@@ -1268,6 +1268,11 @@ impl Engine {
                 "disappearing-message timers require an established conversation".into(),
             ));
         }
+        if ChatContent::is_local_only_kind(&content.kind) {
+            return Err(ChatError::Invalid(
+                "local timeline notices are never sent".into(),
+            ));
+        }
         if ChatContent::is_account_control_kind(&content.kind) {
             if peer_user != self.session.user() {
                 return Err(ChatError::Invalid(format!(

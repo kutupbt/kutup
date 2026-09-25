@@ -18,6 +18,8 @@ export interface ChatContentView {
   conversationState?: ChatConversationStateV1
   readPosition?: ChatReadPositionV1
   deleteForMe?: ChatDeleteForMeV1
+  /** A group change, written by this device's engine from an applied Commit. */
+  groupUpdate?: ChatGroupUpdate
   expiresAfterSeconds?: number
   expiresAtMs?: number
 }
@@ -48,6 +50,22 @@ export interface ChatReadPositionV1 {
   conversation: ConversationId
   throughMessageId: string
   readThroughMs: number
+}
+
+/** One visible change of an applied group Commit (members are canonical addresses). */
+export type ChatGroupUpdateChange =
+  | { type: 'nameChanged'; name: string }
+  | { type: 'descriptionChanged'; description: string }
+  | { type: 'pictureChanged'; removed: boolean }
+  | { type: 'memberAdded' | 'memberRemoved' | 'memberLeft'; member: string }
+  | { type: 'adminGranted' | 'adminRevoked' | 'ownerAdded' | 'ownerRemoved'; member: string }
+  | { type: 'sendersChanged' | 'editorsChanged'; administratorsOnly: boolean }
+  | { type: 'closed' }
+
+export interface ChatGroupUpdate {
+  /** Who made the change (canonical address). */
+  actor: string
+  changes: ChatGroupUpdateChange[]
 }
 
 export interface ChatDeleteForMeV1 {
@@ -435,6 +453,10 @@ export interface LocalMlsConversationRecord {
   currentCryptographicPolicy: MlsGroupCryptographicPolicy
   /** The group's name, description and picture, once it has them. */
   currentGroupInfo?: MlsGroupInfo
+  /** This account asked to leave: read-only here until an administrator removes it. */
+  left?: boolean
+  /** Members who asked to leave and are not removed yet (canonical addresses). */
+  departingMembers?: string[]
 }
 
 /** Encrypted in the group state; only members see it. */
@@ -1105,6 +1127,7 @@ export interface WasmChatClientHandle {
   createMlsOwnerApprovalRequestMessage(
     mlsGroupId: Uint8Array,
   ): Promise<MlsOutboxEntry | null>
+  requestMlsLeave(mlsGroupId: Uint8Array, nowSeconds: string): Promise<MlsOutboxEntry | null>
   createMlsInvitationAcceptanceMessage(
     mlsGroupId: Uint8Array,
     invitedEpoch: string,

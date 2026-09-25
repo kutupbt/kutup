@@ -43,9 +43,9 @@ pub use backup::{
 };
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
-    DisappearingExpiryStartBody, DisappearingTimerBody, MessageMutationBody,
-    MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody, ReceiptState,
-    SentTranscriptBody, TextBody, TypingBody, MAX_SAFE_CLOCK_MS,
+    DisappearingExpiryStartBody, DisappearingTimerBody, GroupUpdateBody, GroupUpdateChange,
+    MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
+    ReceiptState, SentTranscriptBody, TextBody, TypingBody, MAX_SAFE_CLOCK_MS,
 };
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
@@ -92,8 +92,8 @@ pub use mls::{
     MlsGroupCryptographicPolicyV1, MlsGroupInfoEditorsV1, MlsGroupInfoV1,
     MlsIncarnationRecoveryPlanV1, MlsIncarnationRecoveryV1, MlsInvitationAcceptanceV1,
     MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, MlsKeyPackageBundleV1,
-    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsMailboxDeliveryKindV1, MlsMailboxEnvelopeV1,
-    MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsLeaveRequestV1, MlsMailboxDeliveryKindV1,
+    MlsMailboxEnvelopeV1, MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
     MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
     MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
     MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerApprovalCertificateV1,

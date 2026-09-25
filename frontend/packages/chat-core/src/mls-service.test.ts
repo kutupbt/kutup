@@ -601,6 +601,7 @@ function harness(
       },
       control: pendingMembership(),
     }),
+    requestMlsLeave: vi.fn().mockResolvedValue(null),
     prepareMlsGroupInfoChange: vi.fn().mockResolvedValue({
       pending: {
         mlsGroupId: [...genesisGroupBytes],
@@ -1263,6 +1264,44 @@ describe('MlsConversationService', () => {
       expect.stringMatching(/^[0-9]+$/),
       { sequence: 1, name: 'Trail crew' },
     )
+  })
+
+  it('removes members who asked to leave from the first staying administrator only', async () => {
+    const roster = [
+      { address: { username: 'alice', server: 'alpha.example' }, isAdmin: true, ownerId: 'owner' },
+      { address: { username: 'bobby', server: 'beta.example' }, isAdmin: true },
+      { address: { username: 'carol', server: 'gamma.example' }, isAdmin: false },
+    ]
+    const group = {
+      ...activeGenesis(),
+      currentRoster: roster,
+      departingMembers: ['carol@gamma.example'],
+    }
+    // Alice is the first administrator by address: she removes Carol.
+    const first = harness(null, [group], { username: 'alice', server: 'alpha.example' })
+    const firstRemove = vi.spyOn(first.service, 'removeMember').mockResolvedValue(finalizedMembership())
+    await first.service.reconcileDepartures()
+    expect(firstRemove).toHaveBeenCalledWith(conversationId, roster[2].address)
+    // Bobby is an administrator too, but not the first: he leaves it to Alice.
+    const second = harness(null, [group], { username: 'bobby', server: 'beta.example' })
+    const secondRemove = vi.spyOn(second.service, 'removeMember').mockResolvedValue(finalizedMembership())
+    await second.service.reconcileDepartures()
+    expect(secondRemove).not.toHaveBeenCalled()
+    // An owner who asks to leave is not removed by an ordinary Commit.
+    const owner = harness(null, [{ ...group, departingMembers: ['alice@alpha.example'] }], { username: 'bobby', server: 'beta.example' })
+    const ownerRemove = vi.spyOn(owner.service, 'removeMember').mockResolvedValue(finalizedMembership())
+    await owner.service.reconcileDepartures()
+    expect(ownerRemove).not.toHaveBeenCalled()
+  })
+
+  it('asks to leave through the engine and sends the request', async () => {
+    const { client, service } = harness(null, [activeGenesis()])
+    vi.mocked(client.requestMlsLeave).mockResolvedValueOnce(applicationOutboxEntry())
+    const deliver = vi.spyOn(service as unknown as { deliverApplicationEntry: () => Promise<void> }, 'deliverApplicationEntry')
+      .mockResolvedValue(undefined)
+    await service.leaveGroup(conversationId)
+    expect(client.requestMlsLeave).toHaveBeenCalledWith(genesisGroupBytes, expect.stringMatching(/^[0-9]+$/))
+    expect(deliver).toHaveBeenCalledOnce()
   })
 
   it('rejects a no-op administrator change before staging MLS state', async () => {

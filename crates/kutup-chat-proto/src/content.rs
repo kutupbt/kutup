@@ -64,6 +64,10 @@ pub mod kind {
     pub const ATTACHMENT: &str = "attachment";
     /// Encrypted group-state operation. [RSV] (phase 4)
     pub const GROUP_CONTROL: &str = "groupControl";
+    /// A timeline notice of an applied group change ("Alice renamed the
+    /// group"). Written only by the local engine from an authenticated,
+    /// ordered MLS Commit; never sent, and refused if it ever arrives. [IMPL]
+    pub const GROUP_UPDATE: &str = "groupUpdate";
     /// Session-control notice (e.g. explicit reset). [RSV]
     pub const SESSION_CONTROL: &str = "sessionControl";
 }
@@ -602,6 +606,23 @@ impl ChatContent {
         }
     }
 
+    /// Kinds only this device's engine writes; they never travel.
+    pub fn is_local_only_kind(kind: &str) -> bool {
+        kind == kind::GROUP_UPDATE
+    }
+
+    pub fn group_update_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        body: &GroupUpdateBody,
+    ) -> Result<Self, String> {
+        Self::account_control(kind::GROUP_UPDATE, message_id, sent_at, 0, body)
+    }
+
+    pub fn as_group_update(&self) -> Option<GroupUpdateBody> {
+        self.as_account_control(kind::GROUP_UPDATE)
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -693,6 +714,7 @@ impl ChatContent {
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
                     | kind::GROUP_CONTROL
+                    | kind::GROUP_UPDATE
                     | kind::SESSION_CONTROL
             )
     }
@@ -922,6 +944,72 @@ impl ReadPositionBody {
         }
         Ok(())
     }
+}
+
+/// One visible change an applied group Commit made. Members are canonical
+/// account addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+pub enum GroupUpdateChange {
+    #[serde(rename_all = "camelCase")]
+    NameChanged {
+        name: String,
+    },
+    /// Empty when the description was removed.
+    #[serde(rename_all = "camelCase")]
+    DescriptionChanged {
+        description: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    PictureChanged {
+        removed: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberAdded {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberRemoved {
+        member: String,
+    },
+    /// A removal the member asked for.
+    #[serde(rename_all = "camelCase")]
+    MemberLeft {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    AdminGranted {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    AdminRevoked {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    OwnerAdded {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    OwnerRemoved {
+        member: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SendersChanged {
+        administrators_only: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    EditorsChanged {
+        administrators_only: bool,
+    },
+    Closed,
+}
+
+/// Who made an applied group change, and what it changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupUpdateBody {
+    pub actor: String,
+    pub changes: Vec<GroupUpdateChange>,
 }
 
 /// Remove these messages from this account's history on every one of its

@@ -13,8 +13,10 @@ mod device;
 mod device_sync;
 mod genesis;
 mod governance;
+mod group_update;
 mod inbound;
 mod invitation_acceptance;
+mod leave;
 mod lifecycle;
 mod membership;
 mod owner_approval;
@@ -30,6 +32,7 @@ pub use delivery::{AnonymousMlsRecipientDevice, DerivedMlsDeliveryCapability};
 pub use governance::{
     FinalizedMlsAuthorityChange, PendingMlsAuthorityChange, PreparedMlsAuthorityChange,
 };
+use group_update::{group_update_record, left_notice_record, local_group_update};
 use membership::*;
 pub use owner_approval::PendingMlsOwnerApprovalRequest;
 pub use ownership::{FinalizedMlsOwnerChange, PendingMlsOwnerChange, PreparedMlsOwnerChange};
@@ -185,6 +188,15 @@ pub struct LocalMlsConversationRecord {
     /// The group's name, description and picture, when it has them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_group_info: Option<MlsGroupInfoV1>,
+    /// This account asked to leave. The group stays in the MLS state until an
+    /// administrator commits the removal, but here it is read-only and what
+    /// arrives meanwhile is not kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left: bool,
+    /// Members who asked to leave and are not removed yet (canonical
+    /// addresses), from their authenticated leave requests.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub departing_members: BTreeSet<String>,
 }
 
 /// Atomic result of preparing an epoch-zero group and its exact server

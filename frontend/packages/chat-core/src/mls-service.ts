@@ -1654,6 +1654,7 @@ export class MlsConversationService {
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     const appliedApplications = await this.reconcileInboundApplicationMessages()
+    await this.reconcileDepartures()
     await this.reconcilePendingOwnerChanges()
     await this.reconcilePendingPolicyChanges()
     await this.reconcilePendingCloses()
@@ -1672,6 +1673,54 @@ export class MlsConversationService {
         active: typing ?? false,
       }]
     })
+  }
+
+  /**
+   * Ask to leave a group. An MLS member cannot remove itself, so the request
+   * goes to the group and an administrator's client commits the removal;
+   * the group is read-only here from now on. The engine refuses (with a
+   * reason) an owner, the last administrator, and the only member.
+   */
+  async leaveGroup(conversationId: string): Promise<void> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(conversation.request.genesis.mlsGroupId, 16, 255)
+    const entry = await this.withCryptoLock(() =>
+      this.client.requestMlsLeave(groupId, String(Math.floor(Date.now() / 1000))))
+    if (entry) await this.deliverApplicationEntry(entry)
+  }
+
+  /**
+   * Remove members who asked to leave. One administrator does it, the first
+   * by address among those staying, so two clients do not race to commit
+   * the same removal; any administrator can still remove them by hand.
+   * Owners are skipped: removing one needs the owners' approval, and a
+   * well-behaved owner hands ownership over before asking.
+   */
+  async reconcileDepartures(): Promise<void> {
+    if (!this.selfAddress) return
+    const self = canonicalAccountAddress(this.selfAddress)
+    for (const conversation of await this.conversations()) {
+      const departing = new Set(conversation.departingMembers ?? [])
+      if (conversation.status !== 'active' || conversation.left || departing.size === 0) continue
+      const staying = conversation.currentRoster.filter(
+        member => !departing.has(canonicalAccountAddress(member.address)),
+      )
+      const remover = staying
+        .filter(member => member.isAdmin)
+        .map(member => canonicalAccountAddress(member.address))
+        .sort()[0]
+      if (remover !== self) continue
+      for (const member of conversation.currentRoster) {
+        const address = canonicalAccountAddress(member.address)
+        if (!departing.has(address) || member.ownerId) continue
+        try {
+          await this.removeMember(conversation.request.genesis.conversationId, member.address)
+        } catch (error) {
+          console.warn('chat: could not remove a member who left', error)
+          break
+        }
+      }
+    }
   }
 
   /**

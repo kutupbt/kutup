@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Info, Loader2, MoreVertical, Timer } from 'lucide-react'
+import { ArrowLeft, Check, Info, Loader2, MoreVertical, Timer, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -17,6 +17,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
+import { groupUpdateSentences } from '../../lib/groupUpdate'
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
@@ -244,6 +245,16 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                 <p className="mt-1.5 text-center text-xs font-semibold text-muted-foreground">
                   {t('chat.thread.unread', { count: row.count })}
                 </p>
+              </div>
+            )
+          }
+          if (row.kind === 'notice' && row.view.groupUpdate) {
+            return (
+              <div key={row.key} className="mx-auto flex max-w-md flex-col items-center gap-0.5 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-group-notice">
+                <Users className="mb-0.5 size-4 shrink-0" aria-hidden />
+                {groupUpdateSentences(row.view.groupUpdate, self.address, (address) => personName(address, profiles, self.address, t), t).map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
               </div>
             )
           }

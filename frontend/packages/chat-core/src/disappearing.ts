@@ -25,7 +25,8 @@ export function reduceDisappearingTimers(
 
 export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): boolean {
   if (message.content.reaction || message.content.mutation || message.content.receipt
-      || message.content.disappearingTimer || isAccountControl(message)) return false
+      || message.content.disappearingTimer || message.content.groupUpdate
+      || isAccountControl(message)) return false
   const expiresAt = disappearingMessageExpiresAt(message)
   return expiresAt === undefined || nowMs < expiresAt
 }

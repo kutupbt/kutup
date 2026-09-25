@@ -989,6 +989,12 @@ export class ChatService {
     return finalized !== null
   }
 
+  /** Leave the group (see MlsConversationService.leaveGroup). */
+  async leaveGroup(conversationId: string): Promise<void> {
+    await this.withMlsWorkflow(() => this.requireMls().leaveGroup(conversationId))
+    this.notifyPeers()
+  }
+
   /** Rename the group, or change its description or picture. */
   async setGroupInfo(conversationId: string, info: Omit<MlsGroupInfo, 'sequence'>): Promise<void> {
     await this.withMlsWorkflow(() => this.requireMls().setGroupInfo(conversationId, info))

@@ -396,7 +396,8 @@
       "closed": "This group was closed. Its history stays, but nothing new can be sent.",
       "adminsOnly": "Only administrators can send messages in this group.",
       "pendingInvitations_one": "Waiting for {{count}} invited member to accept before messages can be sent.",
-      "pendingInvitations_other": "Waiting for {{count}} invited members to accept before messages can be sent."
+      "pendingInvitations_other": "Waiting for {{count}} invited members to accept before messages can be sent.",
+      "left": "You left this group."
     },
     "details": {
       "open": "Chat details",
@@ -505,6 +506,16 @@
         "removePicture": "Remove picture",
         "pictureUnreadable": "That picture can't be used. Try a JPEG, PNG or WebP image.",
         "saved": "Group updated"
+      },
+      "leave": {
+        "action": "Leave group",
+        "title": "Leave this group?",
+        "description": "You will no longer be able to send or receive messages in this group. Its history stays on your devices until you delete the chat.",
+        "chooseAdmin": "You are the only administrator. Choose who becomes an administrator when you leave:",
+        "owner": "You are an owner of this group. Make another member an owner first; then you can leave.",
+        "onlyMember": "You are the only member. Close the group instead.",
+        "done": "You left the group",
+        "leaving": "Leaving"
       }
     },
     "groupInvitations": {
@@ -531,6 +542,44 @@
       "connecting": "Reconnecting…",
       "queued": "New messages will appear once you're connected. Messages you send will go out then.",
       "retry": "Retry"
+    },
+    "groupUpdates": {
+      "nameChanged": "{{actor}} changed the group name to “{{name}}”.",
+      "nameChanged_you": "You changed the group name to “{{name}}”.",
+      "descriptionChanged": "{{actor}} changed the group description.",
+      "descriptionChanged_you": "You changed the group description.",
+      "descriptionRemoved": "{{actor}} removed the group description.",
+      "descriptionRemoved_you": "You removed the group description.",
+      "pictureChanged": "{{actor}} changed the group picture.",
+      "pictureChanged_you": "You changed the group picture.",
+      "pictureRemoved": "{{actor}} removed the group picture.",
+      "pictureRemoved_you": "You removed the group picture.",
+      "added": "{{actor}} added {{member}}.",
+      "added_you": "You added {{member}}.",
+      "added_member_you": "{{actor}} added you.",
+      "removed": "{{actor}} removed {{member}}.",
+      "removed_you": "You removed {{member}}.",
+      "removed_member_you": "{{actor}} removed you.",
+      "left": "{{member}} left the group.",
+      "left_you": "You left the group.",
+      "adminGranted": "{{actor}} made {{member}} an administrator.",
+      "adminGranted_you": "You made {{member}} an administrator.",
+      "adminGranted_member_you": "{{actor}} made you an administrator.",
+      "adminRevoked": "{{actor}} removed {{member}} as an administrator.",
+      "adminRevoked_you": "You removed {{member}} as an administrator.",
+      "adminRevoked_member_you": "{{actor}} removed you as an administrator.",
+      "ownerAdded": "{{member}} is now an owner.",
+      "ownerAdded_member_you": "You are now an owner.",
+      "ownerRemoved": "{{member}} is no longer an owner.",
+      "ownerRemoved_member_you": "You are no longer an owner.",
+      "sendersChanged": "{{actor}} changed who can send messages to {{who}}.",
+      "sendersChanged_you": "You changed who can send messages to {{who}}.",
+      "editorsChanged": "{{actor}} changed who can edit the group's details to {{who}}.",
+      "editorsChanged_you": "You changed who can edit the group's details to {{who}}.",
+      "administrators": "administrators only",
+      "allMembers": "all members",
+      "closed": "{{actor}} closed the group.",
+      "closed_you": "You closed the group."
     }
   },
   "boot": {

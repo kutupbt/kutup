@@ -13,6 +13,7 @@ import {
   type ReactionOperation,
 } from '@kutup/chat-core/reactions'
 import type {
+  ChatGroupUpdate,
   ChatHistoryEntry,
   ContactRecord,
   ConversationId,
@@ -183,7 +184,9 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   const profiles = new Map(data.profiles.map((p) => [p.peer, p]))
   const latest = new Map<string, ChatHistoryEntry>()
   for (const message of data.history) {
-    if (isVisibleChatMessage(message, nowMs)) latest.set(conversationKey(message.conversation), message)
+    // A group change notice counts as the latest activity (Signal shows it
+    // as the preview), though it is not a message.
+    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message)) latest.set(conversationKey(message.conversation), message)
   }
   const liveGroups = new Set(data.groups.map(groupIdOf))
   const items = new Map<string, ConversationSummary>()
@@ -299,6 +302,13 @@ export interface MessageView {
   receipt: ReceiptState | null
   /** A timer change shown as a notice rather than a bubble. */
   timerChange: { seconds?: number } | null
+  /** A group change (renamed, member added…) shown as a notice. */
+  groupUpdate: ChatGroupUpdate | null
+}
+
+/** A group change notice: only the engine writes these, into group history. */
+export function isGroupNotice(message: ChatHistoryEntry): boolean {
+  return message.conversation.kind === 'group' && message.content.groupUpdate !== undefined
 }
 
 /** One conversation's timeline: visible messages and timer changes, in order. */
@@ -309,7 +319,7 @@ export function threadView(
   nowMs: number,
 ): MessageView[] {
   const inThread = history.filter((m) => conversationKey(m.conversation) === key)
-  const shown = inThread.filter((m) => m.content.disappearingTimer || isVisibleChatMessage(m, nowMs))
+  const shown = inThread.filter((m) => m.content.disappearingTimer || isGroupNotice(m) || isVisibleChatMessage(m, nowMs))
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
   const mutations = foldMutations(inThread, selfAddress)
   const targetIds = new Set(shown.flatMap((m) => (m.content.messageId ? [m.content.messageId] : [])))
@@ -329,6 +339,7 @@ export function threadView(
       reactions: reactions.get(id) ?? [],
       receipt: receipts.get(id) ?? null,
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
+      groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
     }
   })
 }

@@ -1380,3 +1380,27 @@ fn same_account_controls_go_only_to_note_to_self_from_their_named_device() {
         Err(ChatError::Invalid(_))
     ));
 }
+
+#[test]
+fn local_timeline_notices_are_never_sent() {
+    let mut rng = test_rng();
+    let alice = device("alice", 1, &mut rng);
+    let server = Rc::new(MockServer::default());
+    let mut engine = Engine::new_for_development(alice, server);
+    let id = "6c1d7e2f-9a3b-4c5d-8e7f-1a2b3c4d5e6f";
+    let notice = ChatContent::group_update_with_id(
+        id,
+        "t",
+        &kutup_chat_proto::GroupUpdateBody {
+            actor: "alice@example.test".into(),
+            changes: vec![kutup_chat_proto::GroupUpdateChange::Closed],
+        },
+    )
+    .unwrap();
+    for peer in ["bob", "alice"] {
+        assert!(matches!(
+            block_on(engine.send(id, peer, &notice, &mut rng)),
+            Err(ChatError::Invalid(message)) if message.contains("never sent")
+        ));
+    }
+}

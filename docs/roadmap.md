@@ -425,11 +425,8 @@ traffic is enabled.
 
 ### Chat app (web) follow-ups
 
-The rebuilt Chat app (docs/plans/chat-app.md) shows only what `chat-core`
-provides. Not built, because the protocol layer has no support yet:
-
-- **Leaving a group** — there is no leave operation (an owner can close a
-  group; an administrator can remove members).
+Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
+(required before deployment).
 
 ### Files workspace follow-up
 

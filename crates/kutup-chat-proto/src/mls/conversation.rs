@@ -457,6 +457,33 @@ impl MlsInvitationAcceptanceV1 {
     }
 }
 
+/// A member asks to leave the group. Nobody can remove their own leaf in a
+/// Commit, so an administrator's client commits the removal; until then the
+/// member's own devices treat the group as left. The member is the
+/// authenticated MLS sender.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsLeaveRequestV1 {
+    pub protocol_version: u16,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    pub requested_at: i64,
+}
+
+impl MlsLeaveRequestV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != MLS_PROTOCOL_VERSION
+            || self.conversation_id.is_nil()
+            || self.incarnation == 0
+            || self.requested_at < 0
+        {
+            return Err("MLS leave request has invalid metadata".into());
+        }
+        Ok(())
+    }
+}
+
 /// Typed body carried by `ChatContent.kind == groupControl`.
 // Keeping the concrete request types visible makes every variant's canonical
 // wire/API shape explicit. These transient values are not stored in large
@@ -476,6 +503,9 @@ pub enum MlsGroupControlBodyV1 {
     },
     InvitationAccepted {
         acceptance: MlsInvitationAcceptanceV1,
+    },
+    LeaveRequest {
+        request: MlsLeaveRequestV1,
     },
 }
 

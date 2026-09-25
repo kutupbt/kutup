@@ -502,6 +502,11 @@ impl MlsClient {
             .merge_pending_commit(&provider)
             .map_err(|error| mls_error("merge pending MLS close commit", error))?;
         let private_control = extract_private_control_state(group.extensions())?;
+        let previous = metadata
+            .conversations
+            .get(&block.conversation_id.to_string())
+            .cloned()
+            .ok_or_else(|| ChatError::Db("local MLS conversation record is unavailable".into()))?;
         let conversation = metadata
             .conversations
             .get_mut(&block.conversation_id.to_string())
@@ -525,6 +530,7 @@ impl MlsClient {
         conversation.last_block_hash = Some(block_hash);
         conversation.status = LocalMlsConversationStatus::Closed;
         let conversation = conversation.clone();
+        let update = local_group_update(&metadata, &previous, &conversation, block)?;
         metadata.pending_commits.remove(&group_key);
         metadata.pending_closes.remove(&group_key);
         metadata.owner_approval_requests.remove(&group_key);
@@ -533,6 +539,10 @@ impl MlsClient {
         self.db
             .apply(&Pending {
                 mls_state: Some(state),
+                mls_messages: update
+                    .into_iter()
+                    .map(|message| (message.record_id.clone(), message))
+                    .collect(),
                 ..Pending::default()
             })
             .await?;

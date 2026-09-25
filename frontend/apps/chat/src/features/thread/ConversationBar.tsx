@@ -1,4 +1,4 @@
-import { Ban, Clock, Lock, ShieldAlert } from 'lucide-react'
+import { Ban, Clock, DoorOpen, Lock, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -74,7 +74,14 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
         </div>
       )
     default: {
-      const Icon = model.readOnly === 'pendingInvitations' ? Clock : model.readOnly === 'adminsOnly' ? ShieldAlert : Lock
+      const Icon =
+        model.readOnly === 'pendingInvitations'
+          ? Clock
+          : model.readOnly === 'adminsOnly'
+            ? ShieldAlert
+            : model.readOnly === 'left'
+              ? DoorOpen
+              : Lock
       return (
         <div className={frame} data-testid={model.readOnly === 'pendingInvitations' ? 'chat-group-delivery-readiness' : undefined}>
           <p className="flex items-center justify-center gap-1.5 text-center text-sm text-muted-foreground">

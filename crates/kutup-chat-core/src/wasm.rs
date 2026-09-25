@@ -88,6 +88,7 @@ export interface KutupChatContentView {
   conversationState?: unknown;
   readPosition?: unknown;
   deleteForMe?: unknown;
+  groupUpdate?: unknown;
   expiresAfterSeconds?: number;
   expiresAtMs?: number;
 }
@@ -1111,6 +1112,24 @@ impl WasmChatClient {
         let entry = self
             .mls_client()
             .create_owner_approval_request_message(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    /// Ask to leave the group; `null` when this device already left.
+    #[wasm_bindgen(js_name = requestMlsLeave)]
+    pub async fn request_mls_leave(
+        &self,
+        mls_group_id: Vec<u8>,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .request_leave(
+                &mls_group_id,
+                parse_i64_string("MLS leave clock", &now_seconds)?,
+            )
             .await
             .map_err(chat_error)?;
         to_output(&entry)
@@ -3108,6 +3127,8 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     delete_for_me: Option<kutup_chat_proto::DeleteForMeBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    group_update: Option<kutup_chat_proto::GroupUpdateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     expires_after_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at_ms: Option<i64>,
@@ -3125,6 +3146,7 @@ impl From<ChatContent> for ContentView {
         let conversation_state = content.as_conversation_state();
         let read_position = content.as_read_position();
         let delete_for_me = content.as_delete_for_me();
+        let group_update = content.as_group_update();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
@@ -3144,6 +3166,7 @@ impl From<ChatContent> for ContentView {
             conversation_state,
             read_position,
             delete_for_me,
+            group_update,
             expires_after_seconds,
             expires_at_ms: None,
         }

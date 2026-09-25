@@ -396,7 +396,8 @@
       "closed": "Bu grup kapatıldı. Geçmişi duruyor, ama yeni bir şey gönderilemez.",
       "adminsOnly": "Bu grupta yalnızca yöneticiler mesaj gönderebilir.",
       "pendingInvitations_one": "Mesaj gönderilebilmesi için davet edilen {{count}} üyenin kabul etmesi bekleniyor.",
-      "pendingInvitations_other": "Mesaj gönderilebilmesi için davet edilen {{count}} üyenin kabul etmesi bekleniyor."
+      "pendingInvitations_other": "Mesaj gönderilebilmesi için davet edilen {{count}} üyenin kabul etmesi bekleniyor.",
+      "left": "Bu gruptan ayrıldınız."
     },
     "details": {
       "open": "Sohbet ayrıntıları",
@@ -505,6 +506,16 @@
         "removePicture": "Resmi kaldır",
         "pictureUnreadable": "Bu resim kullanılamıyor. JPEG, PNG veya WebP deneyin.",
         "saved": "Grup güncellendi"
+      },
+      "leave": {
+        "action": "Gruptan ayrıl",
+        "title": "Bu gruptan ayrılmak istiyor musunuz?",
+        "description": "Artık bu grupta mesaj gönderip alamayacaksınız. Geçmişi, sohbeti silene kadar cihazlarınızda kalır.",
+        "chooseAdmin": "Tek yönetici sizsiniz. Ayrıldığınızda kimin yönetici olacağını seçin:",
+        "owner": "Bu grubun sahiplerindensiniz. Önce başka bir üyeyi sahip yapın; sonra ayrılabilirsiniz.",
+        "onlyMember": "Tek üye sizsiniz. Bunun yerine grubu kapatın.",
+        "done": "Gruptan ayrıldınız",
+        "leaving": "Ayrılıyor"
       }
     },
     "groupInvitations": {
@@ -531,6 +542,44 @@
       "connecting": "Yeniden bağlanılıyor…",
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene"
+    },
+    "groupUpdates": {
+      "nameChanged": "{{actor}} grubun adını “{{name}}” olarak değiştirdi.",
+      "nameChanged_you": "Grubun adını “{{name}}” olarak değiştirdiniz.",
+      "descriptionChanged": "{{actor}} grubun açıklamasını değiştirdi.",
+      "descriptionChanged_you": "Grubun açıklamasını değiştirdiniz.",
+      "descriptionRemoved": "{{actor}} grubun açıklamasını kaldırdı.",
+      "descriptionRemoved_you": "Grubun açıklamasını kaldırdınız.",
+      "pictureChanged": "{{actor}} grubun resmini değiştirdi.",
+      "pictureChanged_you": "Grubun resmini değiştirdiniz.",
+      "pictureRemoved": "{{actor}} grubun resmini kaldırdı.",
+      "pictureRemoved_you": "Grubun resmini kaldırdınız.",
+      "added": "{{actor}}, {{member}} kişisini ekledi.",
+      "added_you": "{{member}} kişisini eklediniz.",
+      "added_member_you": "{{actor}} sizi ekledi.",
+      "removed": "{{actor}}, {{member}} kişisini çıkardı.",
+      "removed_you": "{{member}} kişisini çıkardınız.",
+      "removed_member_you": "{{actor}} sizi çıkardı.",
+      "left": "{{member}} gruptan ayrıldı.",
+      "left_you": "Gruptan ayrıldınız.",
+      "adminGranted": "{{actor}}, {{member}} kişisini yönetici yaptı.",
+      "adminGranted_you": "{{member}} kişisini yönetici yaptınız.",
+      "adminGranted_member_you": "{{actor}} sizi yönetici yaptı.",
+      "adminRevoked": "{{actor}}, {{member}} kişisinin yöneticiliğini kaldırdı.",
+      "adminRevoked_you": "{{member}} kişisinin yöneticiliğini kaldırdınız.",
+      "adminRevoked_member_you": "{{actor}} yöneticiliğinizi kaldırdı.",
+      "ownerAdded": "{{member}} artık bir sahip.",
+      "ownerAdded_member_you": "Artık bir sahipsiniz.",
+      "ownerRemoved": "{{member}} artık sahip değil.",
+      "ownerRemoved_member_you": "Artık sahip değilsiniz.",
+      "sendersChanged": "{{actor}}, mesaj gönderebilecekleri {{who}} olarak değiştirdi.",
+      "sendersChanged_you": "Mesaj gönderebilecekleri {{who}} olarak değiştirdiniz.",
+      "editorsChanged": "{{actor}}, grup bilgilerini düzenleyebilecekleri {{who}} olarak değiştirdi.",
+      "editorsChanged_you": "Grup bilgilerini düzenleyebilecekleri {{who}} olarak değiştirdiniz.",
+      "administrators": "yalnızca yöneticiler",
+      "allMembers": "tüm üyeler",
+      "closed": "{{actor}} grubu kapattı.",
+      "closed_you": "Grubu kapattınız."
     }
   },
   "boot": {

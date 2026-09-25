@@ -12,6 +12,7 @@ export type ReadOnlyReason =
   | 'request'
   | 'blocked'
   | 'history'
+  | 'left'
   | 'closed'
   | 'adminsOnly'
   | 'pendingInvitations'
@@ -64,6 +65,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
     if (contact?.state === 'pendingIncoming') readOnly = 'request'
     else if (contact?.state === 'blocked') readOnly = 'blocked'
     else if (historyOnly) readOnly = 'history'
+    else if (group?.left) readOnly = 'left'
     else if (group?.status === 'closed') readOnly = 'closed'
     else if (group && group.currentAuthorizationPolicy.applicationSenders !== 1 && !isAdmin) readOnly = 'adminsOnly'
     else if (readiness.blocksSending) readOnly = 'pendingInvitations'
@@ -90,6 +92,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
       canEditGroupInfo:
         group !== null &&
         group.status === 'active' &&
+        !group.left &&
         (isAdmin || group.currentAuthorizationPolicy.groupInfoEditors === 1),
       canSendTyping:
         !readOnly && !note && (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),

@@ -1507,6 +1507,18 @@ impl Session {
         plaintext: Vec<u8>,
     ) -> Result<ReceiveOutcome> {
         let parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        let local_only = |content: &ChatContent| {
+            ChatContent::is_local_only_kind(&content.kind)
+                || content.as_sent_transcript().is_some_and(|transcript| {
+                    ChatContent::is_local_only_kind(&transcript.content.kind)
+                })
+        };
+        if parsed.as_ref().is_some_and(local_only) {
+            self.store.discard();
+            return Err(ChatError::Content(
+                "local timeline notices never arrive from another device or account".into(),
+            ));
+        }
         let transcript = if sender == self.user() && sender_device_id != self.device_id() {
             parsed
                 .as_ref()

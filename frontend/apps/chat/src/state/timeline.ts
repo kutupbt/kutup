@@ -3,7 +3,7 @@ import type { MessageView } from './views'
 
 // How the timeline is laid out, as in Signal Desktop: a heading when the day
 // changes, an "unread messages" marker before the first unread one, notices
-// (timer changes) on their own row, and consecutive messages from one
+// (timer changes, group changes) on their own row, and consecutive messages from one
 // author within three minutes drawn as one group — name on the first,
 // picture and time on the last, tighter corners in between.
 
@@ -23,10 +23,14 @@ export type TimelineRow =
       joinedBelow: boolean
     }
 
+function isNotice(view: MessageView): boolean {
+  return view.timerChange !== null || view.groupUpdate !== null
+}
+
 function joins(older: MessageView, newer: MessageView): boolean {
   return (
-    !older.timerChange &&
-    !newer.timerChange &&
+    !isNotice(older) &&
+    !isNotice(newer) &&
     older.author === newer.author &&
     newer.entry.timestampMs - older.entry.timestampMs < GROUP_WINDOW_MS &&
     isSameDay(older.entry.timestampMs, newer.entry.timestampMs) &&
@@ -46,7 +50,7 @@ export function timelineRows(
 ): TimelineRow[] {
   const rows: TimelineRow[] = []
   const isUnread = (v: MessageView) =>
-    unread !== null && !v.outgoing && !v.timerChange && v.entry.timestampMs > unread.after && v.entry.timestampMs <= unread.openedAt
+    unread !== null && !v.outgoing && !isNotice(v) && v.entry.timestampMs > unread.after && v.entry.timestampMs <= unread.openedAt
   const firstUnread = views.findIndex(isUnread)
   const unreadCount = views.filter(isUnread).length
   views.forEach((view, index) => {
@@ -57,7 +61,7 @@ export function timelineRows(
     }
     const markerHere = index === firstUnread && unreadCount > 0
     if (markerHere) rows.push({ kind: 'unread', key: UNREAD_ROW_KEY, count: unreadCount })
-    if (view.timerChange) {
+    if (isNotice(view)) {
       rows.push({ kind: 'notice', key: `notice:${view.entry.id}`, view })
       return
     }

@@ -301,6 +301,8 @@ impl MlsClient {
             current_authorization_policy: private.authorization_policy,
             current_cryptographic_policy: private.cryptographic_policy,
             current_group_info: private.group_info.clone(),
+            left: false,
+            departing_members: BTreeSet::new(),
         };
         metadata
             .conversations
@@ -944,6 +946,8 @@ impl MlsClient {
             current_authorization_policy: private_control.authorization_policy,
             current_cryptographic_policy: private_control.cryptographic_policy,
             current_group_info: private_control.group_info.clone(),
+            left: false,
+            departing_members: BTreeSet::new(),
         };
         metadata
             .conversations

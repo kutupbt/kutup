@@ -158,7 +158,12 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
     if (!item.last) {
       return { text: item.kind === 'group' ? t('chat.list.newGroup') : '' }
     }
-    const preview = messagePreview(item.last, mutations.get(item.last.content.messageId ?? item.last.id), t)
+    const nameOf = (address: string) => personName(address, profiles, self.address, t)
+    const preview = messagePreview(item.last, mutations.get(item.last.content.messageId ?? item.last.id), t, {
+      self: self.address,
+      nameOf,
+    })
+    if (item.last.content.groupUpdate) return { text: preview }
     if (item.conversation.kind === 'group') {
       const author = item.last.direction === 'outgoing' ? self.address : item.last.peer
       return { text: t('chat.list.byAuthor', { author: personName(author, profiles, self.address, t), text: preview }) }

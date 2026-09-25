@@ -20,6 +20,7 @@ function view(id: string, at: number, author: string, extra: Partial<MessageView
     reactions: [],
     receipt: null,
     timerChange: null,
+    groupUpdate: null,
     ...extra,
   }
 }
@@ -66,5 +67,18 @@ describe('timelineRows', () => {
       null,
     )
     expect(kinds(rows)).toEqual(['day', 'a', 'b', 'notice', 'c'])
+  })
+
+  it('puts a group change on its own row, never joined or counted unread', () => {
+    const rows = timelineRows(
+      [
+        view('a', T0, 'bob'),
+        view('n', T0 + 1_000, 'bob', { groupUpdate: { actor: 'bob', changes: [{ type: 'nameChanged', name: 'X' }] } }),
+        view('b', T0 + 2_000, 'bob'),
+      ],
+      { after: T0 - 1, openedAt: T0 + 10_000 },
+    )
+    expect(kinds(rows)).toEqual(['day', 'unread', 'a', 'notice', 'b'])
+    expect(rows.find((r) => r.kind === 'unread')).toMatchObject({ count: 2 })
   })
 })

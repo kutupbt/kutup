@@ -129,9 +129,11 @@ impl MlsClient {
                 "MLS disappearing-message timer is invalid".into(),
             ));
         }
-        if ChatContent::is_account_control_kind(&content.kind) {
+        if ChatContent::is_account_control_kind(&content.kind)
+            || ChatContent::is_local_only_kind(&content.kind)
+        {
             return Err(ChatError::Content(format!(
-                "{} is a same-account control, not an MLS application",
+                "{} is not an MLS application",
                 content.kind
             )));
         }
@@ -180,6 +182,7 @@ impl MlsClient {
                 "MLS application sender is not permitted by group policy".into(),
             ));
         }
+        let mut left_notice = None;
         if let Some(control) = group_control {
             match control {
                 MlsGroupControlBodyV1::OwnerCandidate { candidate } => {
@@ -260,6 +263,40 @@ impl MlsClient {
                         context.server_timestamp,
                     )?;
                 }
+                MlsGroupControlBodyV1::LeaveRequest { request } => {
+                    request.validate().map_err(ChatError::Trust)?;
+                    if request.conversation_id != conversation.request.genesis.conversation_id
+                        || request.incarnation != conversation.request.genesis.incarnation
+                        || request.requested_at
+                            > context
+                                .server_timestamp
+                                .saturating_add(KEY_PACKAGE_CLOCK_SKEW_SECONDS as i64)
+                    {
+                        return Err(ChatError::Trust(
+                            "MLS leave request differs from its authenticated group".into(),
+                        ));
+                    }
+                    let (local_address, _) =
+                        parse_device_credential_identity(&metadata.credential_identity)?;
+                    let record = metadata
+                        .conversations
+                        .get_mut(&conversation.request.genesis.conversation_id.to_string())
+                        .ok_or_else(|| {
+                            ChatError::Db("local MLS conversation record is unavailable".into())
+                        })?;
+                    if sender == local_address {
+                        // Left from another of this account's devices.
+                        record.left = true;
+                        left_notice = Some(left_notice_record(
+                            record,
+                            &local_address,
+                            sender_device_id,
+                            epoch,
+                        )?);
+                    } else {
+                        record.departing_members.insert(sender.clone());
+                    }
+                }
             }
         }
         // Disappearing messages get a full local viewing window even after a
@@ -293,7 +330,14 @@ impl MlsClient {
             mls_state: Some(state),
             ..Pending::default()
         };
-        writes.mls_messages.insert(record_id, history.clone());
+        // After leaving, what the group still sends until the removal is
+        // committed is decrypted (the MLS state must advance) but not kept.
+        if !conversation.left {
+            writes.mls_messages.insert(record_id, history.clone());
+        }
+        if let Some(notice) = left_notice {
+            writes.mls_messages.insert(notice.record_id.clone(), notice);
+        }
         self.db.apply(&writes).await?;
         Ok(AppliedInboundMlsApplication {
             message: history,
@@ -1306,6 +1350,13 @@ impl MlsClient {
             created_at_ms,
         )?;
         let content_digest: [u8; 32] = Sha256::digest(plaintext).into();
+        if serde_json::from_slice::<ChatContent>(plaintext)
+            .is_ok_and(|content| ChatContent::is_local_only_kind(&content.kind))
+        {
+            return Err(ChatError::Invalid(
+                "local timeline notices are never sent".into(),
+            ));
+        }
 
         if let Some(existing) = self.db.load_mls_outbox(send_id).await? {
             if existing.conversation_id != conversation_id
@@ -1342,6 +1393,9 @@ impl MlsClient {
         // without constructing the Kutup control log.
         if !metadata.conversations.is_empty() {
             let conversation = active_conversation_for_group(&metadata, mls_group_id)?;
+            if conversation.left && !is_group_control {
+                return Err(ChatError::Trust("this account left the group".into()));
+            }
             if conversation.request.genesis.conversation_id.as_bytes() != &conversation_id
                 || conversation.request.genesis.incarnation != incarnation
                 || conversation.last_finalized_epoch != group.epoch().as_u64()

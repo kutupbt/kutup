@@ -297,6 +297,8 @@ impl MlsClient {
             current_authorization_policy: private_control.authorization_policy.clone(),
             current_cryptographic_policy: private_control.cryptographic_policy.clone(),
             current_group_info: private_control.group_info.clone(),
+            left: false,
+            departing_members: BTreeSet::new(),
         };
         let receipt = ProcessedMlsControlEnvelope {
             envelope_id: envelope.envelope_id,

@@ -1,4 +1,4 @@
-import { Crown, Loader2, RefreshCw, Shield, Trash2, UserMinus, UserPlus } from 'lucide-react'
+import { Crown, DoorOpen, Loader2, RefreshCw, Shield, Trash2, UserMinus, UserPlus } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -49,8 +49,11 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
 
   const me = group.currentRoster.find((m) => canonicalAccountAddress(m.address) === selfAddress)
   const closed = group.status === 'closed'
-  const canManage = me?.isAdmin === true && !closed
-  const isOwner = Boolean(me?.ownerId) && !closed
+  const left = group.left === true
+  const canManage = me?.isAdmin === true && !closed && !left
+  const isOwner = Boolean(me?.ownerId) && !closed && !left
+  const [leaving, setLeaving] = useState(false)
+  const departing = new Set(group.departingMembers ?? [])
   const adminCount = group.currentRoster.filter((m) => m.isAdmin).length
   const approval = snapshot.ownerApprovals.find((a) => a.request.proposal.conversationId === groupId)
   const feedback = snapshot.invitationFeedback.filter(
@@ -118,6 +121,7 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
               name={personName(canonicalAccountAddress(member.address), profiles, selfAddress, t)}
               self={canonicalAccountAddress(member.address) === selfAddress}
               feedback={feedback.find((f) => canonicalAccountAddress(f.member) === canonicalAccountAddress(member.address))?.decision}
+              leaving={departing.has(canonicalAccountAddress(member.address))}
               canManage={canManage}
               canOwn={isOwner}
               canDemote={member.isAdmin && !member.ownerId && adminCount > 1}
@@ -253,6 +257,36 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         ) : null}
       </Section>
 
+      {!closed && !left && me ? (
+        <section className="border-t border-border px-4 py-3">
+          <Button
+            variant="ghost"
+            className="w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={busy}
+            onClick={() => setLeaving(true)}
+            data-testid="chat-group-leave"
+          >
+            <DoorOpen />
+            {t('chat.group.leave.action')}
+          </Button>
+        </section>
+      ) : null}
+      <LeaveGroupDialog
+        open={leaving}
+        onOpenChange={setLeaving}
+        group={group}
+        selfAddress={selfAddress}
+        nameOf={(address) => personName(address, profiles, selfAddress, t)}
+        busy={busy}
+        onLeave={(successor) => {
+          setLeaving(false)
+          void run(async () => {
+            if (successor) await service!.setGroupAdministrator(groupId, successor, true)
+            await service!.leaveGroup(groupId)
+          }, t('chat.group.leave.done'))
+        }}
+      />
+
       {closed ? (
         <p className="mx-6 mt-4 rounded-lg border border-destructive/40 p-3 text-sm" data-testid="chat-group-closed">
           {t('chat.group.closedNotice')}
@@ -319,6 +353,7 @@ function MemberRow({
   name,
   self,
   feedback,
+  leaving,
   canManage,
   canOwn,
   canDemote,
@@ -331,6 +366,8 @@ function MemberRow({
   name: string
   self: boolean
   feedback?: string
+  /** Asked to leave; an administrator's client removes them. */
+  leaving: boolean
   canManage: boolean
   canOwn: boolean
   canDemote: boolean
@@ -350,6 +387,7 @@ function MemberRow({
           {name !== address && !self ? <span className="truncate">{address}</span> : null}
           {member.ownerId ? <span data-testid={`chat-group-member-owner-${address}`}>{t('chat.group.owner')}</span> : null}
           {member.isAdmin ? <span>{t('chat.group.admin')}</span> : null}
+          {leaving ? <span className="text-status-warn">{t('chat.group.leave.leaving')}</span> : null}
         </span>
         {feedback ? (
           <span
@@ -475,6 +513,96 @@ function AddMemberDialog({
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Signal's "Leave group": a confirmation, and for the last administrator a
+ * choice of who takes over. An owner must hand ownership over first, and
+ * the only member closes the group instead; both are said here rather than
+ * failing after the click.
+ */
+function LeaveGroupDialog({
+  open,
+  onOpenChange,
+  group,
+  selfAddress,
+  nameOf,
+  busy,
+  onLeave,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  group: LocalMlsConversationRecord
+  selfAddress: string
+  nameOf: (address: string) => string
+  busy: boolean
+  onLeave: (successor: MlsConversationMember['address'] | null) => void
+}) {
+  const { t } = useTranslation()
+  const me = group.currentRoster.find((m) => canonicalAccountAddress(m.address) === selfAddress)
+  const others = group.currentRoster.filter((m) => canonicalAccountAddress(m.address) !== selfAddress)
+  const lastAdmin = me?.isAdmin === true && group.currentRoster.filter((m) => m.isAdmin).length === 1
+  const [successor, setSuccessor] = useState('')
+  useEffect(() => {
+    if (open) setSuccessor('')
+  }, [open])
+  const blocked = others.length === 0
+    ? t('chat.group.leave.onlyMember')
+    : me?.ownerId
+      ? t('chat.group.leave.owner')
+      : null
+  const needsSuccessor = !blocked && lastAdmin
+  const chosen = others.find((m) => canonicalAccountAddress(m.address) === successor)
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-md" data-testid="chat-group-leave-dialog">
+        <DialogHeader>
+          <DialogTitle>{t('chat.group.leave.title')}</DialogTitle>
+          <DialogDescription>{blocked ?? t('chat.group.leave.description')}</DialogDescription>
+        </DialogHeader>
+        {needsSuccessor ? (
+          <div className="space-y-2">
+            <p className="text-sm">{t('chat.group.leave.chooseAdmin')}</p>
+            <ul className="max-h-56 space-y-1 overflow-y-auto" role="radiogroup" aria-label={t('chat.group.leave.chooseAdmin')}>
+              {others.map((member) => {
+                const address = canonicalAccountAddress(member.address)
+                return (
+                  <li key={address}>
+                    <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted">
+                      <input
+                        type="radio"
+                        name="successor"
+                        value={address}
+                        checked={successor === address}
+                        onChange={() => setSuccessor(address)}
+                        data-testid={`chat-group-leave-successor-${address}`}
+                      />
+                      <span className="truncate text-sm">{nameOf(address)}</span>
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t('common.cancel')}
+          </Button>
+          {!blocked ? (
+            <Button
+              variant="destructive"
+              disabled={busy || (needsSuccessor && !chosen)}
+              onClick={() => onLeave(needsSuccessor && chosen ? chosen.address : null)}
+              data-testid="chat-group-leave-confirm"
+            >
+              {t('chat.group.leave.action')}
+            </Button>
+          ) : null}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

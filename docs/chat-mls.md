@@ -476,6 +476,42 @@ control pin, and stores the mailbox id/cursor/send id receipt atomically.
 Only afterward may the browser acknowledge the row. A crash replay reads that
 receipt and acknowledges without attempting to process the old Commit again.
 
+### Leaving
+
+An MLS member cannot commit its own removal, so leaving takes two steps, as
+Signal does with its server-held group state:
+
+1. The member sends a `leaveRequest` group control (conversation,
+   incarnation, time) to the group, authenticated by its MLS sender leaf.
+   Its devices mark the record `left`: the group is read-only there, and what
+   arrives until the removal is decrypted (the epoch must advance) but not
+   kept. The account's other devices do the same when they receive the
+   request from their own account.
+2. Every other member records the account in `departingMembers`. The first
+   administrator by canonical address among those staying commits an
+   ordinary removal; any administrator can also remove the member by hand.
+   The removal's timeline notice then reads "left" rather than "removed".
+
+The engine refuses a leave, with a reason the app shows, for an owner (who
+must hand ownership over first: removing an owner needs the owners'
+approval), for the last administrator of a group with other members (who
+picks a successor first; the app then makes that member an administrator
+and leaves), and for the only member (who closes the group instead).
+
+### Timeline notices
+
+When the engine applies an ordered Commit (its own after finalization, or an
+inbound one after authentication), it compares the pinned record before and
+after and writes one `groupUpdate` history row naming the Commit's sender
+and each visible change: name, description, picture, members added, removed
+or left, administrators and owners, the two sender and editor rules, and
+closure. The row's id derives from the block, so a replay writes nothing new.
+`groupUpdate` is a local-only content kind: every send path refuses it and
+every receive path (Direct, sync transcript, MLS application) rejects it, so a
+member cannot forge a notice. Device syncs and authority changes write no
+notice. "You left the group." is written when leaving, since the removal
+Commit never reaches the member it removes.
+
 ### Linked devices
 
 One account may occupy multiple distinct MLS leaves. Kutup never copies an

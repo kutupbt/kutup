@@ -490,6 +490,11 @@ impl MlsClient {
         }
         metadata.pending_commits.remove(&group_key);
         metadata.pending_membership_changes.remove(&group_key);
+        let previous = metadata
+            .conversations
+            .get(&block.conversation_id.to_string())
+            .cloned()
+            .ok_or_else(|| ChatError::Db("local MLS conversation record is unavailable".into()))?;
         let conversation = metadata
             .conversations
             .get_mut(&block.conversation_id.to_string())
@@ -507,10 +512,19 @@ impl MlsClient {
         conversation.last_block_hash = Some(expected_hash);
         advance_member_readiness(conversation, &control.next_roster, block.epoch_after);
         conversation.current_roster = control.next_roster;
+        let remaining = conversation
+            .current_roster
+            .iter()
+            .map(|member| member.address.canonical())
+            .collect::<BTreeSet<_>>();
+        conversation
+            .departing_members
+            .retain(|member| remaining.contains(member));
         if control.next_group_info.is_some() {
             conversation.current_group_info = control.next_group_info;
         }
         let conversation = conversation.clone();
+        let update = local_group_update(&metadata, &previous, &conversation, block)?;
         ownership::prune_owner_candidates_for_roster(
             &mut metadata,
             mls_group_id,
@@ -521,6 +535,10 @@ impl MlsClient {
         self.db
             .apply(&Pending {
                 mls_state: Some(state),
+                mls_messages: update
+                    .into_iter()
+                    .map(|message| (message.record_id.clone(), message))
+                    .collect(),
                 ..Pending::default()
             })
             .await?;

@@ -166,6 +166,8 @@ impl MlsClient {
             current_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
             current_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
             current_group_info: group_info,
+            left: false,
+            departing_members: BTreeSet::new(),
             request,
             status: LocalMlsConversationStatus::PendingGenesis,
             server_genesis_hash: None,

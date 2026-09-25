@@ -681,6 +681,11 @@ impl MlsClient {
             .merge_pending_commit(&provider)
             .map_err(|error| mls_error("merge pending MLS owner commit", error))?;
         let private_control = extract_private_control_state(group.extensions())?;
+        let previous = metadata
+            .conversations
+            .get(&block.conversation_id.to_string())
+            .cloned()
+            .ok_or_else(|| ChatError::Db("local MLS conversation record is unavailable".into()))?;
         let conversation = metadata
             .conversations
             .get_mut(&block.conversation_id.to_string())
@@ -706,6 +711,7 @@ impl MlsClient {
         conversation.current_roster = control.next_roster;
         conversation.current_owner_set = control.owner_change.next_owner_set;
         let conversation = conversation.clone();
+        let update = local_group_update(&metadata, &previous, &conversation, block)?;
         let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
         let retained_local_owner = group_owner_credential(&metadata, mls_group_id)
             .ok()
@@ -730,6 +736,10 @@ impl MlsClient {
         self.db
             .apply(&Pending {
                 mls_state: Some(state),
+                mls_messages: update
+                    .into_iter()
+                    .map(|message| (message.record_id.clone(), message))
+                    .collect(),
                 ..Pending::default()
             })
             .await?;
@@ -785,6 +795,7 @@ fn candidate_conversation_id(content: &ChatContent) -> Result<Uuid> {
         }
         MlsGroupControlBodyV1::OwnerApproval { approval } => Ok(approval.conversation_id),
         MlsGroupControlBodyV1::InvitationAccepted { acceptance } => Ok(acceptance.conversation_id),
+        MlsGroupControlBodyV1::LeaveRequest { request } => Ok(request.conversation_id),
     }
 }
 

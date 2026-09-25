@@ -32,13 +32,15 @@ Done:
    description and picture in the MLS private control state, changed by a
    `GroupInfoChange` Commit; the owners' "who can edit" rule.
 
+4. **Group timeline notices** (docs/chat-mls.md "Timeline notices"),
+   written locally from each applied Commit; a local-only content kind that
+   no path can send or accept.
+5. **Leave group** (docs/chat-mls.md "Leaving"): a `leaveRequest` control,
+   removal committed by the first staying administrator, successor choice
+   for the last administrator.
+
 Next, in order:
 
-4. **Group timeline notices.** "Alice changed the group name", "Alice added
-   Bob", "Bob left": recorded locally from each applied Commit.
-5. **Leave group.** A `leaveRequest` group control that an administrator's
-   client commits as a removal; the leaver's local state becomes "left"; an
-   owner or last administrator must hand over first.
 6. **Message features.** Mentions, link previews (fetched by the sender),
    view-once media, forwarding, quoting attachments, stickers, profile
    "about", polls.

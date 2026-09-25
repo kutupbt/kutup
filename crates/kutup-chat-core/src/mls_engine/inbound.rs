@@ -256,7 +256,7 @@ impl MlsClient {
         }
         let sender_identity = std::str::from_utf8(processed.credential().serialized_content())
             .map_err(|_| ChatError::Trust("MLS Commit sender identity is not UTF-8".into()))?;
-        let (sender_address, _) = parse_device_credential_identity(sender_identity)?;
+        let (sender_address, sender_device_id) = parse_device_credential_identity(sender_identity)?;
         let sender_member = conversation
             .current_roster
             .iter()
@@ -443,6 +443,7 @@ impl MlsClient {
             )?;
         }
 
+        let previous = conversation;
         let conversation = metadata
             .conversations
             .get_mut(&block.conversation_id.to_string())
@@ -457,10 +458,28 @@ impl MlsClient {
         conversation.current_authorization_policy = private_control.authorization_policy;
         conversation.current_cryptographic_policy = private_control.cryptographic_policy;
         conversation.current_group_info = private_control.group_info;
+        let remaining = conversation
+            .current_roster
+            .iter()
+            .map(|member| member.address.canonical())
+            .collect::<BTreeSet<_>>();
+        conversation
+            .departing_members
+            .retain(|member| remaining.contains(member));
         if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation {
             conversation.status = LocalMlsConversationStatus::Closed;
         }
         let conversation = conversation.clone();
+        let (local_account, _) = parse_device_credential_identity(&metadata.credential_identity)?;
+        let update = group_update_record(
+            &previous,
+            &conversation,
+            block,
+            &sender_address,
+            sender_device_id,
+            &local_account,
+            &previous.departing_members,
+        )?;
         ownership::prune_owner_candidates_for_roster(
             &mut metadata,
             mls_group_id,
@@ -489,6 +508,10 @@ impl MlsClient {
         self.db
             .apply(&Pending {
                 mls_state: Some(state),
+                mls_messages: update
+                    .into_iter()
+                    .map(|message| (message.record_id.clone(), message))
+                    .collect(),
                 ..Pending::default()
             })
             .await?;
