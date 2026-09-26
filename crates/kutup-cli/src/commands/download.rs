@@ -62,7 +62,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
 
         // Integrity check (only meaningful for the cold-start blob; snapshot
         // bytes carry their own size and may differ from the original).
-        if !from_version && meta.size > 0 && written != meta.size {
+        if !from_version && meta.size > 0 && written != meta.size as i64 {
             let _ = std::fs::remove_file(&dest_path);
             bail!(
                 "size mismatch: expected {} bytes, got {}",

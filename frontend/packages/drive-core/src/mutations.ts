@@ -14,7 +14,7 @@ import api from '@kutup/session/client'
 import { peopleKey } from './people'
 import { foldersKey } from './folders'
 import { useDriveIdentity, type DriveIdentity } from './identity'
-import { folderLocation, type DriveFile, type Folder } from './model'
+import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
 import { rekeyFile } from './rekey'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
@@ -69,7 +69,7 @@ export function useRenameFile() {
     const next = await renameFileRecordV1(
       { id: file.id, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
       file.fileKey,
-      { name: name.trim(), mimeType: file.mimeType, size: file.size },
+      fileMetadataOf(file, { name: name.trim() }),
     )
     await api.put(`/files/${file.id}`, next)
   })

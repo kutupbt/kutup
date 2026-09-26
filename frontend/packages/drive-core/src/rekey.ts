@@ -2,7 +2,7 @@ import { isAxiosError } from 'axios'
 import { rekeyFileRecordV1 } from '@kutup/crypto/fileRecord'
 import api from '@kutup/session/client'
 import { loadFolderFiles } from './files'
-import type { DriveFile, Folder } from './model'
+import { fileMetadataOf, type DriveFile, type Folder } from './model'
 
 /**
  * Before anything new is written to a file the folder has rotated past — or
@@ -27,7 +27,7 @@ export async function rekeyFile(folder: Folder, file: DriveFile): Promise<DriveF
     file.fileKey,
     folder.keyEpoch,
     folder.key,
-    { name: file.name, mimeType: file.mimeType, size: file.size },
+    fileMetadataOf(file),
   )
   try {
     await api.post(`/files/${file.id}/rekey`, {

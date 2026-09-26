@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { openFileRecordV1 } from '@kutup/crypto'
+import { openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from './kinds'
@@ -39,7 +39,7 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
 /** A listed file, from its row and what opening it gave (null: it did not open). */
 export function toDriveFile(
   row: FileRowLike,
-  result: { fileKey: Uint8Array; metadata: { name: string; mimeType: string; size: number } } | null,
+  result: { fileKey: Uint8Array; metadata: FileMetadataV1 } | null,
 ): DriveFile {
   const name = result?.metadata.name ?? null
   return {
@@ -52,6 +52,7 @@ export function toDriveFile(
     name,
     mimeType: result?.metadata.mimeType ?? 'application/octet-stream',
     size: result?.metadata.size ?? 0,
+    media: result?.metadata.media ?? null,
     fileKey: result?.fileKey ?? null,
     originalKeyGeneration: row.originalKeyGeneration,
     contentKeyGeneration: row.contentKeyGeneration,

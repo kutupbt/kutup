@@ -23,6 +23,7 @@
 
 import api from '@kutup/session/client'
 import { createOwnedCollectionV1 } from '@kutup/crypto'
+import { readMedia } from '../media'
 import { streamUpload, type UploadedFile } from './streamUpload'
 
 /** One file + the directory path it lives in, relative to the drop root. */
@@ -121,6 +122,8 @@ export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
         collection: target,
         accessToken: opts.accessToken,
         signal: opts.signal,
+        // A photo's or video's details, sealed with its name (docs/plans/photos.md).
+        media: await readMedia(entry.file, opts.signal),
       })
       opts.onFileUploaded?.(uploaded, entry.file)
     } catch (err) {

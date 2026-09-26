@@ -44,10 +44,32 @@ struct CryptoVectors {
     file_keyring: FileKeyringVec,
     #[serde(rename = "liveLocation")]
     live_location: LiveLocationVec,
+    #[serde(rename = "fileMetadata")]
+    file_metadata: FileMetadataVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
     #[serde(rename = "localState")]
     local_state: LocalStateVecs,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileMetadataVec {
+    canonical: Vec<FileMetadataCase>,
+    invalid: Vec<String>,
+    content_hash: ContentHashVec,
+}
+
+#[derive(Deserialize)]
+struct FileMetadataCase {
+    input: String,
+    output: String,
+}
+
+#[derive(Deserialize)]
+struct ContentHashVec {
+    chunks: Vec<String>,
+    hash: String,
 }
 
 #[derive(Deserialize)]
@@ -741,4 +763,29 @@ fn live_location_update_matches_canonical_vector() {
         (v.counter, point)
     );
     assert_eq!(live_location::counter_of(&envelope).unwrap(), v.counter);
+}
+
+#[test]
+fn file_metadata_matches_canonical_vector() {
+    use kutup_crypto::file_metadata::{self, ContentHasher};
+    let v = load_crypto().file_metadata;
+    for case in &v.canonical {
+        let parsed = file_metadata::decode(case.input.as_bytes()).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&file_metadata::encode(&parsed).unwrap()).unwrap(),
+            case.output
+        );
+        assert_eq!(
+            file_metadata::decode(case.output.as_bytes()).unwrap(),
+            parsed
+        );
+    }
+    for bad in &v.invalid {
+        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+    }
+    let mut hasher = ContentHasher::new();
+    for chunk in &v.content_hash.chunks {
+        hasher.update(&b64(chunk));
+    }
+    assert_eq!(hasher.finish(), v.content_hash.hash);
 }

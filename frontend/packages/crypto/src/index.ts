@@ -102,6 +102,8 @@ export type { FileKeyLinkV1 } from './fileKeyring'
 export type {
   CreatedFileRecordV1,
   FileMetadataV1,
+  MediaMetadataV1,
+  TakenFromV1,
   FileWireV1,
 } from './fileRecord'
 export {

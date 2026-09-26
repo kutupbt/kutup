@@ -20,6 +20,7 @@
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
 //! - [`drive_object`] — the Drive suite registry and typed, file-bound file-blob framing.
+//! - [`file_metadata`] — a Drive file's metadata (name, type, size, photo details), canonical JSON.
 //! - [`file_keyring`] — a file's key generations, each sealing the one before.
 //! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
 //! - [`stream`] — XChaCha20-Poly1305 secretstream (file content, 5 MiB chunks).
@@ -40,6 +41,7 @@ pub mod drive_object;
 pub mod envelope;
 pub mod error;
 pub mod file_keyring;
+pub mod file_metadata;
 pub mod identity;
 pub mod kdf;
 pub mod live_location;

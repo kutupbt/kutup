@@ -336,6 +336,8 @@ export interface CryptoWasmModule {
     accuracyM: number,
     atMs: number,
   ): string
+  canonicalFileMetadata(json: string): string
+  ContentHasher: new () => { update(chunk: Uint8Array): void; finish(): string; free(): void }
   liveLocationOpen(keyBase64: string, streamIdHex: string, envelopeBase64: string): LiveLocationUpdate
   sealProfileKeyEnvelope(
     profileKeyBase64: string,

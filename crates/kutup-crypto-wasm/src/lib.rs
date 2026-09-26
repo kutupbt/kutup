@@ -1570,3 +1570,50 @@ fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue>
 fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
+
+/// A Drive file's metadata (name, type, size, photo details), checked and
+/// written canonically (docs/plans/photos.md): JSON text in, the exact JSON
+/// text to seal out. Opening metadata runs it through here too, so every
+/// client refuses the same things.
+#[wasm_bindgen(js_name = canonicalFileMetadata)]
+pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
+    let metadata = kutup_crypto::file_metadata::decode(json.as_bytes())
+        .map_err(|error| js_error(&error.to_string()))?;
+    let bytes = kutup_crypto::file_metadata::encode(&metadata)
+        .map_err(|error| js_error(&error.to_string()))?;
+    String::from_utf8(bytes).map_err(|_| js_error("file metadata is not UTF-8"))
+}
+
+/// A photo's content hash, fed chunk by chunk as the file is read.
+#[wasm_bindgen(js_name = ContentHasher)]
+pub struct ContentHasherJs(Option<kutup_crypto::file_metadata::ContentHasher>);
+
+#[wasm_bindgen(js_class = ContentHasher)]
+impl ContentHasherJs {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self(Some(kutup_crypto::file_metadata::ContentHasher::new()))
+    }
+
+    pub fn update(&mut self, chunk: &[u8]) -> Result<(), JsValue> {
+        self.0
+            .as_mut()
+            .ok_or_else(|| js_error("content hash already finished"))?
+            .update(chunk);
+        Ok(())
+    }
+
+    /// Canonical base64 of the SHA-256; the hasher is spent.
+    pub fn finish(&mut self) -> Result<String, JsValue> {
+        self.0
+            .take()
+            .map(|hasher| hasher.finish())
+            .ok_or_else(|| js_error("content hash already finished"))
+    }
+}
+
+impl Default for ContentHasherJs {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -556,4 +556,17 @@ assert.throws(() =>
   crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
 )
 
+const metadataVector = vectors.fileMetadata
+for (const { input, output } of metadataVector.canonical) {
+  assert.equal(crypto.canonicalFileMetadata(input), output)
+  assert.equal(crypto.canonicalFileMetadata(output), output)
+}
+for (const bad of metadataVector.invalid) {
+  assert.throws(() => crypto.canonicalFileMetadata(bad))
+}
+const contentHasher = new crypto.ContentHasher()
+for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
+assert.equal(contentHasher.finish(), metadataVector.contentHash.hash)
+assert.throws(() => contentHasher.finish())
+
 console.log('crypto WASM canonical vectors passed')

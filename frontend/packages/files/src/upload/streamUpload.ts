@@ -21,7 +21,7 @@
 // adapter.
 
 import * as tus from 'tus-js-client'
-import { createFileRecordV1 } from '@kutup/crypto'
+import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
 import {
   DRIVE_FILE_BLOB_CIPHER_CHUNK,
   DRIVE_FILE_BLOB_PREFIX_BYTES,
@@ -44,6 +44,8 @@ export interface StreamUploadOptions {
   onProgress?: (plainSent: number, plainTotal: number) => void
   /** Cancel an in-flight upload. Calls tus DELETE under the hood. */
   signal?: AbortSignal
+  /** A photo's or video's details (`@kutup/files/media`), sealed with its name. */
+  media?: MediaMetadataV1
 }
 
 /** What an upload made: enough to seal things beside it (a thumbnail). */
@@ -64,11 +66,12 @@ export interface UploadedFile {
  * backoff).
  */
 export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedFile> {
-  const meta = {
+  const meta: FileMetadataV1 = {
     name: opts.file.name,
     mimeType: opts.file.type || 'application/octet-stream',
     size: opts.file.size,
   }
+  if (opts.media) meta.media = opts.media
   const record = await createFileRecordV1(
     opts.collection.id,
     opts.collection.keyEpoch,

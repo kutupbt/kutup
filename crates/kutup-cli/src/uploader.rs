@@ -124,7 +124,8 @@ pub fn upload_streaming(
     let meta = FileMetadata {
         name: name.clone(),
         mime_type: guess_mime(local_path),
-        size: plain_size,
+        size: plain_size as u64,
+        media: None,
     };
     let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
     debug_assert_eq!(record.metadata_revision, 1);

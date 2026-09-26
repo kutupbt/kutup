@@ -1,3 +1,4 @@
+import type { FileMetadataV1, MediaMetadataV1 } from '@kutup/crypto'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import type { FileKind } from './kinds'
 
@@ -62,6 +63,8 @@ export interface DriveFile {
   mimeType: string
   /** Plaintext bytes. */
   size: number
+  /** A photo's or video's details (docs/plans/photos.md), when read. */
+  media: MediaMetadataV1 | null
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
   /** The key generation the upload was sealed under. */
@@ -79,6 +82,21 @@ export interface DriveFile {
   thumbnailStale: boolean
   /** The owner shared it with someone by itself. */
   shared: boolean
+}
+
+/**
+ * What to seal as a file's metadata: as it is, with `change` applied. Every
+ * rewrite (rename, re-key, copy) goes through here so a photo's details are
+ * never dropped.
+ */
+export function fileMetadataOf(
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'>,
+  change: Partial<FileMetadataV1> = {},
+): FileMetadataV1 {
+  if (!file.name) throw new Error('file is not open')
+  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.mimeType, size: file.size }
+  if (file.media) metadata.media = file.media
+  return { ...metadata, ...change }
 }
 
 /** Where a folder's files come from and go to. */

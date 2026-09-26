@@ -1,7 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { createFileRecordV1 } from '@kutup/crypto'
+import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
+import { readMedia } from '@kutup/files/media'
 import { newFileBlobStreamEncryptorV1 } from '@kutup/crypto/fileBlob'
 import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
@@ -22,13 +23,11 @@ import { uploads } from './uploadStore'
  * a time into a Blob (which the browser may keep on disk), never whole in
  * memory.
  */
-async function uploadRemote(folder: Folder, shareId: string, file: File, signal: AbortSignal, progress: (s: number, t: number) => void) {
+async function uploadRemote(folder: Folder, shareId: string, file: File, media: MediaMetadataV1 | undefined, signal: AbortSignal, progress: (s: number, t: number) => void) {
   if (!folder.key) throw new Error('folder is not open')
-  const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, {
-    name: file.name,
-    mimeType: file.type || 'application/octet-stream',
-    size: file.size,
-  })
+  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+  if (media) metadata.media = media
+  const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, metadata)
   const enc = await newFileBlobStreamEncryptorV1(record.fileKey, {
     fileId: record.fileId,
     generation: record.keyGeneration,
@@ -55,14 +54,23 @@ async function uploadRemote(folder: Folder, shareId: string, file: File, signal:
 
 /**
  * Put a file into `folder`, returning what was made (null for a folder on
- * another server, whose files this server does not hold). Its thumbnail is
- * queued from the plaintext still in hand.
+ * another server, whose files this server does not hold). A photo's or
+ * video's details are read first and sealed with its name
+ * (docs/plans/photos.md); `media` gives them instead (a copy keeps the
+ * original's). Its thumbnail is queued from the plaintext still in hand.
  */
-export async function uploadOne(folder: Folder, file: File, signal?: AbortSignal, progress?: (s: number, t: number) => void): Promise<UploadedFile | null> {
+export async function uploadOne(
+  folder: Folder,
+  file: File,
+  signal?: AbortSignal,
+  progress?: (s: number, t: number) => void,
+  media?: MediaMetadataV1 | null,
+): Promise<UploadedFile | null> {
   if (!folder.key) throw new Error('folder is not open')
+  const details = media === undefined ? await readMedia(file, signal) : (media ?? undefined)
   const location = folderLocation(folder)
   if (location.kind === 'remote') {
-    await uploadRemote(folder, location.shareId, file, signal ?? new AbortController().signal, progress ?? (() => {}))
+    await uploadRemote(folder, location.shareId, file, details, signal ?? new AbortController().signal, progress ?? (() => {}))
     return null
   }
   const uploaded = await streamUpload({
@@ -71,6 +79,7 @@ export async function uploadOne(folder: Folder, file: File, signal?: AbortSignal
     accessToken: freshAccessToken,
     onProgress: progress,
     signal,
+    media: details,
   })
   thumbnailAfterUpload(uploaded, file)
   return uploaded

@@ -74,7 +74,7 @@ export async function copyFile(
   progress: (sent: number, total: number) => void,
 ): Promise<void> {
   const blob = await readFile(source.folder, source.file, signal)
-  await uploadOne(dest, new File([blob], name, { type: source.file.mimeType }), signal, progress)
+  await uploadOne(dest, new File([blob], name, { type: source.file.mimeType }), signal, progress, source.file.media ?? undefined)
 }
 
 /** Files (not folders) under `folder`, all levels — for progress totals. */

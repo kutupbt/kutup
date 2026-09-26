@@ -408,7 +408,7 @@ fn decrypt_file_display(f: &crate::api::File, keys: &Keyring) -> FileDisplay {
         Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
             name: meta.name,
-            size: meta.size,
+            size: meta.size as i64,
         },
         Err(_) => FileDisplay {
             id: f.id.clone(),
@@ -520,7 +520,8 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
     let meta = FileMetadata {
         name: name.clone(),
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
-        size: data.len() as i64,
+        size: data.len() as u64,
+        media: None,
     };
     let record = crate::file_crypto::create(
         &share.remote_collection_id,

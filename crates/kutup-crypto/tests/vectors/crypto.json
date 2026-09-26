@@ -191,5 +191,39 @@
       "atMs": 1790000000000
     },
     "envelope": "S1VUUExMMQAAAAAAAAAAB8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zksqYjw55WEGJeMzizhV2kY1MX+p5srEee+Gg/jvp44PAtsismAeBj6xAxWXKKKPw=="
+  },
+  "fileMetadata": {
+    "description": "A Drive file's metadata plaintext (kutup-crypto/src/file_metadata.rs): canonical JSON; decoding refuses unknown fields and out-of-range values.",
+    "canonical": [
+      {
+        "input": "{\"size\":0,\"mimeType\":\"text/plain\",\"name\":\"a.txt\"}",
+        "output": "{\"name\":\"a.txt\",\"mimeType\":\"text/plain\",\"size\":0}"
+      },
+      {
+        "input": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"media\":{\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"camera\":\"Apple iPhone 15\",\"height\":3024,\"width\":4032,\"lon\":28.9784,\"lat\":41.0082,\"takenFrom\":\"exif\",\"takenOffset\":180,\"takenAt\":1719835200000}}",
+        "output": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"media\":{\"takenAt\":1719835200000,\"takenOffset\":180,\"takenFrom\":\"exif\",\"lat\":41.0082,\"lon\":28.9784,\"width\":4032,\"height\":3024,\"camera\":\"Apple iPhone 15\",\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
+      },
+      {
+        "input": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"durationMs\":61500,\"width\":1920,\"height\":1080,\"caption\":\"Doğum günü\"}}",
+        "output": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"width\":1920,\"height\":1080,\"durationMs\":61500,\"caption\":\"Doğum günü\"}}"
+      }
+    ],
+    "invalid": [
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"extra\":1}",
+      "{\"name\":\"\",\"mimeType\":\"\",\"size\":1}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":9007199254740992}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"lat\":0,\"lon\":0}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"takenAt\":1}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"width\":10}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"AAAA\"}}"
+    ],
+    "contentHash": {
+      "chunks": [
+        "aGVsbG8g",
+        "d29ybGQ="
+      ],
+      "hash": "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+    }
   }
 }

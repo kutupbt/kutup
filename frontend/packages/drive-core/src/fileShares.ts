@@ -10,7 +10,7 @@ import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
-import type { DriveFile, Folder } from './model'
+import { fileMetadataOf, type DriveFile, type Folder } from './model'
 
 /**
  * Sharing a single file (docs/plans/drive-file-sharing.md), like Proton
@@ -537,7 +537,7 @@ export function useRemoveFileAccess() {
         file.fileKey!,
         folder.keyEpoch,
         folder.key!,
-        { name: file.name!, mimeType: file.mimeType, size: file.size },
+        fileMetadataOf(file),
       )
       const members = await Promise.all(
         access.members

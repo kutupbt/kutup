@@ -70,7 +70,7 @@ envelope, under the file key, and the browser sorts.
 | `width`, `height` | after rotation |
 | `durationMs` | videos |
 | `camera` | make and model, up to 100 characters |
-| `hash` | BLAKE2b-256 of the content, base64 |
+| `hash` | SHA-256 of the content, base64 |
 | `caption` | the owner's text, up to 2,000 characters |
 
 - **One canonical format, in Rust.** The format moves into `kutup-crypto` (a

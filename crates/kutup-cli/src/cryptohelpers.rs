@@ -55,7 +55,7 @@ pub fn folder_keyring(
 /// Decrypts a file's name and size, returning `("[encrypted]", 0)` on failure.
 pub fn decrypt_file_meta(f: &File, keys: &Keyring) -> (String, i64) {
     match crate::file_crypto::open(f, keys) {
-        Ok((_, meta)) => (meta.name, meta.size),
+        Ok((_, meta)) => (meta.name, meta.size as i64),
         Err(_) => ("[encrypted]".to_string(), 0),
     }
 }

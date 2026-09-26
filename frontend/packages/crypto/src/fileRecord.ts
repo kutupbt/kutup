@@ -5,6 +5,7 @@ import {
   type DriveEnvelopeContextV1,
 } from './driveEnvelope'
 import { sealPreviousFileKeyV1 } from './fileKeyring'
+import { getCryptoWasm } from './rustWasm'
 import { generateKey } from './symmetric'
 
 /**
@@ -15,10 +16,36 @@ import { generateKey } from './symmetric'
  * own keys (a re-key adds one).
  */
 
+/** Where a photo's date came from (docs/plans/photos.md). */
+export type TakenFromV1 = 'exif' | 'video' | 'filename' | 'file' | 'edited'
+
+/**
+ * When and where a photo or video was taken, and what it is. Every field is
+ * optional; Rust (`kutup-crypto` `file_metadata`) holds the limits.
+ */
+export interface MediaMetadataV1 {
+  /** UTC milliseconds. */
+  takenAt?: number
+  /** The local time zone where it was taken, minutes east of UTC. */
+  takenOffset?: number
+  takenFrom?: TakenFromV1
+  lat?: number
+  lon?: number
+  /** As shown (after rotation). */
+  width?: number
+  height?: number
+  durationMs?: number
+  camera?: string
+  /** SHA-256 of the content, base64. */
+  hash?: string
+  caption?: string
+}
+
 export interface FileMetadataV1 {
   name: string
   mimeType: string
   size: number
+  media?: MediaMetadataV1
 }
 
 export interface FileWireV1 {
@@ -53,36 +80,18 @@ function validateRevision(value: number): void {
   }
 }
 
-function encodeMetadata(metadata: FileMetadataV1): Uint8Array {
-  if (typeof metadata.name !== 'string' || metadata.name.length === 0
-    || typeof metadata.mimeType !== 'string'
-    || !Number.isSafeInteger(metadata.size) || metadata.size < 0) {
-    throw new Error('invalid file metadata')
-  }
-  return new TextEncoder().encode(JSON.stringify({
-    name: metadata.name,
-    mimeType: metadata.mimeType,
-    size: metadata.size,
-  }))
+/** The canonical bytes, checked by the Rust format (`canonicalFileMetadata`). */
+async function encodeMetadata(metadata: FileMetadataV1): Promise<Uint8Array> {
+  const module = await getCryptoWasm()
+  const plain: FileMetadataV1 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size }
+  if (metadata.media) plain.media = metadata.media
+  return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))
 }
 
-function decodeMetadata(bytes: Uint8Array): FileMetadataV1 {
-  const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('invalid file metadata')
-  }
-  const record = value as Record<string, unknown>
-  if (Object.keys(record).sort().join(',') !== 'mimeType,name,size'
-    || typeof record.name !== 'string' || record.name.length === 0
-    || typeof record.mimeType !== 'string'
-    || !Number.isSafeInteger(record.size) || (record.size as number) < 0) {
-    throw new Error('invalid file metadata')
-  }
-  return {
-    name: record.name,
-    mimeType: record.mimeType,
-    size: record.size as number,
-  }
+async function decodeMetadata(bytes: Uint8Array): Promise<FileMetadataV1> {
+  const module = await getCryptoWasm()
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  return JSON.parse(module.canonicalFileMetadata(text)) as FileMetadataV1
 }
 
 /** The file key's wrap under its folder's key at `keyEpoch`. */
@@ -135,7 +144,7 @@ export async function createFileRecordV1(
     fileKeyContext(fileId, collectionId, keyEpoch, 1),
   )
   const metadataEnvelope = await sealDriveEnvelope(
-    encodeMetadata(metadata),
+    await encodeMetadata(metadata),
     fileKey,
     metadataContext(fileId, 1, 1),
   )
@@ -166,7 +175,7 @@ export async function openFileRecordV1(
     fileKey,
     metadataContext(row.id, row.keyGeneration, row.metadataRevision),
   )
-  return { fileKey, metadata: decodeMetadata(metadataBytes) }
+  return { fileKey, metadata: await decodeMetadata(metadataBytes) }
 }
 
 /**
@@ -193,7 +202,7 @@ export async function renameFileRecordV1(
   validateRevision(row.metadataRevision)
   const metadataRevision = row.metadataRevision + 1
   const metadataEnvelope = await sealDriveEnvelope(
-    encodeMetadata(metadata),
+    await encodeMetadata(metadata),
     fileKey,
     metadataContext(row.id, row.keyGeneration, metadataRevision),
   )
@@ -228,7 +237,7 @@ export async function rekeyFileRecordV1(
     fileKeyContext(row.id, row.collectionId, keyEpoch, keyGeneration),
   )
   const metadataEnvelope = await sealDriveEnvelope(
-    encodeMetadata(metadata),
+    await encodeMetadata(metadata),
     fileKey,
     metadataContext(row.id, keyGeneration, row.metadataRevision),
   )

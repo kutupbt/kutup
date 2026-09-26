@@ -555,7 +555,14 @@ mod tests {
             DriveEnvelopeContextV1::public_link_file_key(other, owner, 3).unwrap(),
             DriveEnvelopeContextV1::public_link_file_key(file, other, 3).unwrap(),
             // A folder link's wrap is a different thing.
-            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::PublicLinkCollectionKey, 3, 1, file, owner).unwrap(),
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::PublicLinkCollectionKey,
+                3,
+                1,
+                file,
+                owner,
+            )
+            .unwrap(),
         ] {
             assert!(open_b64(&sealed, &link_key, wrong).is_err());
         }

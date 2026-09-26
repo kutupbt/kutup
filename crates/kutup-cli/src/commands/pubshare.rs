@@ -148,7 +148,7 @@ fn decrypt_display(f: &crate::api::File, keys: &Keyring) -> FileDisplay {
         Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
             name: meta.name,
-            size: meta.size,
+            size: meta.size as i64,
         },
         Err(_) => FileDisplay {
             id: f.id.clone(),

@@ -153,7 +153,7 @@ fn file_meta(
         Ok(metadata)
     };
     match inner() {
-        Ok(meta) => (meta.name, Some(meta.size)),
+        Ok(meta) => (meta.name, Some(meta.size as i64)),
         Err(_) => ("[encrypted]".to_string(), None),
     }
 }

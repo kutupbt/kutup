@@ -76,8 +76,8 @@ pub fn open_metadata(file: &File, file_key: &[u8]) -> Result<FileMetadata> {
         )
         .context("invalid file envelope context")?,
     )?;
-    let metadata: FileMetadata = serde_json::from_slice(&metadata)?;
-    validate_metadata(&metadata)?;
+    let metadata = kutup_crypto::file_metadata::decode(&metadata)
+        .map_err(|_| anyhow!("invalid file metadata"))?;
     Ok(metadata)
 }
 
@@ -136,10 +136,9 @@ pub fn rename_request(
 }
 
 fn validate_metadata(metadata: &FileMetadata) -> Result<()> {
-    if metadata.name.is_empty() || metadata.size < 0 {
-        bail!("invalid file metadata");
-    }
-    Ok(())
+    metadata
+        .validate()
+        .map_err(|_| anyhow!("invalid file metadata"))
 }
 
 fn seal_file_key(
@@ -167,7 +166,8 @@ fn seal_metadata(
 ) -> Result<String> {
     validate_metadata(metadata)?;
     Ok(drive_envelope::seal_b64(
-        &serde_json::to_vec(metadata)?,
+        &kutup_crypto::file_metadata::encode(metadata)
+            .map_err(|_| anyhow!("invalid file metadata"))?,
         file_key,
         DriveEnvelopeContextV1::file_metadata(file_id, generation, revision)
             .context("invalid file envelope context")?,
@@ -291,6 +291,7 @@ mod tests {
             name: "notes.md".into(),
             mime_type: "text/markdown".into(),
             size: 42,
+            media: None,
         }
     }
 
@@ -374,6 +375,38 @@ mod tests {
             ..file
         };
         assert_eq!(open_metadata(&file, &file_key).unwrap().name, "renamed.md");
+    }
+
+    #[test]
+    fn rename_keeps_a_photos_details() {
+        let folder_key = [7u8; 32];
+        let (file, file_key) = uploaded(&folder_key);
+        let mut photo = metadata();
+        photo.media = Some(kutup_crypto::file_metadata::MediaMetadataV1 {
+            taken_at: Some(1_719_835_200_000),
+            taken_from: Some(kutup_crypto::file_metadata::TakenFrom::Exif),
+            lat: Some(41.0082),
+            lon: Some(28.9784),
+            ..Default::default()
+        });
+        let request = rename_request(&file, &file_key, &photo).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 2,
+            ..file
+        };
+        // What `kutup mv` does: open, change the name, seal.
+        let mut opened = open_metadata(&file, &file_key).unwrap();
+        opened.name = "istanbul.jpg".into();
+        let request = rename_request(&file, &file_key, &opened).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 3,
+            ..file
+        };
+        let reopened = open_metadata(&file, &file_key).unwrap();
+        assert_eq!(reopened.name, "istanbul.jpg");
+        assert_eq!(reopened.media, photo.media);
     }
 
     #[test]
