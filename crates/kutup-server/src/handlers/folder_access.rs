@@ -846,6 +846,7 @@ pub async fn rekey(
     tx.commit().await?;
     // Live sessions reconnect under the new key.
     state.hub.close_room(&file_id.to_string());
+    state.collab_federation.close_file(&state, file_id);
     Ok((
         StatusCode::OK,
         Json(RekeyResult {

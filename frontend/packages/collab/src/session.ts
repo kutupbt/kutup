@@ -16,7 +16,7 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protoc
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
-import { claimSeed, listVersions, registerDevice } from './api'
+import { claimSeed, listVersions, localBase, registerDevice } from './api'
 import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
 import { encodePubKeyB64, generateDeviceKeypair, loadKeypair, saveKeypair } from './devices'
 import { KIND } from './envelope'
@@ -60,6 +60,12 @@ export type RestoreChoice = 'save-and-restore' | 'restore-only'
 
 export interface CollabSessionOptions {
   fileId: string
+  /**
+   * Where the file's calls go (versions, the seed, the socket): here by
+   * default; for a file on another server, its route through this server
+   * (docs/plans/collab-federation.md).
+   */
+  base?: string
   /** The file's current key and its generation: frames and saved states are sealed under it. */
   fileKey: Uint8Array
   keyGeneration: number
@@ -113,6 +119,7 @@ export interface CollabSession {
  */
 export async function openCollabSession(options: CollabSessionOptions): Promise<CollabSession | null> {
   const { fileId, fileKey, keyGeneration, fileKeyAt, readOnly, signal } = options
+  const base = options.base ?? localBase(fileId)
 
   // 1. A device keypair and registered device id.
   let keypair = loadKeypair()
@@ -168,6 +175,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     : new SnapshotTrigger({
         onSnapshot: (versionId, explicit) => options.onSnapshot?.(versionId, explicit),
         fileId,
+        base,
         ydoc: doc,
         getSeq: () => applied,
         encryptSnapshot: async (bytes: Uint8Array) => {
@@ -180,9 +188,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   const restore =
     trigger &&
     (async (versionId: string, choice: RestoreChoice) => {
-      const r = await api.get(`/files/${fileId}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
+      const r = await api.get(`${base}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
-      const generation = (await listVersions(fileId)).find((v) => v.id === versionId)?.keyGeneration ?? keyGeneration
+      const generation = (await listVersions(fileId, base)).find((v) => v.id === versionId)?.keyGeneration ?? keyGeneration
       const state = await decryptFileBlobV1(blob, await keyOf(generation), { fileId, generation })
       const old = new Y.Doc()
       Y.applyUpdateV2(old, state)
@@ -251,11 +259,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   let maySeed = false
   let neverSaved = false
   try {
-    const versions = await listVersions(fileId)
+    const versions = await listVersions(fileId, base)
     neverSaved = versions.length === 0
     if (versions.length > 0) {
       const latest = versions[0]
-      const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+      const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
       if (blob.length > 0) {
         const state = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), {
@@ -267,7 +275,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       }
     } else if (options.seed && !readOnly) {
       try {
-        maySeed = (await claimSeed(fileId)).committed
+        maySeed = (await claimSeed(fileId, base)).committed
       } catch (error) {
         console.warn('collab: claimSeed failed, opening without seed', error)
       }
@@ -292,10 +300,10 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   // A saved version trimmed the log past where this document was: merge
   // that version in (merging is safe), and the log continues from there.
   const catchUp = async () => {
-    const versions = await listVersions(fileId)
+    const versions = await listVersions(fileId, base)
     const latest = versions[0]
     if (!latest) return 0
-    const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+    const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
     const blob = new Uint8Array(r.data as ArrayBuffer)
     if (blob.length > 0) {
       const state = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), { fileId, generation: latest.keyGeneration })
@@ -306,7 +314,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
 
   // 6. The relay: replays what came after the saved state, then live frames.
   transport = new CollabTransport({
-    url: () => collabSocketUrl(fileId, device),
+    url: () => collabSocketUrl(fileId, device, base),
     lastSeenSeq: () => applied,
     onPosition: async (message: PositionMsg) => {
       if (message.type === 'stored') {

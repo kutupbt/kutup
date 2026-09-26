@@ -110,6 +110,7 @@ pub struct FederatedFileMember {
     pub recipient_username: String,
     pub recipient_server: String,
     pub recipient_incarnation_id: String,
+    pub can_edit: bool,
     /// The generation their envelope opens; below the file's, it waits.
     pub key_generation: i32,
     #[serde(with = "time::serde::rfc3339")]
@@ -575,10 +576,10 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
 }
 
 async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FederatedFileMember>> {
-    type Row = (Uuid, String, String, String, i32, OffsetDateTime);
+    type Row = (Uuid, String, String, String, bool, i32, OffsetDateTime);
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, recipient_username, recipient_domain, recipient_incarnation_id,
-                key_generation, created_at
+                can_edit, key_generation, created_at
          FROM federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
     )
     .bind(file_id)
@@ -592,6 +593,7 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
                 recipient_username,
                 recipient_server,
                 recipient_incarnation_id,
+                can_edit,
                 key_generation,
                 created_at,
             )| {
@@ -600,6 +602,7 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
                     recipient_username,
                     recipient_server,
                     recipient_incarnation_id,
+                    can_edit,
                     key_generation,
                     created_at,
                 }
@@ -901,6 +904,7 @@ pub async fn rotate(
     tx.commit().await?;
     // Live sessions reconnect under the new key; the removed are refused.
     state.hub.close_room(&file_id.to_string());
+    state.collab_federation.close_file(&state, file_id);
     Ok(Json(file_access_of(&state, file_id, next, true).await?).into_response())
 }
 

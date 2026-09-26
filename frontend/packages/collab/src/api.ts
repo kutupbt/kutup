@@ -48,25 +48,35 @@ export interface VersionRow {
   kind: 'file' | 'yjs'
   /** The generation of the file key it was sealed under (docs/plans/drive-move.md). */
   keyGeneration: number
+  /** Saved by someone on another server (`user@server`); the owner is `authorUserId` then. */
+  remoteAuthor?: string
 }
 
-export async function listVersions(fileId: string): Promise<VersionRow[]> {
-  const r = await api.get<VersionRow[]>(`/files/${fileId}/versions`)
+/**
+ * Where a file's collaboration calls go, under the API: `/files/:id` here;
+ * for a file on another server, its route through this server
+ * (docs/plans/collab-federation.md), which takes the same suffixes.
+ */
+export const localBase = (fileId: string) => `/files/${fileId}`
+
+export async function listVersions(fileId: string, base = localBase(fileId)): Promise<VersionRow[]> {
+  const r = await api.get<VersionRow[]>(`${base}/versions`)
   return r.data
 }
 
-export function getVersionDownloadUrl(fileId: string, vid: string): string {
+export function getVersionDownloadUrl(fileId: string, vid: string, base = localBase(fileId)): string {
   // Includes /api prefix because this URL is consumed directly (e.g. anchor href),
   // not via the axios instance which adds the baseURL itself.
-  return `/api/files/${fileId}/versions/${vid}/download`
+  return `/api${base}/versions/${vid}/download`
 }
 
 export async function patchVersion(
   fileId: string,
   vid: string,
   patch: { label?: string; keepForever?: boolean },
+  base = localBase(fileId),
 ): Promise<VersionRow> {
-  const r = await api.patch<VersionRow>(`/files/${fileId}/versions/${vid}`, patch)
+  const r = await api.patch<VersionRow>(`${base}/versions/${vid}`, patch)
   return r.data
 }
 
@@ -80,8 +90,8 @@ export async function patchVersion(
  * tab sessions) see committed=false and must wait for WS replay to
  * populate their local Y.Text.
  */
-export async function claimSeed(fileId: string): Promise<{ committed: boolean }> {
-  const r = await api.post<{ committed: boolean }>(`/files/${fileId}/claim-seed`)
+export async function claimSeed(fileId: string, base = localBase(fileId)): Promise<{ committed: boolean }> {
+  const r = await api.post<{ committed: boolean }>(`${base}/claim-seed`)
   return r.data
 }
 
@@ -101,7 +111,12 @@ export interface NewVersion {
  * {@link QuotaExceededError}: notes' autosave disarms itself, explicit saves
  * and restores show a localized toast.
  */
-export async function createVersion(fileId: string, sealed: Uint8Array, version: NewVersion): Promise<VersionRow> {
+export async function createVersion(
+  fileId: string,
+  sealed: Uint8Array,
+  version: NewVersion,
+  base = localBase(fileId),
+): Promise<VersionRow> {
   const form = new FormData()
   form.append('kind', version.kind)
   form.append('seqAtSnapshot', String(version.seqAtSnapshot))
@@ -110,7 +125,7 @@ export async function createVersion(fileId: string, sealed: Uint8Array, version:
   if (version.label) form.append('label', version.label)
   form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
-    const r = await api.post<VersionRow>(`/files/${fileId}/versions`, form)
+    const r = await api.post<VersionRow>(`${base}/versions`, form)
     return r.data
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 413) {

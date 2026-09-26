@@ -62,6 +62,8 @@ interface Props {
   /** The file key of an older generation, for what was stored before the
    *  file's last re-key (log frames, saved states; docs/plans/drive-move.md). */
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
+  /** A file on another server: its calls go through this server (see `localBase`). */
+  base?: string
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
@@ -77,6 +79,7 @@ export default function TextCollabEditor({
   initialContent,
   readOnly = false,
   fileKeyAt,
+  base,
 }: Props) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -176,11 +179,14 @@ export default function TextCollabEditor({
     void (async () => {
       // Only editors save; each saved version also redraws the thumbnail
       // (throttled; see noteThumbnailScheduler).
-      const thumbnails = readOnly ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
+      // Thumbnails are stored with the file's own server: not from here for a
+      // file on another one.
+      const thumbnails = readOnly || base ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
       let ytext: Y.Text | null = null
       // 1–6: the shared editing session (@kutup/collab/session).
       const session = await openCollabSession({
         fileId,
+        base,
         fileKey,
         keyGeneration,
         fileKeyAt,
@@ -574,6 +580,7 @@ export default function TextCollabEditor({
             </header>
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
               <VersionHistoryPanel
+                base={base}
                 fileId={fileId}
                 onRestore={(vid) => setPendingRestoreVersionId(vid)}
                 readOnly={readOnly}

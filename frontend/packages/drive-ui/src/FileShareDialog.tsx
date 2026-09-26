@@ -223,7 +223,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 key={f.id}
                 icon={person.profile ? <PersonAvatar {...person} /> : <Server className="size-4" aria-hidden />}
                 name={person.name}
-                detail={[person.profile ? account : null, t('fileShare.canView'), t('fileShare.otherServer'), behind].filter(Boolean).join(' · ')}
+                detail={[person.profile ? account : null, f.canEdit ? t('fileShare.canEdit') : t('fileShare.canView'), t('fileShare.otherServer'), behind].filter(Boolean).join(' · ')}
                 onRemove={owner ? () => setPending({ federatedId: f.id, name: person.name }) : undefined}
                 removeLabel={t('fileShare.removeNamed', { name: person.name })}
                 busy={remove.isPending}

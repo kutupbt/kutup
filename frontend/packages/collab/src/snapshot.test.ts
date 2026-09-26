@@ -121,7 +121,8 @@ describe('SnapshotTrigger', () => {
     const t = new SnapshotTrigger({ fileId: 'f1', ydoc, encryptSnapshot: encrypt, getSeq: () => 0, onSnapshot })
     await t.forceSave('Milestone', true)
     expect(encrypt).not.toHaveBeenCalled()
-    expect(patchVersionMock).toHaveBeenCalledWith('f1', 'latest', { label: 'Milestone', keepForever: true })
+    // Here (no base): the local routes.
+    expect(patchVersionMock).toHaveBeenCalledWith('f1', 'latest', { label: 'Milestone', keepForever: true }, undefined)
     expect(onSnapshot).toHaveBeenCalledWith('latest', true)
     t.destroy()
   })
@@ -136,7 +137,20 @@ describe('SnapshotTrigger', () => {
     await t.forceSave()
     expect(recordSnapshotMock).toHaveBeenCalledWith('f1', new Uint8Array([9]), {
       kind: 'yjs', seqAtSnapshot: 12, docKeyId: 4, label: null, keepForever: false,
-    })
+    }, undefined)
+    t.destroy()
+  })
+
+  it('saves a file on another server through its route here', async () => {
+    const ydoc = new Y.Doc()
+    const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([7]), storageHints: { docKeyId: 1, sizeBytes: 1 } })
+    recordSnapshotMock.mockReset()
+    recordSnapshotMock.mockResolvedValue({ id: 'v1' })
+    const base = '/drive/federation/file-shares/s1'
+    const t = new SnapshotTrigger({ fileId: 'f1', base, ydoc, encryptSnapshot: encrypt, getSeq: () => 3 })
+    ydoc.getText('content').insert(0, 'x')
+    await t.forceSave()
+    expect(recordSnapshotMock).toHaveBeenCalledWith('f1', new Uint8Array([7]), expect.objectContaining({ seqAtSnapshot: 3 }), base)
     t.destroy()
   })
 })

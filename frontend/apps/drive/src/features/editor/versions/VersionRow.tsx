@@ -15,9 +15,11 @@ interface Props {
   onRestore?: (versionId: string) => void
   /** View-only access: the history is shown, not changed. */
   readOnly?: boolean
+  /** A file on another server: its calls go through this server. */
+  base?: string
 }
 
-export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = false }: Props) {
+export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = false, base }: Props) {
   const { t, i18n } = useTranslation()
   const [naming, setNaming] = useState(false)
   const [name, setName] = useState(v.label ?? '')
@@ -43,7 +45,7 @@ export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = 
   async function update(patch: Parameters<typeof patchVersion>[2]): Promise<boolean> {
     setBusy(true)
     try {
-      onChange(await patchVersion(fileId, v.id, patch))
+      onChange(await patchVersion(fileId, v.id, patch, base))
       return true
     } catch {
       toast.error(t('editor.versions.updateFailed'))

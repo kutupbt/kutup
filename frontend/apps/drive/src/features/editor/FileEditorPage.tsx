@@ -21,7 +21,7 @@ import { rekeyFile } from '@kutup/drive-core/rekey'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { folderPath, mapsListUrl } from '../drive/paths'
 import { isListName } from '@kutup/map/list'
 import { currentContent } from './content'
@@ -135,11 +135,17 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     let cancelled = false
     let blobUrl: string | null = null
     void (async () => {
-      const editor = container.source === 'remote' ? null : editorKindFor(name)
-      const viewer = container.source === 'remote' ? null : chooseViewer(name)
+      const location = fileLocation(container)
+      const remote = location.kind !== 'local'
+      // On another server, notes are edited live through this one
+      // (docs/plans/collab-federation.md); office documents and whiteboards
+      // are not yet.
+      const kind = editorKindFor(name)
+      const editor = remote && kind !== 'text' ? null : kind
+      const viewer = chooseViewer(name)
       // An editor writes only under the folder's current key: a file the
       // folder rotated past moves to it first (docs/plans/drive-share-revocation.md).
-      if (editor && container.canUpload && f.keyEpoch < container.keyEpoch) {
+      if (editor && !remote && container.canUpload && f.keyEpoch < container.keyEpoch) {
         try {
           const rekeyed = await rekeyFile(container, f)
           void queryClient.invalidateQueries({ queryKey: filesKey(container.id) })
@@ -167,11 +173,11 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
           bytes =
             content.kind === 'version'
               ? await loadVersionBytes(await sealedAt(f, content.keyGeneration), content.path)
-              : await loadOriginal(f, await sealedAt(f, f.contentKeyGeneration))
+              : await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
         } else {
           // Notes pick their latest version up themselves; the upload only
           // seeds a note that has never been edited.
-          bytes = await loadOriginal(f, await sealedAt(f, f.contentKeyGeneration))
+          bytes = await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
         }
         if (cancelled) return
         setKeys({ target, fileKeyAt: keyOf })
@@ -243,8 +249,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   )
 }
 
-async function loadOriginal(file: DriveFile, target: SnapshotTarget): Promise<Uint8Array> {
-  const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/download`, { responseType: 'arraybuffer' })
+async function loadOriginal(location: FileLocation, file: DriveFile, target: SnapshotTarget): Promise<Uint8Array> {
+  const { data } = await api.get<ArrayBuffer>(contentPath(location, file.id), { responseType: 'arraybuffer' })
   return decryptFileBlobV1(new Uint8Array(data), target.fileKey, target.context)
 }
 
@@ -337,14 +343,17 @@ function Workspace({
       fileKeyAt: keys.fileKeyAt,
     }
     switch (opened.kind) {
-      case 'text':
+      case 'text': {
+        const location = fileLocation(folder)
         return (
           <TextCollabEditor
             {...common}
             initialContent={opened.initialText}
             readOnly={readOnly}
+            base={location.kind === 'local' ? undefined : collabBase(location, file.id)}
           />
         )
+      }
       case 'office':
         return (
           <OfficeEditor

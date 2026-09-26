@@ -30,6 +30,8 @@ export interface SnapshotEncryptResult {
 }
 
 export interface SnapshotOpts {
+  /** Where the file's calls go (see `localBase`); here by default. */
+  base?: string
   fileId: string
   ydoc: Y.Doc
   /** Encrypt and frame the encoded state as a complete persistent blob. */
@@ -94,9 +96,9 @@ export class SnapshotTrigger {
       // Naming unchanged content names the version that already holds it
       // (a pointer, as CryptPad's snapshots are) rather than storing a copy.
       if (this.updatesSince === 0 && label) {
-        const latest = this.latestVersionId ?? (await listVersions(this.opts.fileId))[0]?.id
+        const latest = this.latestVersionId ?? (await listVersions(this.opts.fileId, this.opts.base))[0]?.id
         if (latest) {
-          await patchVersion(this.opts.fileId, latest, { label, keepForever })
+          await patchVersion(this.opts.fileId, latest, { label, keepForever }, this.opts.base)
           this.opts.onSnapshot?.(latest, explicit)
           return
         }
@@ -113,7 +115,7 @@ export class SnapshotTrigger {
         docKeyId: storageHints.docKeyId,
         label: label ?? null,
         keepForever,
-      })
+      }, this.opts.base)
       this.latestVersionId = recorded.id
 
       this.updatesSince = 0

@@ -128,9 +128,7 @@ export function SharedPage() {
           onOpen={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              // From another server: downloaded, as files in folders there are.
-              if (s?.file.fileKey && s.remoteShareId) void downloadShared(s)
-              else if (s?.file.fileKey) openFile(navigate, s.container, s.file)
+              if (s?.file.fileKey) openFile(navigate, s.container, s.file)
               else if (s?.state === 'waiting') toast.info(t('shared.waitingHint'))
               return
             }
@@ -145,9 +143,7 @@ export function SharedPage() {
                 : []
               if (!s?.file.fileKey) return leave
               return [
-                ...(s.remoteShareId
-                  ? []
-                  : [{ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) }]),
+                { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) },
                 {
                   id: 'download',
                   label: t('drive.actions.download'),

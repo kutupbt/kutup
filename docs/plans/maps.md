@@ -235,9 +235,8 @@ goes beyond Signal parity.
      (as in Drive); anyone in a list can send one of its places into a chat
      as a location message. "Editors can share" (the owner allowing members
      to add people) is a later change to Drive sharing as a whole.
-   - Editing a list with someone on another server waits for editing across
-     servers in Drive generally (notes included); they can view and
-     download it.
+   - Lists are edited live with people on other servers too
+     (docs/plans/collab-federation.md).
    4a progress (2026-09-26): the `maps.` origin (KUTUP_MAPS_URL, `web-maps`
    sessions, migration 057, the frontend image); Drive's core in
    `@kutup/drive-core`; the live editing session in `@kutup/collab/session`,
@@ -317,8 +316,10 @@ goes beyond Signal parity.
    remounted everything, including Maps' map.
    Across servers (2026-09-26): lists in folders shared from another server,
    and lists shared by themselves from another server, show in Maps with
-   their places as last saved (relayed by your server), view only. Waiting
-   lists keep their name. Editing across servers waits for Drive's.
+   their places as last saved (relayed by your server). Waiting lists keep
+   their name. Opening one joins its live session through your server; it is
+   editable with "Can add and edit files" on the folder, or "Can edit" on
+   the list, and view only otherwise.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

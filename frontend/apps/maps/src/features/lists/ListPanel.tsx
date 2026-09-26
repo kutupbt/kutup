@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Download, Eye, FileDown, MapPin, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, Upload, UserPlus, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { shareRole, useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
-import { fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useRenameFile, useTrashFile } from '@kutup/drive-core/mutations'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
@@ -28,7 +28,6 @@ import { sendToChat } from './chat'
 import { asPlaces, IMPORT_ACCEPT, PlaceFileTooLarge, readChosenFile, saveFile, UnreadablePlaceFile } from './files'
 import { PlaceDialog, type PlaceDraft } from './PlaceDialog'
 import { TitleDialog } from './TitleDialog'
-import { savedPlaces, savedPlacesKey } from './savedPlaces'
 import { useListSession } from './useListSession'
 
 type Failure = 'notFound' | 'undecryptable' | 'waiting' | 'notAList' | 'loadFailed'
@@ -108,9 +107,7 @@ function OpenList({ cid, shareId, fid }: { cid: string | null; shareId: string |
       folder={folder ?? picked.folder}
       file={file ?? picked.file}
       opened={picked.file}
-      // On another server: its places as last saved, view only.
-      live={fileLocation(picked.folder).kind === 'local'}
-      readOnly={!picked.folder.canUpload || fileLocation(picked.folder).kind !== 'local'}
+      readOnly={!picked.folder.canUpload}
       editsWait={sharedFile?.state === 'editsWait' && sharedFile.canEdit}
     />
   )
@@ -141,7 +138,6 @@ function Workspace({
   folder,
   file,
   opened,
-  live,
   readOnly,
   editsWait,
 }: {
@@ -150,8 +146,6 @@ function Workspace({
   file: DriveFile
   /** The file as it opened, whose key the session uses. */
   opened: DriveFile
-  /** Edited together here; false for a list on another server. */
-  live: boolean
   readOnly: boolean
   editsWait: boolean
 }) {
@@ -161,21 +155,8 @@ function Workspace({
   const session = useRequiredSession()
   const stage = useStage()
   const atlas = useAtlas()
-  const liveList = useListSession(live ? opened : null, readOnly)
-  const saved = useQuery({
-    queryKey: [...savedPlacesKey(opened.id), 'remote', opened.keyGeneration],
-    enabled: !live,
-    queryFn: () => savedPlaces(opened, folder),
-  })
-  const list = live
-    ? liveList
-    : {
-        status: (saved.isPending ? 'connecting' : saved.isError ? 'error' : 'ready'),
-        places: saved.data ?? [],
-        doc: null,
-        session: null,
-        collaborators: 0,
-      }
+  // Here or on another server (through this one): the same live session.
+  const list = useListSession(opened, readOnly, folder)
   const effectiveMap = useEffectiveMap()
   const rename = useRenameFile()
   const trash = useTrashFile()
@@ -286,9 +267,8 @@ function Workspace({
     }
   }
 
-  const statusText = !live
-    ? t('list.status.otherServer')
-    : list.status === 'error'
+  const statusText =
+    list.status === 'error'
       ? t('list.status.error')
       : list.status === 'connecting'
         ? t('list.status.connecting')

@@ -534,7 +534,9 @@ Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-foreve
 Versions are stored with one request (`POST /files/:fileId/versions`, multipart, charged by measured size, one object per version; `docs/plans/drive-versions-v2.md`) and are file-type-agnostic — notes (`kind = yjs`), office docs and whiteboards (`kind = file`) all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
 
 ### Federation, sharing
-Existing collection-share + federation flows are unchanged. A live-edited file is still a regular `files` row with an encrypted blob; non-editing users continue to download it as today.
+A live-edited file is still a regular `files` row with an encrypted blob; non-editing users download it as usual.
+
+Across servers, each browser connects only to its own server. For a file on another server, that server (the bridge) keeps a local room, subscribes at the file's server (home) over the signed Drive federation transport, sends its users' frames home in batches, and receives home's new frames by push, never by polling. Home applies the same checks as for a local frame plus the share's edit permission, and stores remote senders as `(domain, device)`. Versions and the seed are relayed the same way. Only notes and place lists use it so far; see `docs/plans/collab-federation.md`.
 
 ### Replay protection
 Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.

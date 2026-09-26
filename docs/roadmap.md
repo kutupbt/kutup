@@ -543,14 +543,12 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
-### Drive · editing across servers
+### Drive · office documents and whiteboards across servers
 
-Folders and files shared across servers can be opened and downloaded (with
-notes and place lists as last saved), but not edited together live: the
-collaboration relay (`/api/files/:id/collab/ws`) is per server. Editing
-across servers needs a federated relay: the owner's server hosting the room,
-and remote editors' servers bridging to it over the signed transport.
-Uploads into shared folders already cross servers. Also still to come:
+Notes and place lists are edited together live across servers
+(docs/plans/collab-federation.md). Office documents and whiteboards from
+another server open for viewing and download only, until their editors use
+the routed endpoints that notes and lists already use. Also still to come:
 shared files in Drive search.
 
 ### Federation polish

@@ -11,6 +11,7 @@ mod chat_federation;
 mod chat_hub;
 mod chat_media_federation;
 mod chat_mls;
+mod collab_federation;
 mod config;
 mod db;
 mod drive_federation;
@@ -107,6 +108,8 @@ pub struct AppState {
     pub(crate) web_push: Option<Arc<web_push::WebPush>>,
     /// Map providers, people's choices and the tile relay (docs/plans/maps.md).
     pub(crate) maps: Arc<maps::MapService>,
+    /// Live editing across servers (docs/plans/collab-federation.md).
+    pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
 }
 
 #[tokio::main]
@@ -315,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
+        collab_federation: Arc::new(collab_federation::CollabFederation::default()),
         chat_hub,
         federation,
         sealed_sender,
@@ -1091,6 +1095,58 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/drive/collab/subscribe",
+            post(collab_federation::subscribe)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/unsubscribe",
+            post(collab_federation::unsubscribe)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/frames",
+            post(collab_federation::frames)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/log",
+            post(collab_federation::log).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/list",
+            post(collab_federation::versions_list)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/create",
+            post(collab_federation::versions_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/patch",
+            post(collab_federation::versions_patch)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/claim-seed",
+            post(collab_federation::claim_seed)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/push",
+            post(collab_federation::receive_push)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/files/:fileId/versions/:vid",
+            get(collab_federation::version_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/file-invite",
             get(drive_federation_files::get_file_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1129,6 +1185,52 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/state",
             get(drive_federation_files::proxy_folder_file_state),
+        )
+        // Live editing of files on other servers, relayed through this one:
+        // the same suffixes as `/api/files/:id/…`.
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/collab/ws",
+            get(collab_federation::ws_folder_file),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/collab/ws",
+            get(collab_federation::ws_shared_file),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions",
+            get(collab_federation::folder_versions)
+                .post(collab_federation::folder_version_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions",
+            get(collab_federation::file_versions)
+                .post(collab_federation::file_version_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid/download",
+            get(collab_federation::folder_version_download),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions/:vid/download",
+            get(collab_federation::file_version_download),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid",
+            patch(collab_federation::folder_version_patch),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions/:vid",
+            patch(collab_federation::file_version_patch),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/claim-seed",
+            post(collab_federation::folder_claim_seed),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/claim-seed",
+            post(collab_federation::file_claim_seed),
         )
         .route(
             "/api/drive/federation/file-shares",

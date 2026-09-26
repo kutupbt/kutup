@@ -146,6 +146,7 @@ interface RemoteFileShareNow {
   file: FileRowLike
   shareEnvelope: string
   keyGeneration: number
+  canEdit: boolean
   ownerUserId: string
   ownerAccount: string
   ownerIncarnationId: string
@@ -163,8 +164,8 @@ interface RemoteFileShareRow {
 
 /**
  * A file shared from another server (docs/plans/drive-file-sharing.md,
- * slice 2): read through this server; viewing and downloading only, as
- * editing across servers is not there yet. Only owners share across servers.
+ * slice 2): read, and edited live if shared for editing, through this
+ * server (docs/plans/collab-federation.md). Only owners share across servers.
  */
 async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<SharedFile> {
   try {
@@ -173,7 +174,7 @@ async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<S
       {
         file: data.file,
         shareEnvelope: data.shareEnvelope,
-        canEdit: false,
+        canEdit: data.canEdit,
         keyGeneration: data.keyGeneration,
         folderKeyCurrent: true,
         ownerUserId: data.ownerUserId,
@@ -274,6 +275,7 @@ export interface FederatedFileMember {
   recipientUsername: string
   recipientServer: string
   recipientIncarnationId: string
+  canEdit: boolean
   keyGeneration: number
   createdAt: string
 }
@@ -485,6 +487,7 @@ export function useShareFile() {
             recipientUsername: username,
             recipientServer: server,
             shareEnvelope,
+            canEdit: input.canEdit,
           })
           return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
         }

@@ -194,11 +194,7 @@ export function FolderPage() {
         return
       }
       if (!target.file.fileKey) return
-      if (target.folder.source === 'remote') {
-        // Files on another server are downloaded rather than opened in place.
-        void downloadFile(target.folder, target.file).catch(() => {})
-        return
-      }
+      // Files on another server open here too, read (and notes edited) through this server.
       openFile(navigate, target.folder, target.file)
     },
     [lookup, navigate],
@@ -281,7 +277,7 @@ export function FolderPage() {
             ? [{ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true }]
             : []
         }
-        if (container.source !== 'remote') {
+        {
           actions.push({
             id: 'open',
             label: isListName(file.name) ? t('drive.actions.openInMaps') : t('drive.actions.open'),

@@ -151,6 +151,7 @@ pub async fn move_file(
     tx.commit().await?;
     // Who may open it changed: live sessions reconnect and are checked again.
     state.hub.close_room(&file_id.to_string());
+    state.collab_federation.close_file(&state, file_id);
     Ok(Json(MoveFileResult {
         collection_id: to.to_string(),
         key_epoch: target_epoch,

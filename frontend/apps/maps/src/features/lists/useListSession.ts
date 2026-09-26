@@ -6,7 +6,7 @@ import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
-import type { DriveFile } from '@kutup/drive-core/model'
+import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { fillDoc, placesMap, placesOf, replacePlaces, type Place } from '@kutup/map/list'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { useRequiredSession } from '@kutup/session/store'
@@ -30,7 +30,7 @@ export interface ListSession {
  * as a version after a pause, as notes are. `file` must be the file as it
  * opened (a new key would reopen the session).
  */
-export function useListSession(file: DriveFile | null, readOnly: boolean): ListSession {
+export function useListSession(file: DriveFile | null, readOnly: boolean, folder?: Folder): ListSession {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const account = useRequiredSession()
@@ -53,10 +53,13 @@ export function useListSession(file: DriveFile | null, readOnly: boolean): ListS
     setStatus('connecting')
     void (async () => {
       try {
-        const initial = await uploadedPlaces(file)
+        const initial = await uploadedPlaces(file, folder)
+        const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
         if (controller.signal.aborted) return
         session = await openCollabSession({
           fileId: file.id,
+          // A list on another server: live through this one (docs/plans/collab-federation.md).
+          base: location.kind === 'local' ? undefined : collabBase(location, file.id),
           fileKey,
           keyGeneration: file.keyGeneration,
           fileKeyAt: (generation) => fileKeyAt(file, generation),

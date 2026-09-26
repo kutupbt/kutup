@@ -11,9 +11,11 @@ interface Props {
   onRestore?: (versionId: string) => void
   /** View-only access: no naming, keeping or restoring. */
   readOnly?: boolean
+  /** A file on another server: its calls go through this server. */
+  base?: string
 }
 
-export default function VersionHistoryPanel({ fileId, onRestore, readOnly = false }: Props) {
+export default function VersionHistoryPanel({ fileId, onRestore, readOnly = false, base }: Props) {
   const { t } = useTranslation()
   const [versions, setVersions] = useState<VR[]>([])
   const [loading, setLoading] = useState(true)
@@ -25,7 +27,7 @@ export default function VersionHistoryPanel({ fileId, onRestore, readOnly = fals
     setFailed(false)
     void (async () => {
       try {
-        const v = await listVersions(fileId)
+        const v = await listVersions(fileId, base)
         if (alive) setVersions(v)
       } catch {
         if (alive) setFailed(true)
@@ -34,7 +36,7 @@ export default function VersionHistoryPanel({ fileId, onRestore, readOnly = fals
       }
     })()
     return () => { alive = false }
-  }, [fileId])
+  }, [fileId, base])
 
   if (loading) {
     return (
@@ -60,6 +62,7 @@ export default function VersionHistoryPanel({ fileId, onRestore, readOnly = fals
         <VersionRow
           key={v.id}
           fileId={fileId}
+          base={base}
           v={v}
           onChange={(updated) => setVersions((arr) => arr.map((x) => (x.id === v.id ? updated : x)))}
           onRestore={readOnly ? undefined : onRestore}

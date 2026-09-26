@@ -1820,11 +1820,12 @@ so the browser turns the state back into the file.
 
 A file can be shared with someone on another server
 (docs/plans/drive-file-sharing.md, slice 2). It works like a folder invite,
-with a capability for that file alone. Across servers it is view and download
-only; editing waits for the live-editing relay to federate.
+with a capability for that file alone. With `canEdit`, notes and place lists
+are edited live through the recipient's server (see *Collaboration across
+servers* below).
 
 - **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
-  `{ recipientUsername, recipientServer, shareEnvelope }`. The envelope is a
+  `{ recipientUsername, recipientServer, shareEnvelope, canEdit }`. The envelope is a
   `FileShareEnvelopeV1` at the file's current generation, sealed to the
   remote account (looked up with `GET /api/drive/federation/users/:username`).
   **Response:** `201 { inviteUrl }`, of the form
@@ -1846,6 +1847,27 @@ only; editing waits for the live-editing relay to federate.
 - **`GET …/file-shares/:id/content`**: the content, relayed.
   **`GET …/file-shares/:id/state`**: the saved state, as above.
   **`DELETE …/file-shares/:id`**: stop seeing it.
+
+### Collaboration across servers
+
+Live editing of a file on another server, through your own server
+(docs/plans/collab-federation.md). `BASE` is
+`/api/drive/federation/shares/:shareId/files/:fileId` for a file in a shared
+folder, or `/api/drive/federation/file-shares/:id` for a file shared by
+itself. Each route behaves as its local counterpart under `/api/files/:id`,
+with the same bodies and responses; this server relays it to the file's
+server, which applies the share's permission (`canUpload` on a folder,
+`canEdit` on a file) to every write.
+
+- **`GET BASE/collab/ws`**: the collab WebSocket (same frames, `hello`,
+  `stored` and `replayed` messages). Your server subscribes at the file's
+  server while anyone is in the room, and pushes your frames there.
+- **`GET BASE/versions`**, **`POST BASE/versions`** (multipart),
+  **`GET BASE/versions/:vid/download`**, **`PATCH BASE/versions/:vid`**:
+  versions. A version you save lists `remoteAuthor` (`user@server`) and is
+  charged to the file's owner.
+- **`POST BASE/claim-seed`**: whether your editor seeds a never-saved
+  document.
 
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
 
@@ -1922,6 +1944,32 @@ and parses nothing until the digest matches. Body cap 10 GiB.
 Move one file **this share uploaded** to the owner's trash (restorable, and
 purged with its versions, assets, thumbnails and charges by the trash's own
 path), under a persistent idempotent mutation result. Other files are `404`.
+
+### Collaboration: `/api/fed/drive/collab/*`
+
+Between the file's server (home) and an editor's server (bridge). All are
+signed and carry the share's capability, except `push`, which home signs
+and which names a subscription the bridge made. Bodies are JSON; frames are
+base64 sealed collab frames.
+
+- **`POST subscribe`** `{ fileId, subscriptionId }` → `{ headSeq,
+  currentDocKeyId, floor, canWrite }`. Home pushes every new frame to the
+  bridge from then on. The lease lasts 60 s and is renewed by subscribing
+  again. **`POST unsubscribe`**, same body: the room is empty.
+- **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
+  frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
+  order, never the bridge's own. `404` for an unknown subscription.
+- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions }`
+  (null for relayed-only or refused frames). Checked as local frames are,
+  against the file's current keys and the share's edit permission; the
+  sender is kept as `(domain, device)`.
+- **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
+  catching up.
+- **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**
+  (a signed stream of the sealed blob); **`POST versions/create`** `{ fileId,
+  author, kind, seqAtSnapshot, docKeyId, label, keepForever, blob }` (up to
+  32 MiB); **`POST versions/patch`** `{ fileId, versionId, label,
+  keepForever }`; **`POST claim-seed`** `{ fileId }`.
 
 The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
 `/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and

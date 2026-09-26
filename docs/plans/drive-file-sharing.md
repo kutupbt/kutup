@@ -105,7 +105,7 @@ folders, and a move keeps the key generation, so shares survive a move.
 1. **Local single-file sharing:** the envelope, `file_shares`, access
    checks, share / access / remove, "Shared with me", opening and live
    editing a shared file; the folder-rotation re-seal.
-2. **Across servers:** done 2026-09-26, view and download only.
+2. **Across servers:** done 2026-09-26.
    - A file invite is a capability for one file (migration 064), read through
      the recipient's server, like folder federation.
    - The owner's removal, re-seal and pending cover remote recipients.
@@ -114,7 +114,11 @@ folders, and a move keeps the key generation, so shares survive a move.
    - The saved state of notes and place lists is relayed too
      (`…/file-state`, and `…/files/:id/state` for folders), so they are read
      as last saved.
-   - Editing across servers waits for the live-editing relay to federate.
+   - The owner chooses "Can edit" across servers too
+     (`federated_outgoing_file_shares.can_edit`). Notes and place lists are
+     then edited live through the recipient's server
+     (docs/plans/collab-federation.md); office documents and whiteboards
+     stay view and download for now.
 3. **Public link to a single file:** done 2026-09-26.
    - `public_shares.share_type = 'file'` (migration 063), with a link key
      sealing the file key (Drive envelope purpose 11, bound to the file,

@@ -48,6 +48,9 @@ pub struct CreateFederatedFileShareRequest {
     pub recipient_server: String,
     /// `FileShareEnvelopeV1` sealed to the remote account's Drive key.
     pub share_envelope: String,
+    /// They may edit it too (live, through their server).
+    #[serde(default)]
+    pub can_edit: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -66,6 +69,8 @@ pub struct FileInviteResponse {
     pub share_envelope: String,
     /// The generation the envelope opens.
     pub key_generation: i32,
+    /// They may edit it.
+    pub can_edit: bool,
     pub owner_user_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
@@ -110,6 +115,7 @@ pub struct IncomingFileShareNow {
     pub file: FederatedDriveFile,
     pub share_envelope: String,
     pub key_generation: i32,
+    pub can_edit: bool,
     pub owner_user_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
@@ -199,8 +205,8 @@ pub async fn create_federated_file_share(
     sqlx::query(
         "INSERT INTO federated_outgoing_file_shares
             (file_id, sharer_user_id, recipient_username, recipient_domain,
-             recipient_incarnation_id, share_envelope, key_generation, capability_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+             recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
     )
     .bind(file_id)
     .bind(owner)
@@ -210,6 +216,7 @@ pub async fn create_federated_file_share(
     .bind(&request.share_envelope)
     .bind(generation)
     .bind(capability_hash(&capability))
+    .bind(request.can_edit)
     .execute(&state.pool)
     .await?;
     let invite_url = format!(
@@ -230,6 +237,7 @@ struct OutgoingFileShare {
     recipient_username: String,
     share_envelope: String,
     key_generation: i32,
+    can_edit: bool,
 }
 
 /// The file share a signed request's capability names, when its file is live
@@ -244,8 +252,8 @@ async fn outgoing_file_share(
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| AppError::not_found("Drive share not found"))?;
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
-    let row: Option<(Uuid, String, String, i32)> = sqlx::query_as(
-        "SELECT s.file_id, s.recipient_username, s.share_envelope, s.key_generation
+    let row: Option<(Uuid, String, String, i32, bool)> = sqlx::query_as(
+        "SELECT s.file_id, s.recipient_username, s.share_envelope, s.key_generation, s.can_edit
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -255,13 +263,14 @@ async fn outgoing_file_share(
     .bind(authenticated.origin())
     .fetch_optional(&state.pool)
     .await?;
-    let (file_id, recipient_username, share_envelope, key_generation) =
+    let (file_id, recipient_username, share_envelope, key_generation, can_edit) =
         row.ok_or_else(|| AppError::not_found("Drive share not found"))?;
     Ok(OutgoingFileShare {
         file_id,
         recipient_username,
         share_envelope,
         key_generation,
+        can_edit,
     })
 }
 
@@ -347,6 +356,7 @@ pub async fn get_file_invite(
                     file,
                     share_envelope: share.share_envelope,
                     key_generation: share.key_generation,
+                    can_edit: share.can_edit,
                     owner_user_id,
                     owner_account: format!(
                         "{}@{}",
@@ -676,6 +686,7 @@ pub async fn get_file_share(
         file: invite.file,
         share_envelope: invite.share_envelope,
         key_generation: invite.key_generation,
+        can_edit: invite.can_edit,
         owner_user_id: invite.owner_user_id,
         owner_account: invite.owner_account,
         owner_incarnation_id: invite.owner_incarnation_id,

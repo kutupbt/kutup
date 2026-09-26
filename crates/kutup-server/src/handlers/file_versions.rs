@@ -43,9 +43,13 @@ pub struct VersionRow {
     /// The key generation it was sealed at: open it with that generation's
     /// file key.
     key_generation: i32,
+    /// Saved by someone on another server (`user@server`); the owner is
+    /// `authorUserId` then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_author: Option<String>,
 }
 
-type VersionTuple = (
+pub(crate) type VersionTuple = (
     Uuid,
     String,
     String,
@@ -58,10 +62,25 @@ type VersionTuple = (
     OffsetDateTime,
     String,
     i32,
+    Option<String>,
 );
 
-fn to_version_row(t: VersionTuple) -> VersionRow {
-    let (id, s3v, path, seq, dk, author, size, label, keep, created, kind, key_generation) = t;
+pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
+    let (
+        id,
+        s3v,
+        path,
+        seq,
+        dk,
+        author,
+        size,
+        label,
+        keep,
+        created,
+        kind,
+        key_generation,
+        remote_author,
+    ) = t;
     VersionRow {
         id: id.to_string(),
         s3_version_id: s3v,
@@ -75,11 +94,13 @@ fn to_version_row(t: VersionTuple) -> VersionRow {
         created_at: created,
         kind,
         key_generation,
+        remote_author,
     }
 }
 
-const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
-       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation
+pub(crate) const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
+       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
+       remote_author
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -315,6 +336,22 @@ pub async fn create(
     let Some((tmp_file, size)) = tmp else {
         return Err(AppError::bad_request("missing file"));
     };
+    let created = store_version(&state, fid, user_id, None, &fields, tmp_file, size).await?;
+    Ok((StatusCode::CREATED, Json(created)).into_response())
+}
+
+/// Stores a version from its form fields and sealed blob: checked, charged to
+/// `payer`, recorded, and the collaboration log trimmed up to its position.
+/// `remote_author` names an editor on another server (the owner pays then).
+pub(crate) async fn store_version(
+    state: &AppState,
+    fid: Uuid,
+    payer: Uuid,
+    remote_author: Option<&str>,
+    fields: &std::collections::HashMap<String, String>,
+    tmp_file: NamedTempFile,
+    size: i64,
+) -> AppResult<VersionRow> {
     let kind = match fields.get("kind").map(String::as_str) {
         Some("file") => "file",
         Some("yjs") => "yjs",
@@ -368,7 +405,7 @@ pub async fn create(
     // content under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     // The measured size, never a client's claim.
-    crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
+    crate::drive_writes::check_room(&mut tx, payer, collection_id, size, None)
         .await?
         .into_result()?;
     // A version claims the collaboration log up to its position; never past
@@ -386,27 +423,29 @@ pub async fn create(
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
-                                      key_generation)
-           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                      key_generation, remote_author)
+           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
-                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation"#,
+                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
+                     remote_author"#,
     )
     .bind(version_id)
     .bind(fid)
     .bind(&storage_path)
     .bind(seq_at_snapshot)
     .bind(doc_key_id)
-    .bind(user_id)
+    .bind(payer)
     .bind(size)
     .bind(&label)
     .bind(keep_forever)
     .bind(kind)
     .bind(key_generation)
+    .bind(remote_author)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
         .bind(size)
-        .bind(user_id)
+        .bind(payer)
         .execute(&mut *tx)
         .await?;
     // A new version is an edit: the file (and so its folder) was modified now.
@@ -455,7 +494,7 @@ pub async fn create(
         let _ = state.storage.delete(&storage_path).await;
         return Err(AppError::internal("commit"));
     }
-    Ok((StatusCode::CREATED, Json(to_version_row(created))).into_response())
+    Ok(to_version_row(created))
 }
 
 /// Parses the trusted user id + the file-id path param (bad file id ⇒ 404).

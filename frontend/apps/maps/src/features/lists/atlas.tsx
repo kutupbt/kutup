@@ -7,7 +7,7 @@ import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
 import { filesKey } from '@kutup/drive-core/files'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
-import { fileLocation, type DriveFile } from '@kutup/drive-core/model'
+import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import { fillDoc, placesMap, replacePlaces } from '@kutup/map/list'
 import { useRequiredSession } from '@kutup/session/store'
@@ -22,12 +22,14 @@ import { FALLBACK_COLOR, listColors, savedPlacesKey, uploadedPlaces, useSavedPla
  */
 async function editOnce(
   file: DriveFile,
+  folder: Folder,
   change: (doc: Y.Doc) => void,
   identity: { username: string | null; deviceId: number | null; color: string },
   labels: { preRestore: () => string; restored: () => string },
 ): Promise<void> {
   if (!file.fileKey) throw new Error('file is not open')
-  const initial = await uploadedPlaces(file)
+  const initial = await uploadedPlaces(file, folder)
+  const location = fileLocation(folder)
   const controller = new AbortController()
   let settle: { resolve: () => void; reject: (error: Error) => void } | null = null
   const ready = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
@@ -36,6 +38,7 @@ async function editOnce(
   const timer = setTimeout(() => settle?.reject(new ListBusy()), 20_000)
   const session = await openCollabSession({
     fileId: file.id,
+    base: location.kind === 'local' ? undefined : collabBase(location, file.id),
     fileKey: file.fileKey,
     keyGeneration: file.keyGeneration,
     fileKeyAt: (generation) => fileKeyAt(file, generation),
@@ -91,8 +94,6 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
       Boolean(
         entry.file.fileKey &&
           entry.folder.canUpload &&
-          // Editing across servers is not there yet.
-          fileLocation(entry.folder).kind === 'local' &&
           (!entry.shared || entry.shared.state === 'ready'),
       ),
     [],
@@ -105,13 +106,16 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
         return
       }
       let file = entry.file
-      // Written only under the folder's current key (someone may have left it).
-      if (entry.folder.source !== 'file' && file.keyEpoch < entry.folder.keyEpoch) {
+      // Written only under the folder's current key (someone may have left
+      // it); folders here only (a remote one is re-keyed at home).
+      const local = entry.folder.source === 'owned' || entry.folder.source === 'shared'
+      if (local && file.keyEpoch < entry.folder.keyEpoch) {
         file = await rekeyFile(entry.folder, file)
         void queryClient.invalidateQueries({ queryKey: filesKey(entry.folder.id) })
       }
       await editOnce(
         file,
+        entry.folder,
         change,
         { username: account.username, deviceId: account.currentDeviceId, color: account.color ?? getCursorColor() },
         {

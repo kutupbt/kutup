@@ -127,3 +127,19 @@ export function remoteStatePath(location: FileLocation, fileId: string): string 
       return `/drive/federation/file-shares/${location.shareId}/state`
   }
 }
+
+/**
+ * Where a file's live-editing calls go, under the API (versions, the seed,
+ * the socket): `/files/:id` here; a file on another server through this
+ * server's routes for it (docs/plans/collab-federation.md).
+ */
+export function collabBase(location: FileLocation, fileId: string): string {
+  switch (location.kind) {
+    case 'local':
+      return `/files/${fileId}`
+    case 'remoteFolder':
+      return `/drive/federation/shares/${location.shareId}/files/${fileId}`
+    case 'remoteFile':
+      return `/drive/federation/file-shares/${location.shareId}`
+  }
+}

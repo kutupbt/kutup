@@ -25,16 +25,16 @@ use crate::AppState;
 /// token + deviceId arrive here (token may also come via `Authorization`).
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
-    token: Option<String>,
+    pub(crate) token: Option<String>,
     #[serde(rename = "deviceId")]
-    device_id: Option<String>,
+    pub(crate) device_id: Option<String>,
 }
 
 /// One participant in the room's peer-list. Keys are emitted in the alphabetical order Go's
 /// `encoding/json` produces for its `fiber.Map`; `color`/`username` are omitted when empty
 /// (Go only sets them when non-empty).
 #[derive(Debug, Serialize)]
-struct PeerSummary {
+pub(crate) struct PeerSummary {
     #[serde(skip_serializing_if = "String::is_empty")]
     color: String,
     #[serde(rename = "deviceId")]
@@ -47,18 +47,18 @@ struct PeerSummary {
 
 /// The `hello` control message (keys alphabetical, matching Go's marshalled `fiber.Map`).
 #[derive(Debug, Serialize)]
-struct Hello {
+pub(crate) struct Hello {
     #[serde(rename = "currentDocKeyId")]
-    current_doc_key_id: i64,
+    pub(crate) current_doc_key_id: i64,
     #[serde(rename = "fileId")]
-    file_id: String,
+    pub(crate) file_id: String,
     #[serde(rename = "headSeq")]
-    head_seq: i64,
+    pub(crate) head_seq: i64,
     #[serde(rename = "mySenderSeqHigh")]
-    my_sender_seq_high: i64,
-    peers: Vec<PeerSummary>,
+    pub(crate) my_sender_seq_high: i64,
+    pub(crate) peers: Vec<PeerSummary>,
     #[serde(rename = "type")]
-    kind: &'static str,
+    pub(crate) kind: &'static str,
 }
 
 /// The `peers` control message broadcast on join/leave.
@@ -92,23 +92,8 @@ pub async fn ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> AppResult<Response> {
-    // Token from Authorization header or ?token=.
-    let token = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string())
-        .or(q.token);
-    let token = match token {
-        Some(t) if !t.is_empty() => t,
-        _ => return Err(AppError::unauthorized("missing token")),
-    };
-    let auth = crate::middleware::authenticate_access_token(&state, &token)
-        .await
-        .map_err(|_| AppError::unauthorized("invalid token"))?;
-    let user_id = auth.user_id;
-    let session_id = auth.session.session_id;
-
+    let (user_id, session_id, device_id, pub_key) =
+        authenticate_socket(&state, &headers, &q).await?;
     // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
     let user_uuid =
@@ -119,24 +104,6 @@ pub async fn ws(
     if access == Access::None {
         return Err(AppError::forbidden("forbidden"));
     }
-
-    // Device validation: deviceId from query, must belong to the user + be active.
-    let device_id: i64 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
-        Some(d) if d != 0 => d,
-        _ => return Err(AppError::unauthorized("missing or invalid deviceId")),
-    };
-    let dev: Option<(Vec<u8>, bool, String)> = sqlx::query_as(
-        "SELECT public_signing, is_active, user_id::text FROM user_devices WHERE id = $1",
-    )
-    .bind(device_id)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-    let pub_key = match dev {
-        Some((pk, true, owner)) if owner == user_id => pk,
-        _ => return Err(AppError::unauthorized("device not registered or revoked")),
-    };
 
     let conn = Conn {
         file_id,
@@ -154,6 +121,47 @@ pub async fn ws(
         .on_upgrade(move |socket| async move {
             handle_connection(state, socket, conn, user_id).await;
         }))
+}
+
+/// The session and registered device behind a collaboration socket: the
+/// access token (header or `?token=`, as browsers cannot set headers on a
+/// WebSocket) and `?deviceId=`, which must be this user's active device.
+pub(crate) async fn authenticate_socket(
+    state: &AppState,
+    headers: &HeaderMap,
+    q: &CollabQuery,
+) -> AppResult<(String, Uuid, i64, Vec<u8>)> {
+    let token = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| q.token.clone());
+    let token = match token {
+        Some(t) if !t.is_empty() => t,
+        _ => return Err(AppError::unauthorized("missing token")),
+    };
+    let auth = crate::middleware::authenticate_access_token(state, &token)
+        .await
+        .map_err(|_| AppError::unauthorized("invalid token"))?;
+    let user_id = auth.user_id;
+    let session_id = auth.session.session_id;
+    let device_id: i64 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
+        Some(d) if d != 0 => d,
+        _ => return Err(AppError::unauthorized("missing or invalid deviceId")),
+    };
+    let dev: Option<(Vec<u8>, bool, String)> = sqlx::query_as(
+        "SELECT public_signing, is_active, user_id::text FROM user_devices WHERE id = $1",
+    )
+    .bind(device_id)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    match dev {
+        Some((pk, true, owner)) if owner == user_id => Ok((user_id, session_id, device_id, pk)),
+        _ => Err(AppError::unauthorized("device not registered or revoked")),
+    }
 }
 
 /// What a user may do with a file's live session.
@@ -206,12 +214,12 @@ struct Conn {
 /// How often an open connection re-checks its session and file access, so
 /// revoking a share, trashing the file or signing the session out also
 /// ends live sessions.
-const ACCESS_RECHECK: std::time::Duration = std::time::Duration::from_secs(15);
+pub(crate) const ACCESS_RECHECK: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Per-connection budget for kept (durable) frames: a sustained rate with a
 /// burst, in frames and bytes. Typing and office edits stay far below it; a
 /// client flooding the log is cut off.
-struct FrameBudget {
+pub(crate) struct FrameBudget {
     frames: f64,
     bytes: f64,
     last: std::time::Instant,
@@ -223,7 +231,7 @@ impl FrameBudget {
     const BYTES_PER_SEC: f64 = 1024.0 * 1024.0;
     const BYTE_BURST: f64 = 16.0 * 1024.0 * 1024.0;
 
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         FrameBudget {
             frames: Self::FRAME_BURST,
             bytes: Self::BYTE_BURST,
@@ -232,7 +240,7 @@ impl FrameBudget {
     }
 
     /// Takes one frame of `len` bytes from the budget, if it has room.
-    fn take(&mut self, len: usize) -> bool {
+    pub(crate) fn take(&mut self, len: usize) -> bool {
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(self.last).as_secs_f64();
         self.last = now;
@@ -357,7 +365,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
 }
 
 /// Builds the JSON peer-list for a room — mirrors `peerSummaries`.
-fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
+pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
     hub.peers(file_id)
         .into_iter()
         .map(|p| PeerSummary {
@@ -371,7 +379,7 @@ fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
 
 /// Sends the current peer-list as a text message to every conn in the room — mirrors
 /// `broadcastPeers`.
-async fn broadcast_peers(hub: &Hub, file_id: &str) {
+pub(crate) async fn broadcast_peers(hub: &Hub, file_id: &str) {
     let msg = PeersMsg {
         list: peer_summaries(hub, file_id),
         ts: (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64,
@@ -428,33 +436,13 @@ async fn handle_frame(
     // The public authenticated header must name this exact file, its current
     // file-key generation and current document key. Neither stale nor future
     // values are accepted.
-    let binding: (i64, i32, i32, i32) = match sqlx::query_as(
-        "SELECT f.current_doc_key_id, f.key_generation, f.key_epoch, c.key_epoch \
-         FROM files f JOIN collections c ON c.id = f.collection_id \
-         WHERE f.id = $1 AND f.deleted_at IS NULL",
-    )
-    .bind(file_uuid)
-    .fetch_one(&state.pool)
-    .await
-    {
-        Ok(value) => value,
-        Err(_) => return true,
-    };
-    if f.file_id != *file_uuid.as_bytes()
-        || f.key_generation as i64 != binding.1 as i64
-        || f.doc_key_id as i64 != binding.0
-    {
+    let Some(key_current) = frame_binding(state, file_uuid, &f).await else {
         return true;
-    }
-
+    };
     // Presence only: cursors and awareness, which any reader may share.
-    if matches!(
-        f.kind,
-        envelope::kind::YJS_AWARENESS
-            | envelope::kind::OO_CURSOR
-            | envelope::kind::EXCALIDRAW_CURSOR
-    ) {
+    if is_presence(f.kind) {
         state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+        state.collab_federation.relayed(file_uuid, None, data);
         return true;
     }
 
@@ -468,7 +456,7 @@ async fn handle_frame(
     // Edits only under a file key wrapped at the folder's current epoch: a
     // file the folder has rotated past is re-keyed before anyone writes to it
     // (docs/plans/drive-share-revocation.md).
-    if binding.2 != binding.3 {
+    if !key_current {
         return true;
     }
     if !budget.take(data.len()) {
@@ -479,6 +467,7 @@ async fn handle_frame(
     // Scene edits are relayed, not kept.
     if f.kind == envelope::kind::EXCALIDRAW_OP {
         state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+        state.collab_federation.relayed(file_uuid, None, data);
         return true;
     }
 
@@ -486,7 +475,8 @@ async fn handle_frame(
     // broadcast, then tell everyone in the room (the sender too) the frame's
     // log position. Each connection gets the frame before its position, so a
     // client knows every frame up to a position it has seen is applied.
-    let Ok(seq) = persist_frame(state, file_uuid, peer.device_id, &f, data).await else {
+    let Ok(seq) = persist_frame(state, file_uuid, Sender::Device(peer.device_id), &f, data).await
+    else {
         return true;
     };
     state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
@@ -497,7 +487,48 @@ async fn handle_frame(
             &serde_json::json!({ "type": "stored", "seq": seq }).to_string(),
         )
         .await;
+    // Editors on other servers get it too.
+    state.collab_federation.kept(file_uuid);
     true
+}
+
+/// Cursors and awareness: relayed to the room, never kept.
+pub(crate) fn is_presence(kind: u8) -> bool {
+    matches!(
+        kind,
+        envelope::kind::YJS_AWARENESS
+            | envelope::kind::OO_CURSOR
+            | envelope::kind::EXCALIDRAW_CURSOR
+    )
+}
+
+/// Whether a frame names this file, its current file-key generation and
+/// current document key. `Some(true)` when the file's key is also wrapped at
+/// its folder's current epoch (edits are taken then only); `None` when the
+/// frame does not fit the file.
+pub(crate) async fn frame_binding(state: &AppState, file_uuid: Uuid, f: &Frame) -> Option<bool> {
+    let binding: (i64, i32, i32, i32) = sqlx::query_as(
+        "SELECT f.current_doc_key_id, f.key_generation, f.key_epoch, c.key_epoch \
+         FROM files f JOIN collections c ON c.id = f.collection_id \
+         WHERE f.id = $1 AND f.deleted_at IS NULL",
+    )
+    .bind(file_uuid)
+    .fetch_one(&state.pool)
+    .await
+    .ok()?;
+    if f.file_id != *file_uuid.as_bytes()
+        || f.key_generation as i64 != binding.1 as i64
+        || f.doc_key_id as i64 != binding.0
+    {
+        return None;
+    }
+    Some(binding.2 == binding.3)
+}
+
+/// Who sent a kept frame: a device here, or one on another server.
+pub(crate) enum Sender<'a> {
+    Device(i64),
+    Remote { domain: &'a str, device: i64 },
 }
 
 /// The position of the last frame in a file's log: the newest kept frame, or
@@ -526,13 +557,17 @@ pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
 /// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
 /// different devices cannot both select the same `MAX(seq) + 1`; the
 /// `(file_id, sender_device, sender_seq)` unique index still rejects exact replays.
-async fn persist_frame(
+pub(crate) async fn persist_frame(
     state: &AppState,
     file_uuid: Uuid,
-    device_id: i64,
+    sender: Sender<'_>,
     f: &Frame,
     raw: &[u8],
 ) -> Result<i64, sqlx::Error> {
+    let (device_id, remote_domain, remote_device) = match sender {
+        Sender::Device(id) => (Some(id), None, None),
+        Sender::Remote { domain, device } => (None, Some(domain), Some(device)),
+    };
     let mut tx = state.pool.begin().await?;
 
     // PostgreSQL advisory locks are transaction-scoped and do not require a schema change.
@@ -544,14 +579,15 @@ async fn persist_frame(
         .await?;
 
     let seq = sqlx::query_scalar(
-        r#"INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame)
+        r#"INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame,
+                                       remote_domain, remote_device)
            VALUES (
              $1,
              GREATEST(
                COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
                (SELECT collab_log_floor FROM files WHERE id = $1)
              ) + 1,
-             $2, $3, $4, $5, $6
+             $2, $3, $4, $5, $6, $7, $8
            )
            RETURNING seq"#,
     )
@@ -561,6 +597,8 @@ async fn persist_frame(
     .bind(f.doc_key_id as i64)
     .bind(f.kind as i16)
     .bind(raw)
+    .bind(remote_domain)
+    .bind(remote_device)
     .fetch_one(&mut *tx)
     .await?;
 
