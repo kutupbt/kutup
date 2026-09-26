@@ -212,13 +212,21 @@ goes beyond Signal parity.
    together, KML/GPX import and export. Decided 2026-09-26:
    - **Lists are Drive files**, like Google My Maps in Google Drive: each
      list is a `.kutupmap` file (a Yjs document: title, places with name,
-     note, coordinates, who added them and when) in its own folder under
-     "Maps" in the owner's Drive. Drive's encryption, sharing, versions,
-     trash and quota apply; Drive shows the folders and opens lists in Maps.
+     note, coordinates, who added them and when). Drive's encryption,
+     sharing, versions, trash and quota apply.
+   - **A list can live in any folder, like a note.** In Drive, New → Map
+     (and the right-click menu on empty space) creates one in the current
+     folder; opening it, or right-click → Open in Maps, takes it to the Maps
+     app. A list made in the Maps app gets its own folder under "Maps", so
+     sharing it shares only that list. The Maps app shows every list you can
+     reach: your own, wherever they are, and those in folders shared with
+     you.
    - **Everything is done in the Maps app:** create, rename, delete, share,
      see who has access and remove them, and edit together live. Nobody
      needs to open Drive for a list.
-   - **Sharing a list is sharing its folder.** For now only the owner shares
+   - **Sharing a list is sharing its folder.** When that folder holds other
+     things too, the Maps share dialog says so ("shares the folder 'Trips'
+     and everything in it"). For now only the owner shares
      (as in Drive); anyone in a list can send one of its places into a chat
      as a location message. "Editors can share" (the owner allowing members
      to add people) is a later change to Drive sharing as a whole.
