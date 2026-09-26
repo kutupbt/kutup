@@ -1418,7 +1418,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "37d09d4995b3112593e10bffb17b088add934f7ee9f506525390f9590ca7ab8f"
+        "cb5a86c5566da5d31cc830c9ecd41faa0fd1c9c05739f58ae5798f813cf48c35"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
@@ -1456,7 +1456,7 @@ fn private_group_policies_have_stable_canonical_vectors() {
     );
     assert_eq!(
         cryptographic.policy_digest().unwrap(),
-        "02022f987460f6317c4b9b9627c941a29e1de1aeb1c36538b4d61ff09c0d3581"
+        "084323eb8f72a298088306c3ee4e4361753c5a782e11791df6b6ade28d6001c3"
     );
 }
 

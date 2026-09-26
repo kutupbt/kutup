@@ -147,7 +147,7 @@ only in the mandatory MLS GroupContext extension:
   (`groupInfoEditors`; omitted while it is the default, administrators, so
   earlier policies keep their canonical bytes).
 - `MlsGroupCryptographicPolicyV1` fixes suite `0x0003`, private-control
-  extension `0xff4b`, anonymous delivery, 1024-byte padding, two retained past
+  extension `0xff4b`, anonymous delivery, 160-byte padding steps, two retained past
   epochs, and a maximum canonical user-application plaintext size. Typed MLS
   governance controls are exempt from that configurable user-message ceiling
   so a tightened policy cannot deadlock recovery or reconfiguration; they
@@ -576,7 +576,8 @@ Anonymous established delivery uses:
   `DHKEM(X25519, HKDF-SHA256)/HKDF-SHA256/ChaCha20-Poly1305`;
 - a fresh encapsulation per destination device;
 - authenticated recipient/device/send-ID/suite AAD;
-- padding inside HPKE to 1024-byte buckets.
+- padding inside HPKE to multiples of 160 bytes (Signal's step; the policy's
+  `paddingBlockBytes`).
 
 The destination transaction and anonymous mailbox contain recipient, send ID,
 and opaque per-device envelopes, but no sender, sender device, conversation,

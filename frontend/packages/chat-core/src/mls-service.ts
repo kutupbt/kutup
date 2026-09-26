@@ -2547,7 +2547,7 @@ function isCryptographicPolicy(
     && value.requiredPrivateControlExtension === 0xff4b
     && value.maximumPastEpochs === 2
     && value.anonymousDeliveryRequired === true
-    && value.paddingBlockBytes === 1024
+    && value.paddingBlockBytes === 160
     && Number.isSafeInteger(value.maximumApplicationPlaintextBytes)
     && value.maximumApplicationPlaintextBytes >= 1024
     && value.maximumApplicationPlaintextBytes <= 1024 * 1024,
@@ -2828,7 +2828,7 @@ function validatePendingPolicyChange(
         || cryptographic.suite !== 3
         || cryptographic.maximumPastEpochs !== 2
         || cryptographic.anonymousDeliveryRequired !== true
-        || cryptographic.paddingBlockBytes !== 1024
+        || cryptographic.paddingBlockBytes !== 160
         || !Number.isSafeInteger(cryptographic.maximumApplicationPlaintextBytes)
         || cryptographic.maximumApplicationPlaintextBytes < 1024
         || cryptographic.maximumApplicationPlaintextBytes > 1024 * 1024

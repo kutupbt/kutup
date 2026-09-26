@@ -23,7 +23,7 @@ function group(): LocalMlsConversationRecord {
     requiredPrivateControlExtension: 0xff4b,
     maximumPastEpochs: 2 as const,
     anonymousDeliveryRequired: true as const,
-    paddingBlockBytes: 1024 as const,
+    paddingBlockBytes: 160 as const,
     maximumApplicationPlaintextBytes: 1024 * 1024,
   }
   return {

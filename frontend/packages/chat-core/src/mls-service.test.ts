@@ -161,7 +161,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       requiredPrivateControlExtension: 0xff4b,
       maximumPastEpochs: 2,
       anonymousDeliveryRequired: true,
-      paddingBlockBytes: 1024,
+      paddingBlockBytes: 160,
       maximumApplicationPlaintextBytes: 1024 * 1024,
     },
     currentAuthorizationPolicy: {
@@ -176,7 +176,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       requiredPrivateControlExtension: 0xff4b,
       maximumPastEpochs: 2,
       anonymousDeliveryRequired: true,
-      paddingBlockBytes: 1024,
+      paddingBlockBytes: 160,
       maximumApplicationPlaintextBytes: 1024 * 1024,
     },
   }

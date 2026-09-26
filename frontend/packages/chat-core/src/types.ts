@@ -828,7 +828,7 @@ export interface MlsGroupCryptographicPolicy {
   requiredPrivateControlExtension: number
   maximumPastEpochs: 2
   anonymousDeliveryRequired: true
-  paddingBlockBytes: 1024
+  paddingBlockBytes: 160
   maximumApplicationPlaintextBytes: number
 }
 

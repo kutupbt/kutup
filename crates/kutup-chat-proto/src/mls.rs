@@ -28,6 +28,9 @@ pub const MAX_MLS_GROUP_LEAVES: usize = 2_560;
 /// group-encrypted authorization/control state. Every V1 KeyPackage advertises
 /// this extension and every V1 group requires it.
 pub const MLS_PRIVATE_CONTROL_EXTENSION_TYPE: u16 = 0xff4b;
+/// Anonymous delivery pads each device's payload to a multiple of this many
+/// bytes: Signal's 160-byte step (docs/chat-mls.md).
+pub const MLS_PADDING_BLOCK_BYTES: u32 = 160;
 pub const ANONYMOUS_MLS_DELIVERY_CONTEXT: &[u8] = b"kutup/anonymous-mls-delivery/v1";
 const GROUP_DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/group-delivery-capability/v1";
 const MAX_CANONICAL_POLICY_BYTES: usize = 256 * 1024;

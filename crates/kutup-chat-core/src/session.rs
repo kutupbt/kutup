@@ -1488,14 +1488,15 @@ impl Session {
             ));
         }
         let from = ChatAddress::from_sender(&sender, sender_device_id)?;
-        self.finish_received_envelope(
-            envelope,
-            sender,
-            sender_device_id,
-            from,
-            decrypted.message()?.to_vec(),
-        )
-        .await
+        let plaintext = match crate::padding::unpad(decrypted.message()?) {
+            Ok(plaintext) => plaintext,
+            Err(error) => {
+                self.store.discard();
+                return Err(error);
+            }
+        };
+        self.finish_received_envelope(envelope, sender, sender_device_id, from, plaintext)
+            .await
     }
 
     async fn finish_received_envelope(
@@ -2466,7 +2467,7 @@ impl Session {
         let msg = decode_ciphertext(envelope.envelope_type, &envelope.content)?;
         let from_addr = from.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
-        message_decrypt(
+        let padded = message_decrypt(
             &msg,
             &from_addr,
             &self_addr,
@@ -2477,8 +2478,8 @@ impl Session {
             &mut self.store.kyber_pre_key_store,
             rng,
         )
-        .await
-        .map_err(Into::into)
+        .await?;
+        crate::padding::unpad(&padded)
     }
 
     // ----- multi-device send orchestration (each is one atomic transaction) -----
@@ -3002,6 +3003,7 @@ impl Session {
         summary: &mut SendSummary,
         rng: &mut R,
     ) -> Result<Vec<SealedOutgoingEnvelopeV1>> {
+        let padded = crate::padding::pad(plaintext);
         let mut envelopes = Vec::with_capacity(bundles.len());
         for bundle in bundles {
             let peer = ChatAddress::from_sender(peer_user, bundle.device_id)?;
@@ -3023,7 +3025,7 @@ impl Session {
             let content = sealed_sender_encrypt(
                 &peer.to_protocol()?,
                 sender_certificate,
-                plaintext,
+                &padded,
                 &mut self.store.session_store,
                 &mut self.store.identity_store,
                 now(),
@@ -3197,7 +3199,7 @@ impl Session {
         let peer_addr = peer.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
         let msg = message_encrypt(
-            plaintext,
+            &crate::padding::pad(plaintext),
             &peer_addr,
             &self_addr,
             &mut self.store.session_store,

@@ -220,7 +220,7 @@ impl MlsGroupCryptographicPolicyV1 {
             required_private_control_extension: MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
             maximum_past_epochs: 2,
             anonymous_delivery_required: true,
-            padding_block_bytes: 1024,
+            padding_block_bytes: MLS_PADDING_BLOCK_BYTES,
             maximum_application_plaintext_bytes: Self::MAXIMUM_APPLICATION_PLAINTEXT_BYTES,
         }
     }
@@ -232,7 +232,7 @@ impl MlsGroupCryptographicPolicyV1 {
             || self.required_private_control_extension != MLS_PRIVATE_CONTROL_EXTENSION_TYPE
             || self.maximum_past_epochs != 2
             || !self.anonymous_delivery_required
-            || self.padding_block_bytes != 1024
+            || self.padding_block_bytes != MLS_PADDING_BLOCK_BYTES
             || !(Self::MINIMUM_APPLICATION_PLAINTEXT_BYTES
                 ..=Self::MAXIMUM_APPLICATION_PLAINTEXT_BYTES)
                 .contains(&self.maximum_application_plaintext_bytes)

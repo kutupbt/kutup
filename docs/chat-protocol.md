@@ -185,6 +185,11 @@ ML-KEM prekey, and bounded one-time EC/PQ prekeys. Session establishment and
 steady-state ciphertext are generated only by libsignal. A bundle is unusable
 until its exact device identity matches the accepted account manifest.
 
+Plaintext is padded before encryption with Signal's scheme: the content, one
+`0x80` byte, then zeros up to a multiple of 160 bytes
+(`kutup-chat-core/src/padding.rs`). A receiver refuses anything that is not a
+whole number of blocks ending in that terminator.
+
 Sending is multi-device fan-out. Each destination device has an independent
 ratchet. A client-generated UUID `sendId` and durable outbox make retries
 idempotent. A 409 device mismatch causes a bounded manifest/bundle refresh; a
@@ -501,8 +506,10 @@ downgrades delivery or regenerates supposedly durable ciphertext.
 ## 11. Privacy and traffic shape
 
 V1 protects content and removes sender identity from established destination
-delivery. It does not hide message length, timing, IP address, origin domain,
-recipient, or device fan-out.
+delivery. Direct and MLS message sizes are rounded up to 160-byte steps
+(Signal's padding), so short messages of any kind look alike; longer ones
+still reveal their approximate length. V1 does not hide timing, IP address,
+origin domain, recipient, or device fan-out.
 
 The post-v1 advanced traffic-inspection profile may add fixed cells, dummy
 cells, persistent multiplexed connections, controlled-rate batching/delay and
