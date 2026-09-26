@@ -134,7 +134,8 @@
     "title": "Hoş geldiniz, {{name}}",
     "description": "Kaldığınız yerden devam edin.",
     "drive": "Uçtan uca şifreli dosyalar, notlar, belgeler ve beyaz tahtalar.",
-    "chat": "Kutup sunucuları arasında özel sohbetler ve gruplar."
+    "chat": "Kutup sunucuları arasında özel sohbetler ve gruplar.",
+    "maps": "Paylaşılan ve birlikte düzenlenen, uçtan uca şifreli yer listeleri."
   },
   "settings": {
     "account": {

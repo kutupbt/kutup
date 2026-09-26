@@ -134,7 +134,8 @@
     "title": "Welcome, {{name}}",
     "description": "Pick up where you left off.",
     "drive": "Files, notes, documents and whiteboards, end-to-end encrypted.",
-    "chat": "Private conversations and groups across Kutup servers."
+    "chat": "Private conversations and groups across Kutup servers.",
+    "maps": "Lists of places, shared and edited together, end-to-end encrypted."
   },
   "settings": {
     "account": {
