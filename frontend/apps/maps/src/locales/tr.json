@@ -139,10 +139,18 @@
     "add": "Ekle",
     "save": "Kaydet",
     "saveTo": "Kaydet",
-    "noLists": "Henüz değiştirebileceğiniz bir harita yok. Önce bir tane oluşturun.",
+    "noLists": "Henüz değiştirebileceğiniz bir harita yok. Burada yeni bir tane oluşturun.",
     "addFailed": "{{list}} haritasına eklenemedi.",
     "addedTo_one": "{{count}} haritaya eklendi",
-    "addedTo_other": "{{count}} haritaya eklendi"
+    "addedTo_other": "{{count}} haritaya eklendi",
+    "descriptionLists": "Seçtiğiniz haritalardaki herkes hemen görür.",
+    "newList": "Yeni harita",
+    "newListTitle": "Yeni haritanın başlığı",
+    "newListHint": "Bu yerle birlikte oluşturulur.",
+    "newListPlaceholder": "ör. Denenecek yerler",
+    "newListInvalid": "En fazla 240 karakter, / veya \\ olmadan.",
+    "newListCancel": "Yeni harita oluşturma",
+    "newListFailed": "“{{list}}” haritası oluşturulamadı."
   },
   "settings": {
     "title": "Ayarlar",

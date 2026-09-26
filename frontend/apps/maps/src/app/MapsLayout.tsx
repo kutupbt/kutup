@@ -58,6 +58,13 @@ export function MapsLayout() {
     return () => window.removeEventListener('keydown', close)
   }, [menu])
   const openList = atlas.open?.fileId
+  const mapArea = useRef<HTMLElement>(null)
+  // The menu opens at the click, kept inside the map (its size, with a margin).
+  const menuPosition = (x: number, y: number) => {
+    const width = mapArea.current?.clientWidth ?? Infinity
+    const height = mapArea.current?.clientHeight ?? Infinity
+    return { left: Math.max(8, Math.min(x, width - 232)), top: Math.max(8, Math.min(y, height - 100)) }
+  }
 
   const stage = useMemo<Stage>(
     () => ({
@@ -73,7 +80,7 @@ export function MapsLayout() {
   return (
     <StageContext.Provider value={stage}>
       <div className="relative h-svh overflow-hidden bg-background md:flex">
-        <main className="absolute inset-0 md:static md:order-2 md:min-w-0 md:flex-1" aria-label={t('layout.map')}>
+        <main ref={mapArea} className="absolute inset-0 md:relative md:inset-auto md:order-2 md:min-w-0 md:flex-1" aria-label={t('layout.map')}>
           {effective ? (
             <Suspense fallback={<Skeleton className="h-full w-full rounded-none" />}>
               <MapView
@@ -111,7 +118,7 @@ export function MapsLayout() {
           {menu ? (
             <div
               className="absolute z-30 w-56 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-              style={{ left: Math.max(8, menu.x), top: Math.max(8, menu.y) }}
+              style={menuPosition(menu.x, menu.y)}
               role="menu"
               aria-label={t('layout.mapMenu')}
             >
@@ -186,13 +193,13 @@ export function MapsLayout() {
         initialLists={openList && writable.some((l) => l.id === openList) ? [openList] : []}
         busy={adding}
         onClose={() => setDraft(null)}
-        onSubmit={(values, lists) => {
+        onSubmit={(values, lists, newList) => {
           setAdding(true)
-          void addToLists(values, lists)
-            .then((place) => {
-              if (!place) return
+          void addToLists(values, lists, newList)
+            .then((added) => {
+              if (!added) return
               setDraft(null)
-              atlas.showPlace({ place, fileId: lists[0] })
+              if (added.fileId) atlas.showPlace({ place: added.place, fileId: added.fileId })
             })
             .finally(() => setAdding(false))
         }}

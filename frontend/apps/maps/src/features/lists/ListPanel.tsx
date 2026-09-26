@@ -456,7 +456,7 @@ function Workspace({
         initialLists={[file.id]}
         busy={adding}
         onClose={() => setDialog(null)}
-        onSubmit={(values, lists) => {
+        onSubmit={(values, lists, newList) => {
           if (!list.doc) return
           if (editingPlace) {
             updatePlace(list.doc, editingPlace, values)
@@ -464,9 +464,10 @@ function Workspace({
             return
           }
           setAdding(true)
-          void addToLists(values, lists)
-            .then((place) => {
-              if (!place) return
+          void addToLists(values, lists, newList)
+            .then((added) => {
+              if (!added) return
+              const { place } = added
               setDialog(null)
               if (lists.includes(file.id)) {
                 setSelected(place.id)

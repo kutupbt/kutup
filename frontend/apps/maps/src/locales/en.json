@@ -139,10 +139,18 @@
     "add": "Add",
     "save": "Save",
     "saveTo": "Save to",
-    "noLists": "No map you can change yet. Make one first.",
+    "noLists": "No map you can change yet. Make a new one here.",
     "addFailed": "It could not be added to {{list}}.",
     "addedTo_one": "Added to {{count}} map",
-    "addedTo_other": "Added to {{count}} maps"
+    "addedTo_other": "Added to {{count}} maps",
+    "descriptionLists": "Everyone in the maps you choose sees it at once.",
+    "newList": "New map",
+    "newListTitle": "New map’s title",
+    "newListHint": "Made with this place in it.",
+    "newListPlaceholder": "e.g. Places to try",
+    "newListInvalid": "At most 240 characters, without / or \\.",
+    "newListCancel": "Don’t make a new map",
+    "newListFailed": "The map “{{list}}” could not be made."
   },
   "settings": {
     "title": "Settings",

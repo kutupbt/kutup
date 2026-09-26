@@ -1,4 +1,4 @@
-import { MapPin, Search } from 'lucide-react'
+import { MapPin, Plus, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CITIES_ATTRIBUTION, loadCities, searchCities, type City } from '@kutup/map/cities'
@@ -47,7 +47,8 @@ export function PlaceDialog({
   initialLists?: string[]
   busy?: boolean
   onClose: () => void
-  onSubmit: (place: { name: string; note: string; lat: number; lon: number }, lists: string[]) => void
+  /** `newList`: the title of a map to make with this place in it, if one was asked for. */
+  onSubmit: (place: { name: string; note: string; lat: number; lon: number }, lists: string[], newList: string | null) => void
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(initial.name)
@@ -56,6 +57,8 @@ export function PlaceDialog({
   const [lon, setLon] = useState(initial.lon?.toFixed(6) ?? '')
   const [query, setQuery] = useState('')
   const [chosen, setChosen] = useState<string[]>(initialLists)
+  // A new map to put it in, as Google Maps' "New list" (null: not asked for).
+  const [newList, setNewList] = useState<string | null>(null)
   const [cities, setCities] = useState<Awaited<ReturnType<typeof loadCities>> | null>(null)
   const [citiesFailed, setCitiesFailed] = useState(false)
 
@@ -67,6 +70,7 @@ export function PlaceDialog({
     setLon(initial.lon?.toFixed(6) ?? '')
     setQuery('')
     setChosen(initialLists)
+    setNewList(null)
     // initialLists is read when the dialog opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initial])
@@ -90,13 +94,15 @@ export function PlaceDialog({
   const lonBad = lon.trim() === '' || !Number.isFinite(lonValue) || lonValue < -180 || lonValue > 180
   const nameBad = name.trim().length === 0 || [...name.trim()].length > MAX_NAME
   const noteBad = [...note].length > MAX_NOTE
-  const noList = lists !== undefined && chosen.length === 0
-  const invalid = latBad || lonBad || nameBad || noteBad || noList
+  const newTitle = newList?.trim() ?? ''
+  const newTitleBad = [...newTitle].length > 240 || /[/\\]/.test(newTitle)
+  const noList = lists !== undefined && chosen.length === 0 && !newTitle
+  const invalid = latBad || lonBad || nameBad || noteBad || noList || newTitleBad
 
   function submit(event: FormEvent) {
     event.preventDefault()
     if (invalid) return
-    onSubmit({ name: name.trim(), note, lat: latValue, lon: lonValue }, chosen)
+    onSubmit({ name: name.trim(), note, lat: latValue, lon: lonValue }, chosen, newTitle || null)
   }
 
   return (
@@ -105,7 +111,7 @@ export function PlaceDialog({
         <form className="space-y-4" onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{mode === 'add' ? t('place.addTitle') : t('place.editTitle')}</DialogTitle>
-            <DialogDescription>{t('place.description')}</DialogDescription>
+            <DialogDescription>{lists ? t('place.descriptionLists') : t('place.description')}</DialogDescription>
           </DialogHeader>
           <Field label={t('place.name')} error={name && nameBad ? t('place.nameInvalid', { max: MAX_NAME }) : undefined} required>
             {(field) => <Input {...field} value={name} onChange={(e) => setName(e.target.value)} autoFocus />}
@@ -162,9 +168,7 @@ export function PlaceDialog({
           {lists ? (
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">{t('place.saveTo')}</legend>
-              {lists.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t('place.noLists')}</p>
-              ) : (
+              {lists.length > 0 ? (
                 <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border p-2">
                   {lists.map((list) => (
                     <li key={list.id} className="flex items-center gap-2">
@@ -180,7 +184,35 @@ export function PlaceDialog({
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {newList === null ? (
+                <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={() => setNewList('')}>
+                  <Plus /> {t('place.newList')}
+                </Button>
+              ) : (
+                <div className="flex items-start gap-2">
+                  <Field
+                    label={t('place.newListTitle')}
+                    description={t('place.newListHint')}
+                    error={newTitleBad ? t('place.newListInvalid') : undefined}
+                    className="min-w-0 flex-1"
+                  >
+                    {(field) => (
+                      <Input
+                        {...field}
+                        value={newList}
+                        onChange={(e) => setNewList(e.target.value)}
+                        autoFocus
+                        placeholder={t('place.newListPlaceholder')}
+                      />
+                    )}
+                  </Field>
+                  <Button type="button" variant="ghost" size="icon" className="mt-7" onClick={() => setNewList(null)} aria-label={t('place.newListCancel')}>
+                    <X />
+                  </Button>
+                </div>
               )}
+              {lists.length === 0 && newList === null ? <p className="text-sm text-muted-foreground">{t('place.noLists')}</p> : null}
             </fieldset>
           ) : null}
           <DialogFooter>
