@@ -7,8 +7,8 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { currentContent } from '../editor/content'
 import { KindIcon } from '../explorer/KindIcon'
 import { thumbnailsOfFile, thumbnailSourceFor } from './make'
-import { enqueueThumbnail, thumbnailInHand } from './queue'
-import { storeThumbnails, thumbnailUrl } from './store'
+import { enqueueThumbnail, thumbnailInHand } from '@kutup/drive-core/thumbnailQueue'
+import { storeThumbnails, thumbnailUrl } from '@kutup/drive-core/thumbnails'
 
 /** Backfill only what is cheap to draw. */
 const BACKFILL_MAX_IMAGE_BYTES = 20 * 1024 * 1024

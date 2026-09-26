@@ -1,0 +1,37 @@
+{
+  "name": "@kutup/photos-app",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@kutup/crypto": "workspace:*",
+    "@kutup/drive-core": "workspace:*",
+    "@kutup/drive-ui": "workspace:*",
+    "@kutup/files": "workspace:*",
+    "@kutup/i18n": "workspace:*",
+    "@kutup/map": "workspace:*",
+    "@kutup/session": "workspace:*",
+    "@kutup/ui": "workspace:*",
+    "@tanstack/react-query": "^5",
+    "@tanstack/react-virtual": "^3.14.13",
+    "axios": "^1.18.0",
+    "i18next": "^26.0.6",
+    "lucide-react": "^1.8.0",
+    "next-themes": "^0.4.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^17.0.4",
+    "react-router-dom": "^7.1.1",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@kutup/config": "workspace:*",
+    "vite": "^8.0.16"
+  }
+}

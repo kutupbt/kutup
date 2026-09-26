@@ -18,10 +18,6 @@
     "trash": "Çöp kutusu",
     "settings": "Ayarlar"
   },
-  "storage": {
-    "label": "Kullanılan alan",
-    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor"
-  },
   "explorer": {
     "sortBy": "Sırala",
     "fields": {
@@ -306,32 +302,6 @@
     "emptyConfirmDescription_other": "{{count}} öğe kalıcı olarak kaldırılır.",
     "withFiles_one": "İçinde {{count}} dosya",
     "withFiles_other": "İçinde {{count}} dosya"
-  },
-  "uploads": {
-    "title": "Yüklemeler",
-    "uploading_one": "{{count}} öğe yükleniyor",
-    "uploading_other": "{{count}} öğe yükleniyor",
-    "allDone": "Yüklemeler tamamlandı",
-    "someFailed_one": "{{count}} yükleme başarısız",
-    "someFailed_other": "{{count}} yükleme başarısız",
-    "waiting": "Bekliyor…",
-    "progress": "{{sent}} / {{total}}",
-    "intoFolder": "{{folder}} içinde",
-    "done": "Yüklendi",
-    "cancelled": "İptal edildi",
-    "cancel": "{{name}} iptal et",
-    "cancelAll": "Tümünü iptal et",
-    "collapse": "Daralt",
-    "expand": "Genişlet",
-    "failure": {
-      "quota": "Depolama alanınız dolu.",
-      "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
-      "forbidden": "Buraya dosya ekleyemezsiniz.",
-      "network": "Bağlantı koptu.",
-      "other": "Yükleme başarısız oldu."
-    },
-    "progressFiles_one": "{{sent}} / {{count}} dosya",
-    "progressFiles_other": "{{sent}} / {{count}} dosya"
   },
   "public": {
     "title": "Paylaşılan dosyalar",

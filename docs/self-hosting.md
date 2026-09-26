@@ -241,16 +241,17 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
-| `frontend` | The web apps — account, Drive, Chat and the OnlyOffice sandbox — each on its own hostname (Nginx) |
+| `frontend` | The web apps — account, Drive, Chat, Photos, Maps and the OnlyOffice sandbox — each on its own hostname (Nginx) |
 | `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
 
 **The web apps and their hostnames.** Each app has its own origin:
-`account.`, `drive.`, `chat.` and `office.` under `KUTUP_BASE_DOMAIN` (or the
-explicit `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`). The backend and the
+`account.`, `drive.`, `chat.`, `photos.`, `maps.` and `office.` under
+`KUTUP_BASE_DOMAIN` (or the explicit
+`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE}_URL`). The backend and the
 `frontend` container read the same settings: the backend publishes the map to
 the apps, and the `frontend` container serves one app per hostname (any other
 hostname gets `404`) and sends the OnlyOffice sandbox's Content Security
-Policy, which only Drive may embed. Point all four names at the server, cover
+Policy, which only Drive may embed. Point all six names at the server, cover
 them with the certificate, and keep the `Host` header when proxying; the
 bundled `nginx` does.
 
@@ -641,6 +642,14 @@ frontend image) keeps people's place lists. Each list is an encrypted Drive
 file (`.kutupmap`) that counts against its owner's storage, so no separate
 storage or service is needed. Lists work with maps turned off: places are
 then added by city (searched on the device) or by coordinates.
+
+The Photos app (`KUTUP_PHOTOS_URL`, e.g. `photos.example.org`, the same
+frontend image) shows people's photos and videos by when and where they were
+taken. Photos are ordinary Drive files in folders people choose (by default
+a "Photos" folder in My files), so they share the Drive storage quota and
+need nothing more on the server. Dates, places and the rest are read on the
+device and sealed inside each file's encrypted metadata; the Places map
+uses the map settings above.
 
 ---
 

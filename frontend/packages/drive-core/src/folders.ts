@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, type QueryClient } from '@tanstack/react-query'
 import { createOwnedCollectionV1, openOwnedCollectionV1, openSharedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { CollectionRow } from '@kutup/session/api-types'
@@ -195,6 +195,17 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
 }
 
 /** Every folder the account can see — owned, shared with it, and federated — decrypted. */
+/**
+ * The folder index as last loaded. It is cached per account
+ * (`[...foldersKey, userId]`), so it is found by prefix, not read by exact key.
+ */
+export function cachedFolderIndex(queryClient: QueryClient): FolderIndex | undefined {
+  return queryClient
+    .getQueriesData<FolderIndex>({ queryKey: foldersKey })
+    .map(([, data]) => data)
+    .find((data): data is FolderIndex => Boolean(data))
+}
+
 export function useFolders() {
   const identity = useDriveIdentity()
   return useQuery({

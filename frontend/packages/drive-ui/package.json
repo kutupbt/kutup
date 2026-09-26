@@ -5,11 +5,14 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
+    "./uploadStore": "./src/uploadStore.ts",
+    "./uploadError": "./src/uploadError.ts",
     "./*": "./src/*.tsx"
   },
   "dependencies": {
     "@kutup/drive-core": "workspace:*",
     "@kutup/i18n": "workspace:*",
+    "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
     "axios": "^1.18.0",
     "lucide-react": "^1.8.0",

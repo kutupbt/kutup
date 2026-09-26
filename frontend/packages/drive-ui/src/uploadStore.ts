@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
-export type UploadStatus = 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'
+/** `skipped`: nothing to upload (Photos: the library already has it). */
+export type UploadStatus = 'queued' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
 
 export interface UploadJob {
   id: string
@@ -13,7 +14,8 @@ export interface UploadJob {
   unit?: 'bytes' | 'files'
   status: UploadStatus
   failure?: import('./uploadError').UploadFailure
-  run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<void>
+  /** Resolves `skipped` when there was nothing to upload. */
+  run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<void | 'skipped'>
   controller: AbortController
 }
 
@@ -39,8 +41,8 @@ async function pump(onSettled: () => void, classify: (error: unknown) => UploadJ
       if (!job) break
       patch(job.id, { status: 'uploading' })
       try {
-        await job.run(job.controller.signal, (sent, total) => patch(job.id, { sent, total }))
-        patch(job.id, { status: 'done', sent: job.total })
+        const outcome = await job.run(job.controller.signal, (sent, total) => patch(job.id, { sent, total }))
+        patch(job.id, outcome === 'skipped' ? { status: 'skipped' } : { status: 'done', sent: job.total })
       } catch (error) {
         const aborted = error instanceof DOMException && error.name === 'AbortError'
         patch(job.id, aborted ? { status: 'cancelled' } : { status: 'failed', failure: classify(error) })

@@ -1,0 +1,109 @@
+{
+  "app": {
+    "title": "Kutup Fotoğraflar"
+  },
+  "boot": {
+    "opening": "Fotoğraflarınız açılıyor…",
+    "failedTitle": "Fotoğraflar açılamadı",
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "nav": {
+    "photos": "Fotoğraflar",
+    "settings": "Ayarlar"
+  },
+  "timeline": {
+    "title": "Fotoğraflar",
+    "count_one": "{{count}} fotoğraf ya da video",
+    "count_other": "{{count}} fotoğraf ve video",
+    "loading": "Kitaplığınız açılıyor…",
+    "failedTitle": "Kitaplığınız yüklenemedi",
+    "failedDescription": "Kutup'a ulaşılamadı. Bağlantınızı kontrol edip sayfayı yenileyin.",
+    "emptyTitle": "Henüz fotoğraf yok",
+    "emptyDescription": "Fotoğraf ve video yükleyin ya da buraya bırakın. Drive'da tuttuğunuz fotoğraflar, klasörlerini Ayarlar'dan eklediğinizde burada görünür.",
+    "chooseFolders": "Klasör seçin",
+    "select": "{{name}} öğesini seç",
+    "selectDay": "{{day}} gününün tümünü seç",
+    "jump": "Bir aya git"
+  },
+  "upload": {
+    "button": "Yükle",
+    "drop": "Yüklemek için fotoğraf ve videoları bırakın",
+    "noFolder": "Yükleme klasörünüz oluşturulamadı. Yeniden deneyin.",
+    "notMedia_one": "{{count}} dosya dışarıda bırakıldı: kitaplığa yalnızca fotoğraf ve video girer.",
+    "notMedia_other": "{{count}} dosya dışarıda bırakıldı: kitaplığa yalnızca fotoğraf ve video girer."
+  },
+  "selection": {
+    "count_one": "{{count}} seçili",
+    "count_other": "{{count}} seçili",
+    "clear": "Seçimi temizle",
+    "download": "İndir",
+    "share": "Paylaş",
+    "trash": "Çöpe taşı",
+    "zipping": "İndirme hazırlanıyor: {{count}} dosyadan {{done}}",
+    "archiveName": "Fotoğraflar",
+    "downloadFailed": "İndirme tamamlanmadı. Yeniden deneyin.",
+    "tooLargeForBrowser": "Bu indirme bu tarayıcı için fazla büyük. Chrome ya da Edge kullanın veya bir seferde daha azını indirin.",
+    "trashTitle_one": "{{count}} öğe çöpe taşınsın mı?",
+    "trashTitle_other": "{{count}} öğe çöpe taşınsın mı?",
+    "trashDescription_one": "Bulunduğu Drive klasörünün çöpüne gider ve oradan geri yüklenebilir.",
+    "trashDescription_other": "Bulundukları Drive klasörlerinin çöpüne gider ve oradan geri yüklenebilir.",
+    "trashSome_one": "Seçili {{count}} öğe başkasına ait ve yerinde kalır.",
+    "trashSome_other": "Seçili {{count}} öğe başkasına ait ve yerinde kalır.",
+    "trashed_one": "{{count}} öğe çöpe taşındı",
+    "trashed_other": "{{count}} öğe çöpe taşındı",
+    "trashFailed_one": "{{count}} öğe çöpe taşınamadı",
+    "trashFailed_other": "{{count}} öğe çöpe taşınamadı"
+  },
+  "viewer": {
+    "loading": "Açılıyor…",
+    "loadingVideo": "Video indiriliyor…",
+    "videoTooLarge": "Bu video burada oynatmak için fazla büyük. İzlemek için indirin.",
+    "failed": "Bu açılamadı. Yeniden deneyin ya da indirin.",
+    "cannotDraw": "Bu tarayıcı bu biçimi gösteremiyor. Önizlemesi gösteriliyor.",
+    "showingPreview": "Önizleme gösteriliyor: özgün dosya burada açmak için fazla büyük.",
+    "dateUnknown": "Çekildiği tarih bilinmiyor",
+    "download": "İndir",
+    "info": "Ayrıntılar",
+    "previous": "Önceki",
+    "next": "Sonraki"
+  },
+  "info": {
+    "taken": "Çekildiği zaman",
+    "dateUnknown": "Bilinmiyor. Yüklendiği zamana göre sıralanır.",
+    "place": "Yer",
+    "mapLabel": "Çekildiği yer",
+    "placeShared": "Bu fotoğrafı görebilen herkes nerede çekildiğini de görebilir.",
+    "camera": "Kamera",
+    "dimensions": "Boyut",
+    "pixels": "{{width}} × {{height}} ({{megapixels}} MP)",
+    "length": "Süre",
+    "file": "Dosya",
+    "folder": "Drive'daki klasörü",
+    "myFiles": "Dosyalarım",
+    "mapsOff": "Haritalar kapalı. Yerleri haritada görmek için açın."
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "description": "Fotoğraflar Drive dosyalarıdır. Yüklemelerin nereye gideceğini ve kitaplığınızın hangi klasörleri göstereceğini seçin.",
+    "loading": "Ayarlar yükleniyor…",
+    "saved": "Kaydedildi",
+    "saveFailed": "Kaydedilemedi. Yeniden deneyin.",
+    "uploadTitle": "Yükleme klasörü",
+    "uploadDescription": "Yeni fotoğraf ve videolar buraya gider. Drive'daki kendi klasörlerinizden biridir.",
+    "uploadDefault": "Dosyalarım içinde {{folder}}",
+    "uploadNotYet": "Siz seçene kadar, ilk yüklemenizde Dosyalarım içinde {{folder}} adlı bir klasör oluşturulur.",
+    "libraryTitle": "Kitaplığınızdaki klasörler",
+    "libraryDescription": "Yükleme klasörü her zaman kitaplığınızdadır. Fotoğraflarını burada da görmek için kendinizin ya da sizinle paylaşılan başka klasörler ekleyin.",
+    "libraryEmpty": "Henüz başka klasör yok.",
+    "addFolder": "Klasör ekle",
+    "chooseFolder": "Bir klasör seçin",
+    "remove": "{{folder}} klasörünü çıkar",
+    "sharedBy": "{{folder}}, paylaşan {{owner}}",
+    "subfoldersTitle": "Alt klasörler de sayılır",
+    "subfolders": "Bir klasörün alt klasörleri de ona dahildir. Bir klasörü kitaplıktan çıkarmak fotoğraflarını Drive'da bırakır."
+  }
+}

@@ -14,7 +14,7 @@ function JobRow({ job }: { job: UploadJob }) {
     <li className="space-y-1.5 px-4 py-2.5">
       <div className="flex items-center gap-2 text-sm">
         <span className="min-w-0 flex-1 truncate" title={job.name}>{job.name}</span>
-        {job.status === 'done' ? <Check className="size-4 text-status-ok" aria-label={t('uploads.done')} /> : null}
+        {job.status === 'done' || job.status === 'skipped' ? <Check className={cn('size-4', job.status === 'done' ? 'text-status-ok' : 'text-muted-foreground')} aria-label={t(job.status === 'done' ? 'uploads.done' : 'uploads.duplicate')} /> : null}
         {job.status === 'failed' ? <CircleAlert className="size-4 text-destructive" aria-hidden /> : null}
         {active ? (
           <Button variant="ghost" size="icon" className="size-7" aria-label={t('uploads.cancel', { name: job.name })} onClick={() => uploads.cancel(job.id)}>
@@ -32,6 +32,8 @@ function JobRow({ job }: { job: UploadJob }) {
           ? t(`uploads.failure.${job.failure ?? 'other'}`)
           : job.status === 'cancelled'
             ? t('uploads.cancelled')
+            : job.status === 'skipped'
+              ? t('uploads.duplicate')
             : job.status === 'queued'
               ? t('uploads.waiting')
               : job.status === 'done'

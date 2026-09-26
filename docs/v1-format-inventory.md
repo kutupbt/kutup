@@ -65,7 +65,13 @@ A file's key is wrapped under its folder's key as a purpose-3 envelope: object
 the file key's generation. It is the only file object that names the folder;
 moving a file re-seals it alone. The metadata (purpose 4) is sealed under the
 file key with object = parent = file, epoch = key generation and revision =
-metadata revision.
+metadata revision. Its plaintext is `FileMetadataV1` (`kutup-crypto`
+`file_metadata`, vector `fileMetadata`): canonical JSON `{ name, mimeType,
+size, media? }`, decoded strictly (unknown fields and out-of-range values
+refused) by the browser (WASM) and the CLI alike. `media` holds a photo's or
+video's details (docs/plans/photos.md): when it was taken (UTC ms, the time
+zone in minutes, and where the date came from), place, size on screen,
+length, camera, a SHA-256 content hash and a caption.
 
 `CollectionEpochStatementV1` is a fixed-width account-authority-signed record
 over suite, collection UUID, owner UUID, non-zero epoch, exact previous-record

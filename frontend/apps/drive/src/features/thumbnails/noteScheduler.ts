@@ -1,6 +1,6 @@
 import { thumbnailsOfText, thumbnailSourceFor } from './make'
-import { enqueueThumbnail } from './queue'
-import { storeThumbnails, type ThumbnailTarget } from './store'
+import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
+import { storeThumbnails, type ThumbnailTarget } from '@kutup/drive-core/thumbnails'
 
 /** Autosaves redraw at most this often; explicit saves always do. */
 const MIN_INTERVAL_MS = 60_000

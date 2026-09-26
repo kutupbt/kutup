@@ -9,7 +9,7 @@ import type { Plugin, UserConfig } from 'vite'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos'
 export type WasmModule = 'crypto' | 'chat'
 
 /**
@@ -56,7 +56,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'office', number> = { account: 5173, drive: 5174, chat: 5175, office: 5176, maps: 5177 }
+export const DEV_PORTS: Record<KutupApp | 'office', number> = { account: 5173, drive: 5174, chat: 5175, office: 5176, maps: 5177, photos: 5178 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own

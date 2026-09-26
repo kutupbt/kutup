@@ -1,6 +1,7 @@
 # Photos
 
-**Status:** plan, 2026-09-26. Branch `feat/frontend-rewrite`. The product
+**Status:** slice 1 implemented 2026-09-26 (details below, under "Slice 1
+done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
 owner asked for it after Maps: "continue with photos". The roadmap's
 decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
 - photos are Drive files in folders you choose;
@@ -282,6 +283,41 @@ own plan.
 5. **Shared albums:** people here and on other servers, collaborative albums,
    public album links.
 6. **Search on the device.**
+
+## Slice 1 done (2026-09-26)
+
+- **The format:** `FileMetadataV1` with `media` is the Rust format
+  (`kutup-crypto` `file_metadata`, vector `fileMetadata`), used by the
+  browser through WASM and by the CLI. Rename, re-key, re-seal for sharing
+  and copy keep `media`. The hash is SHA-256 (the crate's own).
+- **Reading on upload:** `@kutup/files/media` (ExifReader; a bounded
+  MP4/QuickTime reader for `mvhd`, `tkhd`, Apple's keys, `©xyz` and 3GPP
+  `loci`; dates in names). Tested on real JPEG, MP4 and MOV files. Every
+  Drive upload of a photo or video seals it too.
+- **The app:** `photos.` (`KUTUP_PHOTOS_URL`, dev port 5178, `web-photos`
+  sessions, migration 066); in the app switcher and on the account's apps
+  page.
+  - The timeline: virtualized, by day under month headings, with a month
+    scrubber.
+  - Selection: click, shift-click, a whole day; download (one file, or a
+    ZIP), share one, move to trash.
+  - Drag and drop anywhere to upload.
+  - The viewer: the original when the browser can draw it (the large
+    thumbnail otherwise); arrows, swipes and keys; a details panel with a
+    small map.
+  - Settings: the upload folder, and library folders (yours or shared with
+    you).
+- **Catch-up:** photos without details or a thumbnail get both from one
+  download, one at a time, those on screen first. They are written back
+  where this account may, and kept for the tab otherwise.
+- **Shared with Drive:** the thumbnail store and queue (`drive-core`), photo
+  and video thumbnails (`@kutup/files/thumbnails`), the upload queue and
+  panel and the storage meter (`drive-ui`).
+- **Also fixed:** Drive's retry after a folder moved to a new key mid-upload
+  read the folder index by the wrong cache key and always failed.
+- **Not yet:** folders shared from other servers in the library (their ids
+  are not local folders); a thumbnail for a HEIC photo in browsers that
+  cannot decode it (slice 3).
 
 ## Open questions
 

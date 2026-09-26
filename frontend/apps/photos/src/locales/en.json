@@ -1,0 +1,109 @@
+{
+  "app": {
+    "title": "Kutup Photos"
+  },
+  "boot": {
+    "opening": "Opening your photos…",
+    "failedTitle": "Photos could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The address may be mistyped, or the page may have moved."
+  },
+  "nav": {
+    "photos": "Photos",
+    "settings": "Settings"
+  },
+  "timeline": {
+    "title": "Photos",
+    "count_one": "{{count}} photo or video",
+    "count_other": "{{count}} photos and videos",
+    "loading": "Opening your library…",
+    "failedTitle": "Your library could not be loaded",
+    "failedDescription": "Kutup could not be reached. Check your connection and reload the page.",
+    "emptyTitle": "No photos yet",
+    "emptyDescription": "Upload photos and videos, or drop them here. Photos you already keep in Drive show up once you add their folders in Settings.",
+    "chooseFolders": "Choose folders",
+    "select": "Select {{name}}",
+    "selectDay": "Select all of {{day}}",
+    "jump": "Jump to a month"
+  },
+  "upload": {
+    "button": "Upload",
+    "drop": "Drop photos and videos to upload them",
+    "noFolder": "Your upload folder could not be made. Try again.",
+    "notMedia_one": "{{count}} file was left out: only photos and videos go into the library.",
+    "notMedia_other": "{{count}} files were left out: only photos and videos go into the library."
+  },
+  "selection": {
+    "count_one": "{{count}} selected",
+    "count_other": "{{count}} selected",
+    "clear": "Clear selection",
+    "download": "Download",
+    "share": "Share",
+    "trash": "Move to trash",
+    "zipping": "Preparing download: {{done}} of {{count}}",
+    "archiveName": "Photos",
+    "downloadFailed": "The download did not finish. Try again.",
+    "tooLargeForBrowser": "This download is too large for this browser. Use Chrome or Edge, or download fewer at a time.",
+    "trashTitle_one": "Move {{count}} item to trash?",
+    "trashTitle_other": "Move {{count}} items to trash?",
+    "trashDescription_one": "It goes to the trash of the Drive folder it is in, and can be restored from there.",
+    "trashDescription_other": "They go to the trash of the Drive folders they are in, and can be restored from there.",
+    "trashSome_one": "{{count}} selected item is someone else's and stays.",
+    "trashSome_other": "{{count}} selected items are someone else's and stay.",
+    "trashed_one": "Moved {{count}} item to trash",
+    "trashed_other": "Moved {{count}} items to trash",
+    "trashFailed_one": "{{count}} item could not be moved to trash",
+    "trashFailed_other": "{{count}} items could not be moved to trash"
+  },
+  "viewer": {
+    "loading": "Opening…",
+    "loadingVideo": "Downloading the video…",
+    "videoTooLarge": "This video is too large to play here. Download it to watch it.",
+    "failed": "This could not be opened. Try again, or download it.",
+    "cannotDraw": "This browser cannot show this format. Showing its preview.",
+    "showingPreview": "Showing a preview: the original is too large to open here.",
+    "dateUnknown": "Date taken unknown",
+    "download": "Download",
+    "info": "Details",
+    "previous": "Previous",
+    "next": "Next"
+  },
+  "info": {
+    "taken": "Taken",
+    "dateUnknown": "Not known. It is sorted by when it was uploaded.",
+    "place": "Place",
+    "mapLabel": "Where it was taken",
+    "placeShared": "Anyone who can see this photo can see where it was taken.",
+    "camera": "Camera",
+    "dimensions": "Size",
+    "pixels": "{{width}} × {{height}} ({{megapixels}} MP)",
+    "length": "Length",
+    "file": "File",
+    "folder": "Folder in Drive",
+    "myFiles": "My files",
+    "mapsOff": "Maps are off. Turn them on to see places on a map."
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Photos are Drive files. Choose where uploads go and which folders your library shows.",
+    "loading": "Loading settings…",
+    "saved": "Saved",
+    "saveFailed": "This could not be saved. Try again.",
+    "uploadTitle": "Upload folder",
+    "uploadDescription": "New photos and videos go here. It is one of your own folders in Drive.",
+    "uploadDefault": "{{folder}} in My files",
+    "uploadNotYet": "Until you choose, a folder named {{folder}} is made in My files on your first upload.",
+    "libraryTitle": "Folders in your library",
+    "libraryDescription": "The upload folder is always in your library. Add other folders, yours or shared with you, to see their photos here too.",
+    "libraryEmpty": "No other folders yet.",
+    "addFolder": "Add folder",
+    "chooseFolder": "Choose a folder",
+    "remove": "Remove {{folder}}",
+    "sharedBy": "{{folder}}, shared by {{owner}}",
+    "subfoldersTitle": "Subfolders count too",
+    "subfolders": "A folder's subfolders are part of it. Removing a folder from the library leaves its photos in Drive."
+  }
+}

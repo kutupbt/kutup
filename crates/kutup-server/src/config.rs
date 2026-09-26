@@ -117,6 +117,8 @@ pub struct AppOrigins {
     pub office: String,
     /// The Maps app (docs/plans/maps.md).
     pub maps: String,
+    /// The Photos app (docs/plans/photos.md).
+    pub photos: String,
 }
 
 impl AppOrigins {
@@ -128,6 +130,7 @@ impl AppOrigins {
             ClientType::WebDrive => Some(&self.drive),
             ClientType::WebChat => Some(&self.chat),
             ClientType::WebMaps => Some(&self.maps),
+            ClientType::WebPhotos => Some(&self.photos),
             ClientType::Cli => None,
         }
     }
@@ -145,7 +148,7 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
     Ok(origin.ascii_serialization())
 }
 
-/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS,PHOTOS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
 /// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
 /// (`http://<app>.localhost:<port>`) and production refuses to start.
 pub fn resolve_app_origins(
@@ -171,6 +174,7 @@ pub fn resolve_app_origins(
         chat: pick("chat", "KUTUP_CHAT_URL", 5175)?,
         office: pick("office", "KUTUP_OFFICE_URL", 5176)?,
         maps: pick("maps", "KUTUP_MAPS_URL", 5177)?,
+        photos: pick("photos", "KUTUP_PHOTOS_URL", 5178)?,
     };
     let all = [
         &origins.account,
@@ -178,6 +182,7 @@ pub fn resolve_app_origins(
         &origins.chat,
         &origins.office,
         &origins.maps,
+        &origins.photos,
     ];
     for (i, a) in all.iter().enumerate() {
         if all[i + 1..].contains(a) {
@@ -368,6 +373,7 @@ mod tests {
         assert_eq!(o.chat, "https://chat.example.org");
         assert_eq!(o.office, "https://office.example.org");
         assert_eq!(o.maps, "https://maps.example.org");
+        assert_eq!(o.photos, "https://photos.example.org");
     }
 
     #[test]
@@ -392,6 +398,7 @@ mod tests {
         assert_eq!(o.chat, "http://chat.localhost:5175");
         assert_eq!(o.office, "http://office.localhost:5176");
         assert_eq!(o.maps, "http://maps.localhost:5177");
+        assert_eq!(o.photos, "http://photos.localhost:5178");
     }
 
     #[test]

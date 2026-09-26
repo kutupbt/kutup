@@ -10,7 +10,7 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { editorKindFor, extensionOf } from '../editor/editorKind'
 import { chooseViewer } from '../editor/viewers/dispatch'
 import { KindIcon } from '../explorer/KindIcon'
-import { thumbnailUrl } from '../thumbnails/store'
+import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 
 const MarkdownPreview = lazy(() => import('../editor/text/markdown/MarkdownPreview'))
 

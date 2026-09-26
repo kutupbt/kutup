@@ -3,7 +3,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
 
-/** Drive storage used of quota, in the chrome's footer. */
+/** Storage used of the quota Drive and Photos share, in the chrome's footer. */
 export function StorageMeter() {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()

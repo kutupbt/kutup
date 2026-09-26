@@ -18,8 +18,8 @@ import { SharedByMePage } from './features/shared/SharedByMePage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
-import { UploadPanel } from './features/uploads/UploadPanel'
-import { setThumbnailStoredListener } from './features/thumbnails/queue'
+import { UploadPanel } from '@kutup/drive-ui/UploadPanel'
+import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { NotFoundPage } from './NotFoundPage'
 
 /** Thumbnails stored in the background show up without a reload. */

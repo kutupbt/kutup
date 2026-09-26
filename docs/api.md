@@ -849,6 +849,24 @@ not offered or a resource it does not have, `429` above 1,200 requests a
 minute per person, `502` when the provider fails (an expired cached copy is
 served instead when there is one).
 
+## Photos
+
+The Photos app's library (docs/plans/photos.md). Photos are Drive files;
+their details are sealed in each file's metadata (`media`), never sent here.
+
+### GET /api/photos/preferences
+
+**Auth:** Bearer JWT. `{ uploadFolderId, libraryFolderIds }`: where uploads
+go (one of your own folders, or null until the app makes "Photos" in My
+files), and the other folders the library shows, each with its subfolders.
+Folders deleted, or no longer shared with you, are left out.
+
+### PUT /api/photos/preferences
+
+**Auth:** Bearer JWT. Body: the same shape. `uploadFolderId` must be one of
+your own folders, not in the trash; each library folder one you can open,
+at most 200 (`400` otherwise). Returns what was saved.
+
 ### Live-location streams
 
 A live location's stream on the sharer's server (docs/chat-protocol.md

@@ -30,6 +30,7 @@ mod maps;
 mod middleware;
 mod models;
 mod openapi;
+mod photos;
 mod ratelimit;
 mod sealed_sender_service;
 mod sessions;
@@ -569,6 +570,11 @@ fn build_router(state: AppState) -> Router {
         .route("/api/maps", get(maps::get_config))
         .route("/api/maps/preferences", put(maps::put_preferences))
         .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
+        // --- Photos (docs/plans/photos.md). ---
+        .route(
+            "/api/photos/preferences",
+            get(photos::get_preferences).put(photos::put_preferences),
+        )
         // --- Live-location streams (docs/plans/maps.md). ---
         .route(
             "/api/live-locations",

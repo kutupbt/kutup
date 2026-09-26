@@ -32,7 +32,8 @@
     "account": "Hesap",
     "chat": "Sohbet",
     "drive": "Drive",
-    "maps": "Haritalar"
+    "maps": "Haritalar",
+    "photos": "Fotoğraflar"
   },
   "theme": {
     "dark": "Koyu tema",
@@ -86,5 +87,36 @@
     "inviteLink": "Davet bağlantısı",
     "otherServer": "başka sunucuda",
     "recipientChanged": "{{account}} hesabını sıfırladı. Onu kaldırın, isterseniz yeniden paylaşın."
+  },
+  "storage": {
+    "label": "Kullanılan alan",
+    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor"
+  },
+  "uploads": {
+    "title": "Yüklemeler",
+    "uploading_one": "{{count}} öğe yükleniyor",
+    "uploading_other": "{{count}} öğe yükleniyor",
+    "allDone": "Yüklemeler tamamlandı",
+    "someFailed_one": "{{count}} yükleme başarısız",
+    "someFailed_other": "{{count}} yükleme başarısız",
+    "waiting": "Bekliyor…",
+    "progress": "{{sent}} / {{total}}",
+    "intoFolder": "{{folder}} içinde",
+    "done": "Yüklendi",
+    "cancelled": "İptal edildi",
+    "cancel": "{{name}} iptal et",
+    "cancelAll": "Tümünü iptal et",
+    "collapse": "Daralt",
+    "expand": "Genişlet",
+    "failure": {
+      "quota": "Depolama alanınız dolu.",
+      "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
+      "forbidden": "Buraya dosya ekleyemezsiniz.",
+      "network": "Bağlantı koptu.",
+      "other": "Yükleme başarısız oldu."
+    },
+    "progressFiles_one": "{{sent}} / {{count}} dosya",
+    "progressFiles_other": "{{sent}} / {{count}} dosya",
+    "duplicate": "Kitaplığınızda zaten var"
   }
 }

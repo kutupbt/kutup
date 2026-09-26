@@ -32,7 +32,8 @@
     "account": "Account",
     "chat": "Chat",
     "drive": "Drive",
-    "maps": "Maps"
+    "maps": "Maps",
+    "photos": "Photos"
   },
   "theme": {
     "dark": "Dark theme",
@@ -86,5 +87,36 @@
     "inviteLink": "Invite link",
     "otherServer": "on another server",
     "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to."
+  },
+  "storage": {
+    "label": "Storage used",
+    "usage": "{{used}} of {{total}} used"
+  },
+  "uploads": {
+    "title": "Uploads",
+    "uploading_one": "Uploading {{count}} item",
+    "uploading_other": "Uploading {{count}} items",
+    "allDone": "Uploads complete",
+    "someFailed_one": "{{count}} upload failed",
+    "someFailed_other": "{{count}} uploads failed",
+    "waiting": "Waiting…",
+    "progress": "{{sent}} of {{total}}",
+    "intoFolder": "In {{folder}}",
+    "done": "Uploaded",
+    "cancelled": "Cancelled",
+    "cancel": "Cancel {{name}}",
+    "cancelAll": "Cancel all",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "failure": {
+      "quota": "Your storage is full.",
+      "shareQuota": "This shared folder's upload limit is reached.",
+      "forbidden": "You cannot add files here.",
+      "network": "The connection dropped.",
+      "other": "The upload failed."
+    },
+    "progressFiles_one": "{{sent}} of {{count}} file",
+    "progressFiles_other": "{{sent}} of {{count}} files",
+    "duplicate": "Already in your library"
   }
 }

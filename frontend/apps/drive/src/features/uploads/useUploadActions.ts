@@ -10,12 +10,12 @@ import { uploadFolder, type FolderEntry } from '@kutup/files/upload/uploadFolder
 import api, { freshAccessToken } from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
 import { filesKey } from '@kutup/drive-core/files'
-import { foldersKey, type FolderIndex } from '@kutup/drive-core/folders'
+import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { folderLocation, type Folder } from '@kutup/drive-core/model'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
-import { classifyUploadError, isFolderKeyChanged } from './uploadError'
-import { uploads } from './uploadStore'
+import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
+import { uploads } from '@kutup/drive-ui/uploadStore'
 
 /**
  * A file into a federated folder: the other server takes one multipart body,
@@ -108,7 +108,7 @@ export function useUploadActions() {
       // A folder on another server: bring its stored share up to the new key.
       if (folder.remoteShareId) await api.post(`/drive/federation/shares/${folder.remoteShareId}/refresh`)
       await queryClient.invalidateQueries({ queryKey: foldersKey })
-      const fresh = queryClient.getQueryData<FolderIndex>(foldersKey)?.byId.get(folder.id)
+      const fresh = cachedFolderIndex(queryClient)?.byId.get(folder.id)
       if (!fresh?.key) throw new Error('the folder is no longer available')
       return fresh
     },

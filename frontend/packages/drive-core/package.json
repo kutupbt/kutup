@@ -10,6 +10,7 @@
   "dependencies": {
     "@kutup/chat-core": "workspace:*",
     "@kutup/crypto": "workspace:*",
+    "@kutup/files": "workspace:*",
     "@kutup/session": "workspace:*",
     "axios": "^1.18.0"
   },

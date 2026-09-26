@@ -18,10 +18,6 @@
     "trash": "Trash",
     "settings": "Settings"
   },
-  "storage": {
-    "label": "Storage used",
-    "usage": "{{used}} of {{total}} used"
-  },
   "explorer": {
     "sortBy": "Sort by",
     "fields": {
@@ -306,32 +302,6 @@
     "emptyConfirmDescription_other": "{{count}} items are removed for good.",
     "withFiles_one": "{{count}} file inside",
     "withFiles_other": "{{count}} files inside"
-  },
-  "uploads": {
-    "title": "Uploads",
-    "uploading_one": "Uploading {{count}} item",
-    "uploading_other": "Uploading {{count}} items",
-    "allDone": "Uploads complete",
-    "someFailed_one": "{{count}} upload failed",
-    "someFailed_other": "{{count}} uploads failed",
-    "waiting": "Waiting…",
-    "progress": "{{sent}} of {{total}}",
-    "intoFolder": "In {{folder}}",
-    "done": "Uploaded",
-    "cancelled": "Cancelled",
-    "cancel": "Cancel {{name}}",
-    "cancelAll": "Cancel all",
-    "collapse": "Collapse",
-    "expand": "Expand",
-    "failure": {
-      "quota": "Your storage is full.",
-      "shareQuota": "This shared folder's upload limit is reached.",
-      "forbidden": "You cannot add files here.",
-      "network": "The connection dropped.",
-      "other": "The upload failed."
-    },
-    "progressFiles_one": "{{sent}} of {{count}} file",
-    "progressFiles_other": "{{sent}} of {{count}} files"
   },
   "public": {
     "title": "Shared files",

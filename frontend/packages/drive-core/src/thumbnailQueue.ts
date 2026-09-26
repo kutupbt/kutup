@@ -38,10 +38,26 @@ function stored(): void {
   }, 800)
 }
 
-export function enqueueThumbnail(fileId: string, job: Job): void {
+/**
+ * Queue a file's job. `first` puts it ahead of the others (a picture now on
+ * screen); otherwise it goes last.
+ */
+export function enqueueThumbnail(fileId: string, job: Job, first = false): void {
   waiting.delete(fileId)
-  waiting.set(fileId, job)
+  if (first) {
+    const rest = [...waiting]
+    waiting.clear()
+    waiting.set(fileId, job)
+    for (const [id, queued] of rest) waiting.set(id, queued)
+  } else {
+    waiting.set(fileId, job)
+  }
   void pump()
+}
+
+/** Whether a job for the file is waiting (not yet started). */
+export function thumbnailWaiting(fileId: string): boolean {
+  return waiting.has(fileId)
 }
 
 async function pump(): Promise<void> {
