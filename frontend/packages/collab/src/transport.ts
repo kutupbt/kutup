@@ -47,13 +47,27 @@ export interface CollabTransportOpts {
   /** Optional — fires when the server pushes an updated peer-list. */
   onPeers?: (p: PeersMsg) => void
   lastSeenSeq?: () => number                        // for resume on reconnect
+  /**
+   * Log positions: `stored` after each kept frame (to everyone in the room,
+   * the sender too) and `replayed` after the replay on connect. Messages are
+   * handled strictly in order, so every frame before a position is applied.
+   */
+  onPosition?: (message: PositionMsg) => void | Promise<void>
 }
+
+export type PositionMsg =
+  | { type: 'stored'; seq: number }
+  | { type: 'replayed'; throughSeq: number; floor: number; since: number }
 
 export class CollabTransport {
   private ws: WebSocket | null = null
   private pending: Uint8Array[] = []
   private reconnectTimer: number | null = null
   private closed = false
+  /** Messages are handled one after another, in arrival order. */
+  private inbox: Promise<void> = Promise.resolve()
+  /** The position this connection resumed from. */
+  private resumedFrom = 0
 
   constructor(private readonly opts: CollabTransportOpts) {
     this.connect()
@@ -113,6 +127,7 @@ export class CollabTransport {
     ws.addEventListener('open', () => {
       // Resume from last-seen seq on the server.
       const last = this.opts.lastSeenSeq?.() ?? 0
+      this.resumedFrom = last
       ws.send(JSON.stringify({ type: 'resume', lastSeenSeq: last }))
       // Drain queued outbound.
       for (const p of this.pending) ws.send(p)
@@ -120,20 +135,36 @@ export class CollabTransport {
     })
 
     ws.addEventListener('message', (ev) => {
-      if (typeof ev.data === 'string') {
-        try {
-          const obj = JSON.parse(ev.data)
-          if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
-          else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
-        } catch {
-          // ignore non-JSON text
-        }
-      } else {
-        const arr = ev.data instanceof ArrayBuffer
-          ? new Uint8Array(ev.data)
-          : new Uint8Array(ev.data as ArrayBufferLike)
-        Promise.resolve(this.opts.onFrame(arr)).catch((e: unknown) => this.opts.onError(e))
-      }
+      const resumedFrom = this.resumedFrom
+      this.inbox = this.inbox
+        .then(async () => {
+          if (typeof ev.data === 'string') {
+            let obj: { type?: string; seq?: number; throughSeq?: number; floor?: number }
+            try {
+              obj = JSON.parse(ev.data)
+            } catch {
+              return // ignore non-JSON text
+            }
+            if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
+            else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
+            else if (obj.type === 'stored' && typeof obj.seq === 'number') {
+              await this.opts.onPosition?.({ type: 'stored', seq: obj.seq })
+            } else if (obj.type === 'replayed' && typeof obj.throughSeq === 'number') {
+              await this.opts.onPosition?.({
+                type: 'replayed',
+                throughSeq: obj.throughSeq,
+                floor: typeof obj.floor === 'number' ? obj.floor : 0,
+                since: resumedFrom,
+              })
+            }
+          } else {
+            const arr = ev.data instanceof ArrayBuffer
+              ? new Uint8Array(ev.data)
+              : new Uint8Array(ev.data as ArrayBufferLike)
+            await this.opts.onFrame(arr)
+          }
+        })
+        .catch((e: unknown) => this.opts.onError(e))
     })
 
     ws.addEventListener('close', () => {

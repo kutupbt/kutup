@@ -116,6 +116,20 @@ impl Hub {
         }
     }
 
+    /// Sends a JSON control message to every peer in the room, the sender too.
+    pub async fn broadcast_text(&self, file_id: &str, text: &str) {
+        let targets: Vec<Arc<Peer>> = {
+            let rooms = self.rooms.lock().unwrap();
+            match rooms.get(file_id) {
+                Some(room) => room.peers.values().cloned().collect(),
+                None => Vec::new(),
+            }
+        };
+        for p in targets {
+            p.write(WsOut::Text(text.to_owned())).await;
+        }
+    }
+
     /// Sends `frame` to every peer in the room except `sender_conn_id` — mirrors `Broadcast`.
     /// Snapshots the peer set under the lock, then writes outside it (so a slow peer can't
     /// head-of-line-block the room while the lock is held).

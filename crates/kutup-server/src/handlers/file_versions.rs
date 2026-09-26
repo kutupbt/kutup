@@ -371,6 +371,18 @@ pub async fn create(
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
         .await?
         .into_result()?;
+    // A version claims the collaboration log up to its position; never past
+    // the log's head (a made-up position must not trim edits it lacks). Under
+    // the relay's per-file lock, so no frame lands in between.
+    let seq_at_snapshot = if seq_at_snapshot > 0 {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(super::collab::log_lock_key(fid))
+            .execute(&mut *tx)
+            .await?;
+        seq_at_snapshot.min(super::collab::log_head(&mut *tx, fid).await?)
+    } else {
+        0
+    };
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
@@ -406,15 +418,21 @@ pub async fn create(
     // Under the relay's own per-file lock, so no frame lands in between; never
     // past the log's head, and only for the document key the log is under (a
     // stale or made-up position must not wipe edits the version lacks).
+    // The trimmed stretch is in this version; the floor keeps positions
+    // counting from its end.
     if seq_at_snapshot > 0 {
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(super::collab::log_lock_key(fid))
-            .execute(&mut *tx)
-            .await?;
         sqlx::query(
             "DELETE FROM file_update_log l USING files f
-             WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3
-               AND l.seq <= LEAST($2, (SELECT MAX(seq) FROM file_update_log WHERE file_id = $1))",
+             WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
+        )
+        .bind(fid)
+        .bind(seq_at_snapshot)
+        .bind(doc_key_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
+             WHERE id = $1 AND current_doc_key_id = $3",
         )
         .bind(fid)
         .bind(seq_at_snapshot)

@@ -269,12 +269,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
         .fetch_one(&state.pool)
         .await
         .unwrap_or(0);
-    let head_seq: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM file_update_log WHERE file_id = $1")
-            .bind(file_uuid)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0);
+    let head_seq: i64 = log_head(&state.pool, file_uuid).await.unwrap_or(0);
     let my_sender_seq: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log \
          WHERE file_id = $1 AND sender_device = $2",
@@ -481,15 +476,38 @@ async fn handle_frame(
         return true;
     }
 
-    // Durable kinds: persist (drop only exact sender-sequence replays), then broadcast.
-    if persist_frame(state, file_uuid, peer.device_id, &f, data)
-        .await
-        .is_err()
-    {
+    // Durable kinds: persist (drop only exact sender-sequence replays), then
+    // broadcast, then tell everyone in the room (the sender too) the frame's
+    // log position. Each connection gets the frame before its position, so a
+    // client knows every frame up to a position it has seen is applied.
+    let Ok(seq) = persist_frame(state, file_uuid, peer.device_id, &f, data).await else {
         return true;
-    }
+    };
     state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+    state
+        .hub
+        .broadcast_text(
+            &conn.file_id,
+            &serde_json::json!({ "type": "stored", "seq": seq }).to_string(),
+        )
+        .await;
     true
+}
+
+/// The position of the last frame in a file's log: the newest kept frame, or
+/// where a saved version trimmed it to. Positions only ever go up.
+pub(crate) async fn log_head<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    file_uuid: Uuid,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT GREATEST(
+             COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
+             COALESCE((SELECT collab_log_floor FROM files WHERE id = $1), 0))",
+    )
+    .bind(file_uuid)
+    .fetch_one(executor)
+    .await
 }
 
 /// The advisory lock that serialises a file's update log: appends here and
@@ -523,7 +541,10 @@ async fn persist_frame(
         r#"INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame)
            VALUES (
              $1,
-             COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0) + 1,
+             GREATEST(
+               COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
+               (SELECT collab_log_floor FROM files WHERE id = $1)
+             ) + 1,
              $2, $3, $4, $5, $6
            )
            RETURNING seq"#,
@@ -543,8 +564,8 @@ async fn persist_frame(
 
 /// Streams every frame with `seq > since_seq` to the joining client — mirrors `replayLog`.
 async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_seq: i64) {
-    let rows: Vec<(Vec<u8>,)> = match sqlx::query_as(
-        "SELECT frame FROM file_update_log WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
+    let rows: Vec<(i64, Vec<u8>)> = match sqlx::query_as(
+        "SELECT seq, frame FROM file_update_log WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
     )
     .bind(file_uuid)
     .bind(since_seq)
@@ -554,9 +575,26 @@ async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_s
         Ok(r) => r,
         Err(_) => return,
     };
-    for (frame,) in rows {
+    let mut through = since_seq;
+    for (seq, frame) in rows {
         if !peer.write(WsOut::Binary(frame)).await {
             return;
         }
+        through = seq;
     }
+    // Everything up to `through` has now been sent. A client that was behind
+    // the floor (a saved version trimmed past it) also needs that version.
+    let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM files WHERE id = $1")
+        .bind(file_uuid)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    let _ = peer
+        .write(WsOut::Text(
+            serde_json::json!({ "type": "replayed", "throughSeq": through, "floor": floor })
+                .to_string(),
+        ))
+        .await;
 }

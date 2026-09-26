@@ -4,7 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
-import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
 import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap,
@@ -19,19 +18,14 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { useResolvedTheme } from '../useResolvedTheme'
 
 import { langForExtension } from './lang'
-import { CollabTransport, type HelloMsg } from '@kutup/collab/transport'
-import { KIND } from '@kutup/collab/envelope'
-import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from '@kutup/collab/cryptoFrame'
-import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
-import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '@kutup/collab/devices'
-import { registerDevice, listVersions, claimSeed } from '@kutup/collab/api'
 import { QuotaExceededError } from '@kutup/session/errors'
-import api from '@kutup/session/client'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
-import { collabSocketUrl } from '@kutup/collab/socketUrl'
-import { updateSession, useRequiredSession } from '@kutup/session/store'
+import { useRequiredSession } from '@kutup/session/store'
+import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { buildAwarenessName, withAlpha } from '@kutup/collab/identity'
+import type { Awareness } from 'y-protocols/awareness'
 import VersionHistoryPanel from '../versions/VersionHistoryPanel'
 import RestoreConfirmDialog from '../versions/RestoreConfirmDialog'
 import { Button } from '@kutup/ui/components/button'
@@ -46,24 +40,6 @@ import ModeToggle from './markdown/ModeToggle'
 import StatusBar from './markdown/StatusBar'
 import { countWords } from './markdown/countWords'
 import { useMarkdownMode, nextMode, prevMode } from './markdown/useMarkdownMode'
-import {
-  buildAwarenessName,
-  withAlpha,
-  randomSenderSeqPrefix,
-} from '@kutup/collab/identity'
-
-// Module-level cache: dedupes concurrent registerDevice() calls within the same
-// browser session (prevents StrictMode double-mount from creating two rows).
-const _devicePromiseCache = new Map<string, Promise<number>>()
-
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let p = _devicePromiseCache.get(pubKeyB64)
-  if (!p) {
-    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
-    _devicePromiseCache.set(pubKeyB64, p)
-  }
-  return p
-}
 
 interface Props {
   fileId: string
@@ -88,22 +64,9 @@ interface Props {
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
 }
 
-/**
- * The first content of a note no one has edited yet: the uploaded text as
- * one Yjs insert by a client id derived from the file. Every tab builds the
- * same bytes, so an editor's seed and a viewer's local copy are the same
- * Yjs item and merge instead of doubling.
- */
+/** The first content of a note no one has edited yet (see deterministicSeed). */
 function seedUpdate(fileId: string, text: string): Uint8Array {
-  const doc = new Y.Doc()
-  // FNV-1a over the id: a stable uint32, as Yjs client ids are.
-  let id = 0x811c9dc5
-  for (let i = 0; i < fileId.length; i++) id = Math.imul(id ^ fileId.charCodeAt(i), 0x01000193) >>> 0
-  doc.clientID = id
-  doc.getText('content').insert(0, text)
-  const update = Y.encodeStateAsUpdate(doc)
-  doc.destroy()
-  return update
+  return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
 }
 
 export default function TextCollabEditor({
@@ -206,295 +169,78 @@ export default function TextCollabEditor({
 
   useEffect(() => {
     if (!ref.current) return
-    let alive = true
+    const controller = new AbortController()
     let view: EditorView | null = null
-    let transport: CollabTransport | null = null
-    let ydoc: Y.Doc | null = null
-    let awareness: Awareness | null = null
     let cleanup: (() => void) | null = null
 
     void (async () => {
-      // 1. Ensure we have a device keypair + registered deviceId.
-      let kp = loadKeypair()
-      if (!kp) {
-        kp = await generateDeviceKeypair()
-        saveKeypair(kp)
-      }
-      let deviceId = storedDeviceId
-      if (!deviceId) {
-        const pubB64 = encodePubKeyB64(kp.publicKey)
-        deviceId = await ensureRegistered(pubB64, navigator.userAgent.slice(0, 80))
-        if (!alive) return
-        updateSession({ currentDeviceId: deviceId })
-      }
-      if (!alive) return
-
-      // 2. Local Yjs doc + awareness.
-      ydoc = new Y.Doc()
-      const ytext = ydoc.getText('content')
-      ytextRef.current = ytext
-      awareness = new Awareness(ydoc)
-      awarenessRef.current = awareness
-      // Each tab gets its own display name (#<tabId>) and randomized color
-      // from a 20-color palette (user-customizable via the toolbar). The
-      // colorLight is what y-codemirror.next paints as the selection bg.
-      awareness.setLocalStateField('user', {
-        name: buildAwarenessName(username),
-        color: cursorColor,
-        colorLight: withAlpha(cursorColor, 0.3),
-      })
-      let lastSeenSeq = 0
-      let docKeyId = 1
-      // The file key of `generation`: saved states and log frames stored
-      // before a re-key open with the key they were sealed under.
-      const keyOf = async (generation: number): Promise<Uint8Array> => {
-        if (generation === keyGeneration) return fileKey
-        if (!fileKeyAt) throw new Error('no key for an older generation')
-        return fileKeyAt(generation)
-      }
-      // Per-tab sender_seq partition: see randomSenderSeqPrefix in
-      // ../../collab/identity. Two tabs of the same user share a
-      // sender_device row, so without a high random tabPrefix in the upper
-      // 32 bits both tabs would collide on (file_id, sender_device,
-      // sender_seq) UNIQUE — the relay would silently drop one frame.
-      let outboundSeq = randomSenderSeqPrefix()
-
-      // 2.5 Snapshot trigger. Each saved version also redraws the file's
-      // thumbnail (throttled; see noteThumbnailScheduler).
-      // Only editors save; a viewer's copy follows theirs.
+      // Only editors save; each saved version also redraws the thumbnail
+      // (throttled; see noteThumbnailScheduler).
       const thumbnails = readOnly ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
-      const trig = thumbnails && new SnapshotTrigger({
-        onSnapshot: (versionId, explicit) => thumbnails.saved(versionId, explicit, ytext.toJSON()),
+      let ytext: Y.Text | null = null
+      // 1–6: the shared editing session (@kutup/collab/session).
+      const session = await openCollabSession({
         fileId,
-        ydoc,
-        getSeq: () => Number(outboundSeq),
-        encryptSnapshot: async (bytes: Uint8Array) => {
-          const out = await encryptFileBlobV1(bytes, fileKey, { fileId, generation: keyGeneration })
-          return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
-        },
-        // Surface 413 quota errors as a localized toast. Other errors are
-        // logged to console only — the autosave path can't surface every
-        // transient failure or it'd spam users on flaky networks. Trigger
-        // disarms itself after a 413, so this fires at most once per
-        // session-after-reload.
-        onError: (err) => {
-          if (err instanceof QuotaExceededError) {
-            toast.error(t('editor.quotaSave'))
-          } else {
-            console.warn('snapshot save failed', err)
-          }
-        },
-      })
-      if (alive) { triggerRef.current = trig; setTrigger(trig) }
-
-      // Restore handler. Wired into VersionHistoryPanel + RestoreConfirmDialog
-      // via the staged-versionId pattern in render. The `choice` arg comes
-      // from the dialog: 'save-and-restore' pre-snapshots first;
-      // 'restore-only' skips the backup snapshot.
-      const handleRestore = trig && (async (versionId: string, choice: 'save-and-restore' | 'restore-only') => {
-        try {
-          // axios `api` instance has baseURL='/api'; do NOT include /api/ here.
-          const r = await api.get(`/files/${fileId}/versions/${versionId}/download`, {
-            responseType: 'arraybuffer',
-          })
-          const blob = new Uint8Array(r.data as ArrayBuffer)
-          const generation =
-            (await listVersions(fileId)).find((v) => v.id === versionId)?.keyGeneration ?? keyGeneration
-          const stateBytes = await decryptFileBlobV1(blob, await keyOf(generation), { fileId, generation })
-          // Materialize the old state in a throwaway doc, extract the plaintext.
-          const oldDoc = new Y.Doc()
-          Y.applyUpdateV2(oldDoc, stateBytes)
-          const oldText = oldDoc.getText('content').toJSON()
-          oldDoc.destroy()
-          if (choice === 'save-and-restore') {
-            await trig.forceSave(t('editor.preRestoreLabel', { time: new Date().toLocaleString() }))
-          }
-          // Replace live content. CodeMirror sees this as a delete + insert.
-          ydoc!.transact(() => {
-            ytext.delete(0, ytext.length)
-            ytext.insert(0, oldText)
-          })
-          // Save a named snapshot so the restore is itself a milestone.
-          await trig.forceSave(t('editor.restoredLabel', { time: new Date().toLocaleString() }), true)
-          toast.success(t('editor.restored'))
-        } catch (e) {
-          console.error('restore failed', e)
-          toast.error(t('editor.restoreFailed'))
-        }
-      })
-      if (alive && handleRestore) setRestoreHandler(() => handleRestore)
-
-      // 4. Local Yjs update -> canonical Rust frame + device signature.
-      const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
-        if (origin === 'remote') return
-        void (async () => {
-          // Per-device sequence is incremented synchronously to guarantee uniqueness; the
-          // encrypt → sign → send chain is async, so wire-arrival order may differ from
-          // generation order. The server's UNIQUE (file_id, sender_device, sender_seq)
-          // index in migration 013 deduplicates either way; Yjs convergence handles
-          // out-of-order application.
-          outboundSeq++
-          const frame = await encryptCollabFrameV1(update, KIND.YJS_UPDATE, {
-            fileId,
-            keyGeneration,
-            docKeyId,
-            deviceId: BigInt(deviceId),
-            sequence: outboundSeq,
-          }, fileKey, kp.privateKey)
-          transport?.send(frame)
-        })()
-      }
-      ydoc.on('update', onLocalUpdate)
-
-      // 5. Local awareness change -> encrypt + send (no persistence server-side).
-      const onAwarenessChange = (
-        { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
-        origin: unknown,
-      ) => {
-        if (origin === 'remote') return
-        const changed = [...added, ...updated, ...removed]
-        if (changed.length === 0) return
-        void (async () => {
-          const upd = encodeAwarenessUpdate(awareness!, changed)
-          outboundSeq++
-          const frame = await encryptCollabFrameV1(upd, KIND.YJS_AWARENESS, {
-            fileId,
-            keyGeneration,
-            docKeyId,
-            deviceId: BigInt(deviceId),
-            sequence: outboundSeq,
-          }, fileKey, kp.privateKey)
-          transport?.send(frame)
-        })()
-      }
-      awareness.on('change', onAwarenessChange)
-
-      // Track remote-collaborator count for the status bar. Awareness
-      // states map clientID → state; we count entries other than our own
-      // local clientID. Yjs's awareness 'update' fires on every state
-      // change including additions / removals.
-      const updateCollabCount = () => {
-        const states = awareness!.getStates()
-        let n = 0
-        const myID = ydoc!.clientID
-        states.forEach((_v, id) => { if (id !== myID) n++ })
-        setCollaboratorCount(n)
-      }
-      awareness.on('update', updateCollabCount)
-      updateCollabCount()
-
-      // 5.5 Load the latest snapshot from S3 (if any) so the editor shows the
-      // current state on open. The relay can't help here — when a snapshot was
-      // taken the file_update_log was truncated up to seq_at_snapshot, so a
-      // resume(0) would replay nothing. We load the snapshot blob, decrypt,
-      // applyUpdateV2 to seed the Y.Doc, then set lastSeenSeq so the WS resume
-      // only fetches post-snapshot deltas.
-      //
-      // For a freshly-created note (no snapshot, no log entries yet), we want
-      // to seed Y.Text from `initialContent` exactly once globally. The
-      // earlier "headSeq === 0 in onHello" gate looked atomic but wasn't —
-      // two tabs whose hellos are computed concurrently both observe
-      // headSeq=0 and both seed, and Yjs CRDT-merges the duplicates. The
-      // server-arbitrated `claim-seed` endpoint runs an atomic UPDATE
-      // false→true so exactly one tab ever wins.
-      let mayInitialSeed = false
-      let neverSaved = false
-      try {
-        const versions = await listVersions(fileId)
-        neverSaved = versions.length === 0
-        if (versions.length > 0) {
-          const latest = versions[0]
-          const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, {
-            responseType: 'arraybuffer',
-          })
-          const blob = new Uint8Array(r.data as ArrayBuffer)
-          if (blob.length > 0) {
-            const stateBytes = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), {
-              fileId,
-              generation: latest.keyGeneration,
-            })
-            Y.applyUpdateV2(ydoc, stateBytes, 'remote')
-            lastSeenSeq = latest.seqAtSnapshot
-          }
-        } else if (initialContent && initialContent.length > 0 && !readOnly) {
-          // Race-safe seed claim. The losing tab simply skips the insert
-          // and waits for WS replay to populate Y.Text from the winner's
-          // frame. Failures fall through to "don't seed" — the editor
-          // opens empty, which is recoverable and strictly better than
-          // a duplicated heading.
-          try {
-            const r = await claimSeed(fileId)
-            mayInitialSeed = r.committed
-          } catch (e) {
-            console.warn('collab: claimSeed failed, opening without seed', e)
-          }
-        }
-      } catch (e) {
-        console.warn('collab: failed to load initial content, starting empty', e)
-      }
-      if (!alive) return
-
-      // 6. Build transport.
-      const wsUrl = () => collabSocketUrl(fileId, deviceId)
-      transport = new CollabTransport({
-        url: wsUrl,
-        lastSeenSeq: () => lastSeenSeq,
-        onHello: (h: HelloMsg) => {
-          docKeyId = h.currentDocKeyId
-          lastSeenSeq = h.headSeq
-          // Resume per-device outbound counter from the server's record so
-          // we don't replay sender_seqs and trip the unique index after a
-          // refresh / remount.
-          // Re-roll the tab prefix if the random pick happened to land at
-          // or below the historic high — keeps the (file_id,
-          // sender_device, sender_seq) uniqueness guarantee. Vanishingly
-          // rare (~2^-32 per fresh tab).
-          if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
-            const high = BigInt(h.mySenderSeqHigh)
-            if (outboundSeq <= high) {
-              outboundSeq = randomSenderSeqPrefix(high)
+        fileKey,
+        keyGeneration,
+        fileKeyAt,
+        readOnly,
+        username,
+        storedDeviceId,
+        cursorColor,
+        seed: initialContent
+          ? {
+              update: () => seedUpdate(fileId, initialContent),
+              isEmpty: (doc) => doc.getText('content').length === 0,
             }
-          }
-          // We won the seed claim earlier — insert the cold-start content
-          // now that the WS is up. The local 'update' listener will encrypt
-          // and send this as a regular frame; the relay broadcasts it to
-          // peers, which replay it onto their (empty) Y.Text via onFrame.
-          //
-          // Losing tabs (mayInitialSeed=false) fall through and rely on the
-          // WS replay alone — server's atomic claim guarantees exactly one
-          // local insert per file.
-          if (mayInitialSeed && ytext.length === 0 && initialContent) {
-            Y.applyUpdate(ydoc!, seedUpdate(fileId, initialContent), 'seed')
-            mayInitialSeed = false  // single-shot
-          }
-          // A viewer of a note no editor has opened yet shows the upload
-          // locally (not sent); an editor's seed, when it comes, is the
-          // same item.
-          if (readOnly && neverSaved && h.headSeq === 0 && ytext.length === 0 && initialContent) {
-            Y.applyUpdate(ydoc!, seedUpdate(fileId, initialContent), 'remote')
-          }
-          setStatus('ready')
+          : undefined,
+        // CodeMirror sees a restore as a delete + insert.
+        replaceContent: (live, old) => {
+          const text = live.getText('content')
+          const oldText = old.getText('content').toJSON()
+          live.transact(() => {
+            text.delete(0, text.length)
+            text.insert(0, oldText)
+          })
         },
-        onFrame: async (bs) => {
-          try {
-            // A frame replayed from before a re-key opens with its generation's key.
-            const f = await openCollabFrameAtGenerationV1(bs, keyOf, { fileId, keyGeneration })
-            if (f.kind === KIND.YJS_UPDATE) {
-              Y.applyUpdate(ydoc!, f.plaintext, 'remote')
-            } else if (f.kind === KIND.YJS_AWARENESS) {
-              applyAwarenessUpdate(awareness!, f.plaintext, 'remote')
-            }
-            // Snapshot/oo_* kinds ignored in v1 text path.
-          } catch (e) {
-            // Drop invalid/undecryptable frames silently.
-            console.warn('collab: dropped frame', e)
-          }
+        labels: {
+          preRestore: () => t('editor.preRestoreLabel', { time: new Date().toLocaleString() }),
+          restored: () => t('editor.restoredLabel', { time: new Date().toLocaleString() }),
         },
-        onError: (e) => {
-          console.warn('collab transport error', e)
-          setStatus('error')
+        onSnapshot: (versionId, explicit) => thumbnails?.saved(versionId, explicit, ytext?.toJSON() ?? ''),
+        // A full storage is said once (the trigger disarms itself after a
+        // 413); other autosave failures are only logged, not to spam users
+        // on flaky networks.
+        onSaveError: (err) => {
+          if (err instanceof QuotaExceededError) toast.error(t('editor.quotaSave'))
+          else console.warn('snapshot save failed', err)
         },
+        onStatus: setStatus,
+        onCollaborators: setCollaboratorCount,
+        signal: controller.signal,
       })
+      if (!session) {
+        thumbnails?.flush()
+        return
+      }
+      const { doc: ydoc, awareness, trigger: trig } = session
+      ytext = ydoc.getText('content')
+      ytextRef.current = ytext
+      awarenessRef.current = awareness
+      triggerRef.current = trig
+      setTrigger(trig)
+      if (session.restore) {
+        const restore = session.restore
+        setRestoreHandler(() => async (versionId: string, choice: 'save-and-restore' | 'restore-only') => {
+          try {
+            await restore(versionId, choice)
+            toast.success(t('editor.restored'))
+          } catch (e) {
+            console.error('restore failed', e)
+            toast.error(t('editor.restoreFailed'))
+          }
+        })
+      }
 
       // 7. Build the CodeMirror editor.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -608,18 +354,14 @@ export default function TextCollabEditor({
       // 8. Cleanup on unmount.
       cleanup = () => {
         thumbnails?.flush()
-        trig?.destroy()
-        ydoc?.off('update', onLocalUpdate)
-        awareness?.off('change', onAwarenessChange)
-        awareness?.off('update', updateCollabCount)
         view?.destroy()
-        ydoc?.destroy()
-        transport?.close()
+        session.close()
       }
+      if (controller.signal.aborted) cleanup()
     })()
 
     return () => {
-      alive = false
+      controller.abort()
       cleanup?.()
     }
     // storedDeviceId is intentionally NOT a dep: the first render reads it

@@ -2244,7 +2244,7 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
 
 ### PUT /api/files/:fileId/assets/:assetId
 
@@ -2323,9 +2323,10 @@ quota (a client's size claim is not read), stores it as an object of its own
 (`files/{id}/versions/{versionId}`), records the row, truncates
 `file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
 so its folder's) — one transaction; the object is removed again if the
-commit fails. Truncation takes the relay's per-file lock, never goes past the
-log's head, and happens only when `docKeyId` is the file's current document
-key. **Auth:** write access (`403` for a view-only recipient).
+commit fails. Under the relay's per-file lock, `seqAtSnapshot` is clamped
+to the log's head before the row is stored; truncation happens only when
+`docKeyId` is the file's current document key, and raises the file's log
+floor to that position so the next frame continues after it. **Auth:** write access (`403` for a view-only recipient).
 
 **Response 201:** the version row, including `kind`. `413` over quota.
 
