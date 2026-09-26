@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { useCurrentFolder } from '../drive/currentFolderContext'
-import { useFolders } from '../drive/folders'
+import { useFolders } from '@kutup/drive-core/folders'
 import { useCreateActions } from './useCreateActions'
 
 /** The sidebar's New: into the folder on screen, or My Files elsewhere. */

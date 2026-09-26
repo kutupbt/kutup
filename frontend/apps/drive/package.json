@@ -37,6 +37,7 @@
     "@kutup/chat-core": "workspace:*",
     "@kutup/collab": "workspace:*",
     "@kutup/crypto": "workspace:*",
+    "@kutup/drive-core": "workspace:*",
     "@kutup/files": "workspace:*",
     "@kutup/i18n": "workspace:*",
     "@kutup/session": "workspace:*",

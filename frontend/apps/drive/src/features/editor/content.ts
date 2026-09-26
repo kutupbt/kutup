@@ -1,8 +1,8 @@
 import { listVersions } from '@kutup/collab/api'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
-import { sealedAt } from '../drive/keyring'
-import type { DriveFile, Folder } from '../drive/model'
+import { sealedAt } from '@kutup/drive-core/keyring'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { editorKindFor } from './editorKind'
 
 /**

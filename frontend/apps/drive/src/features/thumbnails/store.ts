@@ -5,8 +5,8 @@ import {
   type ThumbnailVariant,
 } from '@kutup/crypto/thumbnail'
 import api from '@kutup/session/client'
-import { fileKeyAt } from '../drive/keyring'
-import type { DriveFile } from '../drive/model'
+import { fileKeyAt } from '@kutup/drive-core/keyring'
+import type { DriveFile } from '@kutup/drive-core/model'
 import type { MadeThumbnails } from './make'
 
 /** What a thumbnail is sealed to: the file and its current key. */

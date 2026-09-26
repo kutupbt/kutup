@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { FolderIndex } from './folders'
-import type { DriveFile, Folder } from './model'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { moveRefusal } from './move'
 
 const key = new Uint8Array(32)

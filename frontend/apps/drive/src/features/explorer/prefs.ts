@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { FILE_KINDS, type ItemKind } from './kinds'
+import { FILE_KINDS, type ItemKind } from '@kutup/drive-core/kinds'
 import { DEFAULT_SORT, SORT_FIELDS, type SortDir, type SortField, type SortSpec } from './sort'
 
 export type ViewMode = 'list' | 'grid'

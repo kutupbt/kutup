@@ -5,11 +5,11 @@ import api from '@kutup/session/client'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
 import { uploadOne } from '../uploads/useUploadActions'
-import { sealedAt } from './keyring'
-import { loadFolderFiles } from './files'
-import type { FolderIndex } from './folders'
-import type { DriveIdentity } from './identity'
-import { folderLocation, type DriveFile, type Folder } from './model'
+import { sealedAt } from '@kutup/drive-core/keyring'
+import { loadFolderFiles } from '@kutup/drive-core/files'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import type { DriveIdentity } from '@kutup/drive-core/identity'
+import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
 // Copying, end to end encrypted: the server never holds a readable file, so
 // a copy is the browser reading the file (decrypting as it streams) and

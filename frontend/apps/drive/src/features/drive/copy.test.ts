@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { copyName, isWithin } from './copy'
-import type { FolderIndex } from './folders'
-import type { Folder } from './model'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import type { Folder } from '@kutup/drive-core/model'
 
 describe('copyName', () => {
   it('keeps a free name', () => {

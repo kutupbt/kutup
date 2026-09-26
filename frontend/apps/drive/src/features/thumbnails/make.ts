@@ -15,7 +15,7 @@ import {
   type RasterResultV1,
 } from '@kutup/files/mediaPreview'
 import { editorKindFor } from '../editor/editorKind'
-import { fileKind } from '../explorer/kinds'
+import { fileKind } from '@kutup/drive-core/kinds'
 
 /** Thumbnails for one file, by variant (docs/plans/drive-thumbnails.md). */
 export type MadeThumbnails = Partial<Record<ThumbnailVariant, ThumbnailImage>>

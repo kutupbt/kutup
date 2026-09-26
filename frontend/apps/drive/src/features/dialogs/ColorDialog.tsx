@@ -5,8 +5,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { FOLDER_COLORS, folderHex } from '../drive/colors'
-import type { Folder } from '../drive/model'
-import { useSetFolderColor } from '../drive/mutations'
+import type { Folder } from '@kutup/drive-core/model'
+import { useSetFolderColor } from '@kutup/drive-core/mutations'
 
 export function ColorDialog({ folder, onClose }: { folder: Folder | null; onClose: () => void }) {
   const { t } = useTranslation()

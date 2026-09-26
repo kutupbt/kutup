@@ -31,7 +31,8 @@
   "apps": {
     "account": "Account",
     "chat": "Chat",
-    "drive": "Drive"
+    "drive": "Drive",
+    "maps": "Maps"
   },
   "theme": {
     "dark": "Dark theme",

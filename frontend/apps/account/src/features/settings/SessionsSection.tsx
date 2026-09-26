@@ -43,6 +43,7 @@ const CLIENT_KEYS: Record<string, string> = {
   'web-account': 'apps.account',
   'web-drive': 'apps.drive',
   'web-chat': 'apps.chat',
+  'web-maps': 'apps.maps',
   cli: 'settings.sessions.cli',
 }
 

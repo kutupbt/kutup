@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { parseInvite, useAcceptInvite } from '../drive/mutations'
+import { parseInvite, useAcceptInvite } from '@kutup/drive-core/mutations'
 
 /** Paste an invite link someone on another Kutup server sent you. */
 export function AcceptInviteDialog({ open, onClose }: { open: boolean; onClose: () => void }) {

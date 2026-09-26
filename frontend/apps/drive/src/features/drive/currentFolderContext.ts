@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect } from 'react'
-import type { Folder } from './model'
+import type { Folder } from '@kutup/drive-core/model'
 
 export const CurrentFolder = createContext<Folder | null>(null)
 export const SetCurrentFolder = createContext<(folder: Folder | null) => void>(() => {})

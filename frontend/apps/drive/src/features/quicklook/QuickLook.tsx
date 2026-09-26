@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@kutup/ui
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import { readFile } from '../drive/copy'
-import type { DriveFile, Folder } from '../drive/model'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { editorKindFor, extensionOf } from '../editor/editorKind'
 import { chooseViewer } from '../editor/viewers/dispatch'
 import { KindIcon } from '../explorer/KindIcon'

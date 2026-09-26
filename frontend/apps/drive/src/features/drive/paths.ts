@@ -1,4 +1,4 @@
-import type { Folder } from './model'
+import type { Folder } from '@kutup/drive-core/model'
 
 export function folderPath(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId' | 'isRoot'>): string {
   if (folder.isRoot) return '/'

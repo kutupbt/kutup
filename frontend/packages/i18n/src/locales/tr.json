@@ -31,7 +31,8 @@
   "apps": {
     "account": "Hesap",
     "chat": "Sohbet",
-    "drive": "Drive"
+    "drive": "Drive",
+    "maps": "Haritalar"
   },
   "theme": {
     "dark": "Koyu tema",

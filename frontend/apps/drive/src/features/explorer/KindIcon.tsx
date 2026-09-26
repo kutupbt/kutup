@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@kutup/ui/lib/cn'
-import type { FileKind, ItemKind } from './kinds'
+import type { FileKind, ItemKind } from '@kutup/drive-core/kinds'
 
 const GLYPHS: Record<FileKind, LucideIcon> = {
   note: NotebookPen,

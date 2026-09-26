@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
-import { FILE_KINDS, type ItemKind } from './kinds'
+import { FILE_KINDS, type ItemKind } from '@kutup/drive-core/kinds'
 import type { ExplorerPrefs, useExplorerPrefs } from './prefs'
 import { SORT_FIELDS, type SortDir, type SortField } from './sort'
 

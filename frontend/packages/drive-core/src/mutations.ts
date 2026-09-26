@@ -11,7 +11,7 @@ import {
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
-import { peopleKey } from '../people/people'
+import { peopleKey } from './people'
 import { foldersKey } from './folders'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { folderLocation, type DriveFile, type Folder } from './model'

@@ -238,6 +238,15 @@ goes beyond Signal parity.
    - Editing a list with someone on another server waits for editing across
      servers in Drive generally (notes included); they can view and
      download it.
+   4a progress (2026-09-26): the `maps.` origin (KUTUP_MAPS_URL, `web-maps`
+   sessions, migration 057, the frontend image); Drive's core in
+   `@kutup/drive-core`; the live editing session in `@kutup/collab/session`,
+   which also fixed a data-losing bug: a saved note recorded its client
+   counter as the log position, so saving trimmed the whole relay log and
+   people who joined later missed edits (now the relay announces positions,
+   saves record the applied one, and positions never restart; migration
+   058). Known gap: after a sign-in hand-off from the account app, a child
+   app opens at its home page rather than the link that was asked for.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

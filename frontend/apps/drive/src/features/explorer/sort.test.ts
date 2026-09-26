@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fileKind } from './kinds'
+import { fileKind } from '@kutup/drive-core/kinds'
 import { DEFAULT_SORT, filterItems, sortItems, type ExplorerItem } from './sort'
 
 const item = (type: 'folder' | 'file', name: string, modifiedAt: string, size: number | null = null): ExplorerItem => ({

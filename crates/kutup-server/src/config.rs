@@ -115,6 +115,8 @@ pub struct AppOrigins {
     pub chat: String,
     /// The keyless OnlyOffice sandbox; embedded by drive, holds no session.
     pub office: String,
+    /// The Maps app (docs/plans/maps.md).
+    pub maps: String,
 }
 
 impl AppOrigins {
@@ -125,6 +127,7 @@ impl AppOrigins {
             ClientType::WebAccount => Some(&self.account),
             ClientType::WebDrive => Some(&self.drive),
             ClientType::WebChat => Some(&self.chat),
+            ClientType::WebMaps => Some(&self.maps),
             ClientType::Cli => None,
         }
     }
@@ -142,7 +145,7 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
     Ok(origin.ascii_serialization())
 }
 
-/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
 /// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
 /// (`http://<app>.localhost:<port>`) and production refuses to start.
 pub fn resolve_app_origins(
@@ -167,12 +170,14 @@ pub fn resolve_app_origins(
         drive: pick("drive", "KUTUP_DRIVE_URL", 5174)?,
         chat: pick("chat", "KUTUP_CHAT_URL", 5175)?,
         office: pick("office", "KUTUP_OFFICE_URL", 5176)?,
+        maps: pick("maps", "KUTUP_MAPS_URL", 5177)?,
     };
     let all = [
         &origins.account,
         &origins.drive,
         &origins.chat,
         &origins.office,
+        &origins.maps,
     ];
     for (i, a) in all.iter().enumerate() {
         if all[i + 1..].contains(a) {
@@ -362,6 +367,7 @@ mod tests {
         assert_eq!(o.drive, "https://drive.example.org");
         assert_eq!(o.chat, "https://chat.example.org");
         assert_eq!(o.office, "https://office.example.org");
+        assert_eq!(o.maps, "https://maps.example.org");
     }
 
     #[test]
@@ -385,6 +391,7 @@ mod tests {
         assert_eq!(o.drive, "http://drive.localhost:5174");
         assert_eq!(o.chat, "http://chat.localhost:5175");
         assert_eq!(o.office, "http://office.localhost:5176");
+        assert_eq!(o.maps, "http://maps.localhost:5177");
     }
 
     #[test]

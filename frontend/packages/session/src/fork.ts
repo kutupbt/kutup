@@ -21,14 +21,15 @@ import { sanitizeNext } from './sessionSync'
 import { getSession } from './store'
 
 /** The apps the account app forks for, and their session types. */
-export type ForkChild = Extract<AppId, 'drive' | 'chat'>
-const CHILD_CLIENT: Record<ForkChild, 'web-drive' | 'web-chat'> = {
+export type ForkChild = Extract<AppId, 'drive' | 'chat' | 'maps'>
+const CHILD_CLIENT: Record<ForkChild, 'web-drive' | 'web-chat' | 'web-maps'> = {
   drive: 'web-drive',
   chat: 'web-chat',
+  maps: 'web-maps',
 }
 
 export function isForkChild(value: string | null): value is ForkChild {
-  return value === 'drive' || value === 'chat'
+  return value === 'drive' || value === 'chat' || value === 'maps'
 }
 
 const STATE_PREFIX = 'kutup-fork:'

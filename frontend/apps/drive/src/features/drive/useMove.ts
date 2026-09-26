@@ -2,9 +2,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { loadFolderFiles } from './files'
-import { foldersKey, type FolderIndex } from './folders'
-import type { Folder } from './model'
+import { loadFolderFiles } from '@kutup/drive-core/files'
+import { foldersKey, type FolderIndex } from '@kutup/drive-core/folders'
+import type { Folder } from '@kutup/drive-core/model'
 import { clashes, moveFile, moveFolder, moveRefusal, MoveConflictError, type MoveSource } from './move'
 
 /**

@@ -4,7 +4,7 @@ import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } 
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import type { ProfileLookup } from '@kutup/chat-core/types'
 import api from '@kutup/session/client'
-import { useDriveIdentity, type DriveIdentity } from '../drive/identity'
+import { useDriveIdentity, type DriveIdentity } from './identity'
 
 /**
  * Names and pictures for the people you share folders with

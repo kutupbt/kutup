@@ -2,9 +2,9 @@ import { isAxiosError } from 'axios'
 import { wrapFileKeyForV1 } from '@kutup/crypto/fileRecord'
 import api from '@kutup/session/client'
 import { isWithin, namesIn } from './copy'
-import type { FolderIndex } from './folders'
-import type { DriveFile, Folder } from './model'
-import { rekeyFile } from './rekey'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { rekeyFile } from '@kutup/drive-core/rekey'
 
 // Moving (docs/plans/drive-move.md). Everything sealed under a file's key is
 // bound to the file alone; only the wrap of that key names its folder, so a

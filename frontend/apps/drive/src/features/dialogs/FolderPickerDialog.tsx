@@ -5,8 +5,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { cn } from '@kutup/ui/lib/cn'
 import { folderHex } from '../drive/colors'
-import type { FolderIndex } from '../drive/folders'
-import type { Folder } from '../drive/model'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import type { Folder } from '@kutup/drive-core/model'
 import { KindIcon } from '../explorer/KindIcon'
 
 /**

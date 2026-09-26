@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { openFileRecordV1, openOwnedCollectionKeyV1, openOwnedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
-import { fileKind, type ItemKind } from '../explorer/kinds'
-import { foldersKey } from '../drive/folders'
-import { useDriveIdentity } from '../drive/identity'
-import { folderKeyAt } from '../drive/keyring'
+import { fileKind, type ItemKind } from '@kutup/drive-core/kinds'
+import { foldersKey } from '@kutup/drive-core/folders'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
+import { folderKeyAt } from '@kutup/drive-core/keyring'
 
 interface TrashFolderRow {
   id: string

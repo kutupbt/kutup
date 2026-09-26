@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { CurrentFolder, SetCurrentFolder } from './currentFolderContext'
-import type { Folder } from './model'
+import type { Folder } from '@kutup/drive-core/model'
 
 /** Which folder the page shows (see useDeclareCurrentFolder). */
 export function CurrentFolderProvider({ children }: { children: ReactNode }) {

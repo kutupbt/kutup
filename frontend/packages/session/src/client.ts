@@ -5,7 +5,7 @@ import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
-export type WebClientType = 'web-account' | 'web-drive' | 'web-chat'
+export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps'
 
 let clientType: WebClientType | null = null
 

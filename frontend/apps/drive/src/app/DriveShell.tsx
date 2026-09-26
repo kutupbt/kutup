@@ -8,7 +8,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
-import { usePeople } from '../features/people/people'
+import { usePeople } from '@kutup/drive-core/people'
 import { SearchBox } from '../features/search/SearchBox'
 import { StorageMeter } from './StorageMeter'
 

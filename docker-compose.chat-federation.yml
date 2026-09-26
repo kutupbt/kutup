@@ -111,6 +111,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_MAPS_URL: http://maps.a.test:${KUTUP_FED_A_PORT:-39081}
       # Group calls hosted on A (no SFU runs: the live test checks tokens).
       CHAT_SFU_URL: ws://sfu.a.test
       CHAT_SFU_API_KEY: federation-sfu-key
@@ -157,6 +158,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_MAPS_URL: http://maps.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
       ADMIN_ACCOUNT: federation-admin-b@example.test:adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
@@ -193,6 +195,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_MAPS_URL: http://maps.a.test:${KUTUP_FED_A_PORT:-39081}
 
   frontend-b:
     image: ${KUTUP_FEDERATION_FRONTEND_IMAGE:-kutup-federation-frontend:local}
@@ -204,6 +207,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_MAPS_URL: http://maps.b.test:${KUTUP_FED_B_PORT:-39082}
 
   edge-a:
     image: nginx:alpine

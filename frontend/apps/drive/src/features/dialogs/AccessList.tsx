@@ -14,11 +14,11 @@ import {
   useRemoveAccess,
   type FolderAccess,
   type Removal,
-} from '../drive/access'
-import { useDriveIdentity } from '../drive/identity'
-import type { Folder } from '../drive/model'
-import { publicLinkUrl } from '../drive/mutations'
-import { personOf, usePeople } from '../people/people'
+} from '@kutup/drive-core/access'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
+import type { Folder } from '@kutup/drive-core/model'
+import { publicLinkUrl } from '@kutup/drive-core/mutations'
+import { personOf, usePeople } from '@kutup/drive-core/people'
 
 type Pending = { label: string; removal: Removal } | null
 

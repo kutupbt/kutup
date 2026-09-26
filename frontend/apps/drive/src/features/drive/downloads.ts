@@ -4,9 +4,9 @@ import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipD
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
-import { loadFolderFiles } from './files'
-import { sealedAt } from './keyring'
-import { folderLocation, type DriveFile, type Folder } from './model'
+import { loadFolderFiles } from '@kutup/drive-core/files'
+import { sealedAt } from '@kutup/drive-core/keyring'
+import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
 /**
  * Save one file: decrypted as it streams, straight to disk where the browser

@@ -4,9 +4,9 @@ import { classifyUploadError } from '../uploads/uploadError'
 import { uploads } from '../uploads/uploadStore'
 import { useUploadActions } from '../uploads/useUploadActions'
 import { copyFile, copyFolder, copyName, countFiles, namesIn } from './copy'
-import type { FolderIndex } from './folders'
-import { useDriveIdentity } from './identity'
-import type { DriveFile, Folder } from './model'
+import type { FolderIndex } from '@kutup/drive-core/folders'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 
 export type CopySource = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
 

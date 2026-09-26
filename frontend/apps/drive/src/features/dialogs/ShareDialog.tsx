@@ -10,10 +10,10 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
-import type { Folder } from '../drive/model'
+import type { Folder } from '@kutup/drive-core/model'
 import { AccessList } from './AccessList'
-import { accessKey } from '../drive/access'
-import { RecipientNotFound, useShareFolder } from '../drive/mutations'
+import { accessKey } from '@kutup/drive-core/access'
+import { RecipientNotFound, useShareFolder } from '@kutup/drive-core/mutations'
 
 const GIB = 1024 ** 3
 

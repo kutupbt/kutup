@@ -1,5 +1,5 @@
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
-import type { FileKind } from '../explorer/kinds'
+import type { FileKind } from './kinds'
 
 /** The name the root collection is created with; it is found by this name. */
 export const ROOT_NAME = 'My Files'

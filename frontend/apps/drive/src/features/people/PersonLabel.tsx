@@ -1,5 +1,5 @@
 import { Avatar } from '@kutup/ui/components/avatar'
-import { personOf, usePeople } from './people'
+import { personOf, usePeople } from '@kutup/drive-core/people'
 
 /** Someone's picture and name (their address until they gave you their profile key). */
 export function PersonLabel({ account, size = 16, format }: { account: string; size?: 16 | 24 | 32; format?: (name: string) => string }) {

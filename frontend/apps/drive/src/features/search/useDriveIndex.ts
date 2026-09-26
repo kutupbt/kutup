@@ -1,7 +1,7 @@
 import { useQueries } from '@tanstack/react-query'
-import { folderFilesKey, loadFolderFiles } from '../drive/files'
-import { useFolders } from '../drive/folders'
-import type { DriveFile, Folder } from '../drive/model'
+import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
+import { useFolders } from '@kutup/drive-core/folders'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 
 export interface IndexedFile {
   folder: Folder
