@@ -461,6 +461,9 @@ An end-to-end encrypted photo and video library.
   Google Photos. Photos is still its own app and its own library, an album
   rather than a file tree. Storage pages in both apps show the shared total
   and what each app uses. Chat's separate media quota is unchanged.
+- **Where things are saved:** like Maps' "Save new maps to", a setting
+  for the Drive folder that photos saved from Photos into Drive (and
+  exports) go to, default My files.
 - **Open questions for the plan:** how are live photos, RAW files and
   videos handled (thumbnails and streaming)? How are duplicates found
   without the server learning which files match (a hash kept inside the
