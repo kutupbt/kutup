@@ -45,7 +45,8 @@
     "settings": "Ayarlar",
     "mapLabel": "Tüm yerleriniz",
     "placesUpdated_one": "{{count}} yer · {{date}} güncellendi",
-    "placesUpdated_other": "{{count}} yer · {{date}} güncellendi"
+    "placesUpdated_other": "{{count}} yer · {{date}} güncellendi",
+    "waiting": "{{name}} erişiminizi güncellemesi bekleniyor"
   },
   "title": {
     "label": "Başlık",

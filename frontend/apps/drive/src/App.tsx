@@ -14,6 +14,7 @@ import { FileEditorPage } from './features/editor/FileEditorPage'
 import { FolderPage } from './features/folder/FolderPage'
 import { PublicSharePage } from './features/public/PublicSharePage'
 import { SearchPage } from './features/search/SearchPage'
+import { SharedByMePage } from './features/shared/SharedByMePage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
@@ -62,6 +63,7 @@ function SignedIn() {
             <Route path="/folders/:id" element={<FolderPage />} />
             <Route path="/remote/:shareId" element={<FolderPage />} />
             <Route path="/shared" element={<SharedPage />} />
+            <Route path="/shared-by-me" element={<SharedByMePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/settings" element={<DriveSettingsPage />} />

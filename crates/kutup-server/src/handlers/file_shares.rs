@@ -101,6 +101,13 @@ pub struct RotateFileAccessRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct MetadataAtShare {
+    pub envelope: String,
+    pub revision: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SharedFile {
     /// The file as a folder listing shows it.
     pub file: FileRow,
@@ -108,6 +115,11 @@ pub struct SharedFile {
     pub can_edit: bool,
     /// The generation the envelope opens.
     pub key_generation: i32,
+    /// For a share left at an older generation: the file's metadata as it
+    /// was at that generation, sealed under the key the share opens (so the
+    /// file can still be named while it waits for the owner).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_at_share: Option<MetadataAtShare>,
     /// The file's key is wrapped at its folder's current epoch. When it is
     /// not, or `key_generation` is behind the file's, the share waits for the
     /// owner: it can be read, not edited.
@@ -463,12 +475,16 @@ pub async fn rotate(
         &req.previous_key_envelope,
         DriveEnvelopeContextV1::previous_file_key(&file_text, next_u32).map_err(invalid)?,
     )?;
-    sqlx::query("INSERT INTO file_key_history (file_id, generation, previous_key_envelope) VALUES ($1, $2, $3)")
-        .bind(file_id)
-        .bind(next)
-        .bind(&req.previous_key_envelope)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO file_key_history (file_id, generation, previous_key_envelope,
+                                       previous_metadata_envelope, previous_metadata_revision)
+         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM files WHERE id = $1",
+    )
+    .bind(file_id)
+    .bind(next)
+    .bind(&req.previous_key_envelope)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
                 metadata_envelope = $5
@@ -543,14 +559,23 @@ pub async fn shared_with_me(
         Option<String>,
         String,
         Option<String>,
+        Option<String>,
+        Option<i64>,
     );
     let shares: Vec<Row> = sqlx::query_as(
         "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
-                f.key_epoch = c.key_epoch, fs.created_at, c.owner_user_id, o.username, o.account_incarnation_id, o.drive_signing_public_key
+                f.key_epoch = c.key_epoch, fs.created_at, c.owner_user_id,
+                o.username, o.account_incarnation_id, o.drive_signing_public_key,
+                h.previous_metadata_envelope, h.previous_metadata_revision
          FROM file_shares fs
          JOIN files f ON f.id = fs.file_id
          JOIN collections c ON c.id = f.collection_id
          JOIN users o ON o.id = c.owner_user_id
+         -- Behind: the metadata of the share's generation, recorded when the
+         -- file left it.
+         LEFT JOIN file_key_history h
+                ON h.file_id = fs.file_id AND h.generation = fs.key_generation + 1
+               AND fs.key_generation < f.key_generation
          WHERE fs.recipient_user_id = $1",
     )
     .bind(user_id)
@@ -575,6 +600,8 @@ pub async fn shared_with_me(
                     username,
                     incarnation,
                     signing,
+                    metadata_envelope,
+                    metadata_revision,
                 ) = by_file.remove(&file.id)?;
                 Some(SharedFile {
                     file,
@@ -587,6 +614,9 @@ pub async fn shared_with_me(
                     owner_incarnation_id: incarnation,
                     owner_signing_public_key: signing?,
                     shared_at,
+                    metadata_at_share: metadata_envelope
+                        .zip(metadata_revision)
+                        .map(|(envelope, revision)| MetadataAtShare { envelope, revision }),
                 })
             })
             .collect(),
@@ -633,6 +663,75 @@ pub async fn pending(
                 file_id,
                 collection_id,
             })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedByMeItem {
+    /// The folder, or the file's folder.
+    pub collection_id: Uuid,
+    /// Set for a file shared by itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<Uuid>,
+    /// People on this server.
+    pub people: i64,
+    /// People on other servers.
+    pub other_servers: i64,
+    /// Public links.
+    pub links: i64,
+}
+
+/// `GET /api/shared-by-me` — what you share: your folders shared with people
+/// (here or on other servers) or by link, and your files shared by
+/// themselves, with how many of each. Names stay encrypted; the app decrypts
+/// them from your own folder listings. Folders and files in the trash are
+/// left out.
+#[utoipa::path(
+    get,
+    path = "/api/shared-by-me",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "What you share", body = Vec<SharedByMeItem>))
+)]
+pub async fn shared_by_me(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<SharedByMeItem>>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    type Row = (Uuid, Option<Uuid>, i64, i64, i64);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT c.id, NULL::uuid,
+                (SELECT count(*) FROM collection_shares cs WHERE cs.collection_id = c.id),
+                (SELECT count(*) FROM federated_outgoing_shares fo WHERE fo.collection_id = c.id),
+                (SELECT count(*) FROM public_shares ps
+                  WHERE ps.share_type = 'collection' AND ps.target_id = c.id
+                    AND (ps.expires_at IS NULL OR ps.expires_at > now()))
+         FROM collections c
+         WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
+         UNION ALL
+         SELECT f.collection_id, f.id,
+                (SELECT count(*) FROM file_shares fs WHERE fs.file_id = f.id), 0, 0
+         FROM files f JOIN collections c ON c.id = f.collection_id
+         WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL AND f.deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM file_shares fs WHERE fs.file_id = f.id)",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .filter(|(_, _, people, other, links)| people + other + links > 0)
+            .map(
+                |(collection_id, file_id, people, other_servers, links)| SharedByMeItem {
+                    collection_id,
+                    file_id,
+                    people,
+                    other_servers,
+                    links,
+                },
+            )
             .collect(),
     ))
 }

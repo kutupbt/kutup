@@ -113,6 +113,9 @@ export function HomePanel({ settings = false }: { settings?: boolean }) {
   }
 
   const where = (entry: ListEntry) => {
+    if (entry.shared?.state === 'waiting') {
+      return <PersonName account={entry.shared.ownerAccount} format={(name) => t('home.waiting', { name })} />
+    }
     if (entry.shared) return <PersonName account={entry.shared.ownerAccount} format={(name) => t('home.from', { name })} />
     if (entry.folder.ownerAccount) return <PersonName account={entry.folder.ownerAccount} format={(name) => t('home.inShared', { folder: entry.folder.name ?? '', name })} />
     return t('home.in', { folder: entry.folder.isRoot ? t('home.myFiles') : (entry.folder.name ?? t('home.encrypted')) })

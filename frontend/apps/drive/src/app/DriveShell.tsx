@@ -1,4 +1,4 @@
-import { HardDrive, Map as MapIcon, MessagesSquare, Settings, Trash2, UserRound, Users } from 'lucide-react'
+import { HardDrive, Map as MapIcon, MessagesSquare, Settings, Share2, Trash2, UserRound, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -37,7 +37,8 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
       nav={
         <>
           <SidebarNavLink to="/" end icon={<HardDrive />} label={t('nav.myFiles')} />
-          <SidebarNavLink to="/shared" icon={<Users />} label={t('nav.shared')} />
+          <SidebarNavLink to="/shared" end icon={<Users />} label={t('nav.shared')} />
+          <SidebarNavLink to="/shared-by-me" icon={<Share2 />} label={t('nav.sharedByMe')} />
           <SidebarNavLink to="/trash" icon={<Trash2 />} label={t('nav.trash')} />
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('nav.settings')} />
         </>

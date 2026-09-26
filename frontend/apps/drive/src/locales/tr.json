@@ -14,6 +14,7 @@
   "nav": {
     "myFiles": "Dosyalarım",
     "shared": "Benimle paylaşılanlar",
+    "sharedByMe": "Paylaştıklarım",
     "trash": "Çöp kutusu",
     "settings": "Ayarlar"
   },
@@ -517,5 +518,16 @@
       "list": "Liste",
       "grid": "Izgara"
     }
+  },
+  "sharedByMe": {
+    "emptyTitle": "Henüz bir şey paylaşmıyorsunuz",
+    "emptyDescription": "Kişilerle veya bağlantıyla paylaştığınız klasör ve dosyalar burada görünür.",
+    "people_one": "{{count}} kişi",
+    "people_other": "{{count}} kişi",
+    "otherServers_one": "başka sunucuda {{count}} kişi",
+    "otherServers_other": "başka sunucularda {{count}} kişi",
+    "links_one": "herkese açık bağlantı",
+    "links_other": "{{count}} herkese açık bağlantı",
+    "manage": "Paylaşımı yönet"
   }
 }

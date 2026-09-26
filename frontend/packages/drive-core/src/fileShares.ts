@@ -31,6 +31,8 @@ interface SharedFileRow {
   ownerIncarnationId: string
   ownerSigningPublicKey: string
   sharedAt: string
+  /** Behind: the metadata of the share's generation, sealed under the key it opens. */
+  metadataAtShare?: { envelope: string; revision: number }
 }
 
 /**
@@ -62,8 +64,9 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
   const { file } = row
   const current = row.keyGeneration === file.keyGeneration
   let result: Opened = null
-  if (current) {
-    const cacheKey = `${file.id}:${row.shareEnvelope}:${file.metadataEnvelope}`
+  const behind = row.metadataAtShare
+  if (current || behind) {
+    const cacheKey = `${file.id}:${row.shareEnvelope}:${current ? file.metadataEnvelope : behind!.envelope}`
     let pending = opened.get(cacheKey)
     if (!pending) {
       pending = (async () => {
@@ -75,15 +78,25 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
           recipientAccount: me.account,
           recipientIncarnationId: me.incarnationId,
         })
-        return { fileKey, metadata: await openFileMetadataV1(file, fileKey) }
+        const metadata = current
+          ? await openFileMetadataV1(file, fileKey)
+          : await openFileMetadataV1(
+              { id: file.id, keyGeneration: row.keyGeneration, metadataRevision: behind!.revision, metadataEnvelope: behind!.envelope },
+              fileKey,
+            )
+        return { fileKey, metadata }
       })().catch(() => null)
       opened.set(cacheKey, pending)
     }
     result = await pending
   }
   const state: SharedFileState = !current ? 'waiting' : row.folderKeyCurrent ? 'ready' : 'editsWait'
+  const driveFile = toDriveFile(file, result)
+  // Waiting: named (as it was at the share's generation), but its current
+  // content is under a key this account does not have yet.
+  if (!current) driveFile.fileKey = null
   return {
-    file: toDriveFile(file, result),
+    file: driveFile,
     container: {
       source: 'file',
       id: file.collectionId,

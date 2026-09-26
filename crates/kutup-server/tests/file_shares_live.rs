@@ -342,6 +342,23 @@ fn stale_file_shares_wait_for_the_owner() {
     .status();
     assert_eq!(status, StatusCode::NO_CONTENT);
 
+    // Shared by me: the folder (two people) and the file by itself (one).
+    let by_me = get(&c, format!("{base}/api/shared-by-me"), &alice.token);
+    let by_me = by_me.as_array().unwrap();
+    assert!(by_me.iter().any(|i| i["collectionId"] == folder.id.as_str()
+        && i.get("fileId").is_none()
+        && i["people"] == 2));
+    assert!(by_me
+        .iter()
+        .any(|i| i["fileId"] == file.id.as_str() && i["people"] == 1));
+    assert_eq!(
+        get(&c, format!("{base}/api/shared-by-me"), &carol.token)
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
     // The owner sees the mark; a folder member does not.
     let listing = |token: &str| {
         get(
@@ -461,6 +478,16 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(entry["folderKeyCurrent"], true);
     assert_eq!(entry["keyGeneration"], 1);
     assert_eq!(entry["file"]["keyGeneration"], 2);
+    // Waiting, it can still be named: the metadata of generation 1, under the key Carol has.
+    let at_share = &entry["metadataAtShare"];
+    let revision = at_share["revision"].as_u64().unwrap();
+    let named = drive_envelope::open_b64(
+        at_share["envelope"].as_str().unwrap(),
+        &file.key,
+        DriveEnvelopeContextV1::file_metadata(&file.id, 1, revision).unwrap(),
+    )
+    .unwrap();
+    assert!(!named.is_empty());
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 1);
     assert_eq!(
         post_version(&c, &base, &carol.token, &file.id, version(&key2, 2)).status(),
@@ -476,6 +503,7 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
     assert_eq!(carol_entry(&carol.token)["keyGeneration"], 2);
+    assert!(carol_entry(&carol.token).get("metadataAtShare").is_none());
     assert!(
         post_version(&c, &base, &carol.token, &file.id, version(&key2, 2))
             .status()

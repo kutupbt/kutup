@@ -822,8 +822,9 @@ pub async fn rekey(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     sqlx::query(
-        "INSERT INTO file_key_history (file_id, generation, previous_key_envelope)
-         VALUES ($1, $2, $3)",
+        "INSERT INTO file_key_history (file_id, generation, previous_key_envelope,
+                                       previous_metadata_envelope, previous_metadata_revision)
+         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)

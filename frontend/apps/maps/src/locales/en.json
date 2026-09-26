@@ -45,7 +45,8 @@
     "settings": "Settings",
     "mapLabel": "All your places",
     "placesUpdated_one": "{{count}} place · updated {{date}}",
-    "placesUpdated_other": "{{count}} places · updated {{date}}"
+    "placesUpdated_other": "{{count}} places · updated {{date}}",
+    "waiting": "Waiting for {{name}} to update your access"
   },
   "title": {
     "label": "Title",

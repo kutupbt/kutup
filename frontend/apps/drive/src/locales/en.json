@@ -14,6 +14,7 @@
   "nav": {
     "myFiles": "My files",
     "shared": "Shared with me",
+    "sharedByMe": "Shared by me",
     "trash": "Trash",
     "settings": "Settings"
   },
@@ -517,5 +518,16 @@
       "list": "List",
       "grid": "Grid"
     }
+  },
+  "sharedByMe": {
+    "emptyTitle": "You share nothing yet",
+    "emptyDescription": "Folders and files you share with people, or by link, appear here.",
+    "people_one": "{{count}} person",
+    "people_other": "{{count}} people",
+    "otherServers_one": "{{count}} on another server",
+    "otherServers_other": "{{count}} on other servers",
+    "links_one": "public link",
+    "links_other": "{{count}} public links",
+    "manage": "Manage sharing"
   }
 }
