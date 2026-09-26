@@ -555,11 +555,7 @@ Two slices remain:
 - **Slice 3:** a public link to one file. `public_shares` already reserves
   `share_type` for this.
 
-A few more items come later:
-
-- Editors who can rename or share a file.
-- "Shared by me".
-- Shared files in Drive search.
+Still to come: shared files in Drive search.
 
 ### Federation polish
 

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
-import { canShareFile, useSharedFiles } from '@kutup/drive-core/fileShares'
+import { shareRole, useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useRenameFile, useTrashFile } from '@kutup/drive-core/mutations'
@@ -160,7 +160,11 @@ function Workspace({
   const importInput = useRef<HTMLInputElement>(null)
 
   const title = listTitle(file.name ?? '')
-  const mayRename = folder.source !== 'file' && (folder.canManage || (folder.canDelete && file.uploaderUserId === session.userId))
+  const role = shareRole(folder, file, atlas.lists.find((l) => l.file.id === file.id)?.shared)
+  // Owners and uploaders who may delete; editors of a file shared by itself too.
+  const mayRename =
+    folder.source === 'file' ? folder.canUpload : folder.canManage || (folder.canDelete && file.uploaderUserId === session.userId)
+  const mayTrash = folder.source !== 'file' && mayRename
   const editable = !readOnly && list.doc !== null && list.status !== 'error' && atlas.me !== null
   const color = atlas.colorOf(file.id)
   const { setOpen, showPlace } = atlas
@@ -295,7 +299,7 @@ function Workspace({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canShareFile(folder, file) ? (
+            {role ? (
               <DropdownMenuItem onSelect={() => setDialog({ kind: 'share' })}>
                 <UserPlus /> {t('list.share')}
               </DropdownMenuItem>
@@ -320,7 +324,7 @@ function Workspace({
             <DropdownMenuItem onSelect={download} disabled={list.status === 'connecting'}>
               <Download /> {t('list.download')}
             </DropdownMenuItem>
-            {mayRename ? (
+            {mayTrash ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem destructive onSelect={() => setDialog({ kind: 'trash' })}>
@@ -488,7 +492,7 @@ function Workspace({
         onClose={() => (setDialog(null), rename.reset())}
         onSubmit={(next) => rename.mutate({ folder, file, name: `${next}.${LIST_EXTENSION}` }, { onSuccess: () => setDialog(null) })}
       />
-      <FileShareDialog target={dialog?.kind === 'share' ? { folder, file } : null} onClose={() => setDialog(null)} />
+      <FileShareDialog target={dialog?.kind === 'share' && role ? { folder, file, role } : null} onClose={() => setDialog(null)} />
       <input ref={importInput} type="file" accept={IMPORT_ACCEPT} className="hidden" onChange={(e) => void importPlaces(e)} data-testid="import-places" />
       <ConfirmDestructive
         open={dialog?.kind === 'trash'}

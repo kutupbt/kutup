@@ -1,4 +1,4 @@
-import { Download, ExternalLink, LogOut, Plus } from 'lucide-react'
+import { Download, ExternalLink, LogOut, Pencil, Plus, UserPlus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -9,7 +9,10 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { downloadFile, downloadFolderZip } from '../drive/downloads'
-import { useSharedFiles } from '@kutup/drive-core/fileShares'
+import { useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
+import { useRenameFile } from '@kutup/drive-core/mutations'
+import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
+import { NameDialog } from '../dialogs/NameDialog'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
 import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
@@ -36,6 +39,10 @@ export function SharedPage() {
   const [inviting, setInviting] = useState(false)
   const [leaving, setLeaving] = useState<Folder | null>(null)
   const leave = useLeaveRemoteShare()
+  const rename = useRenameFile()
+  // By id: the file's key and name refresh while a dialog is open.
+  const [sharing, setSharing] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
   const people = usePeople()
 
   const byId = useMemo(() => new Map((folders.data?.sharedWithMe ?? []).map((f) => [f.remoteShareId ?? f.id, f])), [folders.data])
@@ -133,6 +140,11 @@ export function SharedPage() {
                       (e: unknown) => !(e instanceof DOMException && e.name === 'AbortError') && toast.error(t('drive.downloadFailed')),
                     ),
                 },
+                // An editor renames, and shares on when the owner lets them.
+                ...(s.canEdit && s.state === 'ready'
+                  ? [{ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setRenaming(s.file.id), separated: true }]
+                  : []),
+                ...(s.canShare ? [{ id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setSharing(s.file.id) }] : []),
               ]
             }
             const f = byId.get(item.id)
@@ -157,6 +169,28 @@ export function SharedPage() {
         />
       )}
       <AcceptInviteDialog open={inviting} onClose={() => setInviting(false)} />
+      <FileShareDialog
+        target={(() => {
+          const s: SharedFile | undefined = sharing ? filesById.get(sharing) : undefined
+          return s?.canShare ? { folder: s.container, file: s.file, role: 'editor' as const } : null
+        })()}
+        onClose={() => setSharing(null)}
+      />
+      {(() => {
+        const s = renaming ? filesById.get(renaming) : undefined
+        return (
+          <NameDialog
+            open={s !== undefined}
+            title={t('dialogs.rename.title')}
+            initial={s?.file.name ?? ''}
+            submit={t('dialogs.rename.submit')}
+            pending={rename.isPending}
+            error={rename.error}
+            onClose={() => (setRenaming(null), rename.reset())}
+            onSubmit={(name) => s && rename.mutate({ folder: s.container, file: s.file, name }, { onSuccess: () => setRenaming(null) })}
+          />
+        )
+      })()}
       <ConfirmDestructive
         open={leaving !== null}
         onOpenChange={(o) => !o && (setLeaving(null), leave.reset())}

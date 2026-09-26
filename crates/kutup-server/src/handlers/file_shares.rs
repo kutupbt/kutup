@@ -66,6 +66,8 @@ pub struct FileAccessMember {
 pub struct FileAccess {
     pub key_generation: i32,
     pub members: Vec<FileAccessMember>,
+    /// People with edit access may share it on.
+    pub editors_can_share: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -128,6 +130,12 @@ pub struct SharedFile {
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
+    /// Who sealed the envelope: the owner, or an editor the owner lets share.
+    pub sharer_account: String,
+    pub sharer_incarnation_id: String,
+    pub sharer_signing_public_key: String,
+    /// People with edit access may share it on.
+    pub editors_can_share: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub shared_at: OffsetDateTime,
 }
@@ -179,6 +187,32 @@ async fn owned_file(
         Some(_) => Err(AppError::forbidden("only the owner shares this file")),
         None => Err(AppError::not_found("not found")),
     }
+}
+
+/// Whether `user_id`, not the owner, may share the file on: the owner allows
+/// editors to share, and they edit it at its current key. Returns the key
+/// generation when they may.
+async fn editor_may_share(
+    tx: &mut Transaction<'_, Postgres>,
+    file_id: Uuid,
+    user_id: Uuid,
+) -> AppResult<Option<i32>> {
+    let row: Option<(i32, bool)> = sqlx::query_as(&format!(
+        "SELECT f.key_generation, f.editors_can_share
+         FROM file_shares fs
+         JOIN files f ON f.id = fs.file_id
+         JOIN collections c ON c.id = f.collection_id
+         WHERE fs.file_id = $1 AND fs.recipient_user_id = $2 AND fs.can_edit
+           AND f.deleted_at IS NULL AND c.deleted_at IS NULL
+           AND {}
+         FOR UPDATE OF f",
+        crate::drive_writes::FILE_SHARE_CURRENT
+    ))
+    .bind(file_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.and_then(|(generation, allowed)| allowed.then_some(generation)))
 }
 
 fn verify_envelope(
@@ -238,16 +272,44 @@ pub async fn share_file(
         return Err(AppError::bad_request("a file is shared with someone else"));
     }
     let domain = state.config.chat_server_name.as_str();
-    let owner = party(&state.pool, user_id, domain).await?;
+    let sharer = party(&state.pool, user_id, domain).await?;
     let recipient = party(&state.pool, req.recipient_user_id, domain).await?;
     let mut tx = state.pool.begin().await?;
-    let (_, generation, _, _) = owned_file(&mut tx, file_id, user_id).await?;
-    verify_envelope(&req.share_envelope, file_id, generation, &owner, &recipient)?;
+    let generation = match owned_file(&mut tx, file_id, user_id).await {
+        Ok((_, generation, _, _)) => generation,
+        // An editor the owner lets share: adds people, changes nobody.
+        Err(error) => {
+            let Some(generation) = editor_may_share(&mut tx, file_id, user_id).await? else {
+                return Err(error);
+            };
+            let taken: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM file_shares WHERE file_id = $1 AND recipient_user_id = $2)
+                     OR EXISTS(SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
+                               WHERE f.id = $1 AND c.owner_user_id = $2)",
+            )
+            .bind(file_id)
+            .bind(req.recipient_user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if taken {
+                return Err(AppError::conflict("they already have this file"));
+            }
+            generation
+        }
+    };
+    verify_envelope(
+        &req.share_envelope,
+        file_id,
+        generation,
+        &sharer,
+        &recipient,
+    )?;
     sqlx::query(
         "INSERT INTO file_shares (file_id, sharer_user_id, recipient_user_id, share_envelope,
                                   key_generation, can_edit)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (file_id, recipient_user_id) DO UPDATE SET
+             sharer_user_id = EXCLUDED.sharer_user_id,
              share_envelope = EXCLUDED.share_envelope,
              key_generation = EXCLUDED.key_generation,
              can_edit = EXCLUDED.can_edit",
@@ -260,6 +322,42 @@ pub async fn share_file(
     .bind(req.can_edit)
     .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileSharingSettings {
+    /// People with edit access may share the file with others.
+    pub editors_can_share: bool,
+}
+
+/// `PUT /api/files/{id}/sharing` — the owner's sharing settings for a file.
+#[utoipa::path(
+    put,
+    path = "/api/files/{id}/sharing",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    request_body = FileSharingSettings,
+    responses((status = 204, description = "Saved"), (status = 403, description = "Not the owner"))
+)]
+pub async fn set_sharing(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<FileSharingSettings>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let mut tx = state.pool.begin().await?;
+    owned_file(&mut tx, file_id, user_id).await?;
+    sqlx::query("UPDATE files SET editors_can_share = $2 WHERE id = $1")
+        .bind(file_id)
+        .bind(req.editors_can_share)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -329,12 +427,28 @@ pub async fn file_access(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
-    let (_, generation, _, _) = owned_file(&mut tx, file_id, user_id).await?;
+    // The owner, or an editor who may share (to see who has it already).
+    let generation = match owned_file(&mut tx, file_id, user_id).await {
+        Ok((_, generation, _, _)) => generation,
+        Err(error) => editor_may_share(&mut tx, file_id, user_id)
+            .await?
+            .ok_or(error)?,
+    };
     tx.commit().await?;
-    Ok(Json(FileAccess {
+    file_access_of(&state, file_id, generation).await.map(Json)
+}
+
+async fn file_access_of(state: &AppState, file_id: Uuid, generation: i32) -> AppResult<FileAccess> {
+    let editors_can_share: bool =
+        sqlx::query_scalar("SELECT editors_can_share FROM files WHERE id = $1")
+            .bind(file_id)
+            .fetch_one(&state.pool)
+            .await?;
+    Ok(FileAccess {
         key_generation: generation,
         members: members(&state.pool, file_id, &state.config.chat_server_name).await?,
-    }))
+        editors_can_share,
+    })
 }
 
 /// Check and store envelopes at `generation` for existing members.
@@ -357,7 +471,9 @@ async fn store_envelopes(
             &recipient,
         )?;
         let updated = sqlx::query(
-            "UPDATE file_shares SET share_envelope = $3, key_generation = $4
+            "UPDATE file_shares SET share_envelope = $3, key_generation = $4,
+                    sharer_user_id = (SELECT c.owner_user_id FROM files f
+                                      JOIN collections c ON c.id = f.collection_id WHERE f.id = $1)
              WHERE file_id = $1 AND recipient_user_id = $2",
         )
         .bind(file_id)
@@ -515,11 +631,7 @@ pub async fn rotate(
     tx.commit().await?;
     // Live sessions reconnect under the new key; the removed are refused.
     state.hub.close_room(&file_id.to_string());
-    Ok(Json(FileAccess {
-        key_generation: next,
-        members: members(&state.pool, file_id, &domain).await?,
-    })
-    .into_response())
+    Ok(Json(file_access_of(&state, file_id, next).await?).into_response())
 }
 
 /// `GET /api/shared-files` — files shared with you by themselves, with the
@@ -561,16 +673,23 @@ pub async fn shared_with_me(
         Option<String>,
         Option<String>,
         Option<i64>,
+        Option<String>,
+        String,
+        Option<String>,
+        bool,
     );
     let shares: Vec<Row> = sqlx::query_as(
         "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
                 f.key_epoch = c.key_epoch, fs.created_at, c.owner_user_id,
                 o.username, o.account_incarnation_id, o.drive_signing_public_key,
-                h.previous_metadata_envelope, h.previous_metadata_revision
+                h.previous_metadata_envelope, h.previous_metadata_revision,
+                s.username, s.account_incarnation_id, s.drive_signing_public_key,
+                f.editors_can_share
          FROM file_shares fs
          JOIN files f ON f.id = fs.file_id
          JOIN collections c ON c.id = f.collection_id
          JOIN users o ON o.id = c.owner_user_id
+         JOIN users s ON s.id = fs.sharer_user_id
          -- Behind: the metadata of the share's generation, recorded when the
          -- file left it.
          LEFT JOIN file_key_history h
@@ -602,6 +721,10 @@ pub async fn shared_with_me(
                     signing,
                     metadata_envelope,
                     metadata_revision,
+                    sharer_username,
+                    sharer_incarnation,
+                    sharer_signing,
+                    editors_can_share,
                 ) = by_file.remove(&file.id)?;
                 Some(SharedFile {
                     file,
@@ -613,6 +736,10 @@ pub async fn shared_with_me(
                     owner_account: format!("{}@{domain}", username?),
                     owner_incarnation_id: incarnation,
                     owner_signing_public_key: signing?,
+                    sharer_account: format!("{}@{domain}", sharer_username?),
+                    sharer_incarnation_id: sharer_incarnation,
+                    sharer_signing_public_key: sharer_signing?,
+                    editors_can_share,
                     shared_at,
                     metadata_at_share: metadata_envelope
                         .zip(metadata_revision)

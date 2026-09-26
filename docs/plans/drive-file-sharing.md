@@ -45,7 +45,9 @@ the folder key names the folder. So a person can be given one file's key.
 |---|---|---|
 | Open, download, versions, thumbnails | ✓ | ✓ |
 | Edit together live, save versions, thumbnails | | ✓ |
-| Rename, move, delete, share | owner only | owner only |
+| Rename | owner only | ✓ |
+| Share with new people | owner only | if the owner turns on "Editors can share" |
+| Move, delete, change or remove people | owner only | owner only |
 
 What an editor stores counts against the editor's own storage, as uploads
 into shared folders do today.
@@ -127,7 +129,19 @@ folders, and a move keeps the key generation, so shares survive a move.
   - `/shared/file/:fid`, which opens a shared file in the same editors and
     viewers.
 
+## After slice 1 (2026-09-26)
+
+- **Shared by me:** Drive lists your shared folders and files
+  (`GET /api/shared-by-me`).
+- **Waiting shares keep their name.** When a file moves to a new key,
+  `file_key_history` (migration 061) keeps its metadata as it was, still
+  under the older key. A share left behind gets it back, so Drive and Maps
+  can show the file by name while it waits for the owner.
+- **Editors rename.** They share with new people only when the owner turns
+  on "Editors can share" (off by default, as in Proton Drive; migration 062).
+  Each share records its sender, who signs it. Only the owner removes, since
+  that takes the folder's key.
+
 ## Open questions
 
-- Should editors be able to rename a shared file (Google Drive allows it)?
-  Proposed: not in slice 1.
+None.

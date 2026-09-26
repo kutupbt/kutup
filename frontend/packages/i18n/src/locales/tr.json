@@ -64,6 +64,11 @@
     "confirmBody": "Erişimlerini hemen kaybederler ve dosya asla alamayacakları yeni bir anahtara geçer: bundan sonra değişen hiçbir şeyi okuyamazlar. Daha önce açtıkları veya indirdikleri onlarda kalır.",
     "removed": "Erişim kaldırıldı",
     "changed": "Bu arada erişimi olanlar değişti. Listeyi kontrol edip yeniden deneyin.",
-    "removeFailed": "Erişim kaldırılamadı. Yeniden deneyin."
+    "removeFailed": "Erişim kaldırılamadı. Yeniden deneyin.",
+    "alreadyHas": "Bu dosya onlarda zaten var. Neler yapabileceklerini yalnızca sahibi değiştirebilir.",
+    "editorsCanShare": "Düzenleyenler paylaşabilir",
+    "editorsCanShareHint": "Düzenleyebilenler bunu başkalarıyla paylaşabilir (kimseyi kaldıramazlar).",
+    "onlyOwnerRemoves": "Kişileri yalnızca sahibi değiştirebilir veya kaldırabilir.",
+    "settingFailed": "Ayar kaydedilemedi."
   }
 }

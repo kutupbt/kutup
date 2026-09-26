@@ -228,7 +228,11 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload}
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
-      mayRename={liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)}
+      mayRename={
+        liveFolder.source === 'file'
+          ? liveFolder.canUpload
+          : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
+      }
       onRestored={(bytes) => {
         if (opened.kind === 'office' || opened.kind === 'whiteboard') {
           setOpened({ kind: opened.kind, bytes })

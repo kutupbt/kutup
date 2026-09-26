@@ -11,6 +11,7 @@
     "@kutup/drive-core": "workspace:*",
     "@kutup/i18n": "workspace:*",
     "@kutup/ui": "workspace:*",
+    "axios": "^1.18.0",
     "lucide-react": "^1.8.0",
     "react-i18next": "^17.0.4",
     "sonner": "^2.0.7"

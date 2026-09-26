@@ -679,7 +679,7 @@ export function FolderPage() {
       <FileShareDialog
         target={(() => {
           const target = dialog?.kind === 'shareFile' ? lookup.get(dialog.key) : undefined
-          return target?.file ? { folder: target.folder, file: target.file } : null
+          return target?.file ? { folder: target.folder, file: target.file, role: 'owner' as const } : null
         })()}
         onClose={() => setDialog(null)}
       />

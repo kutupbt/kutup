@@ -593,6 +593,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/files/:id/share", post(file_shares::share_file))
         .route("/api/files/:id/access", get(file_shares::file_access))
         .route("/api/files/:id/shares", put(file_shares::reseal))
+        .route("/api/files/:id/sharing", put(file_shares::set_sharing))
         .route("/api/files/:id/rotate", post(file_shares::rotate))
         .route("/api/shared-files", get(file_shares::shared_with_me))
         .route("/api/file-shares/pending", get(file_shares::pending))

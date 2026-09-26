@@ -408,7 +408,11 @@ pub async fn update_metadata(
     let Some((coll_id, uploader_id, key_generation, current_revision)) = row else {
         return Err(AppError::not_found("not found"));
     };
-    require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
+    // The folder's owner, an uploader who may delete, or someone the file
+    // itself is shared with for editing.
+    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await {
+        require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
+    }
 
     // A new name is new content: never under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, file_id, key_generation).await?;

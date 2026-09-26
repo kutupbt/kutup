@@ -72,7 +72,7 @@ export function SharedByMePage() {
 
   const fileTarget = (() => {
     const item = dialog?.kind === 'file' ? byKey.get(dialog.key) : undefined
-    return item?.file ? { folder: item.folder, file: item.file } : null
+    return item?.file ? { folder: item.folder, file: item.file, role: 'owner' as const } : null
   })()
 
   if (shared.loading && shared.items.length === 0) return <LoadingPanel label={t('common.loading')} />

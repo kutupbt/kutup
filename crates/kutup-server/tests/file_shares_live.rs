@@ -510,3 +510,157 @@ fn stale_file_shares_wait_for_the_owner() {
             .is_success()
     );
 }
+
+#[test]
+fn editors_share_and_rename_when_allowed() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::new();
+    let (alice, carol, dave, erin) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let folder = create_folder(&c, &base, &alice);
+    let file = seal_file(&folder, &uuid(), b"edit me");
+    assert!(upload(&c, &base, &alice.token, &folder, &file)
+        .status()
+        .is_success());
+    let share = |by: &User, to: &User, can_edit: bool| {
+        bearer(
+            c.post(format!("{base}/api/files/{}/share", file.id)),
+            &by.token,
+        )
+        .json(&json!({ "recipientUserId": to.id,
+                       "shareEnvelope": file_share(by, &file.id, &file.key, 1, to),
+                       "canEdit": can_edit }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(share(&alice, &carol, true), StatusCode::NO_CONTENT);
+    assert_eq!(share(&alice, &erin, false), StatusCode::NO_CONTENT);
+
+    // Off by default: an editor may not share on, nor see who has it.
+    assert_eq!(share(&carol, &dave, false), StatusCode::FORBIDDEN);
+    let access = |by: &User| {
+        bearer(
+            c.get(format!("{base}/api/files/{}/access", file.id)),
+            &by.token,
+        )
+        .send()
+        .unwrap()
+    };
+    assert_eq!(access(&carol).status(), StatusCode::FORBIDDEN);
+    let allow = |value: bool, by: &User| {
+        bearer(
+            c.put(format!("{base}/api/files/{}/sharing", file.id)),
+            &by.token,
+        )
+        .json(&json!({ "editorsCanShare": value }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(allow(true, &carol), StatusCode::FORBIDDEN, "only the owner");
+    assert_eq!(allow(true, &alice), StatusCode::NO_CONTENT);
+
+    // Now Carol adds Dave, signing it herself; she changes nobody.
+    assert_eq!(share(&carol, &dave, false), StatusCode::NO_CONTENT);
+    assert_eq!(
+        share(&carol, &erin, true),
+        StatusCode::CONFLICT,
+        "Erin has it"
+    );
+    assert_eq!(
+        share(&carol, &alice, false),
+        StatusCode::CONFLICT,
+        "the owner"
+    );
+    assert_eq!(
+        share(&erin, &dave, false),
+        StatusCode::FORBIDDEN,
+        "a viewer"
+    );
+    let seen: Value = access(&carol).json().unwrap();
+    assert_eq!(seen["members"].as_array().unwrap().len(), 3);
+    assert_eq!(seen["editorsCanShare"], true);
+
+    let listed = get(&c, format!("{base}/api/shared-files"), &dave.token);
+    let entry = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["file"]["id"] == file.id.as_str())
+        .unwrap();
+    assert_eq!(entry["sharerAccount"], account(&carol));
+    assert_eq!(entry["ownerAccount"], account(&alice));
+    let opened = FileShareEnvelopeV1::decode_b64(entry["shareEnvelope"].as_str().unwrap())
+        .unwrap()
+        .open(
+            &file.id,
+            1,
+            &account(&carol),
+            &carol.identity.incarnation_id(),
+            &carol.identity.drive_signing_public_key(),
+            &account(&dave),
+            &dave.identity.incarnation_id(),
+            dave.identity.drive_hpke_private_key(),
+        )
+        .unwrap();
+    assert_eq!(opened, file.key);
+
+    // Editors rename; viewers do not.
+    let rename = |by: &User, revision: u64| {
+        bearer(c.put(format!("{base}/api/files/{}", file.id)), &by.token)
+            .json(&json!({
+                "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"renamed.txt","mimeType":"text/plain","size":1}"#, &file.key,
+                    DriveEnvelopeContextV1::file_metadata(&file.id, 1, revision).unwrap()).unwrap(),
+                "metadataRevision": revision,
+            }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    assert!(rename(&carol, 2).is_success());
+    assert_eq!(rename(&erin, 3), StatusCode::FORBIDDEN);
+
+    // Only the owner removes (it takes the folder's key); what the owner
+    // re-seals is theirs.
+    let rotate = |by: &User| {
+        let mut next = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut next);
+        let members: Vec<Value> = [&carol, &erin]
+            .iter()
+            .map(|m| json!({ "userId": m.id, "shareEnvelope": file_share(&alice, &file.id, &next, 2, m) }))
+            .collect();
+        bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &by.token)
+            .json(&json!({
+                "fromGeneration": 1,
+                "fileKeyEnvelope": drive_envelope::seal_b64(&next, &folder.key,
+                    DriveEnvelopeContextV1::file_key(&file.id, &folder.id, 1, 2).unwrap()).unwrap(),
+                "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#, &next,
+                    DriveEnvelopeContextV1::file_metadata(&file.id, 2, 2).unwrap()).unwrap(),
+                "previousKeyEnvelope": file_keyring::seal_previous_key(&file.key, &next, &file.id, 2).unwrap(),
+                "members": members,
+                "removed": [dave.id],
+            }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    assert_eq!(rotate(&carol), StatusCode::FORBIDDEN);
+    assert_eq!(rotate(&alice), StatusCode::OK);
+    let carol_entry = get(&c, format!("{base}/api/shared-files"), &carol.token);
+    let carol_entry = carol_entry
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["file"]["id"] == file.id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(carol_entry["sharerAccount"], account(&alice));
+}

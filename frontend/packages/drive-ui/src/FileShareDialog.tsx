@@ -12,19 +12,20 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { isAxiosError } from 'axios'
 import { AccessChanged } from '@kutup/drive-core/access'
-import { CannotShareWithSelf, useFileAccess, useRemoveFileAccess, useShareFile } from '@kutup/drive-core/fileShares'
+import { CannotShareWithSelf, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 
-export type FileShareTarget = { folder: Folder; file: DriveFile }
+export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
 /**
  * Share one file with someone on this server, like Proton Drive and CryptPad
  * (docs/plans/drive-file-sharing.md): they get the file's own key, never its
- * folder's. Only the folder's owner shares. Used by Drive and by Maps (a
- * place list is a Drive file).
+ * folder's. The owner shares, changes and removes; an editor the owner lets
+ * share adds people. Used by Drive and by Maps (a place list is a Drive file).
  */
 export function FileShareDialog({ target, onClose }: { target: FileShareTarget | null; onClose: () => void }) {
   const { t } = useTranslation()
@@ -57,7 +58,9 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
   }
 
   const errorText = share.error
-    ? share.error instanceof RecipientNotFound
+    ? isAxiosError(share.error) && share.error.response?.status === 409 && target?.role === 'editor'
+      ? t('fileShare.alreadyHas')
+      : share.error instanceof RecipientNotFound
       ? t('fileShare.notFound')
       : share.error instanceof CannotShareWithSelf
         ? t('fileShare.self')
@@ -109,7 +112,9 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
 /** Who the file itself is shared with; removing someone moves it to a new key. */
 function FileAccessList({ target }: { target: FileShareTarget }) {
   const { t } = useTranslation()
-  const access = useFileAccess(target.folder, target.file)
+  const access = useFileAccess(target.file, target.role)
+  const setEditorsCanShare = useSetEditorsCanShare()
+  const owner = target.role === 'owner'
   const remove = useRemoveFileAccess()
   const people = usePeople()
   const [pending, setPending] = useState<{ userId: string; name: string } | null>(null)
@@ -155,7 +160,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
                 name={person.name}
                 detail={[person.profile ? m.account : null, permission, behind].filter(Boolean).join(' · ')}
-                onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                onRemove={owner ? () => setPending({ userId: m.userId, name: person.name }) : undefined}
                 removeLabel={t('fileShare.removeNamed', { name: person.name })}
                 busy={remove.isPending}
               />
@@ -178,6 +183,23 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
         </Alert>
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
+      {owner ? (
+        <div className="flex items-start gap-2 border-t border-border pt-3">
+          <Checkbox
+            id="file-editors-share"
+            checked={access.data.editorsCanShare}
+            disabled={setEditorsCanShare.isPending}
+            onCheckedChange={(v) => setEditorsCanShare.mutate({ file: target.file, value: v === true })}
+          />
+          <div>
+            <Label htmlFor="file-editors-share">{t('fileShare.editorsCanShare')}</Label>
+            <p className="text-xs text-muted-foreground">{t('fileShare.editorsCanShareHint')}</p>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">{t('fileShare.onlyOwnerRemoves')}</p>
+      )}
+      {setEditorsCanShare.error ? <Alert variant="error">{t('fileShare.settingFailed')}</Alert> : null}
     </section>
   )
 }
@@ -197,7 +219,8 @@ function Row({
   icon: ReactNode
   name: string
   detail: string
-  onRemove: () => void
+  /** Absent: this person cannot be removed from here (only the owner removes). */
+  onRemove?: () => void
   removeLabel: string
   busy: boolean
 }) {
@@ -209,9 +232,11 @@ function Row({
         <p className="truncate text-sm font-medium">{name}</p>
         <p className="truncate text-xs text-muted-foreground">{detail}</p>
       </div>
-      <Button size="sm" variant="ghost" onClick={onRemove} disabled={busy} aria-label={removeLabel}>
-        {t('fileShare.remove')}
-      </Button>
+      {onRemove ? (
+        <Button size="sm" variant="ghost" onClick={onRemove} disabled={busy} aria-label={removeLabel}>
+          {t('fileShare.remove')}
+        </Button>
+      ) : null}
     </li>
   )
 }

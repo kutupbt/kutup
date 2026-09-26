@@ -30,6 +30,11 @@ interface SharedFileRow {
   ownerAccount: string
   ownerIncarnationId: string
   ownerSigningPublicKey: string
+  /** Who sealed the envelope: the owner, or an editor the owner lets share. */
+  sharerAccount: string
+  sharerIncarnationId: string
+  sharerSigningPublicKey: string
+  editorsCanShare: boolean
   sharedAt: string
   /** Behind: the metadata of the share's generation, sealed under the key it opens. */
   metadataAtShare?: { envelope: string; revision: number }
@@ -49,6 +54,8 @@ export interface SharedFile {
   /** Where the file lives, as far as the recipient can tell: no key, no name. */
   container: Folder
   canEdit: boolean
+  /** An editor the owner lets share it on (adding people, not removing). */
+  canShare: boolean
   state: SharedFileState
   ownerAccount: string
   sharedAt: string
@@ -70,11 +77,11 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
     let pending = opened.get(cacheKey)
     if (!pending) {
       pending = (async () => {
-        const fileKey = await openFileShareEnvelope(row.shareEnvelope, row.ownerSigningPublicKey, me.privateKey, {
+        const fileKey = await openFileShareEnvelope(row.shareEnvelope, row.sharerSigningPublicKey, me.privateKey, {
           fileId: file.id,
           generation: row.keyGeneration,
-          senderAccount: row.ownerAccount,
-          senderIncarnationId: row.ownerIncarnationId,
+          senderAccount: row.sharerAccount,
+          senderIncarnationId: row.sharerIncarnationId,
           recipientAccount: me.account,
           recipientIncarnationId: me.incarnationId,
         })
@@ -118,6 +125,7 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
       isRoot: false,
     },
     canEdit: row.canEdit,
+    canShare: row.canEdit && row.editorsCanShare && state === 'ready',
     state,
     ownerAccount: row.ownerAccount,
     sharedAt: row.sharedAt,
@@ -153,6 +161,8 @@ export interface FileAccessMember {
 export interface FileAccess {
   keyGeneration: number
   members: FileAccessMember[]
+  /** People with edit access may share it on. */
+  editorsCanShare: boolean
 }
 
 export const fileAccessKey = (fileId: string) => ['file-access', fileId] as const
@@ -167,12 +177,35 @@ export function canShareFile(folder: Folder | undefined, file: DriveFile | undef
   return Boolean(folder?.source === 'owned' && folder.key && file?.fileKey && file.name)
 }
 
-export function useFileAccess(folder: Folder | undefined, file: DriveFile | undefined) {
+/**
+ * How this account may share a file: as its owner (add, change, remove), as
+ * an editor the owner lets share (add people only), or not at all.
+ */
+export type ShareRole = 'owner' | 'editor'
+
+export function shareRole(folder: Folder | undefined, file: DriveFile | undefined, shared?: SharedFile): ShareRole | null {
+  if (canShareFile(folder, file)) return 'owner'
+  return shared?.canShare && file?.fileKey ? 'editor' : null
+}
+
+export function useFileAccess(file: DriveFile | undefined, role: ShareRole | null) {
   return useQuery({
     queryKey: fileAccessKey(file?.id ?? ''),
-    enabled: canShareFile(folder, file),
+    enabled: Boolean(file && role),
     refetchOnMount: 'always',
     queryFn: () => loadFileAccess(file!.id),
+  })
+}
+
+/** The owner lets (or stops) editors share the file on. */
+export function useSetEditorsCanShare() {
+  const queryClient = useQueryClient()
+  return useDriveMutation(async ({ file, value }: { file: DriveFile; value: boolean }) => {
+    try {
+      await api.put(`/files/${file.id}/sharing`, { editorsCanShare: value })
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: fileAccessKey(file.id) })
+    }
   })
 }
 
@@ -237,7 +270,8 @@ export function useShareFile() {
   return useDriveMutation(
     async (input: { folder: Folder; file: DriveFile; recipient: string; canEdit: boolean }, me) => {
       const email = input.recipient.trim()
-      if (!canShareFile(input.folder, input.file)) throw new Error('file is not open')
+      const owner = canShareFile(input.folder, input.file)
+      if (!owner && !(input.folder.source === 'file' && input.file.fileKey)) throw new Error('file is not open')
       let recipient: LocalRecipient
       try {
         recipient = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(email)}`)).data
@@ -246,7 +280,9 @@ export function useShareFile() {
         throw error
       }
       if (recipient.userId === me.userId) throw new CannotShareWithSelf()
-      const file = await bringFileSharesUpToDate(input.folder, input.file, me)
+      // The owner first brings the file and its shares up to date; an editor
+      // shares the key they hold (the server takes it only if it is current).
+      const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file
       const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
         account: recipient.account,
         accountIncarnationId: recipient.accountIncarnationId,

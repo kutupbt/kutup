@@ -1120,6 +1120,25 @@ through its shares.
 In a folder listing, a file shared by itself carries `shared: true`, for the
 folder's owner only.
 
+**Editors.** Someone with edit access may rename the file (at its current
+key). If the owner turns on "Editors can share"
+(`PUT /api/files/:id/sharing`, body `{ editorsCanShare }`, owner only, off by
+default), an editor may also share it with new people. They sign the
+envelope themselves, may not change anyone who already has it (`409`), and
+may read `GET /api/files/:id/access`. Only the owner removes people (the
+rotation takes the folder's key). Envelopes the owner re-seals become the
+owner's.
+
+- `GET /api/shared-files` rows also carry the envelope's sender
+  (`sharerAccount`, `sharerIncarnationId`, `sharerSigningPublicKey`), which is
+  the owner or an editor, plus `editorsCanShare`. A share left at an older
+  generation carries `metadataAtShare: { envelope, revision }`: the file's
+  metadata as it was then, under the key the share opens.
+- `GET /api/files/:id/access` also returns `editorsCanShare`.
+- **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
+  otherServers, links }]`. These are your folders shared with people or by
+  link, and your files shared by themselves, with counts.
+
 ### POST /api/files/:id/move
 
 Move a file to another folder of the same owner (docs/plans/drive-move.md).

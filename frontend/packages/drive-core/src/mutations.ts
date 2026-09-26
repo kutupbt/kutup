@@ -30,6 +30,8 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: foldersKey }),
         queryClient.invalidateQueries({ queryKey: ['files'] }),
+        // Files shared with this account by themselves (fileShares.sharedFilesKey).
+        queryClient.invalidateQueries({ queryKey: ['shared-files'] }),
         queryClient.invalidateQueries({ queryKey: ['folder-access'] }),
         // A new share is someone to exchange profile keys with.
         queryClient.invalidateQueries({ queryKey: peopleKey }),

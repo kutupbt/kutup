@@ -41,6 +41,24 @@ pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool
 pub const FILE_SHARE_CURRENT: &str =
     "fs.key_generation = f.key_generation AND f.key_epoch = c.key_epoch";
 
+/// Whether `user_id` edits the file through a share of the file itself, at
+/// its current key (so may also rename it, as Google Drive lets editors).
+pub async fn is_file_share_editor(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(&format!(
+        r#"SELECT EXISTS(SELECT 1 FROM file_shares fs
+                  JOIN files f ON f.id = fs.file_id
+                  JOIN collections c ON c.id = f.collection_id
+                  WHERE fs.file_id = $1 AND fs.recipient_user_id = $2 AND fs.can_edit
+                    AND f.deleted_at IS NULL AND c.deleted_at IS NULL
+                    AND {FILE_SHARE_CURRENT})"#,
+    ))
+    .bind(file_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
 /// Locks the user's row, which serialises every Drive charge to them, and
 /// returns how many more bytes they may store: quota − used − what their
 /// open tus uploads have reserved. A tus upload reserves its whole declared
