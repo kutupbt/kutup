@@ -1,7 +1,7 @@
 import { fromBase64 } from '@kutup/crypto/base64'
 import { LINK_PREVIEW_IMAGE_MAX_BYTES, type ChatLinkPreviewV1 } from '@kutup/chat-core/types'
 import api from '@kutup/session/client'
-import { fitImage } from './avatar'
+import { fitImage } from '@kutup/ui/lib/avatar'
 import { linkify } from '../features/thread/linkify'
 
 // Link previews as Signal makes them: the sender's device builds the preview

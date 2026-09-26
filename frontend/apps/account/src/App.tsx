@@ -19,6 +19,7 @@ import { RecoverPage } from './features/auth/RecoverPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
+import { ProfilePage } from './features/settings/ProfilePage'
 import { DevicesPage } from './features/settings/DevicesPage'
 import { SecurityPage } from './features/settings/SecurityPage'
 import { SessionsPage } from './features/settings/SessionsPage'
@@ -56,6 +57,7 @@ export function App() {
               }
             >
               <Route index element={<LauncherPage />} />
+              <Route path="/settings/profile" element={<ProfilePage />} />
               <Route path="/settings/account" element={<AccountSettingsPage />} />
               <Route path="/settings/security" element={<SecurityPage />} />
               <Route path="/settings/sessions" element={<SessionsPage />} />

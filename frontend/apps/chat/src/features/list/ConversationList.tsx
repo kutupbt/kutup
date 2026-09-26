@@ -8,7 +8,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@kutup/ui/c
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
 import { useChat } from '../../app/chatStore'
-import { Avatar } from '../../components/Avatar'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { useDrafts } from '../../lib/drafts'
 import { useTypingIndicators } from '../../state/prefs'
 import { conversationTitle, messagePreview, personName } from '../../lib/names'

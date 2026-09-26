@@ -19,7 +19,7 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
-import { Avatar } from '../../components/Avatar'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import { callLogText } from '../../lib/callText'

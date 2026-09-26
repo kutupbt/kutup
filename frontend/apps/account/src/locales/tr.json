@@ -21,7 +21,8 @@
     "users": "Kullanıcılar",
     "activity": "Etkinlik",
     "federation": "Federasyon",
-    "serverSettings": "Sunucu ayarları"
+    "serverSettings": "Sunucu ayarları",
+    "profile": "Profil"
   },
   "auth": {
     "fields": {
@@ -156,7 +157,8 @@
         "d180": "6 ay",
         "d365": "1 yıl",
         "d3650": "10 yıl"
-      }
+      },
+      "details": "Hesap bilgileri"
     },
     "security": {
       "title": "Güvenlik",
@@ -219,6 +221,28 @@
       "revokedToast": "Cihaz iptal edildi",
       "emptyTitle": "Henüz düzenleme cihazı yok",
       "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür."
+    },
+    "profile": {
+      "title": "Profil",
+      "description": "Sohbet ettiğiniz kişilere nasıl göründüğünüz.",
+      "who": "Siz",
+      "changeAvatar": "Resmi değiştir",
+      "removeAvatar": "Resmi kaldır",
+      "avatarError": "Bu resim kullanılamadı. PNG, JPEG ya da WebP bir görsel deneyin.",
+      "name": "Ad",
+      "about": "Hakkında",
+      "aboutPlaceholder": "Kendinizle ilgili bir satır (isteğe bağlı)",
+      "aboutTooLong": "En fazla {{max}} karakter.",
+      "visibility": "Adınız, resminiz ve hakkında satırınız uçtan uca şifrelidir: sunucu bunları göremez. Sohbet ettiğiniz kişiler görür.",
+      "save": "Kaydet",
+      "saved": "Profil kaydedildi",
+      "saveFailed": "Profil kaydedilemedi.",
+      "address": "Adresiniz",
+      "addressDescription": "İnsanların size ulaşabilmesi için paylaşın; QR kod aynı adresi taşır.",
+      "qr": "Adresinizin QR kodu",
+      "copy": "Adresi kopyala",
+      "copied": "Adres kopyalandı",
+      "copyFailed": "Adres kopyalanamadı"
     }
   },
   "admin": {

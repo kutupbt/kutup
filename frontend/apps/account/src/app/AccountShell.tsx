@@ -1,5 +1,6 @@
 import {
   Activity,
+  CircleUser,
   Globe,
   HardDrive,
   KeyRound,
@@ -50,6 +51,7 @@ export function AccountShell() {
         <>
           <SidebarNavLink to="/" end icon={<LayoutGrid />} label={t('nav.apps')} />
           <SectionLabel>{t('nav.settings')}</SectionLabel>
+          <SidebarNavLink to="/settings/profile" icon={<CircleUser />} label={t('nav.profile')} />
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
           <SidebarNavLink to="/settings/sessions" icon={<MonitorSmartphone />} label={t('nav.sessions')} />

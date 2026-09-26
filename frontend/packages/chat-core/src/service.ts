@@ -1273,6 +1273,7 @@ export class ChatService {
       if (this.disposed) return
       void this.initializeMls().catch((error: unknown) =>
         console.warn('chat: linked device check failed', error))
+      void this.refreshOwnProfile()
     }, LINKED_DEVICE_CHECK_MS)
   }
 
@@ -1612,7 +1613,23 @@ export class ChatService {
 
   private readonly handleVisibilityChange = (): void => {
     this.backup?.pageHidden()
-    if (document.visibilityState === 'visible') void this.initializeMls().then(() => this.reconcile())
+    if (document.visibilityState === 'visible') {
+      void this.initializeMls().then(() => this.reconcile())
+      void this.refreshOwnProfile()
+    }
+  }
+
+  /**
+   * Take a newer version of the account's profile (edited in the account
+   * app, docs/plans/unified-profile.md); the engine tells contacts.
+   */
+  private async refreshOwnProfile(): Promise<void> {
+    try {
+      await this.withLock(() => this.client.refreshProfile())
+      this.notifyPeers()
+    } catch (error) {
+      console.warn('chat: profile refresh failed', error)
+    }
   }
 
   private async connectSocket(): Promise<void> {

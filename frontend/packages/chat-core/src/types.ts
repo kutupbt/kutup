@@ -1765,6 +1765,7 @@ export interface WasmChatClientHandle {
     active: boolean,
   ): Promise<SendSummary>
   sendCallSignal(sendId: string, peer: string, sentAt: string, signal: ChatCallSignal): Promise<SendSummary>
+  refreshProfile(): Promise<void>
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
   sendDisappearingTimer(
     sendId: string,
@@ -1805,7 +1806,28 @@ export interface SafetyNumberV1 {
   quarantineReason?: string
 }
 
+/** The account's profile as the account app edits it (docs/plans/unified-profile.md). */
+export interface AccountProfileView {
+  displayName: string
+  about?: string
+  /** Standard base64. */
+  avatar?: string
+  avatarContentType?: string
+  revision: string
+}
+
+export interface AccountProfileInput {
+  displayName: string
+  about?: string
+  avatar?: string
+  avatarContentType?: string
+}
+
 export interface ChatWasmModule extends InviteLinkCrypto {
+  /** Open the account's profile from the master key (no chat device). */
+  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
+  /** Seal the next profile revision (or the first) as the account app. */
+  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string): unknown
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
     open(

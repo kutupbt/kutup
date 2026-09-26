@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { refreshChat, useChat } from '../../app/chatStore'
-import { Avatar } from '../../components/Avatar'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
 import { groupIdOf } from '../../state/views'

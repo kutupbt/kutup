@@ -2995,6 +2995,19 @@ impl WasmChatClient {
         to_output(&profiles)
     }
 
+    /// Take a newer profile revision from the server (the account app edits
+    /// the profile) and tell contacts when it changed.
+    #[wasm_bindgen(js_name = refreshProfile)]
+    pub async fn refresh_profile(&mut self) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let user = self.engine.session().user().to_string();
+        self.engine
+            .initialize_profile(&self.profile_wrapping_key, &user, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setProfile)]
     pub async fn set_profile(
         &mut self,
@@ -3775,6 +3788,97 @@ pub fn invite_link_open_request(
 #[wasm_bindgen(js_name = inviteStatusToken)]
 pub fn invite_status_token() -> String {
     crate::invite_link::new_invite_status_token()
+}
+
+/// The account's profile for the account app (docs/plans/unified-profile.md):
+/// open it, and seal the next revision, from the master key alone.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileView {
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_content_type: Option<String>,
+    revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileInput {
+    display_name: String,
+    #[serde(default)]
+    about: Option<String>,
+    /// Standard base64.
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    avatar_content_type: Option<String>,
+}
+
+fn master_key_input(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
+    master_key
+        .try_into()
+        .map_err(|_| js_error("the account master key is 32 bytes"))
+}
+
+#[wasm_bindgen(js_name = accountProfileOpen)]
+pub fn account_profile_open(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: kutup_chat_proto::PutChatProfileRequest =
+        from_transport(current).map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+        .map_err(chat_error)?;
+    to_output(&AccountProfileView {
+        display_name: profile.display_name,
+        about: profile.about,
+        avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+        avatar_content_type: profile.avatar_content_type,
+        revision: profile.revision.to_string(),
+    })
+}
+
+#[wasm_bindgen(js_name = accountProfileSeal)]
+pub fn account_profile_seal(
+    master_key: Vec<u8>,
+    current: JsValue,
+    update: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: Option<kutup_chat_proto::PutChatProfileRequest> =
+        if current.is_null() || current.is_undefined() {
+            None
+        } else {
+            Some(from_transport(current).map_err(chat_error)?)
+        };
+    let update: AccountProfileInput = from_transport(update).map_err(chat_error)?;
+    let avatar = update
+        .avatar
+        .map(|value| STANDARD.decode(value).map_err(ChatError::from))
+        .transpose()
+        .map_err(chat_error)?;
+    let mut rng = OsRng.unwrap_err();
+    let upload = crate::profile::seal_account_profile(
+        &master_key,
+        current.as_ref(),
+        crate::profile::AccountProfileUpdate {
+            display_name: update.display_name,
+            avatar,
+            avatar_content_type: update.avatar_content_type,
+            about: update.about,
+        },
+        &account,
+        &mut rng,
+    )
+    .map_err(chat_error)?;
+    to_output(&upload)
 }
 
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {

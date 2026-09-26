@@ -397,7 +397,18 @@ impl Engine {
                 if (remote.revision, remote.source_device_id)
                     > (local.revision, local.source_device_id) =>
             {
-                crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?
+                let mut adopted =
+                    crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                // The account app changed the profile: it cannot tell
+                // contacts, so this device fans the key out and they refetch.
+                if remote.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
+                    && (adopted.display_name != local.display_name
+                        || adopted.avatar != local.avatar
+                        || adopted.about != local.about)
+                {
+                    adopted.broadcast_pending = true;
+                }
+                adopted
             }
             (Some(local), _) => local,
             (None, Some(remote)) => {

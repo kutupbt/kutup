@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@kutup/ui/components/input'
 import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
-import { Avatar } from '../../components/Avatar'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
 import { conversationTitle } from '../../lib/names'
 import { attachmentFile, uploadAndSend } from '../../lib/sendMedia'

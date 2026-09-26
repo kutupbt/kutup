@@ -1,5 +1,5 @@
 import { Users } from 'lucide-react'
-import { cn } from '@kutup/ui/lib/cn'
+import { cn } from '../lib/cn'
 import { initialsOf } from '../lib/initials'
 
 /**

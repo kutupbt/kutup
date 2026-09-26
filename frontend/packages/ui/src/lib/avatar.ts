@@ -1,4 +1,9 @@
-import { toBase64 } from '@kutup/crypto/base64'
+/** Standard base64 of bytes (chunked: large pictures overflow a spread). */
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
 
 /** A profile picture: at most 512×512 and 512 KiB. */
 export const PROFILE_AVATAR = { maxSide: 512, maxBytes: 512 * 1024 }

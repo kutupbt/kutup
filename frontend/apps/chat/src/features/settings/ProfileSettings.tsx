@@ -1,126 +1,46 @@
-import { PROFILE_ABOUT_MAX_CHARS } from '@kutup/chat-core/types'
-import { Camera, Copy, Loader2, Trash2 } from 'lucide-react'
+import { Copy, ExternalLink, Lock } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { contactUri } from '@kutup/chat-core/identity'
+import { appUrl } from '@kutup/session/apps'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
-import { Field } from '@kutup/ui/components/field'
-import { Input } from '@kutup/ui/components/input'
-import { refreshChat, useChat } from '../../app/chatStore'
-import { Avatar } from '../../components/Avatar'
-import { normalizeAvatar } from '../../lib/avatar'
-import { chatErrorMessage } from '../../lib/errors'
+import { useChat } from '../../app/chatStore'
 import { SettingsSection } from './SettingsPage'
 
 /**
- * Your chat profile (name and picture, encrypted and shared only with
- * people you message or accept, as in Signal) and your address to give out,
- * as text and as a QR code.
+ * Your profile as your contacts see it, and your address to give out. The
+ * profile is the account's one profile, edited in the account app
+ * (docs/plans/unified-profile.md); this tab takes a new version as soon as
+ * it regains focus.
  */
 export function ProfileSettings() {
   const { t } = useTranslation()
-  const { service, snapshot, self } = useChat()
+  const { snapshot, self } = useChat()
   const profile = snapshot.profile
-  const [name, setName] = useState(profile?.displayName ?? '')
-  const [about, setAbout] = useState(profile?.about ?? '')
-  const [avatar, setAvatar] = useState<{ base64?: string; contentType?: string }>({
-    base64: profile?.avatar,
-    contentType: profile?.avatarContentType,
-  })
-  const [processing, setProcessing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const file = useRef<HTMLInputElement>(null)
-
-  // Another device (or tab) saved a new profile: show it.
-  useEffect(() => {
-    setName(profile?.displayName ?? '')
-    setAbout(profile?.about ?? '')
-    setAvatar({ base64: profile?.avatar, contentType: profile?.avatarContentType })
-  }, [profile?.revision, profile?.displayName, profile?.about, profile?.avatar, profile?.avatarContentType])
-
-  async function choose(chosen: File | undefined) {
-    if (!chosen) return
-    setProcessing(true)
-    try {
-      const normalized = await normalizeAvatar(chosen)
-      setAvatar({ base64: normalized.base64, contentType: normalized.contentType })
-    } catch {
-      toast.error(t('chat.profile.avatarError'))
-    } finally {
-      setProcessing(false)
-      if (file.current) file.current.value = ''
-    }
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault()
-    if (!service || !name.trim() || saving || processing) return
-    setSaving(true)
-    try {
-      await service.setProfile(name.trim(), avatar.base64, avatar.contentType, about)
-      await refreshChat()
-      toast.success(t('chat.profile.saved'))
-    } catch (error) {
-      toast.error(chatErrorMessage(error, t))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const aboutTooLong = [...about.trim()].length > PROFILE_ABOUT_MAX_CHARS
-  const changed =
-    name.trim() !== (profile?.displayName ?? '') ||
-    about.trim() !== (profile?.about ?? '') ||
-    avatar.base64 !== profile?.avatar
   const address = self!.address
 
   return (
     <div className="space-y-10">
       <SettingsSection title={t('chat.profile.title')} description={t('chat.profile.description')}>
-        <form onSubmit={(e) => void save(e)} className="max-w-md space-y-5">
-          <div className="flex items-center gap-4">
-            <Avatar name={name || address} image={avatar.base64} contentType={avatar.contentType} size={80} />
-            <div className="flex flex-col gap-2">
-              <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => void choose(e.target.files?.[0])} />
-              <Button type="button" size="sm" variant="outline" disabled={processing || saving} onClick={() => file.current?.click()}>
-                {processing ? <Loader2 className="animate-spin" /> : <Camera />}
-                {t('chat.profile.changeAvatar')}
-              </Button>
-              {avatar.base64 ? (
-                <Button type="button" size="sm" variant="ghost" disabled={saving} onClick={() => setAvatar({})}>
-                  <Trash2 />
-                  {t('chat.profile.removeAvatar')}
-                </Button>
-              ) : null}
-            </div>
+        <div className="flex max-w-xl items-center gap-4 rounded-lg border border-border p-4" data-testid="chat-profile-preview">
+          <Avatar name={profile?.displayName || address} image={profile?.avatar} contentType={profile?.avatarContentType} size={48} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium" data-testid="chat-profile-name">{profile?.displayName || address}</p>
+            {profile?.about ? <p className="truncate text-sm text-muted-foreground">{profile.about}</p> : null}
           </div>
-          <p className="text-xs text-muted-foreground">{t('chat.profile.avatarHint')}</p>
-          <Field label={t('chat.profile.displayName')}>
-            {(props) => <Input {...props} value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required autoComplete="name" />}
-          </Field>
-          <Field
-            label={t('chat.profile.about')}
-            description={t('chat.profile.aboutHint', { count: [...about.trim()].length, max: PROFILE_ABOUT_MAX_CHARS })}
-            error={aboutTooLong ? t('chat.profile.aboutTooLong', { count: PROFILE_ABOUT_MAX_CHARS }) : undefined}
-          >
-            {(props) => (
-              <Input
-                {...props}
-                value={about}
-                onChange={(e) => setAbout(e.target.value.replace(/[\r\n]+/gu, ' '))}
-                placeholder={t('chat.profile.aboutPlaceholder')}
-                data-testid="chat-profile-about"
-              />
-            )}
-          </Field>
-          <p className="text-xs text-muted-foreground">{t('chat.profile.visibility')}</p>
-          <Button type="submit" disabled={!name.trim() || !changed || aboutTooLong || saving || processing}>
-            {saving ? <Loader2 className="animate-spin" /> : null}
-            {t('common.save')}
+          <Button asChild variant="outline" size="sm">
+            <a href={appUrl('account', '/settings/profile')} data-testid="chat-profile-edit">
+              <ExternalLink />
+              {t('chat.profile.edit')}
+            </a>
           </Button>
-        </form>
+        </div>
+        <p className="flex max-w-xl items-start gap-2 text-sm text-muted-foreground">
+          <Lock className="mt-0.5 size-4 shrink-0" aria-hidden />
+          {t('chat.profile.visibility')}
+        </p>
       </SettingsSection>
 
       <SettingsSection title={t('chat.contact.title')} description={t('chat.contact.description')}>

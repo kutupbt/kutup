@@ -21,7 +21,8 @@
     "users": "Users",
     "activity": "Activity",
     "federation": "Federation",
-    "serverSettings": "Server settings"
+    "serverSettings": "Server settings",
+    "profile": "Profile"
   },
   "auth": {
     "fields": {
@@ -156,7 +157,8 @@
         "d180": "6 months",
         "d365": "1 year",
         "d3650": "10 years"
-      }
+      },
+      "details": "Account details"
     },
     "security": {
       "title": "Security",
@@ -219,6 +221,28 @@
       "revokedToast": "Device revoked",
       "emptyTitle": "No editor devices yet",
       "emptyDescription": "A device appears here the first time it opens a shared document."
+    },
+    "profile": {
+      "title": "Profile",
+      "description": "How you appear to the people you chat with.",
+      "who": "You",
+      "changeAvatar": "Change picture",
+      "removeAvatar": "Remove picture",
+      "avatarError": "That picture could not be used. Try a PNG, JPEG or WebP image.",
+      "name": "Name",
+      "about": "About",
+      "aboutPlaceholder": "A line about you (optional)",
+      "aboutTooLong": "At most {{max}} characters.",
+      "visibility": "Your name, picture and about are end-to-end encrypted: the server cannot see them. People you chat with see them.",
+      "save": "Save",
+      "saved": "Profile saved",
+      "saveFailed": "The profile could not be saved.",
+      "address": "Your address",
+      "addressDescription": "Give it out so people can reach you; the QR code holds the same address.",
+      "qr": "QR code of your address",
+      "copy": "Copy address",
+      "copied": "Address copied",
+      "copyFailed": "Could not copy the address"
     }
   },
   "admin": {

@@ -108,6 +108,11 @@ impl TryFrom<u8> for ProfileEnvelopePurpose {
     }
 }
 
+/// The source id the account app writes the profile with: it is not a chat
+/// device (those are 1-127), and the envelope refuses zero
+/// (docs/plans/unified-profile.md).
+pub const ACCOUNT_PROFILE_SOURCE: u32 = 128;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileEnvelopeContextV1 {
     pub suite: ProfileSuiteId,

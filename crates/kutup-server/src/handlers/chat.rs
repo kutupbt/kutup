@@ -234,7 +234,10 @@ fn validate_profile(
     if profile.revision == 0 || profile.revision > i64::MAX as u64 {
         return Err(AppError::bad_request("profile revision is out of range"));
     }
-    if profile.source_device_id == 0 || profile.source_device_id > MAX_DEVICE_ID as u32 {
+    // A chat device (1-127), or the account app (docs/plans/unified-profile.md).
+    if (profile.source_device_id == 0 || profile.source_device_id > MAX_DEVICE_ID as u32)
+        && profile.source_device_id != kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
+    {
         return Err(AppError::bad_request(
             "profile sourceDeviceId is out of range",
         ));
@@ -882,12 +885,18 @@ pub async fn put_profile(
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
     let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let (verifier, delivery_verifier) = validate_profile(&profile, &canonical_account)?;
+    // The account app edits the profile too, without being a chat device
+    // (docs/plans/unified-profile.md); any other source must be one.
     let device_exists: Option<i32> =
-        sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
-            .bind(user_id)
-            .bind(profile.source_device_id as i32)
-            .fetch_optional(&mut *tx)
-            .await?;
+        if profile.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
+            Some(1)
+        } else {
+            sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
+                .bind(user_id)
+                .bind(profile.source_device_id as i32)
+                .fetch_optional(&mut *tx)
+                .await?
+        };
     if device_exists.is_none() {
         return Err(AppError::not_found(
             "profile source chat device is not registered",

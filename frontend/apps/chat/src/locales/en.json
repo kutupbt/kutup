@@ -258,18 +258,9 @@
     },
     "profile": {
       "title": "Chat profile",
-      "description": "Your name and avatar are encrypted before they leave this device.",
-      "displayName": "Display name",
-      "changeAvatar": "Choose photo",
-      "removeAvatar": "Remove",
-      "avatarHint": "PNG, JPEG, or WebP. The image is cropped and resized on this device.",
+      "description": "Your name, picture and about line: one profile for your whole Kutup account, edited in the account settings.",
       "visibility": "Like Signal, Kutup shares this profile only with people you message or accept. Blocking someone rotates your profile key so they cannot fetch future changes.",
-      "saved": "Encrypted chat profile updated",
-      "avatarError": "That image could not be used as a profile photo.",
-      "about": "About",
-      "aboutHint": "{{count}}/{{max}} · shown to people you chat with",
-      "aboutTooLong": "At most {{count}} characters.",
-      "aboutPlaceholder": "A few words about yourself"
+      "edit": "Edit profile"
     },
     "reactions": {
       "add": "Add reaction",

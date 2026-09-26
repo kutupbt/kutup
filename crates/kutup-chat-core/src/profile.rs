@@ -242,6 +242,74 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
     }
 }
 
+/// What the account app edits (docs/plans/unified-profile.md).
+pub struct AccountProfileUpdate {
+    pub display_name: String,
+    pub avatar: Option<Vec<u8>>,
+    pub avatar_content_type: Option<String>,
+    pub about: Option<String>,
+}
+
+/// Seal the account's next profile revision from the account app: over the
+/// current one (same key, one revision later), or the first one with a fresh
+/// key. Only the master key is needed; no chat device takes part. Returns the
+/// exact upload.
+pub fn seal_account_profile<R: Rng + CryptoRng>(
+    master_key: &[u8; 32],
+    current: Option<&PutChatProfileRequest>,
+    update: AccountProfileUpdate,
+    canonical_account: &str,
+    rng: &mut R,
+) -> Result<PutChatProfileRequest> {
+    let wrapping_key = derive_wrapping_key(master_key)?;
+    let about = validate_about(update.about.as_deref())?;
+    let (key, revision) = match current {
+        Some(current) => {
+            let profile = open_own_profile(current, &wrapping_key, canonical_account)?;
+            let revision = profile
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| ChatError::Invalid("profile revision is exhausted".into()))?;
+            (profile.key, revision)
+        }
+        None => {
+            let mut key = vec![0u8; PROFILE_KEY_BYTES];
+            rng.fill(key.as_mut_slice());
+            (key, 1)
+        }
+    };
+    let profile = prepare_local_profile(
+        LocalProfileDraft {
+            key,
+            display_name: &update.display_name,
+            avatar: update.avatar,
+            avatar_content_type: update.avatar_content_type,
+            about,
+            revision,
+            source_device_id: kutup_chat_proto::ACCOUNT_PROFILE_SOURCE,
+        },
+        &wrapping_key,
+        canonical_account,
+        rng,
+    )?;
+    profile
+        .pending_upload
+        .ok_or_else(|| ChatError::Db("sealed profile has no upload".into()))
+}
+
+/// The account's own profile as the account app shows it.
+pub fn open_account_profile(
+    master_key: &[u8; 32],
+    current: &PutChatProfileRequest,
+    canonical_account: &str,
+) -> Result<LocalProfile> {
+    open_own_profile(
+        current,
+        &derive_wrapping_key(master_key)?,
+        canonical_account,
+    )
+}
+
 pub fn open_own_profile(
     encrypted: &PutChatProfileRequest,
     wrapping_key: &[u8; 32],
@@ -926,4 +994,50 @@ mod tests {
         }
         assert_eq!(validate_about(Some("   ")).unwrap(), None);
     }
+
+    #[test]
+    fn the_account_app_seals_and_reopens_the_profile_from_the_master_key() {
+        let mut rng = rand::rng();
+        let master = [7u8; 32];
+        let first = seal_account_profile(
+            &master,
+            None,
+            AccountProfileUpdate {
+                display_name: "Ada".into(),
+                avatar: None,
+                avatar_content_type: None,
+                about: Some("Counting things".into()),
+            },
+            RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!((first.revision, first.source_device_id), (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE));
+        let opened = open_account_profile(&master, &first, RECIPIENT).unwrap();
+        assert_eq!(opened.display_name, "Ada");
+        assert_eq!(opened.about.as_deref(), Some("Counting things"));
+
+        let next = seal_account_profile(
+            &master,
+            Some(&first),
+            AccountProfileUpdate {
+                display_name: "Ada L.".into(),
+                avatar: None,
+                avatar_content_type: None,
+                about: None,
+            },
+            RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(next.revision, 2);
+        assert_eq!(next.version, first.version, "same key: contacts keep reading it");
+        // A chat device opens it with the same master-derived wrapping key.
+        let device_view = open_own_profile(&next, &derive_wrapping_key(&master).unwrap(), RECIPIENT).unwrap();
+        assert_eq!(device_view.display_name, "Ada L.");
+        assert_eq!(device_view.about, None);
+        // Another master key opens nothing.
+        assert!(open_account_profile(&[8u8; 32], &next, RECIPIENT).is_err());
+    }
+
 }

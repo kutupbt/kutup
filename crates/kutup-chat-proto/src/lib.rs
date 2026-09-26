@@ -132,6 +132,7 @@ pub use polls::{
 };
 pub use profile::{
     decode_profile_envelope, encode_profile_envelope_header, ChatProfileResponse,
+    ACCOUNT_PROFILE_SOURCE,
     DecodedProfileEnvelopeV1, OwnChatProfileResponse, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, MAX_PROFILE_ABOUT_CHARS,
     MAX_PROFILE_AVATAR_BYTES, PROFILE_ABOUT_PADDED_LENGTHS, PROFILE_NAME_PADDED_LENGTHS,
