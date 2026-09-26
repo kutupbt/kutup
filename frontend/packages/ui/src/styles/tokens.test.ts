@@ -11,17 +11,17 @@ function block(selector: string): Set<string> {
   return new Set([...body.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]))
 }
 
-// Theme-independent by design: the chrome keeps one palette in both themes,
-// and the radius is not a colour.
+// Theme-independent by design: the stage (call screens) stays dark in both
+// themes, and the radius is not a colour.
 const SHARED = new Set(['--radius'])
-const isChrome = (token: string) => token.startsWith('--chrome')
+const isStage = (token: string) => token.startsWith('--stage')
 
 describe('design tokens', () => {
   const light = block(':root')
   const dark = block('.dark')
 
   it('redefine every themed light token for dark', () => {
-    const themed = [...light].filter((t) => !isChrome(t) && !SHARED.has(t))
+    const themed = [...light].filter((t) => !isStage(t) && !SHARED.has(t))
     expect(themed.filter((t) => !dark.has(t))).toEqual([])
   })
 
@@ -29,8 +29,25 @@ describe('design tokens', () => {
     expect([...dark].filter((t) => !light.has(t))).toEqual([])
   })
 
-  it('keep the chrome out of the dark block', () => {
-    expect([...dark].filter(isChrome)).toEqual([])
+  it('keep the stage out of the dark block', () => {
+    expect([...dark].filter(isStage)).toEqual([])
+  })
+
+  it('keep the sidebar readable in both themes', () => {
+    const failures: string[] = []
+    for (const selector of [':root', '.dark']) {
+      const start = css.indexOf(`${selector} {`)
+      const body = css.slice(start, css.indexOf('\n}', start))
+      const hex = (name: string) => body.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6});`))?.[1]
+      const surface = hex('chrome')!
+      for (const [name, minimum] of [['chrome-foreground', 7], ['chrome-muted', 4.5], ['chrome-active', 4.5]] as const) {
+        for (const background of [surface, hex('chrome-accent')!]) {
+          const ratio = contrast(hex(name)!, background)
+          if (ratio < minimum) failures.push(`${selector} --${name} on ${background} ${ratio.toFixed(2)}`)
+        }
+      }
+    }
+    expect(failures).toEqual([])
   })
 
   it('expose every token as a Tailwind colour', () => {

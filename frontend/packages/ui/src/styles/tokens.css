@@ -2,20 +2,21 @@
  * Kutup design tokens.
  *
  * Structure from the asec system: a paper content plane with white cards
- * (raised without shadows), a dark "chrome" sidebar that stays dark in both
- * themes, and one signature element — the 3px spine (components/spine.tsx).
+ * (raised without shadows), a "chrome" sidebar that follows the theme (white
+ * in light, ink in dark, as Signal Desktop and Google Drive do), and one
+ * signature element — the 3px spine (components/spine.tsx). The "stage"
+ * (full-screen calls) stays dark in both themes, as call screens do.
  *
  * Colour from Kutup's mark, the three diamonds (#0369a1 / #38bdf8 / #7dd3fc):
  *
  * - Light primary is the mark's deep diamond, #0369a1. White on it is 5.9:1,
  *   so a primary button's label passes AA at body size. The mark's bright
- *   #38bdf8 would be 2.1:1 there — it is reserved for the chrome, where it
- *   sits on near-black.
+ *   #38bdf8 would be 2.1:1 there — it is reserved for dark surfaces.
  * - Dark primary is the bright diamond, #38bdf8, with an ink label (8.8:1).
  *   Unlike a dark navy on carbon it draws its own edge, so a primary button
  *   still reads as a button in dark mode.
- * - The chrome's active marker is #38bdf8 in both themes: the same ice the
- *   mark's centre diamond uses, on #0b1220 at 8.7:1.
+ * - The chrome's active marker is the primary of its theme: #0369a1 on the
+ *   white light sidebar (5.9:1), #38bdf8 on the ink dark one (8.7:1).
  *
  * Raw Tailwind palette classes are banned by lint; every colour a component
  * needs is a token here.
@@ -54,13 +55,20 @@
   --ring: #0284c7;
   --radius: 0.625rem;
 
-  /* ── chrome: sidebar, app rail — identical in both themes ─────────── */
-  --chrome: #0b1220;
-  --chrome-foreground: #e7eefb;
-  --chrome-muted: #93a4c0;
-  --chrome-accent: #16223a;
-  --chrome-border: oklch(1 0 0 / 9%);
-  --chrome-active: #38bdf8;
+  /* ── chrome: sidebar, app rail — white here, ink in dark ──────────── */
+  --chrome: #ffffff;
+  --chrome-foreground: #1b2433;
+  --chrome-muted: #566479;
+  --chrome-accent: #e8f2fa;
+  --chrome-border: oklch(0.91 0.008 240);
+  --chrome-active: #0369a1;
+
+  /* ── stage: full-screen calls — dark in both themes ──────────────── */
+  --stage: #0b1220;
+  --stage-foreground: #e7eefb;
+  --stage-muted: #93a4c0;
+  --stage-accent: #16223a;
+  --stage-active: #38bdf8;
 
   /* ── status ───────────────────────────────────────────────────────── */
   /*
@@ -105,6 +113,14 @@
 
 .dark {
   color-scheme: dark;
+
+  --chrome: #0b1220;
+  --chrome-foreground: #e7eefb;
+  --chrome-muted: #93a4c0;
+  --chrome-accent: #16223a;
+  --chrome-border: oklch(1 0 0 / 9%);
+  --chrome-active: #38bdf8;
+
   --background: oklch(0.155 0.014 255);
   --foreground: oklch(0.96 0.008 240);
   --card: oklch(0.195 0.016 255);
@@ -168,6 +184,12 @@
   --color-chrome-accent: var(--chrome-accent);
   --color-chrome-border: var(--chrome-border);
   --color-chrome-active: var(--chrome-active);
+
+  --color-stage: var(--stage);
+  --color-stage-foreground: var(--stage-foreground);
+  --color-stage-muted: var(--stage-muted);
+  --color-stage-accent: var(--stage-accent);
+  --color-stage-active: var(--stage-active);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

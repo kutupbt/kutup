@@ -25,10 +25,10 @@ const buttonVariants = cva(
         ghost: 'hover:bg-accent hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
         /*
-         * For the ink chrome — the sidebar and top rail, which keep their own
-         * palette in both themes. `ghost` reaches for `--accent`, a content
-         * token, and on the rail that renders a near-white hover over near-
-         * black text.
+         * For the chrome — the sidebar and top rail, which have their own
+         * palette (white in light, ink in dark). `ghost` reaches for
+         * `--accent`, a content token, which does not match the rail's
+         * surface in dark mode.
          */
         chrome:
           'text-chrome-foreground hover:bg-chrome-accent focus-visible:ring-chrome-active ' +

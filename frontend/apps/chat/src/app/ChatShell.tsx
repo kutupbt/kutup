@@ -25,7 +25,7 @@ import { Shortcuts } from './Shortcuts'
 import { closeChat, useChat } from './chatStore'
 
 /**
- * Chat in the Kutup frame: the dark sidebar (New chat, Chats, Settings,
+ * Chat in the Kutup frame: the sidebar (New chat, Chats, Settings,
  * backup status) and the header (search, app switcher, account menu). The
  * Signal-style panes live in the page.
  */

@@ -36,10 +36,10 @@ function Screen({ call }: { call: GroupCallState }) {
   const columns = call.participants.length <= 1 ? 1 : call.participants.length <= 4 ? 2 : 3
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-chrome text-chrome-foreground" role="dialog" aria-modal aria-label={t('chat.calls.groupScreen', { name: title })} data-testid="chat-group-call-screen" data-phase={call.phase}>
+    <div className="fixed inset-0 z-50 flex flex-col bg-stage text-stage-foreground" role="dialog" aria-modal aria-label={t('chat.calls.groupScreen', { name: title })} data-testid="chat-group-call-screen" data-phase={call.phase}>
       <header className="flex shrink-0 items-center gap-2 px-4 py-3">
         <h2 className="font-semibold">{title}</h2>
-        <span className="text-sm text-chrome-muted" data-testid="chat-group-call-status">{status}</span>
+        <span className="text-sm text-stage-muted" data-testid="chat-group-call-status">{status}</span>
       </header>
       <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
         {call.participants.map((participant) => (
@@ -91,7 +91,7 @@ function Tile({
   return (
     <div
       className={cn(
-        'relative flex min-h-0 items-center justify-center overflow-hidden rounded-xl bg-chrome-accent',
+        'relative flex min-h-0 items-center justify-center overflow-hidden rounded-xl bg-stage-accent',
         participant.speaking && 'ring-2 ring-status-ok',
       )}
       data-testid="chat-group-call-tile"
@@ -104,7 +104,7 @@ function Tile({
       ) : (
         <Avatar name={avatarName} image={profile?.avatar} contentType={profile?.avatarContentType} size={80} />
       )}
-      <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-chrome/70 px-2 py-0.5 text-xs">
+      <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-stage/70 px-2 py-0.5 text-xs">
         {participant.muted ? <MicOff className="size-3" aria-hidden /> : null}
         {name}
       </span>
@@ -140,8 +140,8 @@ function RoundButton({
         danger
           ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
           : pressed
-            ? 'bg-chrome-foreground text-chrome hover:bg-chrome-foreground/90'
-            : 'bg-chrome-accent text-chrome-foreground hover:bg-chrome-active',
+            ? 'bg-stage-foreground text-stage hover:bg-stage-foreground/90'
+            : 'bg-stage-accent text-stage-foreground hover:bg-stage-active',
       )}
       data-testid={testId}
     >

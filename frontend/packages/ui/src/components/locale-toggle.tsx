@@ -4,11 +4,9 @@ import { Button } from './button'
 /**
  * Switch between the two shipped locales.
  *
- * `onChrome` says which surface it is standing on. The chrome tokens are fixed
- * in both themes because the ink rail is — and on the **auth screens**, which
- * have no rail and sit on `bg-muted`, that renders a near-white control on a
- * near-white ground: invisible in light, fine in dark, and visible only in a
- * screenshot.
+ * `onChrome` says which surface it is standing on: the rail (chrome tokens)
+ * or the **auth screens**, which have no rail and sit on `bg-muted`, where
+ * the content tokens fit.
  */
 export function LocaleToggle({ onChrome = true }: { onChrome?: boolean } = {}) {
   const { t, i18n } = useTranslation()

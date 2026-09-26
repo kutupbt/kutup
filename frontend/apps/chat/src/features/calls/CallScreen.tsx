@@ -127,7 +127,7 @@ function CallScreen({ call }: { call: CallState }) {
   const status = statusText(call, now, t)
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-chrome text-chrome-foreground" role="dialog" aria-modal aria-label={t('chat.calls.screen', { name })} data-testid="chat-call-screen" data-phase={call.phase}>
+    <div className="fixed inset-0 z-50 flex flex-col bg-stage text-stage-foreground" role="dialog" aria-modal aria-label={t('chat.calls.screen', { name })} data-testid="chat-call-screen" data-phase={call.phase}>
       <audio ref={remoteAudio} autoPlay />
       <div className="relative flex min-h-0 flex-1 items-center justify-center">
         <video
@@ -142,7 +142,7 @@ function CallScreen({ call }: { call: CallState }) {
           <div className="flex flex-col items-center gap-3 text-center">
             <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={80} />
             <h2 className="text-2xl font-semibold">{name}</h2>
-            <p className="text-sm text-chrome-muted" data-testid="chat-call-status">{status}</p>
+            <p className="text-sm text-stage-muted" data-testid="chat-call-status">{status}</p>
           </div>
         ) : (
           <p className="absolute left-4 top-4 rounded bg-black/50 px-2 py-1 text-sm" data-testid="chat-call-status">{name} · {status}</p>
@@ -233,7 +233,7 @@ function RoundButton({
         'size-14 rounded-full [&_svg]:size-6',
         tone === 'danger' && 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
         tone === 'accept' && 'bg-status-ok text-status-ok-foreground hover:bg-status-ok/90',
-        !tone && (pressed ? 'bg-chrome-foreground text-chrome hover:bg-chrome-foreground/90' : 'bg-chrome-accent text-chrome-foreground hover:bg-chrome-active'),
+        !tone && (pressed ? 'bg-stage-foreground text-stage hover:bg-stage-foreground/90' : 'bg-stage-accent text-stage-foreground hover:bg-stage-active'),
       )}
       data-testid={testId}
     >

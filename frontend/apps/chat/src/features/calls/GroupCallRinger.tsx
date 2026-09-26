@@ -112,10 +112,10 @@ export function GroupCallRinger() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-chrome text-center text-chrome-foreground" role="dialog" aria-modal aria-label={t('chat.calls.groupScreen', { name: title })} data-testid="chat-group-call-ringing">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-stage text-center text-stage-foreground" role="dialog" aria-modal aria-label={t('chat.calls.groupScreen', { name: title })} data-testid="chat-group-call-ringing">
       <Avatar name={title} image={group?.currentGroupInfo?.avatar?.data} contentType={group?.currentGroupInfo?.avatar?.contentType} group size={80} />
       <h2 className="text-2xl font-semibold">{title}</h2>
-      <p className="text-sm text-chrome-muted">{t('chat.calls.groupRinging', { name: starter })}</p>
+      <p className="text-sm text-stage-muted">{t('chat.calls.groupRinging', { name: starter })}</p>
       <div className="mt-10 flex gap-4">
         <Button size="icon" className="size-14 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90 [&_svg]:size-6" onClick={() => setRinging(null)} aria-label={t('chat.calls.decline')} title={t('chat.calls.decline')} data-testid="chat-group-call-decline">
           <PhoneOff />

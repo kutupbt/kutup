@@ -15,10 +15,9 @@ const OPTIONS = [
  * `onChrome` says which surface it is standing on, and both answers are
  * necessary.
  *
- * **On the ink rail, chrome tokens throughout.** That rail keeps one palette in
- * both themes, so content tokens would invert underneath it and the switch
- * would go invisible in exactly one of the two states it exists to move
- * between.
+ * **On the rail, chrome tokens throughout.** The rail has its own palette
+ * (white in light, ink in dark), so the switch is drawn in the rail's colours
+ * rather than the content plane's.
  *
  * **On the auth screens, content tokens**, because there is no rail there and
  * the chrome palette renders a near-white control on `bg-muted`. The first

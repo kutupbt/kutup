@@ -19,7 +19,7 @@ export function BackupIndicator() {
   return (
     <Link
       to="/settings/backup"
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-chrome-muted hover:bg-chrome-active hover:text-chrome-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-accent"
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-chrome-muted hover:bg-chrome-accent hover:text-chrome-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-accent"
     >
       <Icon className={cn('size-4 shrink-0', tone === 'ok' && 'text-status-ok', tone === 'warn' && 'text-status-warn', tone === 'danger' && 'text-status-danger')} aria-hidden />
       <span className="min-w-0">

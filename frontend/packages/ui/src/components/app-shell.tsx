@@ -10,8 +10,8 @@ import { Spine } from './spine'
 
 /**
  * The frame every Kutup app shares (Proton's PrivateAppContainer, asec's
- * chrome): a dark sidebar that stays dark in both themes, and a content
- * column with a thin header.
+ * chrome): a sidebar on its own chrome palette (white in light, ink in
+ * dark), and a content column with a thin header.
  *
  * Sidebar, top to bottom: the brand lockup, the app's primary action
  * ("New"), its navigation, and a footer slot (the storage meter in Drive).
