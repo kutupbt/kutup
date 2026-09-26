@@ -9,6 +9,7 @@ import { RequireAdmin, RequireSession } from './app/guards'
 import { ActivityPage } from './features/admin/ActivityPage'
 import { FederationPage } from './features/admin/FederationPage'
 import { NewUserPage } from './features/admin/NewUserPage'
+import { MapsSettingsPage } from './features/admin/MapsSettingsPage'
 import { ServerSettingsPage } from './features/admin/ServerSettingsPage'
 import { UserPage } from './features/admin/UserPage'
 import { UsersPage } from './features/admin/UsersPage'
@@ -21,6 +22,7 @@ import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
 import { ProfilePage } from './features/settings/ProfilePage'
 import { DevicesSessionsPage } from './features/settings/DevicesSessionsPage'
+import { MapsPage } from './features/settings/MapsPage'
 import { SecurityPage } from './features/settings/SecurityPage'
 import { NotFoundPage } from './NotFoundPage'
 
@@ -61,6 +63,7 @@ export function App() {
               <Route path="/settings/security" element={<SecurityPage />} />
               <Route path="/settings/sessions" element={<Navigate to="/settings/devices" replace />} />
               <Route path="/settings/devices" element={<DevicesSessionsPage />} />
+              <Route path="/settings/maps" element={<MapsPage />} />
               <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
               <Route path="/admin/users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
               <Route path="/admin/users/new" element={<RequireAdmin><NewUserPage /></RequireAdmin>} />
@@ -68,6 +71,7 @@ export function App() {
               <Route path="/admin/activity" element={<RequireAdmin><ActivityPage /></RequireAdmin>} />
               <Route path="/admin/federation" element={<RequireAdmin><FederationPage /></RequireAdmin>} />
               <Route path="/admin/settings" element={<RequireAdmin><ServerSettingsPage /></RequireAdmin>} />
+              <Route path="/admin/maps" element={<RequireAdmin><MapsSettingsPage /></RequireAdmin>} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

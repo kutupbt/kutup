@@ -800,6 +800,55 @@ no share between you; `400` for an envelope that does not match.
 
 ---
 
+## Maps
+
+Kutup stores no map data (docs/plans/maps.md). The administrator chooses the
+providers people may use and whether map traffic goes through this server;
+each person turns maps on (off by default) and chooses within that. Places
+themselves are end-to-end encrypted elsewhere and drawn in the browser.
+
+### GET /api/maps
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "enabled": true,
+  "proxy": "off | available | enforced",
+  "providers": [{
+    "id": "openfreemap | openstreetmap | custom",
+    "name": "OpenFreeMap",
+    "kind": "vector | raster",
+    "url": "https://tiles.openfreemap.org/styles/liberty",
+    "proxyUrl": "/api/maps/proxy/openfreemap/styles/liberty",
+    "attribution": "…"
+  }],
+  "preferences": { "enabled": false, "provider": null, "viaProxy": true }
+}
+```
+
+`enabled: false` means the administrator turned maps off (no providers are
+listed). `proxyUrl` is null when the relay is off. A vector provider's `url`
+is a MapLibre style; a raster provider's is a `{z}/{x}/{y}` template.
+
+### PUT /api/maps/preferences
+
+**Auth:** Bearer JWT. Body: `{ enabled, provider, viaProxy }`; `provider` must
+be one on offer (or null). Returns the same shape as `GET /api/maps`.
+
+### GET /api/maps/proxy/:provider/*path
+
+**Auth:** Bearer JWT. The resource at that path on the provider (style,
+TileJSON, tile, glyphs, sprite), fetched by this server and kept in its
+shared cache; JSON is rewritten so every URL on the provider points back
+here. Only offered providers while the relay is on; plain path segments
+only; images, JSON and vector tiles only, at most 4 MiB. `404` for a provider
+not offered or a resource it does not have, `429` above 1,200 requests a
+minute per person, `502` when the provider fails (an expired cached copy is
+served instead when there is one).
+
+---
+
 ## Files
 
 **Write rights.** Reading a file needs the folder's owner or any share on it.
@@ -1907,6 +1956,29 @@ Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
 `before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
 to 1000. Cells beginning with spreadsheet formula markers are neutralized and
 the response is downloaded as `kutup-admin-audit.csv`.
+
+---
+
+### GET /api/admin/maps · PUT /api/admin/maps
+
+**Auth:** Bearer JWT (admin)
+
+```json
+{
+  "enabled": true,
+  "providers": ["openfreemap", "openstreetmap"],
+  "custom": null,
+  "proxy": "available",
+  "cacheMegabytes": 2048
+}
+```
+
+`custom` is the server's own tile server,
+`{ name, kind: "vector" | "raster", url, attribution }`: a style URL, or a
+tile template with `{z}`, `{x}` and `{y}`; it must also be listed in
+`providers`. Maps on with no provider, a provider listed twice, or a cache
+above 102,400 MB is `400`. Saving writes the `maps.settings.update` audit
+entry.
 
 ---
 

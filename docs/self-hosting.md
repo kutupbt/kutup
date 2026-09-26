@@ -617,6 +617,27 @@ backend from the same release.
 
 ---
 
+## Maps
+
+Kutup stores no map data. On the admin **Maps** page you choose the
+providers people may use (OpenFreeMap and OpenStreetMap, which need no API
+key, and optionally your own tile server), and whether map traffic goes
+through this server: **off** (browsers load maps from the provider),
+**each person chooses**, or **always**. Each person's maps stay off until
+they turn them on in their account's Maps settings. Turn maps off entirely
+for no third-party requests at all.
+
+Through the relay, providers see the server instead of people's addresses.
+The relay keeps one shared tile cache in `MAPS_CACHE_DIR` (the compose file
+uses the `maps_cache` volume; without the variable it is a temporary
+directory), sized on the Maps page. Keep the cache on when OpenStreetMap is
+offered: its [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+does not allow fetching the same tiles repeatedly. If your own tile server
+is only reachable from the Kutup server (e.g. on the Docker network), set
+map traffic to **always**.
+
+---
+
 ## Security Hardening
 
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.

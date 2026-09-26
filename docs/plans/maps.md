@@ -1,6 +1,6 @@
 # Maps
 
-**Status:** decisions agreed 2026-09-26; slices not started. Branch
+**Status:** decisions agreed 2026-09-26; slice 1 done. Branch
 `feat/frontend-rewrite`. Roadmap entry: `docs/roadmap.md` → "New apps (after
 v1)" → Maps.
 
@@ -148,16 +148,35 @@ goes beyond Signal parity.
   sends one identifying User-Agent per server and caches; the admin page
   links the policy.
 - Content Security Policy: each app allows only the providers the admin
-  enabled (and its own origin for the proxy).
+  enabled (and its own origin for the proxy), and none when the relay is
+  enforced. This lands with the per-origin CSP for account, Drive and Chat
+  in phase 5 of docs/plans/multi-app-web-rewrite.md; until then "always"
+  is what the apps do, not what the browser enforces.
 
 ## Slices
 
-1. **Map foundation:** admin settings (providers, own tile server, proxy
-   mode, cache cap, maps off); the proxy; the user's switch, notice and
-   choices (account app → a "Maps" section); `@kutup/map`; the cities list.
+1. (done) **Map foundation:**
+   - admin settings in `site_settings.maps` (providers, own tile server,
+     relay mode, cache size, maps off) on the account app's admin **Maps**
+     page;
+   - each person's choice in `user_map_preferences` (migration 055) on the
+     account app's **Maps** page, with the notice and a preview map;
+   - the relay `GET /api/maps/proxy/{provider}/{path}`
+     (`kutup-server/src/maps.rs`): signed-in people only, offered providers
+     only, plain paths, map resource types only, 4 MiB, 1,200 requests a
+     minute per person; style JSON rewritten to point back at the relay;
+     the shared on-disk cache in `MAPS_CACHE_DIR`, least recently used out
+     first, upstream lifetimes within 1 hour–30 days, an expired copy served
+     when the provider is down;
+   - `@kutup/map`: `useMapConfig`, `effectiveMap`, and `MapView` (MapLibre,
+     loaded lazily), which sends the session token only to the relay.
+   Checked in a browser against the real providers: OpenFreeMap and
+   OpenStreetMap through the relay with no request reaching the provider,
+   and directly; the admin's "always" reaching people's pages.
 2. **Chat: send a place once:** pin or current location; an end-to-end
    encrypted location message; the map card (or the coordinates card with
-   maps off); "Open in maps app".
+   maps off); "Open in maps app"; the cities list (moved here from slice 1:
+   the place picker is its first user) for jumping to a city.
 3. **Chat: live location:** 15 minutes / 1 hour / 8 hours, stop at any
    time; the live channel above.
 4. **The Maps app (`maps.`):** pinned place lists, shared and edited

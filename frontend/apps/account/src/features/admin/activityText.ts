@@ -14,6 +14,7 @@ const ACTION_KEYS: Record<string, string> = {
   'user.rotate_temp_password': 'userRotateTempPassword',
   'user.wipe': 'userWipe',
   'settings.update': 'settingsUpdate',
+  'maps.settings.update': 'mapsSettingsUpdate',
   'federation.policy.update': 'federationPolicyUpdate',
   'federation.rule.upsert': 'federationRuleUpsert',
   'federation.rule.delete': 'federationRuleDelete',

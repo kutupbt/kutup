@@ -28,7 +28,8 @@
     "zxcvbn": "^4.4.2",
     "qrcode.react": "^4.2.0",
     "@kutup/chat-core": "workspace:*",
-    "axios": "^1.18.0"
+    "axios": "^1.18.0",
+    "@kutup/map": "workspace:*"
   },
   "devDependencies": {
     "@kutup/config": "workspace:*",

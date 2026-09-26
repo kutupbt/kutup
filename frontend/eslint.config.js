@@ -13,7 +13,7 @@ import tseslint from 'typescript-eslint'
  * - Native <select> and checkbox are banned: they take the platform's chrome,
  *   cannot be themed and render in the platform font. Use the ui primitives.
  *
- * The new UI code (apps/*, packages/ui, packages/i18n, packages/config) gets
+ * The new UI code (apps/*, packages/ui, packages/i18n, packages/config, packages/map) gets
  * the type-checked rule set. The logic packages moved from the old SPA
  * (crypto, session, files, collab, chat-core) get the untyped recommended set
  * until they are tightened on their own.
@@ -43,7 +43,7 @@ const restricted = [
   },
 ]
 
-const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config}/**/*.{ts,tsx}']
+const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map}/**/*.{ts,tsx}']
 const LOGIC_CODE = ['packages/{crypto,session,files,collab,chat-core}/src/**/*.ts']
 
 export default tseslint.config(

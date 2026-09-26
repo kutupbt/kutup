@@ -74,6 +74,9 @@ pub struct Config {
     /// The VAPID contact (`CHAT_WEB_PUSH_SUBJECT`): a `mailto:` or `https:`
     /// URL push services may use to reach the operator.
     pub chat_web_push_subject: String,
+    /// Where the map relay keeps its tile cache (`MAPS_CACHE_DIR`;
+    /// docs/plans/maps.md). Its size is an administrator setting.
+    pub maps_cache_dir: String,
     /// STUN servers for Chat calls (`CHAT_STUN_URLS`, comma list).
     pub chat_stun_urls: String,
     /// TURN relays for Chat calls (`CHAT_TURN_URLS`, comma list of
@@ -271,6 +274,7 @@ impl Config {
                 crate::web_push::DEFAULT_PUSH_HOSTS,
             ),
             chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
+            maps_cache_dir: get_env("MAPS_CACHE_DIR", ""),
             chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
             chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
             chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),

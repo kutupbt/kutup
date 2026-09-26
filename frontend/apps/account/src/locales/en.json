@@ -23,7 +23,9 @@
     "federation": "Federation",
     "serverSettings": "Server settings",
     "profile": "Profile",
-    "devicesSessions": "Devices & sessions"
+    "devicesSessions": "Devices & sessions",
+    "maps": "Maps",
+    "adminMaps": "Maps"
   },
   "auth": {
     "fields": {
@@ -243,6 +245,27 @@
       "manage": "Manage in Chat",
       "none": "Chat is not set up in any browser yet.",
       "unnamed": "Browser"
+    },
+    "maps": {
+      "title": "Maps",
+      "description": "Maps show shared places and live locations in Chat, and where photos were taken. They are off until you turn them on.",
+      "offByServer": "Maps are turned off on this server.",
+      "show": "Show maps",
+      "enable": "Show maps in Kutup",
+      "enableHint": "Off by default. Without maps, a shared place shows its coordinates and an “Open in maps app” link.",
+      "noticeDirect": "Maps load straight from {{provider}}. It sees your IP address and the areas you look at, which for a friend's shared location or a photo's place is roughly where that is.",
+      "noticeRelay": "Maps load through this Kutup server from {{provider}}. {{provider}} sees only this server; this server sees which areas you look at.",
+      "noticeEncrypted": "The places themselves (shared places, live locations, photo locations) stay end-to-end encrypted and are drawn on the map in your browser.",
+      "provider": "Map provider",
+      "providerHint": "The providers this server offers.",
+      "relay": "Load maps through this server",
+      "relayHint": "The provider then sees this server instead of your address.",
+      "relayEnforced": "This server loads every map for you: providers never see your address.",
+      "relayOff": "Maps load straight from the provider on this server.",
+      "preview": "Preview",
+      "offForYou": "Maps are off for you.",
+      "saved": "Map settings saved",
+      "saveFailed": "The map settings could not be saved."
     }
   },
   "admin": {
@@ -371,6 +394,7 @@
         "userRotateTempPassword": "{{admin}} replaced the temporary password of {{target}}",
         "userWipe": "{{admin}} wiped {{target}}",
         "settingsUpdate": "{{admin}} changed server settings",
+        "mapsSettingsUpdate": "{{admin}} changed the map settings",
         "federationPolicyUpdate": "{{admin}} set {{feature}} federation to {{mode}}",
         "federationRuleUpsert": "{{admin}} changed the federation rule for {{domain}}",
         "federationRuleDelete": "{{admin}} removed the federation rule for {{domain}}",
@@ -507,6 +531,54 @@
         "quarantined": "Quarantined",
         "superseded": "Superseded"
       }
+    },
+    "maps": {
+      "title": "Maps",
+      "description": "Which map providers people may choose, and whether map traffic goes through this server. Kutup stores no map data itself.",
+      "availability": "Availability",
+      "enabled": "Offer maps on this server",
+      "enabledHint": "Off: every map feature is hidden and nothing is ever requested from a map provider.",
+      "providers": "Providers",
+      "providersHint": "People choose among these. Each person's maps stay off until they turn them on.",
+      "provider": {
+        "openfreemap": "OpenFreeMap",
+        "openstreetmap": "OpenStreetMap",
+        "custom": "This server's own tile server"
+      },
+      "providerHint": {
+        "openfreemap": "Free vector maps, no API key.",
+        "openstreetmap": "The OpenStreetMap Foundation's free image tiles, no API key, under its tile usage policy.",
+        "custom": "A tile server you run, e.g. your own OpenFreeMap or OpenStreetMap tile server."
+      },
+      "customName": "Name shown to people",
+      "customKind": "Kind",
+      "kind": {
+        "vector": "Vector (style URL)",
+        "raster": "Raster (image tiles)"
+      },
+      "customUrl": "Address",
+      "customUrlVector": "The style JSON URL, e.g. https://tiles.example.org/styles/liberty",
+      "customUrlRaster": "A tile template with {z}, {x} and {y}, e.g. https://tiles.example.org/{z}/{x}/{y}.png",
+      "customAttribution": "Attribution",
+      "relay": "Relay",
+      "relayHint": "Through the relay, providers see this server rather than people's addresses, and the server sees which areas are viewed.",
+      "relayMode": "Map traffic through this server",
+      "proxy": {
+        "off": "Off",
+        "available": "Each person chooses",
+        "enforced": "Always"
+      },
+      "proxyHint": {
+        "off": "Browsers load maps straight from the provider.",
+        "available": "On by default for each person; they may load maps directly instead.",
+        "enforced": "Every map loads through this server. Needed when your own tile server is only reachable from the server."
+      },
+      "cache": "Relay cache (MB)",
+      "cacheHint": "One cache for everyone; oldest tiles go first. 0 turns it off.",
+      "noCacheWarning": "Without a cache the relay fetches the same tiles again and again, which breaks OpenStreetMap's tile usage policy at any real volume.",
+      "osmPolicy": "Tile usage policy",
+      "saved": "Map settings saved",
+      "saveFailed": "The map settings could not be saved."
     }
   }
 }

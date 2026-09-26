@@ -4,6 +4,7 @@ import {
   Globe,
   HardDrive,
   LayoutGrid,
+  Map,
   MessagesSquare,
   MonitorSmartphone,
   Settings2,
@@ -54,6 +55,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
+          <SidebarNavLink to="/settings/maps" icon={<Map />} label={t('nav.maps')} />
           {session.isAdmin ? (
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
@@ -61,6 +63,7 @@ export function AccountShell() {
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />
               <SidebarNavLink to="/admin/federation" icon={<Globe />} label={t('nav.federation')} />
               <SidebarNavLink to="/admin/settings" icon={<Settings2 />} label={t('nav.serverSettings')} />
+              <SidebarNavLink to="/admin/maps" icon={<Map />} label={t('nav.adminMaps')} />
             </>
           ) : null}
         </>

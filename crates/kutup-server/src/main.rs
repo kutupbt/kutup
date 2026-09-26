@@ -23,6 +23,7 @@ mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod maps;
 mod middleware;
 mod models;
 mod openapi;
@@ -102,6 +103,8 @@ pub struct AppState {
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
     /// Web Push wake-ups for closed browsers; `None` when `CHAT_WEB_PUSH=false`.
     pub(crate) web_push: Option<Arc<web_push::WebPush>>,
+    /// Map providers, people's choices and the tile relay (docs/plans/maps.md).
+    pub(crate) maps: Arc<maps::MapService>,
 }
 
 #[tokio::main]
@@ -302,6 +305,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    let maps =
+        Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -313,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
         mls_ordering,
         storage_probe,
         web_push,
+        maps,
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
@@ -552,6 +558,10 @@ fn build_router(state: AppState) -> Router {
             put(drive_profile_keys::put_profile_key),
         )
         .route("/api/drive/people", get(drive_profile_keys::list_people))
+        // --- Maps (docs/plans/maps.md). ---
+        .route("/api/maps", get(maps::get_config))
+        .route("/api/maps/preferences", put(maps::put_preferences))
+        .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
         .route(
             "/api/collections/:id/federated-shares",
             post(drive_federation::create_federated_share),
@@ -1110,6 +1120,7 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
                 )
+                .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(
                     "/api/admin/federation",
                     get(admin::get_federation_control_plane).put(admin::update_federation_policy),

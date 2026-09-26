@@ -89,6 +89,8 @@ services:
       KUTUP_DRIVE_URL: ${KUTUP_DRIVE_URL:-}
       KUTUP_CHAT_URL: ${KUTUP_CHAT_URL:-}
       KUTUP_OFFICE_URL: ${KUTUP_OFFICE_URL:-}
+      # The map relay's shared tile cache; its size is set on the admin Maps page.
+      MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (email:username:password) — created on first boot; it can
       # never be demoted/disabled/deleted via the API.
       ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
@@ -133,6 +135,8 @@ services:
       RATE_LIMIT_ADMIN_PER_MIN: ${RATE_LIMIT_ADMIN_PER_MIN:-}
       LOGIN_LOCKOUT_THRESHOLD: ${LOGIN_LOCKOUT_THRESHOLD:-}
       LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-}
+    volumes:
+      - maps_cache:/var/cache/kutup-maps
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,3 +220,4 @@ services:
 
 volumes:
   postgres_data:
+  maps_cache:
