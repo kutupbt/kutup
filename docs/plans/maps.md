@@ -62,7 +62,18 @@ offline, no web build. Hosting map data ourselves is future work (below).
    shared place or live location shows as a card with the place's
    coordinates and "Open in maps app", and a photo's location as text; no
    request goes to any provider.
-6. **City search like Ente's:** a world-cities list (e.g. GeoNames
+6. **One shared cache, for the relay only (agreed 2026-09-26).** Direct
+   traffic never touches the server; the browser caches as usual. The relay
+   keeps one cache for all users, sized by the admin, oldest tiles evicted
+   first. It keeps the relay within OpenStreetMap's tile usage policy (no
+   repeated fetches of the same tiles), makes common areas fast, and means
+   the provider sees an occasional fetch rather than every view. Size `0`
+   turns it off and the relay only forwards; the admin page warns that this
+   breaks OpenStreetMap's policy at any real volume. A per-user cache was
+   rejected: its only gain is hiding a timing hint (that *someone* on the
+   server recently viewed an area, never who), at the cost of multiplying
+   disk use and upstream fetches.
+7. **City search like Ente's:** a world-cities list (e.g. GeoNames
    `cities15000`, CC BY 4.0) shipped with the web apps and served from our
    own origin; matching happens on the device. Searching places by name
    through a geocoder is later, and would follow the same provider model.
@@ -85,8 +96,8 @@ offline, no web build. Hosting map data ourselves is future work (below).
   preferences (user); the admin page is in the account app.
 - The proxy serves only the admin-configured upstreams, through the existing
   SSRF-safe client (`crates/kutup-server/src/ssrf.rs`), with bounded paths
-  (`z/x/y`, style, glyphs, sprites) and a size-capped cache that honours
-  upstream cache headers. For vector styles the proxy rewrites the style's
+  (`z/x/y`, style, glyphs, sprites) and the shared cache (decision 6), which
+  honours upstream cache headers. For vector styles the proxy rewrites the style's
   tile, glyph and sprite URLs to its own paths.
 - OpenStreetMap's tile usage policy applies to their servers: an
   identifying User-Agent, no bulk downloads, respect caching. The proxy
@@ -114,9 +125,6 @@ offline, no web build. Hosting map data ourselves is future work (below).
 - Live location in groups: delivering frequent updates without the server
   learning more than message timing, and without exhausting MLS key
   packages.
-- Whether the proxy's cache should be shared across users (fewer upstream
-  requests) or per user (no cross-user timing hints); shared is the
-  default assumption.
 
 ## Future work
 
