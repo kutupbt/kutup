@@ -4,14 +4,19 @@
 //! recipient lists it, opens its key, downloads it, and may save versions
 //! only with edit access; nobody else reaches it; the folder stays closed;
 //! removing someone moves the file to a new key, re-sealed for whoever stays,
-//! and the removed person is refused from then on.
+//! and the removed person is refused from then on. When the folder moves
+//! past the file's key, or someone else re-keys the file, its shares can
+//! read but not edit until the owner re-seals them.
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test file_shares_live -- --nocapture
 
-use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
+use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
+use kutup_crypto::collection_keyring;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
+use kutup_crypto::file_keyring;
 use kutup_crypto::named_share::FileShareEnvelopeV1;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -299,4 +304,181 @@ fn file_share_contract() {
         .unwrap()
         .iter()
         .all(|e| e["file"]["id"] != file.id.as_str()));
+}
+
+fn get(c: &Client, url: String, token: &str) -> Value {
+    bearer(c.get(url), token).send().unwrap().json().unwrap()
+}
+
+#[test]
+fn stale_file_shares_wait_for_the_owner() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::new();
+    let (alice, editor, leaver, carol) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let folder = create_folder(&c, &base, &alice);
+    share(&c, &base, &alice, &folder, &editor, true);
+    share(&c, &base, &alice, &folder, &leaver, false);
+    let file = seal_file(&folder, &uuid(), b"stale");
+    assert!(upload(&c, &base, &alice.token, &folder, &file)
+        .status()
+        .is_success());
+    let status = bearer(
+        c.post(format!("{base}/api/files/{}/share", file.id)),
+        &alice.token,
+    )
+    .json(&json!({ "recipientUserId": carol.id,
+                   "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &carol),
+                   "canEdit": true }))
+    .send()
+    .unwrap()
+    .status();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The owner sees the mark; a folder member does not.
+    let listing = |token: &str| {
+        get(
+            &c,
+            format!("{base}/api/collections/{}/files", folder.id),
+            token,
+        )
+    };
+    assert_eq!(listing(&alice.token)[0]["shared"], true);
+    assert!(listing(&editor.token)[0].get("shared").is_none());
+    let pending = |token: &str| get(&c, format!("{base}/api/file-shares/pending"), token);
+    assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
+    let version = |key: &[u8; 32], generation: u32| {
+        drive_object::encrypt_file_blob(
+            b"v",
+            key,
+            DriveFileBlobContextV1::new(&file.id, generation).unwrap(),
+        )
+        .unwrap()
+    };
+    assert!(
+        post_version(&c, &base, &carol.token, &file.id, version(&file.key, 1))
+            .status()
+            .is_success()
+    );
+
+    // The folder moves to a new key (the leaver removed); the file is behind.
+    let access = get(
+        &c,
+        format!("{base}/api/collections/{}/access", folder.id),
+        &alice.token,
+    );
+    let mut folder2 = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut folder2);
+    let statement = CollectionEpochStatementV1::create(
+        &folder.id,
+        &alice.id,
+        2,
+        access["epochStatementHash"].as_str(),
+        &folder2,
+        alice.identity.authority_signing_key(),
+    )
+    .unwrap();
+    let editor_share = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
+        &folder2,
+        &folder.id,
+        2,
+        &account(&alice),
+        &alice.identity.incarnation_id(),
+        alice.identity.drive_signing_key(),
+        &account(&editor),
+        &editor.identity.incarnation_id(),
+        &editor.identity.drive_hpke_public_key(),
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    let ctx2 = |purpose, revision| {
+        DriveEnvelopeContextV1::new(purpose, 2, revision, &folder.id, &alice.id).unwrap()
+    };
+    let r = bearer(
+        c.post(format!("{base}/api/collections/{}/rotate", folder.id)),
+        &alice.token,
+    )
+    .json(&json!({
+        "fromEpoch": 1,
+        "epochStatement": statement.encode_b64(),
+        "ownerKeyEnvelope": drive_envelope::seal_b64(&folder2, &alice.master_key, ctx2(DriveEnvelopePurpose::CollectionKey, 1)).unwrap(),
+        "previousKeyEnvelope": collection_keyring::seal_previous_key(&folder.key, &folder2, &folder.id, &alice.id, 2).unwrap(),
+        "nameEnvelope": drive_envelope::seal_b64(b"Stale", &folder2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
+        "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],
+        "publicLinks": [],
+        "removed": { "members": [leaver.id] },
+    }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "rotate: {:?}", r.text());
+
+    let carol_entry = |token: &str| {
+        get(&c, format!("{base}/api/shared-files"), token)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["file"]["id"] == file.id.as_str())
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(carol_entry(&carol.token)["folderKeyCurrent"], false);
+    assert_eq!(pending(&alice.token)[0]["fileId"], file.id.as_str());
+    assert_eq!(pending(&carol.token).as_array().unwrap().len(), 0);
+    // The leaver holds the key the file is still under: Carol may not write.
+    assert_eq!(
+        post_version(&c, &base, &carol.token, &file.id, version(&file.key, 1)).status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        download(&c, &base, &carol.token, &file.id).0,
+        StatusCode::OK
+    );
+
+    // The folder's editor re-keys the file; they cannot seal for the owner.
+    let mut key2 = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key2);
+    let r = bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &editor.token)
+        .json(&json!({
+            "fromGeneration": 1,
+            "fileKeyEnvelope": drive_envelope::seal_b64(&key2, &folder2,
+                DriveEnvelopeContextV1::file_key(&file.id, &folder.id, 2, 2).unwrap()).unwrap(),
+            "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#, &key2,
+                DriveEnvelopeContextV1::file_metadata(&file.id, 2, 1).unwrap()).unwrap(),
+            "previousKeyEnvelope": file_keyring::seal_previous_key(&file.key, &key2, &file.id, 2).unwrap(),
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "rekey: {:?}", r.text());
+    let entry = carol_entry(&carol.token);
+    assert_eq!(entry["folderKeyCurrent"], true);
+    assert_eq!(entry["keyGeneration"], 1);
+    assert_eq!(entry["file"]["keyGeneration"], 2);
+    assert_eq!(pending(&alice.token).as_array().unwrap().len(), 1);
+    assert_eq!(
+        post_version(&c, &base, &carol.token, &file.id, version(&key2, 2)).status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // The owner re-seals: Carol edits again, nothing is pending.
+    let r = bearer(c.put(format!("{base}/api/files/{}/shares", file.id)), &alice.token)
+        .json(&json!({ "members": [{ "userId": carol.id,
+                                     "shareEnvelope": file_share(&alice, &file.id, &key2, 2, &carol) }] }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
+    assert_eq!(carol_entry(&carol.token)["keyGeneration"], 2);
+    assert!(
+        post_version(&c, &base, &carol.token, &file.id, version(&key2, 2))
+            .status()
+            .is_success()
+    );
 }

@@ -108,6 +108,10 @@ pub struct SharedFile {
     pub can_edit: bool,
     /// The generation the envelope opens.
     pub key_generation: i32,
+    /// The file's key is wrapped at its folder's current epoch. When it is
+    /// not, or `key_generation` is behind the file's, the share waits for the
+    /// owner: it can be read, not edited.
+    pub folder_key_current: bool,
     pub owner_user_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
@@ -525,6 +529,7 @@ pub async fn shared_with_me(
                   JOIN collections sc ON sc.id = sf.collection_id AND sc.deleted_at IS NULL
                   WHERE fs.recipient_user_id = $1)",
         user_id,
+        user_id,
     )
     .await?;
     type Row = (
@@ -532,6 +537,7 @@ pub async fn shared_with_me(
         String,
         bool,
         i32,
+        bool,
         OffsetDateTime,
         Uuid,
         Option<String>,
@@ -539,8 +545,8 @@ pub async fn shared_with_me(
         Option<String>,
     );
     let shares: Vec<Row> = sqlx::query_as(
-        "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation, fs.created_at,
-                c.owner_user_id, o.username, o.account_incarnation_id, o.drive_signing_public_key
+        "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
+                f.key_epoch = c.key_epoch, fs.created_at, c.owner_user_id, o.username, o.account_incarnation_id, o.drive_signing_public_key
          FROM file_shares fs
          JOIN files f ON f.id = fs.file_id
          JOIN collections c ON c.id = f.collection_id
@@ -563,6 +569,7 @@ pub async fn shared_with_me(
                     envelope,
                     can_edit,
                     key_generation,
+                    folder_key_current,
                     shared_at,
                     owner,
                     username,
@@ -574,12 +581,57 @@ pub async fn shared_with_me(
                     share_envelope: envelope,
                     can_edit,
                     key_generation,
+                    folder_key_current,
                     owner_user_id: owner,
                     owner_account: format!("{}@{domain}", username?),
                     owner_incarnation_id: incarnation,
                     owner_signing_public_key: signing?,
                     shared_at,
                 })
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingFileShare {
+    pub file_id: Uuid,
+    pub collection_id: Uuid,
+}
+
+/// `GET /api/file-shares/pending` — your files whose shares wait for you:
+/// someone else moved the file to a new key, or the folder moved past the
+/// key the file is wrapped at. Your app re-keys the file if needed and
+/// re-seals the shares (`PUT /api/files/{id}/shares`).
+#[utoipa::path(
+    get,
+    path = "/api/file-shares/pending",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Files with shares to bring up to date", body = Vec<PendingFileShare>))
+)]
+pub async fn pending(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<PendingFileShare>>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT DISTINCT f.id, f.collection_id
+         FROM file_shares fs
+         JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+         JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+         WHERE c.owner_user_id = $1
+           AND (fs.key_generation < f.key_generation OR f.key_epoch < c.key_epoch)",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(file_id, collection_id)| PendingFileShare {
+                file_id,
+                collection_id,
             })
             .collect(),
     ))

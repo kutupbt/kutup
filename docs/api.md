@@ -1070,6 +1070,54 @@ asset download carries `X-Kutup-Key-Generation`. Each object opens with the
 file key of its own generation, reached from the current key through
 `keyHistory` wherever the file is.
 
+### Sharing a single file
+
+A file can be shared by itself with someone on this server, like Proton Drive
+and CryptPad (docs/plans/drive-file-sharing.md). They get the file's own key in
+a `FileShareEnvelopeV1` (magic `KUTPFS1`), bound to the file id, the file key
+generation, both accounts and both incarnations, and signed with the owner's
+Drive key. They never get the folder's key. Only the folder's owner shares.
+A file share lets its recipient open, download, list versions and join the
+collaboration socket (read-only for view). With edit, the recipient can also
+save versions, thumbnails and live edits, but only while the share opens the
+file's current key generation and that key is wrapped at the folder's current
+epoch. Otherwise `403`, and the share waits for the owner. Rename, move,
+delete and share stay with the owner. A file in the trash is out of reach
+through its shares.
+
+- **`POST /api/files/:id/share`**: owner only. **Body:** `{ recipientUserId,
+  shareEnvelope, canEdit }`. The envelope must be at the file's current
+  generation, sealed to that exact account (`400` otherwise). Sharing again
+  replaces the envelope and permission. `204`.
+- **`GET /api/files/:id/access`**: owner only. `{ keyGeneration, members:
+  [{ userId, account, accountIncarnationId, drivePublicKey,
+  driveSigningPublicKey, canEdit, keyGeneration, createdAt }] }`. A member
+  whose `keyGeneration` is below the file's is waiting to be re-sealed.
+- **`POST /api/files/:id/rotate`**: remove people, owner only, all or
+  nothing. **Body:** `{ fromGeneration, fileKeyEnvelope, metadataEnvelope,
+  previousKeyEnvelope, members: [{ userId, shareEnvelope }], removed: [userId]
+  }`. It uses the same new-generation envelopes as `rekey`, wrapped at the
+  folder's current epoch, plus an envelope at the new generation for everyone
+  who stays. Kept plus removed must be exactly the file's people and `removed`
+  must not be empty, else `409`. Collaboration sockets on the file are
+  closed. **Response:** the new `FileAccess`.
+- **`PUT /api/files/:id/shares`**: owner only. **Body:** `{ members: [{
+  userId, shareEnvelope }] }`. It re-seals shares left at an older generation
+  (someone else re-keyed the file) at the current one. `204`.
+- **`GET /api/file-shares/pending`**: the caller's files with shares to bring
+  up to date, `[{ fileId, collectionId }]`. These are shares below the file's
+  generation, or a file wrapped below its folder's epoch. The owner's Drive
+  re-keys the file if needed and re-seals.
+- **`GET /api/shared-files`**: files shared with the caller. `[{ file:
+  FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent,
+  ownerUserId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
+  sharedAt }]`. With `keyGeneration` below `file.keyGeneration`, the current
+  metadata cannot be opened yet. With `folderKeyCurrent: false`, the file
+  opens but edits wait.
+
+In a folder listing, a file shared by itself carries `shared: true`, for the
+folder's owner only.
+
 ### POST /api/files/:id/move
 
 Move a file to another folder of the same owner (docs/plans/drive-move.md).

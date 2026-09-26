@@ -66,7 +66,8 @@
       "other": "Diğer dosyalar"
     },
     "selectAll": "Tümünü seç",
-    "showPreviews": "Önizlemeleri göster"
+    "showPreviews": "Önizlemeleri göster",
+    "sharedFile": "Paylaşıldı"
   },
   "newMenu": {
     "new": "Yeni",
@@ -249,11 +250,26 @@
       "changed": "Bu arada erişim değişti. Listeyi kontrol edip yeniden deneyin.",
       "recipientChanged": "{{account}} hesabını sıfırladı. Onu çıkarın, isterseniz sonra yeniden paylaşın.",
       "failed": "Erişim kaldırılamadı. Yeniden deneyin."
+    },
+    "shareFile": {
+      "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
+      "recipient": "E-posta",
+      "recipientHint": "Bu sunucuda hesabı olan biri.",
+      "canEdit": "Düzenleyebilir",
+      "canEditHint": "Dosyayı değiştirip sürüm kaydedebilirler. Bu olmadan yalnızca görüntüleyebilirler. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
+      "canEditShort": "Düzenleyebilir",
+      "note": "Aynı kişiyle yeniden paylaşmak neler yapabileceğini değiştirir.",
+      "notFound": "Bu sunucuda bu e-postaya sahip kimse yok. Dosyalar henüz başka sunucularla paylaşılamıyor.",
+      "self": "Bu sizin kendi hesabınız.",
+      "failed": "Dosya paylaşılamadı.",
+      "empty": "Bu dosyayı yalnızca klasörünü açabilenler açabilir.",
+      "updating": "erişim güncelleniyor",
+      "confirmBody": "Erişimlerini hemen kaybederler ve dosya asla alamayacakları yeni bir anahtara geçer: bundan sonra değişen hiçbir şeyi okuyamazlar. Daha önce açtıkları veya indirdikleri onlarda kalır."
     }
   },
   "shared": {
     "emptyTitle": "Henüz sizinle bir şey paylaşılmadı",
-    "emptyDescription": "Başkalarının sizinle paylaştığı klasörler, diğer Kutup sunucularından gelenler dahil, burada görünür.",
+    "emptyDescription": "Başkalarının sizinle paylaştığı klasörler ve dosyalar, diğer Kutup sunucularından gelen klasörler dahil, burada görünür.",
     "from": "{{account}} tarafından",
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
@@ -270,7 +286,11 @@
     "leave": "Ayrıl",
     "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",
     "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Drive'ınızdan kalkar. Sizi yeniden davet edebilir.",
-    "leaveFailed": "Klasörden ayrılınamadı."
+    "leaveFailed": "Klasörden ayrılınamadı.",
+    "waitingName": "Sahibi bekleniyor",
+    "waiting": "sahibinin erişimi güncellemesi bekleniyor",
+    "editsWait": "sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
+    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Drive’ı yeniden açtığında açılır."
   },
   "trash": {
     "empty": "Çöp kutusunu boşalt",
@@ -451,7 +471,9 @@
     "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
     "noPreviewTitle": "Bu dosya türü için önizleme yok",
     "noPreview": "Cihazında açmak için indir.",
-    "restoring": "Geri yükleniyor…"
+    "restoring": "Geri yükleniyor…",
+    "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme"
   },
   "search": {
     "label": "Drive'da ara",

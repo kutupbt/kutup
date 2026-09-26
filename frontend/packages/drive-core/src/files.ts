@@ -16,7 +16,7 @@ export const filesKey = (folderId: string) => ['files', folderId] as const
 export const folderFilesKey = (folder: Pick<Folder, 'id' | 'remoteShareId' | 'keyEpoch'>) =>
   [...filesKey(folder.remoteShareId ?? folder.id), folder.keyEpoch] as const
 
-type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
+export type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
   uploaderUserId?: string
   updatedAt?: string
 }
@@ -33,7 +33,14 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
       .catch(() => null)
     opened.set(cacheKey, pending)
   }
-  const result = await pending
+  return toDriveFile(row, await pending)
+}
+
+/** A listed file, from its row and what opening it gave (null: it did not open). */
+export function toDriveFile(
+  row: FileRowLike,
+  result: { fileKey: Uint8Array; metadata: { name: string; mimeType: string; size: number } } | null,
+): DriveFile {
   const name = result?.metadata.name ?? null
   return {
     id: row.id,
@@ -55,6 +62,7 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
     updatedAt: row.updatedAt ?? row.createdAt,
     thumbnails: row.thumbnails ?? {},
     thumbnailStale: row.thumbnailStale ?? false,
+    shared: row.shared ?? false,
   }
 }
 

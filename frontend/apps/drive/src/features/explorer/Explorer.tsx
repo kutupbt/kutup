@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, MoreHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, MoreHorizontal, Users } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
@@ -401,6 +401,17 @@ function SortHeader({
   )
 }
 
+/** A file shared by itself, as its owner sees it. */
+function SharedMark() {
+  const { t } = useTranslation()
+  return (
+    <span className="inline-flex shrink-0 text-muted-foreground" title={t('explorer.sharedFile')}>
+      <Users className="size-3.5" aria-hidden />
+      <span className="sr-only">{t('explorer.sharedFile')}</span>
+    </span>
+  )
+}
+
 function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor, rowProps }: ExplorerProps & { rowProps: RowProps }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
@@ -437,8 +448,9 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
                   <div className="flex min-w-0 items-center gap-3">
                     <KindIcon kind={item.kind} color={item.color} className="size-5" />
                     <div className="min-w-0">
-                      <p className={cn('truncate', item.type === 'folder' && 'font-medium')} title={item.name}>
-                        {item.name}
+                      <p className={cn('flex min-w-0 items-center gap-1.5', item.type === 'folder' && 'font-medium')} title={item.name}>
+                        <span className="truncate">{item.name}</span>
+                        {item.shared ? <SharedMark /> : null}
                       </p>
                       {subtitleFor ? <p className="truncate text-xs text-muted-foreground">{subtitleFor(item)}</p> : null}
                       <p className="text-xs text-muted-foreground sm:hidden">{formatFileDate(item.modifiedAt, lang)}</p>
@@ -500,6 +512,7 @@ function GridView({ items, selection, actionsFor, renderPreview, rowProps }: Exp
               <p className="min-w-0 flex-1 truncate text-sm" title={item.name}>
                 {item.name}
               </p>
+              {item.shared ? <SharedMark /> : null}
               <RowMenu item={item} actions={actionsFor(item)} />
             </div>
             <div

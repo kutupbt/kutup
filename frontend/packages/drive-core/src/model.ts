@@ -9,7 +9,12 @@ export const ROOT_NAME = 'My Files'
  * none of them branch on where a folder came from — only on what it allows.
  */
 export interface Folder {
-  source: 'owned' | 'shared' | 'remote'
+  /**
+   * `file`: not a folder the account can open, only the place a file shared
+   * by itself lives (docs/plans/drive-file-sharing.md). It has no key, name
+   * or listing; the file opens with its own key.
+   */
+  source: 'owned' | 'shared' | 'remote' | 'file'
   /** The collection id (for a remote share, the collection on the other server). */
   id: string
   /** Present for remote shares: the local id of the incoming share. */
@@ -67,6 +72,8 @@ export interface DriveFile {
   thumbnails: { sm?: string; lg?: string; smKeyGeneration?: number; lgKeyGeneration?: number }
   /** Drawn from something other than the latest content: redraw. */
   thumbnailStale: boolean
+  /** The owner shared it with someone by itself. */
+  shared: boolean
 }
 
 /** Where a folder's files come from and go to. */

@@ -543,6 +543,24 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · single-file sharing, slices 2 and 3
+
+Slice 1 is done: one file shared with people on this server, with view or
+edit, removal by re-keying, and owner re-seal (docs/plans/drive-file-sharing.md).
+Two slices remain:
+
+- **Slice 2:** sharing a file with someone on another server. This needs a
+  file invite (a capability for one file), with reads and writes through the
+  recipient's server, as for federated folders.
+- **Slice 3:** a public link to one file. `public_shares` already reserves
+  `share_type` for this.
+
+A few more items come later:
+
+- Editors who can rename or share a file.
+- "Shared by me".
+- Shared files in Drive search.
+
 ### Federation polish
 
 Cross-server presence indicators in collab, outgoing Drive-share revocation,

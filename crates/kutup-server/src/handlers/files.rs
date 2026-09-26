@@ -122,7 +122,7 @@ pub async fn list_files(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let out = file_rows(&state.pool, "f.collection_id = $1", coll_id).await?;
+    let out = file_rows(&state.pool, "f.collection_id = $1", coll_id, user_id).await?;
     Ok(Json(out).into_response())
 }
 
@@ -556,10 +556,13 @@ async fn require_owner_or_uploader_with_delete(
 /// File records as the folder listing returns them, for the files matching
 /// `filter` (an SQL condition on `f` with one UUID parameter, `$1`): a
 /// folder's files, or the files shared with someone by themselves.
+/// The files matching `filter` (on `f`, with `$1` = `id`), as `viewer` sees
+/// them.
 pub(crate) async fn file_rows(
     pool: &sqlx::PgPool,
     filter: &str,
     id: Uuid,
+    viewer: Uuid,
 ) -> Result<Vec<FileRow>, sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -582,6 +585,7 @@ pub(crate) async fn file_rows(
         original_key_generation: i32,
         content_key_generation: i32,
         key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
+        shared: bool,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.uploader_user_id,
@@ -600,7 +604,12 @@ pub(crate) async fn file_rows(
                       AND t.source_version IS DISTINCT FROM (
                         SELECT v.id FROM file_versions v WHERE v.file_id = f.id
                         ORDER BY v.created_at DESC LIMIT 1)
-                  ) AS thumb_stale
+                  ) AS thumb_stale,
+                  -- Only the owner learns whom a file is shared with.
+                  EXISTS (
+                    SELECT 1 FROM file_shares fs JOIN collections oc ON oc.id = f.collection_id
+                    WHERE fs.file_id = f.id AND oc.owner_user_id = $2
+                  ) AS shared
            FROM files f
            LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
            LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
@@ -611,6 +620,7 @@ pub(crate) async fn file_rows(
         filter
     ))
     .bind(id)
+    .bind(viewer)
     .fetch_all(pool)
     .await?;
 
@@ -638,6 +648,7 @@ pub(crate) async fn file_rows(
             original_key_generation: r.original_key_generation,
             content_key_generation: r.content_key_generation,
             key_history: r.key_history.0,
+            shared: r.shared,
         })
         .collect())
 }

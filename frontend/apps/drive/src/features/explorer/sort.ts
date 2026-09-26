@@ -12,6 +12,8 @@ export interface ExplorerItem {
   modifiedAt: string
   /** A folder's chosen colour (hex), if any. */
   color?: string | null
+  /** A file its owner shared by itself: marked for the owner. */
+  shared?: boolean
 }
 
 /** Stable selection key: folders and files share one list, and their ids do not. */

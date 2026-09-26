@@ -66,7 +66,8 @@
       "other": "Other files"
     },
     "selectAll": "Select all",
-    "showPreviews": "Show previews"
+    "showPreviews": "Show previews",
+    "sharedFile": "Shared"
   },
   "newMenu": {
     "new": "New",
@@ -249,11 +250,26 @@
       "changed": "Who has access changed meanwhile. Check the list and try again.",
       "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to.",
       "failed": "Access could not be removed. Try again."
+    },
+    "shareFile": {
+      "description": "They get this file's own key, never its folder's. They see only this file.",
+      "recipient": "Email",
+      "recipientHint": "Someone with an account on this server.",
+      "canEdit": "Can edit",
+      "canEditHint": "They can change it and save versions. Without this they can only view it. Only you can rename, move or delete it.",
+      "canEditShort": "Can edit",
+      "note": "Sharing again with the same person changes what they can do.",
+      "notFound": "No one on this server has that email. Files cannot be shared with other servers yet.",
+      "self": "This is your own account.",
+      "failed": "The file could not be shared.",
+      "empty": "Only people who can open its folder can open this file.",
+      "updating": "access being updated",
+      "confirmBody": "They lose access now, and the file moves to a new key they never get: nothing changed from now on is readable to them. What they already opened or downloaded stays with them."
     }
   },
   "shared": {
     "emptyTitle": "Nothing shared with you yet",
-    "emptyDescription": "Folders other people share with you appear here, including ones from other Kutup servers.",
+    "emptyDescription": "Folders and files other people share with you appear here, including folders from other Kutup servers.",
     "from": "From {{account}}",
     "addInvite": "Add from invite link",
     "invite": {
@@ -270,7 +286,11 @@
     "leave": "Leave",
     "leaveTitle": "Leave this shared folder?",
     "leaveDescription": "“{{name}}” from {{account}} disappears from your Drive. They can invite you again.",
-    "leaveFailed": "Could not leave the folder."
+    "leaveFailed": "Could not leave the folder.",
+    "waitingName": "Waiting for the owner",
+    "waiting": "waiting for the owner to update access",
+    "editsWait": "view only until the owner updates access",
+    "waitingHint": "This file moved to a new key. It opens once its owner opens Kutup Drive again."
   },
   "trash": {
     "empty": "Empty trash",
@@ -451,7 +471,9 @@
     "loadFailed": "It could not be loaded. Check your connection and try again.",
     "noPreviewTitle": "No preview for this kind of file",
     "noPreview": "Download it to open it on your device.",
-    "restoring": "Restoring…"
+    "restoring": "Restoring…",
+    "waitingForOwner": "This file moved to a new key, and its owner has not updated your access yet. It opens once they open Kutup Drive again.",
+    "editsWait": "View only until the owner updates access"
   },
   "search": {
     "label": "Search Drive",

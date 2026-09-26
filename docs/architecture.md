@@ -189,6 +189,14 @@ use the same cryptographic envelope; federation adds only signed routing and a
 domain-bound delivery capability. The server stores the envelope but cannot
 open the collection key.
 
+A single file can also be shared by itself (docs/plans/drive-file-sharing.md).
+A `FileShareEnvelopeV1`, sealed and signed the same way, carries that file's
+own key, bound to the file and its key generation. The recipient never gets
+the folder's key. Removing someone moves the file to a new key, re-sealed for
+whoever stays. When the file moves to a new key another way (a folder member
+re-keys it after the folder rotated), its shares can read what they had but
+cannot edit. The owner's Drive re-seals them the next time it is open.
+
 People who share a folder also give each other their profile key, in a
 `ProfileKeyEnvelopeV1` sealed and signed the same way, so Drive shows names
 and pictures from the end-to-end encrypted profile. The server accepts one

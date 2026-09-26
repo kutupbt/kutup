@@ -12,17 +12,17 @@ use uuid::Uuid;
 /// of the file itself with "can edit". A read-only recipient may open and
 /// download, nothing more.
 pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, bool>(
+    sqlx::query_scalar::<_, bool>(&format!(
         r#"SELECT c.owner_user_id = $2
                   OR EXISTS(SELECT 1 FROM collection_shares cs
                             WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
                               AND cs.can_upload)
                   OR EXISTS(SELECT 1 FROM file_shares fs
                             WHERE fs.file_id = f.id AND fs.recipient_user_id = $2
-                              AND fs.can_edit)
+                              AND fs.can_edit AND {FILE_SHARE_CURRENT})
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
-    )
+    ))
     .bind(file_id)
     .bind(user_id)
     .fetch_optional(pool)
@@ -31,6 +31,15 @@ pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool
     .flatten()
     .unwrap_or(false)
 }
+
+/// A file share allows edits only while it opens the file's current key and
+/// that key is wrapped at the folder's current epoch: otherwise what the
+/// editor writes would be readable by someone removed from the folder, or
+/// sealed under a key the owner has not handed on yet. The owner's app brings
+/// such shares up to date (docs/plans/drive-file-sharing.md); meanwhile the
+/// recipient can still read. Aliases: `fs`, `f`, `c`.
+pub const FILE_SHARE_CURRENT: &str =
+    "fs.key_generation = f.key_generation AND f.key_epoch = c.key_epoch";
 
 /// Locks the user's row, which serialises every Drive charge to them, and
 /// returns how many more bytes they may store: quota − used − what their

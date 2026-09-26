@@ -168,17 +168,18 @@ enum Access {
 /// `None` when the file (or its folder) is gone.
 async fn file_access(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> Option<Access> {
     // A folder share or a share of the file itself; either may allow edits.
-    let row: Option<(bool, Option<bool>)> = sqlx::query_as(
+    let row: Option<(bool, Option<bool>)> = sqlx::query_as(&format!(
         r#"SELECT c.owner_user_id = $2,
                   (SELECT bool_or(can) FROM (
                        SELECT cs.can_upload AS can FROM collection_shares cs
                         WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
                        UNION ALL
-                       SELECT fs.can_edit FROM file_shares fs
+                       SELECT fs.can_edit AND {current} FROM file_shares fs
                         WHERE fs.file_id = f.id AND fs.recipient_user_id = $2) shares)
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
-    )
+        current = crate::drive_writes::FILE_SHARE_CURRENT,
+    ))
     .bind(file_id)
     .bind(user_id)
     .fetch_optional(pool)

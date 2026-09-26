@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -38,16 +39,24 @@ function UnauthenticatedHandler() {
   return null
 }
 
+/** Files shared by themselves follow the owner's key changes (docs/plans/drive-file-sharing.md). */
+function FileSharesUpkeep() {
+  useKeepFileSharesCurrent()
+  return null
+}
+
 /** Everything behind the session: the Drive shell and its pages. */
 function SignedIn() {
   return (
     <Boot>
       <UnauthenticatedHandler />
+      <FileSharesUpkeep />
       <ThumbnailRefresh />
       <CurrentFolderProvider>
         <Routes>
           {/* A file opens full screen, outside the Drive frame. */}
           <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
+          <Route path="/shared/file/:fid" element={<FileEditorPage shared />} />
           <Route element={<DriveShell primaryAction={<NewMenu />} />}>
             <Route index element={<FolderPage />} />
             <Route path="/folders/:id" element={<FolderPage />} />

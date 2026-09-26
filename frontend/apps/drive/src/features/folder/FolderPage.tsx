@@ -17,7 +17,9 @@ import { ColorDialog } from '../dialogs/ColorDialog'
 import { FolderPickerDialog } from '../dialogs/FolderPickerDialog'
 import { LinkDialog } from '../dialogs/LinkDialog'
 import { NameDialog } from '../dialogs/NameDialog'
+import { FileShareDialog } from '../dialogs/FileShareDialog'
 import { ShareDialog } from '../dialogs/ShareDialog'
+import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '../drive/copy'
@@ -45,6 +47,8 @@ type Dialog =
   | { kind: 'rename'; target: Target }
   | { kind: 'color'; folder: Folder }
   | { kind: 'share'; folder: Folder }
+  /** By key: the file's own key changes as people are removed, the list refreshes it. */
+  | { kind: 'shareFile'; key: string }
   | { kind: 'link'; url: string }
   | { kind: 'invite'; url: string; account: string }
   | { kind: 'copy'; targets: Target[] }
@@ -161,6 +165,7 @@ export function FolderPage() {
         kind: file.kind,
         size: file.name ? file.size : null,
         modifiedAt: file.updatedAt,
+        shared: file.shared,
       }
       list.push(item)
       lookup.set(itemKey(item), { folder, file })
@@ -283,6 +288,9 @@ export function FolderPage() {
         actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
         if (mayMove(target)) {
           actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
+        }
+        if (canShareFile(container, file)) {
+          actions.push({ id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'shareFile', key: itemKey(item) }), separated: true })
         }
         if (mayChangeFile(container, file) && container.source !== 'remote') {
           actions.push({ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true })
@@ -661,6 +669,13 @@ export function FolderPage() {
         folder={dialog?.kind === 'share' ? dialog.folder : null}
         onClose={() => setDialog(null)}
         onInvite={(url, account) => setDialog({ kind: 'invite', url, account })}
+      />
+      <FileShareDialog
+        target={(() => {
+          const target = dialog?.kind === 'shareFile' ? lookup.get(dialog.key) : undefined
+          return target?.file ? { folder: target.folder, file: target.file } : null
+        })()}
+        onClose={() => setDialog(null)}
       />
       <LinkDialog
         link={dialog?.kind === 'link' ? dialog.url : null}

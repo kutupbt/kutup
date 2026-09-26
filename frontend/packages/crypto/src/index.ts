@@ -89,6 +89,7 @@ export {
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
 export {
   createFileRecordV1,
+  openFileMetadataV1,
   openFileRecordV1,
   rekeyFileRecordV1,
   renameFileRecordV1,

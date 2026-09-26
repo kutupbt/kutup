@@ -18,6 +18,7 @@ import { downloadFile, FsaRequiredError } from '../drive/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
+import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
@@ -53,7 +54,7 @@ type Opened =
   /** Nothing in the browser opens it: offer the download. */
   | { kind: 'none' }
 
-type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed'
+type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed' | 'waitingForOwner'
 
 interface Keys {
   /** Where new saves and frames go: the file's current key and generation. */
@@ -67,19 +68,28 @@ interface Keys {
  * collaborative text editor, office documents in OnlyOffice, whiteboards in
  * Excalidraw; images, PDFs and media in a viewer; anything else offers its
  * download. Keyed by the file, so moving to another file starts afresh.
+ *
+ * `/shared/file/:fid` (`shared`): a file someone shared by itself
+ * (docs/plans/drive-file-sharing.md). It opens with its own key; there is no
+ * folder behind it.
  */
-export function FileEditorPage() {
+export function FileEditorPage({ shared = false }: { shared?: boolean }) {
   const { cid = '', fid = '' } = useParams()
-  return <OpenFile key={`${cid}/${fid}`} cid={cid} fid={fid} />
+  return <OpenFile key={`${shared ? 'shared' : cid}/${fid}`} cid={shared ? null : cid} fid={fid} />
 }
 
-function OpenFile({ cid, fid }: { cid: string; fid: string }) {
+function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const folders = useFolders()
-  const folder = folders.data?.byId.get(cid)
-  const files = useFolderFiles(folder)
-  const file = files.data?.find((f) => f.id === fid)
+  const inFolder = folders.data?.byId.get(cid ?? '')
+  const folderFiles = useFolderFiles(inFolder)
+  const sharedFiles = useSharedFiles({ enabled: cid === null })
+  const sharedFile = cid === null ? sharedFiles.data?.find((s) => s.file.id === fid) : undefined
+  const folder = cid === null ? sharedFile?.container : inFolder
+  const file = cid === null ? sharedFile?.file : folderFiles.data?.find((f) => f.id === fid)
+  // Either the folder's listing or, for a file shared by itself, the list of those.
+  const files = cid === null ? sharedFiles : folderFiles
 
   // The folder and file as they were when the file opened. Their keys are
   // what the editors hold: a rename refetches the list, which decrypts fresh
@@ -93,20 +103,22 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
   // Bumped to remount a whole-file editor on restored content.
   const [generation, setGeneration] = useState(0)
 
-  const listsLoaded = folders.isSuccess && (!folder?.key || files.isSuccess)
+  const listsLoaded = cid === null ? files.isSuccess : folders.isSuccess && (!folder?.key || files.isSuccess)
   const refetching = folders.isFetching || files.isFetching
   useEffect(() => {
     if (picked || !listsLoaded) return
-    if (folder && file) setPicked({ folder, file })
+    if (sharedFile?.state === 'waiting') setFailure('waitingForOwner')
+    else if (folder && file) setPicked({ folder, file })
     // A document just created from New may not be in the cached list yet:
     // only a list fresh from the server can say the file is not there.
     else if (!refetching) setFailure(folders.isError || files.isError ? 'loadFailed' : 'notFound')
-  }, [picked, listsLoaded, refetching, folder, file, folders.isError, files.isError])
+  }, [picked, listsLoaded, refetching, folder, file, sharedFile?.state, folders.isError, files.isError])
 
   useEffect(() => {
     if (!picked) return
     const { folder: container, file: f } = picked
-    if (!container.key || !f.fileKey || !f.name) {
+    // A file shared by itself has no folder key: its own is enough.
+    if ((!container.key && container.source !== 'file') || !f.fileKey || !f.name) {
       setFailure('undecryptable')
       return
     }
@@ -212,6 +224,7 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       // As the file opened: an editor stays one for the session (the server
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload}
+      notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
       mayRename={liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)}
       onRestored={(bytes) => {
         if (opened.kind === 'office' || opened.kind === 'whiteboard') {
@@ -280,6 +293,7 @@ function Workspace({
   opened,
   keys,
   readOnly,
+  notice,
   mayRename,
   onRestored,
 }: {
@@ -290,6 +304,8 @@ function Workspace({
   keys: Keys
   /** A view-only share: editors open read-only, nothing is saved. */
   readOnly: boolean
+  /** Why an editor opened read-only when that is not its share. */
+  notice: string | null
   mayRename: boolean
   onRestored: (bytes: Uint8Array) => void
 }) {
@@ -347,7 +363,12 @@ function Workspace({
     <div className="flex h-svh flex-col overflow-hidden bg-background">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-2 sm:px-3">
         <Button variant="ghost" size="icon" asChild>
-          <Link to={folderPath(folder)} aria-label={t('file.backTo', { folder: folder.isRoot ? t('nav.myFiles') : folder.name })}>
+          <Link
+            to={folderPath(folder)}
+            aria-label={t('file.backTo', {
+              folder: folder.isRoot ? t('nav.myFiles') : folder.source === 'file' ? t('nav.shared') : folder.name,
+            })}
+          >
             <ArrowLeft />
           </Link>
         </Button>
@@ -365,6 +386,11 @@ function Workspace({
           <span className="min-w-0 truncate px-1.5 text-sm font-medium">{name}</span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {notice ? (
+            <span className="hidden rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground sm:inline" title={notice}>
+              {notice}
+            </span>
+          ) : null}
           {wholeFile && readOnly ? (
             <ViewOnlyActions fileId={file.id} />
           ) : wholeFile ? (

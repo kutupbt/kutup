@@ -56,6 +56,8 @@ export interface FileRow {
   contentKeyGeneration: number
   /** The file's older keys, generations 2 to `keyGeneration` in order. */
   keyHistory?: FileKeyHistoryEntry[]
+  /** Shared with someone by itself; only its owner is told. */
+  shared?: boolean
 }
 
 export interface UserRow {

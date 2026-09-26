@@ -1,7 +1,8 @@
 # Drive: sharing a single file
 
-**Status:** proposed 2026-09-26 (product owner asked for it: "share just a
-file like CryptPad and Proton Drive"). Branch `feat/frontend-rewrite`.
+**Status:** slice 1 (local) implemented 2026-09-26. Slices 2 and 3 are
+open. The product owner asked for it: "share just a file like CryptPad and
+Proton Drive". Branch `feat/frontend-rewrite`.
 
 ## Why
 
@@ -29,7 +30,9 @@ the folder key names the folder. So a person can be given one file's key.
   its own magic and HPKE info): the file's current key, HPKE-sealed to the
   recipient's Drive key and signed with the owner's Drive signing key; bound
   to the file id, the file key generation, both accounts and both
-  incarnations. Canonical vector; Rust, WASM and TS like the folder one.
+  incarnations. Rust, WASM and TS like the folder one, with round-trip
+  tests (the HPKE seal is randomized, so there is no fixed vector, as for
+  the folder envelope).
 - The recipient opens it, then everything else as today: the name and
   metadata, and older generations through the file's key history
   (`file_keyring::key_at`). No folder key is ever given.
@@ -59,14 +62,22 @@ what they already had, never anything newer.
 ### When the folder's key changes
 
 When someone is removed from the *folder*, files move to a new generation
-lazily, when first written. If that write is by the owner, the owner's app
-re-seals the file's single-file shares in the same step. If it is by
-another folder member, they cannot sign for the owner: the file's shares
-wait at the old generation (recipients see "Waiting for the owner to
-update access"; they can still open what they had), and the owner's app
-re-seals them the next time Drive is open there, as it does for profile
-keys. A file moved out of its owner's folders loses its single-file
-shares.
+lazily, when first written. Until then, and until the owner re-seals after
+anyone else re-keys the file, its shares wait:
+
+- **The file is wrapped below the folder's epoch.** Someone who left the
+  folder holds its key. Recipients can open it but not edit it; the server
+  refuses their writes, and the editor shows "View only until the owner
+  updates access".
+- **The file is at a newer generation than a share.** A folder member
+  re-keyed it and cannot sign for the owner. The recipient cannot open the
+  current name or content yet and sees "Waiting for the owner to update
+  access".
+
+While Drive is open, the owner's app polls `GET /api/file-shares/pending`
+(every minute). It re-keys such files if needed and re-seals their shares.
+Sharing a file does the same first. Files move only between one owner's
+folders, and a move keeps the key generation, so shares survive a move.
 
 ### Server
 
@@ -96,6 +107,25 @@ shares.
    write through the recipient's server, like folder federation.
 3. **Public link to a single file:** `public_shares` already reserves
    `share_type` for it; a link key sealing the file key.
+
+## Implementation (slice 1)
+
+- Crypto: `FileShareEnvelopeV1` in `crates/kutup-crypto/src/named_share.rs`,
+  exposed through WASM and `@kutup/crypto`, plus `openFileMetadataV1`, which
+  opens a file's metadata with its own key.
+- Server: `file_shares` (migration 059) and
+  `crates/kutup-server/src/handlers/file_shares.rs`. The access helpers also
+  accept a file share, with the "current key" rule for edits
+  (`drive_writes::FILE_SHARE_CURRENT`). Live test:
+  `crates/kutup-server/tests/file_shares_live.rs`.
+- Web: `@kutup/drive-core/fileShares` (list, share, remove, keep current).
+  In Drive:
+  - "Share" on your own files, with a dialog and access list
+    (`FileShareDialog`);
+  - a "Shared" mark;
+  - files under "Shared with me";
+  - `/shared/file/:fid`, which opens a shared file in the same editors and
+    viewers.
 
 ## Open questions
 

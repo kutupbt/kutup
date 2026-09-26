@@ -274,6 +274,10 @@ pub struct FileRow {
     /// `key_generation`, in order). Empty for most files.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub key_history: Vec<FileKeyHistoryEntry>,
+    /// Shared with someone by itself (docs/plans/drive-file-sharing.md).
+    /// Shown to the owner only; false for everyone else.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 /// Generation `generation`'s record: the key of `generation − 1` sealed under

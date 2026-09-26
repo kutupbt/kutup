@@ -169,6 +169,22 @@ export async function openFileRecordV1(
   return { fileKey, metadata: decodeMetadata(metadataBytes) }
 }
 
+/**
+ * A file's name and details from its own key: for a file shared by itself
+ * (docs/plans/drive-file-sharing.md), whose recipient has no folder key.
+ */
+export async function openFileMetadataV1(
+  row: Pick<FileWireV1, 'id' | 'keyGeneration' | 'metadataRevision' | 'metadataEnvelope'>,
+  fileKey: Uint8Array,
+): Promise<FileMetadataV1> {
+  const metadataBytes = await openDriveEnvelope(
+    row.metadataEnvelope,
+    fileKey,
+    metadataContext(row.id, row.keyGeneration, row.metadataRevision),
+  )
+  return decodeMetadata(metadataBytes)
+}
+
 export async function renameFileRecordV1(
   row: Pick<FileWireV1, 'id' | 'keyGeneration' | 'metadataRevision'>,
   fileKey: Uint8Array,

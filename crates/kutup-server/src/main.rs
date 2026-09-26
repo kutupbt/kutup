@@ -595,6 +595,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/files/:id/shares", put(file_shares::reseal))
         .route("/api/files/:id/rotate", post(file_shares::rotate))
         .route("/api/shared-files", get(file_shares::shared_with_me))
+        .route("/api/file-shares/pending", get(file_shares::pending))
         // --- Moving files and folders (docs/plans/drive-move.md). ---
         .route("/api/files/:id/move", post(drive_move::move_file))
         .route(
