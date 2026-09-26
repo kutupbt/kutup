@@ -347,6 +347,18 @@ Three content kinds, in Direct chats and groups alike:
 A receiver refuses a poll-kind message whose body does not validate; votes
 and ends are purged with their poll.
 
+### Locations
+
+`location` (visible), in Direct chats, Note to Self and groups: a place sent
+once, `{lat, lon, label?}` — finite degrees within ±90 and ±180 (clients
+send at most six decimals), and an optional label of 1–100 characters on one
+line. It may carry `expiresAfterSeconds` like a text; a receiver refuses a
+body that does not validate. Each viewer's own map settings decide how it is
+shown (docs/plans/maps.md): a map drawn in the browser, or the coordinates
+with "Open in maps". Choosing the place (tapping a map, the device's
+location, or a city found in a list searched on the device) sends nothing
+anywhere. Live location is a separate channel, not a stream of these.
+
 ### Account state across devices
 
 Signal keeps pinned, archived and muted chats in a storage service and syncs

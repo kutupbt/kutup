@@ -1,4 +1,4 @@
-import { BarChart3, Camera, Check, Loader2, Mic, Paperclip, Pencil, Reply, SendHorizontal, Square, Trash2, X } from 'lucide-react'
+import { BarChart3, Camera, Check, Loader2, MapPin, Mic, Paperclip, Pencil, Reply, SendHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
@@ -45,6 +45,8 @@ export interface ComposerProps {
   linkPreviews?: boolean
   /** Open "New poll". */
   onCreatePoll?: () => void
+  /** Open "Send a location". */
+  onShareLocation?: () => void
   /** Send one of this account's stickers (absent where media cannot go). */
   onSendSticker?: (sticker: ChatStickerV1) => void
   edit: (messageId: string, text: string) => Promise<void>
@@ -421,6 +423,21 @@ export function Composer(props: ComposerProps) {
             data-testid="chat-poll-button"
           >
             <BarChart3 />
+          </Button>
+        ) : null}
+        {props.onShareLocation && !editing ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 shrink-0 rounded-full"
+            disabled={busy}
+            onClick={props.onShareLocation}
+            aria-label={t('chat.location.button')}
+            title={t('chat.location.button')}
+            data-testid="chat-location-button"
+          >
+            <MapPin />
           </Button>
         ) : null}
         <label className="min-w-0 flex-1">

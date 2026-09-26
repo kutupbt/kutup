@@ -27,6 +27,8 @@
 /* Scan the shared components too: apps reach this package through
    node_modules, which Tailwind's automatic detection skips. */
 @source '../';
+/* The shared map component (@kutup/map) styles its own elements. */
+@source '../../../map/src';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

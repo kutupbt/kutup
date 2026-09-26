@@ -15,6 +15,7 @@ import type {
   ChatTypingEvent,
   ChatAccountControl,
   ChatMessageExtras,
+  ChatLocationV1,
   ChatPollV1,
   ChatStickerV1,
   ChatViewOnceOpenedV1,
@@ -546,6 +547,21 @@ export class ChatService {
     return this.sendPollContent(conversation, 'poll', poll, expiresAfterSeconds)
   }
 
+  /**
+   * A place, sent once (with the chat's disappearing timer). Coordinates are
+   * kept to six decimals (about 10 cm); nothing more precise is sent.
+   */
+  sendLocation(conversation: ConversationId, location: ChatLocationV1, expiresAfterSeconds?: number): Promise<SendSummary> {
+    const round = (value: number) => Math.round(value * 1e6) / 1e6
+    const label = location.label?.trim()
+    return this.sendPollContent(
+      conversation,
+      'location',
+      { lat: round(location.lat), lon: round(location.lon), ...(label ? { label } : {}) },
+      expiresAfterSeconds,
+    )
+  }
+
   /** This account's choice in a poll; an empty list takes the vote back. */
   votePoll(conversation: ConversationId, targetMessageId: string, options: number[]): Promise<SendSummary> {
     return this.sendPollContent(conversation, 'pollVote', { targetMessageId, options: [...options].sort((a, b) => a - b) })
@@ -558,7 +574,7 @@ export class ChatService {
 
   private async sendPollContent(
     conversation: ConversationId,
-    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<SendSummary> {

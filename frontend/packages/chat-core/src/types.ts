@@ -30,6 +30,8 @@ export interface ChatContentView {
   /** The image attachment is a sticker. */
   sticker?: { emoji?: string }
   poll?: ChatPollV1
+  /** A place sent once (docs/plans/maps.md). */
+  location?: ChatLocationV1
   pollVote?: ChatPollVoteV1
   pollTerminate?: { targetMessageId: string }
   /** A group change, written by this device's engine from an applied Commit. */
@@ -141,6 +143,15 @@ export interface ChatPollVoteV1 {
 }
 
 export const POLL_LIMITS = { question: 200, option: 100, minOptions: 2, maxOptions: 10 } as const
+
+/** A place: degrees, and an optional label of up to 100 characters. */
+export interface ChatLocationV1 {
+  lat: number
+  lon: number
+  label?: string
+}
+
+export const LOCATION_LABEL_MAX = 100
 
 /** A view-once photo or video was opened on one of this account's devices. */
 export interface ChatViewOnceOpenedV1 {
@@ -1570,7 +1581,7 @@ export interface WasmChatClientHandle {
     incarnation: string,
     mlsGroupId: Uint8Array,
     sentAt: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'groupCall',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'groupCall',
     body: unknown,
     createdAtMs: string,
     expiresAfterSeconds?: number,
@@ -1731,7 +1742,7 @@ export interface WasmChatClientHandle {
     sendId: string,
     peer: string,
     sentAt: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<SendSummary>

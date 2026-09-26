@@ -1,6 +1,6 @@
 # Maps
 
-**Status:** decisions agreed 2026-09-26; slice 1 done. Branch
+**Status:** decisions agreed 2026-09-26; slices 1 and 2 done. Branch
 `feat/frontend-rewrite`. Roadmap entry: `docs/roadmap.md` → "New apps (after
 v1)" → Maps.
 
@@ -173,10 +173,23 @@ goes beyond Signal parity.
    Checked in a browser against the real providers: OpenFreeMap and
    OpenStreetMap through the relay with no request reaching the provider,
    and directly; the admin's "always" reaching people's pages.
-2. **Chat: send a place once:** pin or current location; an end-to-end
-   encrypted location message; the map card (or the coordinates card with
-   maps off); "Open in maps app"; the cities list (moved here from slice 1:
-   the place picker is its first user) for jumping to a city.
+2. (done) **Chat: send a place once:**
+   - the `location` content kind (`kutup-chat-proto/src/locations.rs`,
+     docs/chat-protocol.md "Locations"), validated on every receive path,
+     Direct and MLS, and able to disappear;
+   - "Send a location" in the composer: tap the map (maps on), use this
+     device's location, or jump to a city from the on-device list
+     (`scripts/build-cities.py` → `@kutup/map` `assets/cities.json`,
+     GeoNames cities15000, CC BY 4.0, 34,149 places, 1.3 MB, downloaded only
+     when someone searches); an optional name;
+   - the bubble: a small map while it is on screen (maps on) or the
+     coordinates, the name, "Open in maps" (Apple Maps on iOS, `geo:` on
+     Android, OpenStreetMap elsewhere, only when tapped) and "Copy";
+     "Location: …" in previews, replies and notifications; coordinates in
+     exports; the label is searchable.
+   Checked in a browser: 1:1 by city with maps off on both sides, the
+   receiver turning maps on and seeing the map, and a group by current
+   location with a name.
 3. **Chat: live location:** 15 minutes / 1 hour / 8 hours, stop at any
    time; the live channel above.
 4. **The Maps app (`maps.`):** pinned place lists, shared and edited

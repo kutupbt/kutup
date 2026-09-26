@@ -1,16 +1,11 @@
+import { fold } from '@kutup/ui/lib/fold'
+
 /**
- * Fold a name or query for matching: case, accents and the Turkish dotted
- * and dotless i all compare equal, so "subat" finds "Şubat" and "ilk" finds
- * "İLK" and "ılık" alike. Names are decrypted in the browser, so this is
- * the whole search: nothing is sent anywhere.
+ * Drive search: names are decrypted in the browser, so matching here is the
+ * whole search and nothing is sent anywhere. `fold` makes case, accents and
+ * the Turkish i compare equal.
  */
-export function fold(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replace(/ı/g, 'i')
-    .toLowerCase()
-}
+export { fold }
 
 /** The query's words, folded. */
 export function terms(query: string): string[] {

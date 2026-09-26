@@ -41,6 +41,8 @@ import { DROPDOWN_PARTS } from '../list/menuParts'
 import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { ViewedOnce, ViewOnceBody } from '../media/ViewOnceBody'
+import { LocationBody } from '../location/LocationBody'
+import { NewLocationDialog } from '../location/NewLocationDialog'
 import { NewPollDialog } from '../polls/NewPollDialog'
 import { StickerBody } from '../stickers/StickerBody'
 import { stickerFromImage } from '../../lib/stickers'
@@ -142,6 +144,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [exporting, setExporting] = useState(false)
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
   const [newPoll, setNewPoll] = useState(false)
+  const [newLocation, setNewLocation] = useState(false)
 
   /** "Save sticker": add a received sticker to this account's collection. */
   async function saveSticker(attachment: ChatAttachmentDescriptorV1) {
@@ -486,6 +489,8 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                     attachment={view.entry.content.attachment}
                     accepted={model.contact?.state !== 'pendingIncoming' && model.contact?.state !== 'blocked'}
                   />
+                ) : view.entry.content.location ? (
+                  <LocationBody location={view.entry.content.location} />
                 ) : view.poll ? (
                   <PollBody
                     state={view.poll}
@@ -592,6 +597,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           members={conversation.kind === 'group' ? members : undefined}
           linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
           onCreatePoll={model.note ? undefined : () => setNewPoll(true)}
+          onShareLocation={() => setNewLocation(true)}
           onSendSticker={
             model.canSendMedia && chat.capabilities?.media && (conversation.kind === 'group' || model.note || chat.capabilities.sealedSender)
               ? (sticker) => {
@@ -625,6 +631,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
 
       <ForwardDialog view={forwarding} onOpenChange={(open) => !open && setForwarding(null)} />
       <NewPollDialog open={newPoll} onOpenChange={setNewPoll} send={actions.sendPoll} />
+      <NewLocationDialog open={newLocation} onOpenChange={setNewLocation} send={actions.sendLocation} />
 
       <DeleteMessageDialog
         open={deleting !== null}

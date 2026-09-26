@@ -1176,7 +1176,7 @@ export class MlsConversationService {
   /** A poll, a vote in one, or its end, in this group. */
   async sendPollContent(
     conversationId: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'groupCall',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'groupCall',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {

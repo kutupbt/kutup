@@ -94,6 +94,7 @@ export interface KutupChatContentView {
   sticker?: unknown;
   groupUpdate?: unknown;
   poll?: unknown;
+  location?: unknown;
   pollVote?: unknown;
   pollTerminate?: unknown;
   mentions?: unknown;
@@ -3368,6 +3369,8 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     poll: Option<kutup_chat_proto::PollBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<kutup_chat_proto::LocationBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     poll_vote: Option<kutup_chat_proto::PollVoteBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     poll_terminate: Option<kutup_chat_proto::PollTerminateBody>,
@@ -3406,6 +3409,7 @@ impl From<ChatContent> for ContentView {
         let group_update = content.as_group_update();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
+        let location = content.as_location();
         let poll_vote = content.as_poll_vote();
         let poll_terminate = content.as_poll_terminate();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
@@ -3436,6 +3440,7 @@ impl From<ChatContent> for ContentView {
             sticker: extras.sticker.clone(),
             group_update,
             poll,
+            location,
             poll_vote,
             poll_terminate,
             mentions: extras.mentions,
@@ -3975,8 +3980,8 @@ fn parse_i64_string(label: &str, value: &str) -> std::result::Result<i64, JsValu
     Ok(parsed)
 }
 
-/// Builds poll content from its JSON body by kind; only a poll itself may
-/// disappear.
+/// Builds structured content (polls, a place, a group call) from its JSON
+/// body by kind; only a poll itself and a place may disappear.
 fn build_poll_content(
     kind: &str,
     send_id: &str,
@@ -4005,6 +4010,12 @@ fn build_poll_content(
             seq,
             &serde_json::from_value(body.clone()).map_err(|_| decode("poll end"))?,
         )?,
+        kutup_chat_proto::content::kind::LOCATION => ChatContent::location_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("location"))?,
+        )?,
         kutup_chat_proto::content::kind::GROUP_CALL => ChatContent::group_call_with_id(
             send_id,
             sent_at,
@@ -4014,7 +4025,10 @@ fn build_poll_content(
         _ => return Err("unknown Chat structured content".into()),
     };
     match expires_after_seconds {
-        Some(seconds) if kind == kutup_chat_proto::content::kind::POLL => {
+        Some(seconds)
+            if kind == kutup_chat_proto::content::kind::POLL
+                || kind == kutup_chat_proto::content::kind::LOCATION =>
+        {
             content.with_disappearing_after(seconds)
         }
         _ => Ok(content),

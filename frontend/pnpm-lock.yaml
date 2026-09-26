@@ -160,6 +160,9 @@ importers:
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@kutup/map':
+        specifier: workspace:*
+        version: link:../../packages/map
       '@kutup/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -510,6 +513,9 @@ importers:
       '@kutup/session':
         specifier: workspace:*
         version: link:../session
+      '@kutup/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@tanstack/react-query':
         specifier: ^5
         version: 5.103.2(react@18.3.1)

@@ -362,7 +362,9 @@
       "voice": "Voice message",
       "timer": "Disappearing messages changed",
       "poll": "Poll: {{question}}",
-      "sticker": "Sticker {{emoji}}"
+      "sticker": "Sticker {{emoji}}",
+      "location": "Location: {{label}}",
+      "locationUnnamed": "Location"
     },
     "time": {
       "now": "now",
@@ -858,6 +860,30 @@
       "header": "Kutup Chat: {{title}}",
       "exportedAt": "Exported {{date}}.",
       "edited": "(edited)"
+    },
+    "location": {
+      "button": "Send a location",
+      "title": "Send a location",
+      "description": "The place is end-to-end encrypted, like any message.",
+      "mapLabel": "Map of the place",
+      "pickHint": "Tap the map to drop the pin.",
+      "mapsOff": "Maps are off, so there is no map to tap. Use your current location or a city.",
+      "turnOn": "Turn maps on",
+      "useCurrent": "Use my current location",
+      "locating": "Finding you…",
+      "denied": "Location access is blocked for this site.",
+      "unavailable": "Your location could not be found.",
+      "searchCity": "Search for a city",
+      "noCities": "No city by that name.",
+      "citiesFailed": "The city list could not be loaded.",
+      "citiesAttribution": "City list: {{source}}, searched on this device.",
+      "label": "Name (optional)",
+      "labelPlaceholder": "e.g. Meeting point",
+      "labelTooLong": "At most {{max}} characters.",
+      "send": "Send location",
+      "openInMaps": "Open in maps",
+      "copy": "Copy",
+      "copied": "Coordinates copied"
     }
   },
   "boot": {

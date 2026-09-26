@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { ChatReactionEmoji } from '@kutup/chat-core/reactions'
-import type { ChatMessageExtras, ChatPollV1, ConversationId, SendSummary } from '@kutup/chat-core/types'
+import type { ChatLocationV1, ChatMessageExtras, ChatPollV1, ConversationId, SendSummary } from '@kutup/chat-core/types'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
@@ -140,6 +140,11 @@ export function useConversationActions(
     [run, after, service, conversation, timerFor],
   )
 
+  const sendLocation = useCallback(
+    (location: ChatLocationV1) => run(async () => after(await service!.sendLocation(conversation, location, await timerFor()))),
+    [run, after, service, conversation, timerFor],
+  )
+
   const votePoll = useCallback(
     (pollId: string, options: number[]) => run(async () => after(await service!.votePoll(conversation, pollId, options))),
     [run, after, service, conversation],
@@ -150,5 +155,5 @@ export function useConversationActions(
     [run, after, service, conversation],
   )
 
-  return { send, edit, remove, deleteForMe, react, setTimer, sendFile, sendPoll, votePoll, endPoll }
+  return { send, edit, remove, deleteForMe, react, setTimer, sendFile, sendPoll, sendLocation, votePoll, endPoll }
 }

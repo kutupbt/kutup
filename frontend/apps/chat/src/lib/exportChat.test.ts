@@ -30,6 +30,15 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
 }
 
 describe('chatTranscript', () => {
+  it('keeps a place\'s coordinates', () => {
+    const at = new Date(2026, 8, 25, 14, 3)
+    const place = view('bob@a.test', at, 'x', {
+      entry: { id: 'p', timestampMs: at.getTime(), content: { kind: 'location', location: { lat: 40.9904, lon: 29.0231, label: 'Pier' } } } as unknown as ChatHistoryEntry,
+    })
+    const text = chatTranscript('Bob', [place], { self: 'me@a.test', nameOf: () => 'Bob', t, exportedAt: at })
+    expect(text).toContain('Bob: chat.preview.location:{"label":"Pier"} (40.99040, 29.02310)')
+  })
+
   it('writes one line per message with time and sender', () => {
     const at = new Date(2026, 8, 25, 14, 3)
     const text = chatTranscript('Bob', [

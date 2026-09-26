@@ -3,6 +3,7 @@ import type { MessageView } from '../state/views'
 import { callLogText } from './callText'
 import { groupUpdateSentences } from './groupUpdate'
 import { messagePreview } from './names'
+import { formatCoordinates } from '../features/location/places'
 
 /**
  * A conversation as a plain-text transcript, for keeping outside Kutup:
@@ -41,6 +42,8 @@ export function chatTranscript(
     const attachment = view.entry.content.attachment
     let text = messagePreview(view.entry, view.mutation, t)
     if (attachment && !view.mutation?.deleted && text !== attachment.filename) text = `[${attachment.filename}] ${text}`
+    const location = view.entry.content.location
+    if (location && !view.mutation?.deleted) text = `${text} (${formatCoordinates(location)})`
     if (view.mutation?.editedText && !view.mutation.deleted) text = `${text} ${t('chat.export.edited')}`
     lines.push(`${at} ${nameOf(view.author)}: ${text}`)
   }

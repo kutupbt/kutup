@@ -69,6 +69,8 @@ pub mod kind {
     pub const POLL_VOTE: &str = "pollVote";
     /// The poll's author ends it. [IMPL]
     pub const POLL_TERMINATE: &str = "pollTerminate";
+    /// A place sent once: coordinates and an optional label (visible). [IMPL]
+    pub const LOCATION: &str = "location";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
     pub const MESSAGE_MUTATION: &str = "messageMutation";
     /// Attachment descriptor for the immutable encrypted Chat-media object;
@@ -471,7 +473,7 @@ impl ChatContent {
     pub fn with_disappearing_after(mut self, seconds: u32) -> Result<Self, String> {
         if !matches!(
             self.kind.as_str(),
-            kind::TEXT | kind::ATTACHMENT | kind::POLL
+            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION
         ) {
             return Err("only visible Chat messages may disappear".into());
         }
@@ -492,7 +494,7 @@ impl ChatContent {
         };
         if !matches!(
             self.kind.as_str(),
-            kind::TEXT | kind::ATTACHMENT | kind::POLL
+            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION
         ) {
             return Err("only visible Chat messages may carry an expiry".into());
         }
@@ -850,6 +852,7 @@ impl ChatContent {
                     | kind::POLL
                     | kind::POLL_VOTE
                     | kind::POLL_TERMINATE
+                    | kind::LOCATION
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
                     | kind::GROUP_CONTROL

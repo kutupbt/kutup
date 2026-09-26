@@ -362,7 +362,9 @@
       "voice": "Sesli mesaj",
       "timer": "Kaybolan mesajlar değişti",
       "poll": "Anket: {{question}}",
-      "sticker": "Çıkartma {{emoji}}"
+      "sticker": "Çıkartma {{emoji}}",
+      "location": "Konum: {{label}}",
+      "locationUnnamed": "Konum"
     },
     "time": {
       "now": "şimdi",
@@ -858,6 +860,30 @@
       "header": "Kutup Sohbet: {{title}}",
       "exportedAt": "Dışa aktarma: {{date}}.",
       "edited": "(düzenlendi)"
+    },
+    "location": {
+      "button": "Konum gönder",
+      "title": "Konum gönder",
+      "description": "Yer, her mesaj gibi uçtan uca şifrelenir.",
+      "mapLabel": "Yerin haritası",
+      "pickHint": "İğneyi bırakmak için haritaya dokunun.",
+      "mapsOff": "Haritalar kapalı, dokunacak bir harita yok. Mevcut konumunuzu ya da bir şehri kullanın.",
+      "turnOn": "Haritaları aç",
+      "useCurrent": "Mevcut konumumu kullan",
+      "locating": "Konumunuz bulunuyor…",
+      "denied": "Bu site için konum erişimi engelli.",
+      "unavailable": "Konumunuz bulunamadı.",
+      "searchCity": "Şehir ara",
+      "noCities": "Bu adda bir şehir yok.",
+      "citiesFailed": "Şehir listesi yüklenemedi.",
+      "citiesAttribution": "Şehir listesi: {{source}}, bu cihazda aranır.",
+      "label": "Ad (isteğe bağlı)",
+      "labelPlaceholder": "ör. Buluşma noktası",
+      "labelTooLong": "En fazla {{max}} karakter.",
+      "send": "Konumu gönder",
+      "openInMaps": "Haritada aç",
+      "copy": "Kopyala",
+      "copied": "Koordinatlar kopyalandı"
     }
   },
   "boot": {

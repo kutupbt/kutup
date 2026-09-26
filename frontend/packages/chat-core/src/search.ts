@@ -34,7 +34,7 @@ export function searchChatHistory(
 
       const effectiveText = mutation?.editedText ?? message.content.text
       const attachment = message.content.attachment
-      const searchable = [effectiveText, attachment?.filename, attachment?.caption]
+      const searchable = [effectiveText, attachment?.filename, attachment?.caption, message.content.location?.label]
         .filter((value): value is string => Boolean(value))
         .join('\n')
       if (!searchable) return []
