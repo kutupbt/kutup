@@ -664,3 +664,249 @@ fn editors_share_and_rename_when_allowed() {
         .clone();
     assert_eq!(carol_entry["sharerAccount"], account(&alice));
 }
+
+#[test]
+fn a_public_link_to_one_file() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::new();
+    let (alice, bob) = (register(&c, &base), register(&c, &base));
+    let folder = create_folder(&c, &base, &alice);
+    let file = seal_file(&folder, &uuid(), b"just this file");
+    let neighbour = seal_file(&folder, &uuid(), b"not linked");
+    for f in [&file, &neighbour] {
+        assert!(upload(&c, &base, &alice.token, &folder, f)
+            .status()
+            .is_success());
+    }
+    let wrap = |key: &[u8; 32], link_key: &[u8; 32], generation: u32| {
+        drive_envelope::seal_b64(
+            key,
+            link_key,
+            DriveEnvelopeContextV1::public_link_file_key(&file.id, &alice.id, generation).unwrap(),
+        )
+        .unwrap()
+    };
+    let make_link = |link_key: &[u8; 32]| -> Value {
+        let id = uuid();
+        let r = bearer(c.post(format!("{base}/api/share")), &alice.token)
+            .json(&json!({
+                "shareType": "file",
+                "targetId": file.id,
+                "collectionKeyEnvelope": wrap(&file.key, link_key, 1),
+                "id": id,
+                "ownerLinkKeyEnvelope": owner_link_key(link_key, &alice, &id),
+            }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED, "{:?}", r.text());
+        r.json().unwrap()
+    };
+    let link_key = [0x21u8; 32];
+    let link = make_link(&link_key);
+    let token = link["token"].as_str().unwrap().to_string();
+
+    // Anyone with the link: the file's record, its key, its content.
+    let public: Value = c
+        .get(format!("{base}/api/share/{token}"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(public["shareType"], "file");
+    assert_eq!(public["file"]["id"], file.id.as_str());
+    let key = drive_envelope::open_b64(
+        public["collectionKeyEnvelope"].as_str().unwrap(),
+        &link_key,
+        DriveEnvelopeContextV1::public_link_file_key(&file.id, &alice.id, 1).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(key, file.key);
+    let blob = c
+        .get(format!("{base}/api/share/{token}/download/{}", file.id))
+        .send()
+        .unwrap();
+    assert_eq!(blob.status(), StatusCode::OK);
+    assert_eq!(
+        drive_object::decrypt_file_blob(
+            &blob.bytes().unwrap(),
+            &file.key,
+            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
+        )
+        .unwrap(),
+        b"just this file"
+    );
+    // No saved editing state yet: the upload is the file.
+    assert_eq!(
+        c.get(format!("{base}/api/share/{token}/state/{}", file.id))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/share/{token}/state/{}", neighbour.id))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // Nothing else in the folder.
+    assert_eq!(
+        c.get(format!(
+            "{base}/api/share/{token}/download/{}",
+            neighbour.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        c.get(format!("{base}/api/share/{token}/files"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_ne!(
+        c.get(format!("{base}/api/share/{token}/epochs"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    // A wrap for the wrong generation is refused; only the owner links.
+    let r = bearer(c.post(format!("{base}/api/share")), &bob.token)
+        .json(&json!({ "shareType": "file", "targetId": file.id, "collectionKeyEnvelope": wrap(&file.key, &link_key, 1),
+                       "id": uuid(), "ownerLinkKeyEnvelope": owner_link_key(&link_key, &bob, &uuid()) }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // The owner sees it; so does Shared by me.
+    let access = get(
+        &c,
+        format!("{base}/api/files/{}/access", file.id),
+        &alice.token,
+    );
+    assert_eq!(access["publicLinks"].as_array().unwrap().len(), 1);
+    let by_me = get(&c, format!("{base}/api/shared-by-me"), &alice.token);
+    assert!(by_me
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["fileId"] == file.id.as_str() && i["links"] == 1));
+
+    // Removing Bob keeps the link, re-wrapped for the new key.
+    let status = bearer(c.post(format!("{base}/api/files/{}/share", file.id)), &alice.token)
+        .json(&json!({ "recipientUserId": bob.id, "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &bob), "canEdit": false }))
+        .send()
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let mut next = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut next);
+    let link_id = link["id"].as_str().unwrap();
+    let rotate = |from: u32,
+                  key: &[u8; 32],
+                  to: &[u8; 32],
+                  removed: Value,
+                  links: Value,
+                  removed_links: Value| {
+        bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &alice.token)
+            .json(&json!({
+                "fromGeneration": from,
+                "fileKeyEnvelope": drive_envelope::seal_b64(to, &folder.key,
+                    DriveEnvelopeContextV1::file_key(&file.id, &folder.id, 1, from + 1).unwrap()).unwrap(),
+                "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#, to,
+                    DriveEnvelopeContextV1::file_metadata(&file.id, from + 1, 1).unwrap()).unwrap(),
+                "previousKeyEnvelope": file_keyring::seal_previous_key(key, to, &file.id, from + 1).unwrap(),
+                "members": [],
+                "removed": removed,
+                "publicLinks": links,
+                "removedLinks": removed_links,
+            }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    // Leaving the link out entirely is refused.
+    assert_eq!(
+        rotate(1, &file.key, &next, json!([bob.id]), json!([]), json!([])),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        rotate(
+            1,
+            &file.key,
+            &next,
+            json!([bob.id]),
+            json!([{ "id": link_id, "keyEnvelope": wrap(&next, &link_key, 2) }]),
+            json!([])
+        ),
+        StatusCode::OK
+    );
+    let public: Value = c
+        .get(format!("{base}/api/share/{token}"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(public["collectionKeyEpoch"], 2);
+    let reopened = drive_envelope::open_b64(
+        public["collectionKeyEnvelope"].as_str().unwrap(),
+        &link_key,
+        DriveEnvelopeContextV1::public_link_file_key(&file.id, &alice.id, 2).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reopened, next);
+
+    // Removing the link: a new key, and the link is gone.
+    let mut third = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut third);
+    assert_eq!(
+        rotate(2, &next, &third, json!([]), json!([]), json!([link_id])),
+        StatusCode::OK
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/share/{token}"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // A link to a file in the trash goes dark.
+    let second_key = [0x31u8; 32];
+    let id = uuid();
+    let r = bearer(c.post(format!("{base}/api/share")), &alice.token)
+        .json(&json!({ "shareType": "file", "targetId": file.id,
+                       "collectionKeyEnvelope": drive_envelope::seal_b64(&third, &second_key,
+                           DriveEnvelopeContextV1::public_link_file_key(&file.id, &alice.id, 3).unwrap()).unwrap(),
+                       "id": id, "ownerLinkKeyEnvelope": owner_link_key(&second_key, &alice, &id) }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let token2 = r.json::<Value>().unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(bearer(
+        c.delete(format!("{base}/api/files/{}", file.id)),
+        &alice.token
+    )
+    .send()
+    .unwrap()
+    .status()
+    .is_success());
+    assert_eq!(
+        c.get(format!("{base}/api/share/{token2}"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}

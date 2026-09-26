@@ -1,13 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { isAxiosError } from 'axios'
-import { openFileMetadataV1, openFileShareEnvelope, rekeyFileRecordV1, sealFileShareEnvelope } from '@kutup/crypto'
+import { generateKey, openFileMetadataV1, openFileShareEnvelope, rekeyFileRecordV1, sealFileShareEnvelope, sealPublicLinkFileKeyV1 } from '@kutup/crypto'
+import { openOwnerLinkKeyV1, sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { AccessChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
-import { useDriveMutation, RecipientNotFound } from './mutations'
+import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import type { DriveFile, Folder } from './model'
 
@@ -158,11 +159,38 @@ export interface FileAccessMember {
   createdAt: string
 }
 
+/** A public link to one file (its owner sees these). */
+export interface FileLink {
+  id: string
+  token: string
+  ownerLinkKeyEnvelope: string | null
+  /** The generation its wrap opens; below the file's, it waits to be re-wrapped. */
+  keyGeneration: number
+  expiresAt: string | null
+  createdAt: string
+}
+
 export interface FileAccess {
   keyGeneration: number
   members: FileAccessMember[]
   /** People with edit access may share it on. */
   editorsCanShare: boolean
+  publicLinks: FileLink[]
+}
+
+/** A file link's key, from the owner's copy. */
+function fileLinkKey(link: FileLink, me: DriveIdentity): Promise<Uint8Array> {
+  if (!link.ownerLinkKeyEnvelope) return Promise.reject(new Error('no owner copy of this link'))
+  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
+}
+
+function wrapForLink(file: DriveFile, fileKey: Uint8Array, generation: number, linkKey: Uint8Array, me: DriveIdentity) {
+  return sealPublicLinkFileKeyV1(fileKey, linkKey, { fileId: file.id, ownerUserId: me.userId, generation })
+}
+
+/** The link to give people: the key rides in the fragment, never sent to a server. */
+export async function fileLinkUrl(link: FileLink, me: DriveIdentity): Promise<string> {
+  return publicLinkUrl(link.token, await fileLinkKey(link, me))
 }
 
 export const fileAccessKey = (fileId: string) => ['file-access', fileId] as const
@@ -231,15 +259,22 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
   const access = await loadFileAccess(fresh.id)
   if (access.keyGeneration !== fresh.keyGeneration) throw new AccessChanged()
   const behind = access.members.filter((m) => m.keyGeneration < access.keyGeneration)
-  if (behind.length > 0) {
+  const linksBehind = access.publicLinks.filter((l) => l.keyGeneration < access.keyGeneration)
+  if (behind.length > 0 || linksBehind.length > 0) {
     const members = await Promise.all(
       behind.map(async (m) => ({
         userId: m.userId,
         shareEnvelope: await sealFor(me, fresh.id, fresh.fileKey!, fresh.keyGeneration, m),
       })),
     )
+    const publicLinks = await Promise.all(
+      linksBehind.map(async (l) => ({
+        id: l.id,
+        keyEnvelope: await wrapForLink(fresh, fresh.fileKey!, fresh.keyGeneration, await fileLinkKey(l, me), me),
+      })),
+    )
     try {
-      await api.put(`/files/${fresh.id}/shares`, { members })
+      await api.put(`/files/${fresh.id}/shares`, { members, publicLinks })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()
       throw error
@@ -305,7 +340,7 @@ export function useShareFile() {
  */
 export function useRemoveFileAccess() {
   const queryClient = useQueryClient()
-  return useDriveMutation(async ({ folder, file, removed }: { folder: Folder; file: DriveFile; removed: string[] }, me) => {
+  return useDriveMutation(async ({ folder, file, removed, removedLinks = [] }: { folder: Folder; file: DriveFile; removed: string[]; removedLinks?: string[] }, me) => {
     if (!canShareFile(folder, file)) throw new Error('file is not open')
     try {
       const access = await loadFileAccess(file.id)
@@ -322,6 +357,11 @@ export function useRemoveFileAccess() {
           .filter((m) => !removed.includes(m.userId))
           .map(async (m) => ({ userId: m.userId, shareEnvelope: await sealFor(me, file.id, next.fileKey, next.keyGeneration, m) })),
       )
+      const publicLinks = await Promise.all(
+        access.publicLinks
+          .filter((l) => !removedLinks.includes(l.id))
+          .map(async (l) => ({ id: l.id, keyEnvelope: await wrapForLink(file, next.fileKey, next.keyGeneration, await fileLinkKey(l, me), me) })),
+      )
       await api.post(`/files/${file.id}/rotate`, {
         fromGeneration: file.keyGeneration,
         fileKeyEnvelope: next.fileKeyEnvelope,
@@ -329,6 +369,8 @@ export function useRemoveFileAccess() {
         previousKeyEnvelope: next.previousKeyEnvelope,
         members,
         removed,
+        publicLinks,
+        removedLinks,
       })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()
@@ -385,4 +427,32 @@ export function useKeepFileSharesCurrent() {
       cancelled = true
     }
   }, [identity.data, folders.data, pending.data, queryClient])
+}
+
+/**
+ * Make a public link to one file (docs/plans/drive-file-sharing.md, slice 3):
+ * a new link key wraps the file's current key; the owner keeps a copy of the
+ * link key to copy the link again and keep it working across new keys.
+ * Returns the link to give people.
+ */
+export function useCreateFileLink() {
+  const queryClient = useQueryClient()
+  return useDriveMutation(async ({ folder, file: listed }: { folder: Folder; file: DriveFile }, me): Promise<string> => {
+    if (!canShareFile(folder, listed)) throw new Error('file is not open')
+    const file = await bringFileSharesUpToDate(folder, listed, me)
+    const linkKey = await generateKey()
+    const id = crypto.randomUUID()
+    try {
+      const { data } = await api.post<{ token: string }>('/share', {
+        shareType: 'file',
+        targetId: file.id,
+        collectionKeyEnvelope: await wrapForLink(file, file.fileKey!, file.keyGeneration, linkKey, me),
+        id,
+        ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId }),
+      })
+      return publicLinkUrl(data.token, linkKey)
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: fileAccessKey(file.id) })
+    }
+  })
 }

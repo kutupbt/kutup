@@ -107,8 +107,15 @@ folders, and a move keeps the key generation, so shares survive a move.
    editing a shared file; the folder-rotation re-seal.
 2. **Across servers:** a file invite (capability for one file), read and
    write through the recipient's server, like folder federation.
-3. **Public link to a single file:** `public_shares` already reserves
-   `share_type` for it; a link key sealing the file key.
+3. **Public link to a single file:** done 2026-09-26.
+   - `public_shares.share_type = 'file'` (migration 063), with a link key
+     sealing the file key (Drive envelope purpose 11, bound to the file,
+     owner and key generation).
+   - Removing someone keeps the file's links (re-wrapped for the new key),
+     and removing a link moves the file to a new key.
+   - The owner's app re-wraps links left behind.
+   - A link's page shows notes and maps as last saved; this also fixes
+     folder links, which served notes as first uploaded.
 
 ## Implementation (slice 1)
 

@@ -16,6 +16,8 @@ export const DRIVE_ENVELOPE_PURPOSE = {
   publicLinkCollectionKey: 5,
   /** A public link's key, sealed for the folder owner (object = link id). */
   publicLinkKey: 9,
+  /** A file's key of one generation, under a link to that file (object = file, parent = owner). */
+  publicLinkFileKey: 11,
 } as const
 
 export type DriveEnvelopePurpose =

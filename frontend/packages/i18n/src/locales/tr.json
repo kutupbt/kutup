@@ -69,6 +69,16 @@
     "editorsCanShare": "Düzenleyenler paylaşabilir",
     "editorsCanShareHint": "Düzenleyebilenler bunu başkalarıyla paylaşabilir (kimseyi kaldıramazlar).",
     "onlyOwnerRemoves": "Kişileri yalnızca sahibi değiştirebilir veya kaldırabilir.",
-    "settingFailed": "Ayar kaydedilemedi."
+    "settingFailed": "Ayar kaydedilemedi.",
+    "linksTitle": "Herkese açık bağlantılar",
+    "linksHint": "Bağlantıya sahip herkes bu dosyayı hesap olmadan açıp indirebilir. Anahtar bağlantının kendisindedir; sunucu onu asla görmez.",
+    "link": "Herkese açık bağlantı",
+    "linkCreated": "{{date}} oluşturuldu",
+    "copy": "Kopyala",
+    "linkCopied": "Bağlantı kopyalandı",
+    "removeLink": "Bu bağlantıyı kaldır",
+    "createLink": "Herkese açık bağlantı oluştur",
+    "linkFailed": "Bağlantı oluşturulamadı.",
+    "confirmLinkBody": "Bağlantı hemen çalışmayı bırakır ve dosya bağlantının asla alamayacağı yeni bir anahtara geçer. Daha önce indirenlerin kopyası onlarda kalır."
   }
 }

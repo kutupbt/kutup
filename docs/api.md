@@ -1135,6 +1135,25 @@ owner's.
   generation carries `metadataAtShare: { envelope, revision }`: the file's
   metadata as it was then, under the key the share opens.
 - `GET /api/files/:id/access` also returns `editorsCanShare`.
+- **Public link to one file:** `POST /api/share` with `shareType: "file"`,
+  `targetId` = the file, `collectionKeyEnvelope` = the file's current key
+  sealed under the link key (Drive envelope purpose 11,
+  `public_link_file_key`: object = file, parent = owner, epoch = key
+  generation), `id` and `ownerLinkKeyEnvelope` as for folder links. Owner
+  only.
+  - Anonymous reads through the token: `GET /api/share/:token` (with
+    `file`, the file's record) and `GET /api/share/:token/download/:fileId`
+    (that file only).
+  - The file's links appear in its `access` (`publicLinks`, for the owner).
+  - Removing a link is a rotation (`removedLinks`), and a rotation re-wraps
+    every kept link (`publicLinks: [{ id, keyEnvelope }]`); kept plus
+    removed links must be exactly the current ones. `PUT /api/files/:id/shares`
+    re-wraps links left behind, and `pending` lists files whose links wait.
+- **`GET /api/share/:token/state/:fileId`** (anonymous, folder or file
+  links): the latest saved Yjs state of a note or place list, sealed under
+  the file key of the generation in `X-Kutup-Key-Generation` (`404` when it
+  has none). Their edits are not whole-file versions, so a link's page turns
+  the state back into the file.
 - **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
   otherServers, links }]`. These are your folders shared with people or by
   link, and your files shared by themselves, with counts.

@@ -68,6 +68,8 @@ pub struct FileAccess {
     pub members: Vec<FileAccessMember>,
     /// People with edit access may share it on.
     pub editors_can_share: bool,
+    /// Public links to the file (for its owner only).
+    pub public_links: Vec<FileLink>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -82,6 +84,33 @@ pub struct MemberEnvelope {
 pub struct ResealRequest {
     /// Envelopes at the file's current generation, for members left behind.
     pub members: Vec<MemberEnvelope>,
+    /// The file's links left behind, re-wrapped at the current generation.
+    #[serde(default)]
+    pub public_links: Vec<LinkEnvelope>,
+}
+
+/// A link to the file, its key sealed under the link key (purpose 11).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkEnvelope {
+    pub id: Uuid,
+    pub key_envelope: String,
+}
+
+/// A public link to the file, for its owner.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileLink {
+    pub id: Uuid,
+    pub token: String,
+    /// The link key sealed for the owner (purpose 9), to copy and re-wrap it.
+    pub owner_link_key_envelope: Option<String>,
+    /// The generation its wrap opens; below the file's, it waits to be re-wrapped.
+    pub key_generation: i32,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -99,6 +128,12 @@ pub struct RotateFileAccessRequest {
     pub members: Vec<MemberEnvelope>,
     /// Everyone removed.
     pub removed: Vec<Uuid>,
+    /// Every link that stays, re-wrapped for the new generation.
+    #[serde(default)]
+    pub public_links: Vec<LinkEnvelope>,
+    /// Links removed.
+    #[serde(default)]
+    pub removed_links: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -428,27 +463,111 @@ pub async fn file_access(
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     // The owner, or an editor who may share (to see who has it already).
-    let generation = match owned_file(&mut tx, file_id, user_id).await {
-        Ok((_, generation, _, _)) => generation,
-        Err(error) => editor_may_share(&mut tx, file_id, user_id)
-            .await?
-            .ok_or(error)?,
+    let (generation, owner) = match owned_file(&mut tx, file_id, user_id).await {
+        Ok((_, generation, _, _)) => (generation, true),
+        Err(error) => (
+            editor_may_share(&mut tx, file_id, user_id)
+                .await?
+                .ok_or(error)?,
+            false,
+        ),
     };
     tx.commit().await?;
-    file_access_of(&state, file_id, generation).await.map(Json)
+    file_access_of(&state, file_id, generation, owner)
+        .await
+        .map(Json)
 }
 
-async fn file_access_of(state: &AppState, file_id: Uuid, generation: i32) -> AppResult<FileAccess> {
+async fn file_access_of(
+    state: &AppState,
+    file_id: Uuid,
+    generation: i32,
+    owner: bool,
+) -> AppResult<FileAccess> {
     let editors_can_share: bool =
         sqlx::query_scalar("SELECT editors_can_share FROM files WHERE id = $1")
             .bind(file_id)
             .fetch_one(&state.pool)
             .await?;
+    let public_links = if owner {
+        file_links(&state.pool, file_id).await?
+    } else {
+        Vec::new()
+    };
     Ok(FileAccess {
         key_generation: generation,
         members: members(&state.pool, file_id, &state.config.chat_server_name).await?,
         editors_can_share,
+        public_links,
     })
+}
+
+async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
+    type Row = (
+        Uuid,
+        String,
+        Option<String>,
+        i32,
+        Option<OffsetDateTime>,
+        OffsetDateTime,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, token, owner_link_key_envelope, collection_key_epoch, expires_at, created_at
+         FROM public_shares WHERE share_type = 'file' AND target_id = $1
+           AND (expires_at IS NULL OR expires_at > now())
+         ORDER BY created_at",
+    )
+    .bind(file_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, token, owner_link_key_envelope, key_generation, expires_at, created_at)| {
+                FileLink {
+                    id,
+                    token,
+                    owner_link_key_envelope,
+                    key_generation,
+                    expires_at,
+                    created_at,
+                }
+            },
+        )
+        .collect())
+}
+
+/// Check and store link wraps at `generation`.
+async fn store_link_envelopes(
+    tx: &mut Transaction<'_, Postgres>,
+    file_id: Uuid,
+    owner_id: Uuid,
+    generation: i32,
+    links: &[LinkEnvelope],
+) -> AppResult<()> {
+    let context = DriveEnvelopeContextV1::public_link_file_key(
+        &file_id.to_string(),
+        &owner_id.to_string(),
+        u32::try_from(generation).map_err(|_| AppError::conflict("invalid key generation"))?,
+    )
+    .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+    for link in links {
+        validate_envelope(&link.key_envelope, context)?;
+        let updated = sqlx::query(
+            "UPDATE public_shares SET collection_key_envelope = $3, collection_key_epoch = $4
+             WHERE id = $1 AND share_type = 'file' AND target_id = $2",
+        )
+        .bind(link.id)
+        .bind(file_id)
+        .bind(&link.key_envelope)
+        .bind(generation)
+        .execute(&mut **tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::conflict("the file's links changed; reload"));
+        }
+    }
+    Ok(())
 }
 
 /// Check and store envelopes at `generation` for existing members.
@@ -522,6 +641,7 @@ pub async fn reseal(
         &req.members,
     )
     .await?;
+    store_link_envelopes(&mut tx, file_id, user_id, generation, &req.public_links).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -564,7 +684,17 @@ pub async fn rotate(
             .fetch_all(&mut *tx)
             .await?;
     let kept: Vec<Uuid> = req.members.iter().map(|m| m.user_id).collect();
-    if !same_membership(&current, &kept, &req.removed) || req.removed.is_empty() {
+    let current_links: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM public_shares WHERE share_type = 'file' AND target_id = $1",
+    )
+    .bind(file_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let kept_links: Vec<Uuid> = req.public_links.iter().map(|l| l.id).collect();
+    if !same_membership(&current, &kept, &req.removed)
+        || !same_membership(&current_links, &kept_links, &req.removed_links)
+        || (req.removed.is_empty() && req.removed_links.is_empty())
+    {
         return Err(AppError::conflict("the file's access changed; reload"));
     }
     let next = generation
@@ -618,6 +748,14 @@ pub async fn rotate(
         .bind(&req.removed)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(
+        "DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1 AND id = ANY($2)",
+    )
+    .bind(file_id)
+    .bind(&req.removed_links)
+    .execute(&mut *tx)
+    .await?;
+    store_link_envelopes(&mut tx, file_id, user_id, next, &req.public_links).await?;
     store_envelopes(
         &mut tx,
         &state.pool,
@@ -631,7 +769,7 @@ pub async fn rotate(
     tx.commit().await?;
     // Live sessions reconnect under the new key; the removed are refused.
     state.hub.close_room(&file_id.to_string());
-    Ok(Json(file_access_of(&state, file_id, next).await?).into_response())
+    Ok(Json(file_access_of(&state, file_id, next, true).await?).into_response())
 }
 
 /// `GET /api/shared-files` — files shared with you by themselves, with the
@@ -774,12 +912,15 @@ pub async fn pending(
 ) -> AppResult<Json<Vec<PendingFileShare>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT DISTINCT f.id, f.collection_id
-         FROM file_shares fs
-         JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
-         JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE c.owner_user_id = $1
-           AND (fs.key_generation < f.key_generation OR f.key_epoch < c.key_epoch)",
+        "SELECT f.id, f.collection_id
+         FROM files f JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+         WHERE c.owner_user_id = $1 AND f.deleted_at IS NULL
+           AND (EXISTS (SELECT 1 FROM file_shares fs
+                        WHERE fs.file_id = f.id
+                          AND (fs.key_generation < f.key_generation OR f.key_epoch < c.key_epoch))
+             OR EXISTS (SELECT 1 FROM public_shares ps
+                        WHERE ps.share_type = 'file' AND ps.target_id = f.id
+                          AND (ps.collection_key_epoch < f.key_generation OR f.key_epoch < c.key_epoch)))",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -839,10 +980,14 @@ pub async fn shared_by_me(
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
          UNION ALL
          SELECT f.collection_id, f.id,
-                (SELECT count(*) FROM file_shares fs WHERE fs.file_id = f.id), 0, 0
+                (SELECT count(*) FROM file_shares fs WHERE fs.file_id = f.id), 0,
+                (SELECT count(*) FROM public_shares ps
+                  WHERE ps.share_type = 'file' AND ps.target_id = f.id
+                    AND (ps.expires_at IS NULL OR ps.expires_at > now()))
          FROM files f JOIN collections c ON c.id = f.collection_id
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL AND f.deleted_at IS NULL
-           AND EXISTS (SELECT 1 FROM file_shares fs WHERE fs.file_id = f.id)",
+           AND (EXISTS (SELECT 1 FROM file_shares fs WHERE fs.file_id = f.id)
+             OR EXISTS (SELECT 1 FROM public_shares ps WHERE ps.share_type = 'file' AND ps.target_id = f.id))",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

@@ -76,9 +76,11 @@ export {
 export type { FileShareContextV1, NamedShareContextV1, ProfileKeyPartiesV1 } from './namedShare'
 export {
   openPublicLinkCollectionKeyV1,
+  openPublicLinkFileKeyV1,
   sealPublicLinkCollectionKeyV1,
+  sealPublicLinkFileKeyV1,
 } from './publicLink'
-export type { PublicLinkCollectionContextV1 } from './publicLink'
+export type { PublicLinkCollectionContextV1, PublicLinkFileContextV1 } from './publicLink'
 export {
   createOwnedCollectionV1,
   openOwnedCollectionV1,

@@ -69,6 +69,16 @@
     "editorsCanShare": "Editors can share",
     "editorsCanShareHint": "People who can edit may share it with others (they cannot remove anyone).",
     "onlyOwnerRemoves": "Only the owner can change or remove people.",
-    "settingFailed": "The setting could not be saved."
+    "settingFailed": "The setting could not be saved.",
+    "linksTitle": "Public links",
+    "linksHint": "Anyone with a link can open and download this file, without an account. The key is in the link itself; the server never sees it.",
+    "link": "Public link",
+    "linkCreated": "Created {{date}}",
+    "copy": "Copy",
+    "linkCopied": "Link copied",
+    "removeLink": "Remove this link",
+    "createLink": "Create a public link",
+    "linkFailed": "The link could not be made.",
+    "confirmLinkBody": "The link stops working now, and the file moves to a new key the link never gets. Anyone who already downloaded it keeps their copy."
   }
 }

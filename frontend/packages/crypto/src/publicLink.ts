@@ -74,3 +74,38 @@ export function openOwnerLinkKeyV1(
 ): Promise<Uint8Array> {
   return openDriveEnvelope(envelope, masterKey, ownerContext(context))
 }
+
+export interface PublicLinkFileContextV1 {
+  fileId: string
+  ownerUserId: string
+  /** The file key's generation. */
+  generation: number
+}
+
+function fileContext(context: PublicLinkFileContextV1) {
+  return {
+    purpose: DRIVE_ENVELOPE_PURPOSE.publicLinkFileKey,
+    epoch: context.generation,
+    revision: 1n,
+    objectId: context.fileId,
+    parentId: context.ownerUserId,
+  } as const
+}
+
+/** Wrap one file's key for a link to that file (docs/plans/drive-file-sharing.md, slice 3). */
+export function sealPublicLinkFileKeyV1(
+  fileKey: Uint8Array,
+  linkKey: Uint8Array,
+  context: PublicLinkFileContextV1,
+): Promise<string> {
+  return sealDriveEnvelope(fileKey, linkKey, fileContext(context))
+}
+
+/** Open only the exact file/owner/generation the link's record names. */
+export function openPublicLinkFileKeyV1(
+  envelope: string,
+  linkKey: Uint8Array,
+  expected: PublicLinkFileContextV1,
+): Promise<Uint8Array> {
+  return openDriveEnvelope(envelope, linkKey, fileContext(expected))
+}

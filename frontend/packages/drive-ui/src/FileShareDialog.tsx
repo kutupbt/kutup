@@ -1,4 +1,4 @@
-import { User } from 'lucide-react'
+import { Link2, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -14,10 +14,11 @@ import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
 import { AccessChanged } from '@kutup/drive-core/access'
-import { CannotShareWithSelf, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
+import { CannotShareWithSelf, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
@@ -117,16 +118,29 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const owner = target.role === 'owner'
   const remove = useRemoveFileAccess()
   const people = usePeople()
-  const [pending, setPending] = useState<{ userId: string; name: string } | null>(null)
+  // Someone, or a link, about to be removed (either moves the file to a new key).
+  const [pending, setPending] = useState<{ userId?: string; linkId?: string; name: string } | null>(null)
+  const createLink = useCreateFileLink()
+  const identity = useDriveIdentity()
+  const [newLink, setNewLink] = useState<string | null>(null)
 
   if (access.isPending) return <LoadingPanel label={t('fileShare.loading')} />
   if (access.isError || !access.data) return <Alert variant="error">{t('fileShare.loadFailed')}</Alert>
-  const { members } = access.data
+  const { members, publicLinks } = access.data
+
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success(t('fileShare.linkCopied'))
+    } catch {
+      toast.error(t('common.tryAgain'))
+    }
+  }
 
   function confirm() {
     if (!pending) return
     remove.mutate(
-      { ...target, removed: [pending.userId] },
+      { ...target, removed: pending.userId ? [pending.userId] : [], removedLinks: pending.linkId ? [pending.linkId] : [] },
       {
         onSuccess: () => {
           setPending(null)
@@ -171,7 +185,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
       {pending ? (
         <Alert variant="warn">
           <p className="font-medium">{t('fileShare.confirmTitle', { name: pending.name })}</p>
-          <p className="mt-1 text-sm">{t('fileShare.confirmBody')}</p>
+          <p className="mt-1 text-sm">{pending.linkId ? t('fileShare.confirmLinkBody') : t('fileShare.confirmBody')}</p>
           <div className="mt-3 flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setPending(null)} disabled={remove.isPending}>
               {t('common.cancel')}
@@ -181,6 +195,72 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
             </Button>
           </div>
         </Alert>
+      ) : null}
+      {owner ? (
+        <div className="space-y-2 border-t border-border pt-3">
+          <h3 className="text-sm font-semibold">{t('fileShare.linksTitle')}</h3>
+          <p className="text-xs text-muted-foreground">{t('fileShare.linksHint')}</p>
+          {publicLinks.length > 0 ? (
+            <ul className="divide-y divide-border rounded-md border border-border">
+              {publicLinks.map((link) => (
+                <li key={link.id} className="flex items-center gap-3 px-3 py-2">
+                  <Link2 className="size-4 text-muted-foreground" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{t('fileShare.link')}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {[
+                        t('fileShare.linkCreated', { date: new Date(link.createdAt).toLocaleDateString() }),
+                        link.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!identity.data}
+                    onClick={() => identity.data && void fileLinkUrl(link, identity.data).then(copy, () => toast.error(t('common.tryAgain')))}
+                  >
+                    {t('fileShare.copy')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={remove.isPending}
+                    onClick={() => setPending({ linkId: link.id, name: t('fileShare.link') })}
+                    aria-label={t('fileShare.removeLink')}
+                  >
+                    {t('fileShare.remove')}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {newLink ? (
+            <div className="flex gap-2">
+              <Input readOnly value={newLink} aria-label={t('fileShare.link')} onFocus={(e) => e.target.select()} data-testid="new-file-link" />
+              <Button type="button" variant="outline" onClick={() => void copy(newLink)}>
+                {t('fileShare.copy')}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              loading={createLink.isPending}
+              onClick={() =>
+                createLink.mutate(target, {
+                  onSuccess: (url) => setNewLink(url),
+                })
+              }
+            >
+              <Link2 /> {t('fileShare.createLink')}
+            </Button>
+          )}
+          {createLink.error ? <Alert variant="error">{t('fileShare.linkFailed')}</Alert> : null}
+        </div>
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
       {owner ? (

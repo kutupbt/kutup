@@ -247,7 +247,7 @@ pub async fn access(
     );
     let links: Vec<LinkRow> = sqlx::query_as(
         "SELECT id, token, owner_link_key_envelope, expires_at, created_at
-             FROM public_shares WHERE target_id = $1 ORDER BY created_at",
+             FROM public_shares WHERE target_id = $1 AND share_type = 'collection' ORDER BY created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)
@@ -523,7 +523,7 @@ pub async fn rotate(
     .fetch_all(&mut *tx)
     .await?;
     let links: Vec<(Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT id, owner_link_key_envelope FROM public_shares WHERE target_id = $1",
+        "SELECT id, owner_link_key_envelope FROM public_shares WHERE target_id = $1 AND share_type = 'collection'",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
@@ -698,7 +698,7 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query("DELETE FROM public_shares WHERE target_id = $1 AND id = ANY($2)")
+    sqlx::query("DELETE FROM public_shares WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)")
         .bind(collection_id)
         .bind(&req.removed.public_links)
         .execute(&mut *tx)

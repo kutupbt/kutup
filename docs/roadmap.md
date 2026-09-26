@@ -552,8 +552,6 @@ Two slices remain:
 - **Slice 2:** sharing a file with someone on another server. This needs a
   file invite (a capability for one file), with reads and writes through the
   recipient's server, as for federated folders.
-- **Slice 3:** a public link to one file. `public_shares` already reserves
-  `share_type` for this.
 
 Still to come: shared files in Drive search.
 

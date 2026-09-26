@@ -941,6 +941,11 @@ pub async fn purge_file_root(
     .bind(file_id)
     .execute(&mut *tx)
     .await?;
+    // Links to the file itself (no FK ties them down).
+    sqlx::query("DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1")
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)

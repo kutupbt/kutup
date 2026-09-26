@@ -61,6 +61,11 @@ pub enum DriveEnvelopePurpose {
     /// current file key walk down to every older one, in whichever folder
     /// the file is (docs/plans/drive-move.md).
     PreviousFileKey = 10,
+    /// A file's key of generation `g` (the context's epoch), sealed under a
+    /// public link's key: object = file, parent = owner. A link to one file
+    /// (docs/plans/drive-file-sharing.md, slice 3); a new generation needs a
+    /// new wrap.
+    PublicLinkFileKey = 11,
 }
 
 impl DriveEnvelopePurpose {
@@ -75,7 +80,8 @@ impl DriveEnvelopePurpose {
             | Self::PublicLinkCollectionKey
             | Self::PreviousCollectionKey
             | Self::PublicLinkKey
-            | Self::PreviousFileKey => len == KEY_LEN,
+            | Self::PreviousFileKey
+            | Self::PublicLinkFileKey => len == KEY_LEN,
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
@@ -107,6 +113,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             8 => Ok(Self::PreviousCollectionKey),
             9 => Ok(Self::PublicLinkKey),
             10 => Ok(Self::PreviousFileKey),
+            11 => Ok(Self::PublicLinkFileKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -188,6 +195,18 @@ impl DriveEnvelopeContextV1 {
             1,
             file_id,
             file_id,
+        )
+    }
+
+    /// A file's key of `generation`, under a public link's key: bound to the
+    /// file, its owner and the generation.
+    pub fn public_link_file_key(file_id: &str, owner_id: &str, generation: u32) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkFileKey,
+            generation,
+            1,
+            file_id,
+            owner_id,
         )
     }
 
@@ -519,5 +538,28 @@ mod tests {
                 .as_str(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_file_link_opens_only_for_its_file_owner_and_generation() {
+        let file = "11111111-1111-4111-8111-111111111111";
+        let owner = "22222222-2222-4222-8222-222222222222";
+        let other = "33333333-3333-4333-8333-333333333333";
+        let (file_key, link_key) = ([0x55; 32], [0x66; 32]);
+        let scope = DriveEnvelopeContextV1::public_link_file_key(file, owner, 3).unwrap();
+        assert_eq!(scope.purpose, DriveEnvelopePurpose::PublicLinkFileKey);
+        let sealed = seal_b64(&file_key, &link_key, scope).unwrap();
+        assert_eq!(open_b64(&sealed, &link_key, scope).unwrap(), file_key);
+        for wrong in [
+            DriveEnvelopeContextV1::public_link_file_key(file, owner, 4).unwrap(),
+            DriveEnvelopeContextV1::public_link_file_key(other, owner, 3).unwrap(),
+            DriveEnvelopeContextV1::public_link_file_key(file, other, 3).unwrap(),
+            // A folder link's wrap is a different thing.
+            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::PublicLinkCollectionKey, 3, 1, file, owner).unwrap(),
+        ] {
+            assert!(open_b64(&sealed, &link_key, wrong).is_err());
+        }
+        // Only a key fits.
+        assert!(seal_b64(b"short", &link_key, scope).is_err());
     }
 }

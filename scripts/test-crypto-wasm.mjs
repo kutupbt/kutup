@@ -109,6 +109,18 @@ assert.throws(
   /authentication failed/,
 )
 
+// A link to one file: purpose 11, epoch = the file key's generation.
+{
+  const fileKey = Buffer.alloc(32, 0x55).toString('base64')
+  const linkKey = Buffer.alloc(32, 0x66).toString('base64')
+  const file = '11111111-1111-4111-8111-111111111111'
+  const owner = '22222222-2222-4222-8222-222222222222'
+  const wrapped = crypto.sealDriveEnvelope(fileKey, linkKey, 11, 3, 1n, file, owner)
+  assert.equal(crypto.openDriveEnvelope(wrapped, linkKey, 11, 3, 1n, file, owner), fileKey)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 11, 4, 1n, file, owner), /authentication failed/)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 5, 3, 1n, file, owner), /authentication failed/)
+}
+
 // File blobs are bound to the file and the file key's generation, not a folder.
 const blobVector = vectors.driveFileBlob
 const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)

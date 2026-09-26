@@ -356,6 +356,10 @@
       "other": {
         "title": "The files could not be opened",
         "description": "Check your connection and reload."
+      },
+      "waiting": {
+        "title": "Waiting for the owner",
+        "description": "This file moved to a new key, and its owner has not updated this link yet. It works again once they open Kutup Drive."
       }
     }
   },

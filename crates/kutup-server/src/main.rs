@@ -916,6 +916,10 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/share/:token/epochs", get(shares::public_share_epochs))
         .route(
+            "/api/share/:token/state/:fileId",
+            get(shares::public_share_state),
+        )
+        .route(
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )

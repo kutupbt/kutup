@@ -4,9 +4,12 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { fromBase64, openFileRecordV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
+import { fromBase64, openFileMetadataV1, openFileRecordV1, openPublicLinkCollectionKeyV1, openPublicLinkFileKeyV1 } from '@kutup/crypto'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
+import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { isListName, stateToListJson } from '@kutup/map/list'
+import { editorKindFor } from '../editor/editorKind'
 import { streamDownload } from '@kutup/files/download/streamDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
@@ -24,6 +27,8 @@ import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 
 interface ShareInfo {
+  /** 'collection': a folder's files; 'file': one file (docs/plans/drive-file-sharing.md). */
+  shareType: 'collection' | 'file'
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
@@ -31,6 +36,8 @@ interface ShareInfo {
   /** Signs the folder's key history. */
   ownerAuthorityPublicKey: string
   expiresAt?: string | null
+  /** A link to one file: the file (its key is `collectionKeyEnvelope`, of generation `collectionKeyEpoch`). */
+  file?: PublicFileRow
 }
 
 interface PublicFileRow {
@@ -51,12 +58,14 @@ interface PublicFile {
   row: PublicFileRow
   /** The key the downloaded content opens with (of `row.contentKeyGeneration`). */
   fileKey: Uint8Array | null
+  /** The file's current key (of `row.keyGeneration`), to reach any older one. */
+  currentKey: Uint8Array | null
   name: string | null
   mimeType: string
   size: number
 }
 
-type Failure = 'missingKey' | 'notFound' | 'expired' | 'badKey' | 'other'
+type Failure = 'missingKey' | 'notFound' | 'expired' | 'badKey' | 'waiting' | 'other'
 
 /** The key lives only in the fragment (`#key=…`), which browsers never send to a server. */
 function linkKey(): Uint8Array | null {
@@ -80,6 +89,7 @@ async function loadShare(token: string): Promise<PublicFile[]> {
     throw new PublicLinkError(code === 'not_found' ? 'notFound' : (error as { response?: { status?: number } }).response?.status === 410 ? 'expired' : 'other')
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
+  if (share.shareType === 'file') return [await loadFile(share, key)]
   let collectionKey: Uint8Array
   try {
     collectionKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
@@ -122,12 +132,80 @@ async function loadShare(token: string): Promise<PublicFile[]> {
       return {
         row,
         fileKey: contentKey,
+        currentKey: opened?.fileKey ?? null,
         name: opened?.metadata.name ?? null,
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
       }
     }),
   )
+}
+
+/** A link to one file: its key from the link, then its name and content by its own key. */
+async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> {
+  const row = share.file
+  if (!row) throw new PublicLinkError('notFound')
+  let fileKey: Uint8Array
+  try {
+    fileKey = await openPublicLinkFileKeyV1(share.collectionKeyEnvelope, key, {
+      fileId: share.targetId,
+      ownerUserId: share.ownerUserId,
+      generation: share.collectionKeyEpoch,
+    })
+  } catch {
+    throw new PublicLinkError('badKey')
+  }
+  // The file moved to a newer key the owner has not handed to the link yet.
+  if (share.collectionKeyEpoch !== row.keyGeneration) throw new PublicLinkError('waiting')
+  const metadata = await openFileMetadataV1(row, fileKey).catch(() => null)
+  const contentKey = await fileKeyAtV1(fileKey, row.id, row.keyGeneration, row.keyHistory ?? [], row.contentKeyGeneration).catch(() => null)
+  return {
+    row,
+    fileKey: contentKey,
+    currentKey: fileKey,
+    name: metadata?.name ?? null,
+    mimeType: metadata?.mimeType ?? 'application/octet-stream',
+    size: metadata?.size ?? 0,
+  }
+}
+
+/**
+ * A note's text or a place list's places as last saved. Their edits are Yjs
+ * state, not whole-file versions, so the download alone is the upload. Null
+ * for other files, or when nothing was saved since the upload.
+ */
+async function editedContent(token: string, file: PublicFile): Promise<Uint8Array | null> {
+  const name = file.name ?? ''
+  const list = isListName(name)
+  if (!file.currentKey || (!list && editorKindFor(name) !== 'text')) return null
+  let response
+  try {
+    response = await api.get<ArrayBuffer>(`/share/${encodeURIComponent(token)}/state/${file.row.id}`, { responseType: 'arraybuffer' })
+  } catch (error) {
+    if ((error as { response?: { status?: number } }).response?.status === 404) return null
+    throw error
+  }
+  const generation = Number(response.headers['x-kutup-key-generation'])
+  const key = await fileKeyAtV1(file.currentKey, file.row.id, file.row.keyGeneration, file.row.keyHistory ?? [], generation)
+  const state = await decryptFileBlobV1(new Uint8Array(response.data), key, { fileId: file.row.id, generation })
+  if (list) return stateToListJson(state)
+  const Y = await import('yjs')
+  const doc = new Y.Doc()
+  try {
+    Y.applyUpdateV2(doc, state)
+    return new TextEncoder().encode(doc.getText('content').toJSON())
+  } finally {
+    doc.destroy()
+  }
+}
+
+function saveBytes(bytes: Uint8Array, filename: string, mimeType: string) {
+  const url = URL.createObjectURL(new Blob([bytes.slice()], { type: mimeType }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 class PublicLinkError extends Error {
@@ -162,6 +240,12 @@ export function PublicSharePage() {
   async function download(file: PublicFile) {
     if (!file.fileKey || !file.name) return
     try {
+      // A note or place list: its saved edits, turned back into the file.
+      const edited = await editedContent(token, file)
+      if (edited) {
+        saveBytes(edited, file.name, file.mimeType)
+        return
+      }
       await streamDownload({
         url: `${await resolveApiBase()}/share/${encodeURIComponent(token)}/download/${file.row.id}`,
         fileKey: file.fileKey,

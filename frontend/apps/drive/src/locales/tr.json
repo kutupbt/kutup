@@ -356,6 +356,10 @@
       "other": {
         "title": "Dosyalar açılamadı",
         "description": "Bağlantınızı kontrol edip sayfayı yenileyin."
+      },
+      "waiting": {
+        "title": "Sahibi bekleniyor",
+        "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Drive’ı açtığında yeniden çalışır."
       }
     }
   },

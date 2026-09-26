@@ -25,7 +25,7 @@ use crate::AppState;
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateShareRequest {
-    /// V1 accepts only "collection".
+    /// "collection" (a folder) or "file" (one file).
     share_type: String,
     target_id: String,
     collection_key_envelope: String,
@@ -55,32 +55,66 @@ pub async fn create_public_share(
     let user_id =
         Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
 
-    if req.share_type != "collection" {
-        return Err(AppError::bad_request("unsupported public share type"));
-    }
     let target_uuid = canonical_uuid(&req.target_id)?;
-    let key_epoch: Option<i32> = sqlx::query_scalar(
-        "SELECT key_epoch FROM collections \
-         WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
-    )
-    .bind(target_uuid)
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(key_epoch) = key_epoch else {
-        return Err(AppError::forbidden("forbidden"));
+    // The key version the wrap is bound to: the folder's epoch, or the file
+    // key's generation.
+    let key_epoch: i32 = match req.share_type.as_str() {
+        "collection" => {
+            let key_epoch: Option<i32> = sqlx::query_scalar(
+                "SELECT key_epoch FROM collections \
+                 WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+            )
+            .bind(target_uuid)
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            let Some(key_epoch) = key_epoch else {
+                return Err(AppError::forbidden("forbidden"));
+            };
+            let epoch = u32::try_from(key_epoch)
+                .map_err(|_| AppError::conflict("invalid collection epoch"))?;
+            validate_envelope(
+                &req.collection_key_envelope,
+                DriveEnvelopeContextV1::new(
+                    DriveEnvelopePurpose::PublicLinkCollectionKey,
+                    epoch,
+                    1,
+                    &req.target_id,
+                    &user_id.to_string(),
+                )
+                .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+            )?;
+            key_epoch
+        }
+        // A link to one file (docs/plans/drive-file-sharing.md, slice 3):
+        // its current key, sealed under the link key.
+        "file" => {
+            let generation: Option<i32> = sqlx::query_scalar(
+                "SELECT f.key_generation FROM files f JOIN collections c ON c.id = f.collection_id
+                 WHERE f.id = $1 AND c.owner_user_id = $2
+                   AND f.deleted_at IS NULL AND c.deleted_at IS NULL",
+            )
+            .bind(target_uuid)
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            let Some(generation) = generation else {
+                return Err(AppError::forbidden("forbidden"));
+            };
+            validate_envelope(
+                &req.collection_key_envelope,
+                DriveEnvelopeContextV1::public_link_file_key(
+                    &req.target_id,
+                    &user_id.to_string(),
+                    u32::try_from(generation)
+                        .map_err(|_| AppError::conflict("invalid key generation"))?,
+                )
+                .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+            )?;
+            generation
+        }
+        _ => return Err(AppError::bad_request("unsupported public share type")),
     };
-    let epoch =
-        u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid collection epoch"))?;
-    let envelope_context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::PublicLinkCollectionKey,
-        epoch,
-        1,
-        &req.target_id,
-        &user_id.to_string(),
-    )
-    .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
-    validate_envelope(&req.collection_key_envelope, envelope_context)?;
     let link_id = canonical_uuid(&req.id)?;
     validate_envelope(
         &req.owner_link_key_envelope,
@@ -142,6 +176,27 @@ async fn collection_live(state: &AppState, collection_id: Uuid) -> bool {
     .unwrap_or(false)
 }
 
+/// Whether a linked file is live (it and its folder not trashed, not gone).
+async fn file_live(state: &AppState, file_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
+                        WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL)",
+    )
+    .bind(file_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false)
+}
+
+/// Whether a link's target is live, whichever kind it is.
+async fn target_live(state: &AppState, share_type: &str, target_id: Uuid) -> bool {
+    match share_type {
+        "collection" => collection_live(state, target_id).await,
+        "file" => file_live(state, target_id).await,
+        _ => false,
+    }
+}
+
 /// Authenticated public context plus the opaque key envelope. The fragment key
 /// is deliberately absent.
 #[derive(Debug, Serialize)]
@@ -157,6 +212,10 @@ struct PublicShareResponse {
     owner_authority_public_key: String,
     #[serde(with = "time::serde::rfc3339::option")]
     expires_at: Option<OffsetDateTime>,
+    /// A link to one file: the file (its key wrap is `collectionKeyEnvelope`,
+    /// at generation `collectionKeyEpoch`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<PublicFileRow>,
 }
 
 /// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
@@ -202,10 +261,15 @@ pub async fn get_public_share(
             return Err(AppError::new(StatusCode::GONE, "link expired"));
         }
     }
-    // Dark while its folder is in the trash, like the listing and downloads.
-    if share_type != "collection" || !collection_live(&state, target_id).await {
+    // Dark while its folder (or file) is in the trash, like the downloads.
+    if !target_live(&state, &share_type, target_id).await {
         return Err(AppError::not_found("not found"));
     }
+    let file = if share_type == "file" {
+        public_files(&state, "f.id = $1", target_id).await?.pop()
+    } else {
+        None
+    };
     Ok(Json(PublicShareResponse {
         id,
         share_type,
@@ -215,6 +279,7 @@ pub async fn get_public_share(
         owner_user_id,
         owner_authority_public_key: authority,
         expires_at,
+        file,
     })
     .into_response())
 }
@@ -233,8 +298,9 @@ pub async fn public_share_epochs(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
-    let meta: Option<(Uuid, Option<OffsetDateTime>)> =
-        sqlx::query_as("SELECT target_id, expires_at FROM public_shares WHERE token = $1")
+    let meta: Option<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
+        "SELECT target_id, expires_at FROM public_shares WHERE token = $1 AND share_type = 'collection'",
+    )
             .bind(&token)
             .fetch_optional(&state.pool)
             .await?;
@@ -310,6 +376,12 @@ pub async fn list_public_share_files(
         return Err(AppError::not_found("not found"));
     }
 
+    let files = public_files(&state, "f.collection_id = $1", target_id).await?;
+    Ok(Json(files).into_response())
+}
+
+/// The files matching `filter` (on `f`, `$1` = `id`), as a public link shows them.
+async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec<PublicFileRow>> {
     type PubFileTuple = (
         Uuid,
         Uuid,
@@ -328,17 +400,18 @@ pub async fn list_public_share_files(
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
                   f.created_at, f.original_key_generation, {}, {}
-           FROM files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
+           FROM files f WHERE {} AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::CONTENT_KEY_GENERATION_SQL,
-        crate::models::FILE_KEY_HISTORY_SQL
+        crate::models::FILE_KEY_HISTORY_SQL,
+        filter
     ))
-    .bind(target_id)
+    .bind(id)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
 
-    let files: Vec<PublicFileRow> = rows
+    Ok(rows
         .into_iter()
         .map(
             |(
@@ -371,8 +444,105 @@ pub async fn list_public_share_files(
                 }
             },
         )
-        .collect();
-    Ok(Json(files).into_response())
+        .collect())
+}
+
+/// The file `file_id`, when the link `token` reaches it (its folder's file,
+/// or the one file it links to) and is live and unexpired.
+async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult<Uuid> {
+    let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
+        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+    )
+    .bind(token)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    let Some((target_id, share_type, expires_at)) = meta else {
+        return Err(AppError::not_found("not found"));
+    };
+    if let Some(exp) = expires_at {
+        if OffsetDateTime::now_utc() > exp {
+            return Err(AppError::new(StatusCode::GONE, "link expired"));
+        }
+    }
+
+    let fid = Uuid::parse_str(file_id).map_err(|_| AppError::not_found("not found"))?;
+    let coll_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
+            .bind(fid)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+    let Some(coll_id) = coll_id else {
+        return Err(AppError::not_found("not found"));
+    };
+
+    // A folder link reaches its folder's files; a file link its one file.
+    let reaches = match share_type.as_str() {
+        "collection" => coll_id == target_id,
+        "file" => fid == target_id,
+        _ => false,
+    };
+    if !reaches {
+        return Err(AppError::forbidden("forbidden"));
+    }
+    if !target_live(state, &share_type, target_id).await {
+        return Err(AppError::not_found("not found"));
+    }
+
+    Ok(fid)
+}
+
+/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's latest
+/// saved state (a Yjs version, sealed under the file key of the generation in
+/// `X-Kutup-Key-Generation`), for the page to turn back into the file: their
+/// edits are not whole-file versions, so the download alone would be the
+/// upload. `404` when it has none. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/state/{fileId}",
+    tag = "shares",
+    params(
+        ("token" = String, Path, description = "Share token (the capability)"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 200, description = "The sealed state (application/octet-stream)"), (status = 404, description = "No saved state"))
+)]
+pub async fn public_share_state(
+    State(state): State<AppState>,
+    Path((token, file_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let fid = link_reaches(&state, &token, &file_id).await?;
+    let latest: Option<(String, String, i64, i32)> = sqlx::query_as(
+        "SELECT storage_path, s3_version_id, size_bytes, key_generation FROM file_versions
+         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((path, s3_version_id, _, key_generation)) = latest else {
+        return Err(AppError::not_found("no saved state"));
+    };
+    let (body, size) = if s3_version_id.is_empty() {
+        state.storage.get_object(&path).await
+    } else {
+        state
+            .storage
+            .get_object_version(&path, &s3_version_id)
+            .await
+    }
+    .map_err(|_| AppError::internal("storage"))?;
+    Ok(octet_stream_response(
+        body,
+        size,
+        &[(
+            axum::http::HeaderName::from_static("x-kutup-key-generation"),
+            key_generation.to_string(),
+        )],
+    ))
 }
 
 /// `GET /api/share/{token}/download/{fileId}` — streams the encrypted blob. Anonymous:
@@ -397,43 +567,7 @@ pub async fn download_public_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-    let Some((target_id, share_type, expires_at)) = meta else {
-        return Err(AppError::not_found("not found"));
-    };
-    if let Some(exp) = expires_at {
-        if OffsetDateTime::now_utc() > exp {
-            return Err(AppError::new(StatusCode::GONE, "link expired"));
-        }
-    }
-
-    let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let coll_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
-    let Some(coll_id) = coll_id else {
-        return Err(AppError::not_found("not found"));
-    };
-
-    // Folder links are the only kind: anything else grants nothing.
-    if share_type != "collection" || coll_id != target_id {
-        return Err(AppError::forbidden("forbidden"));
-    }
-    if !collection_live(&state, target_id).await {
-        return Err(AppError::not_found("not found"));
-    }
-
+    let fid = link_reaches(&state, &token, &file_id).await?;
     // A public link shows the file as it is now, edits included.
     let content = crate::file_content::current_content(&state.pool, fid)
         .await?
