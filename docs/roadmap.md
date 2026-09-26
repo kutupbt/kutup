@@ -438,7 +438,11 @@ reference are in `kutup-references/` (`ente`, `comaps`).
 
 ### Photos (like Ente Photos)
 
-An end-to-end encrypted photo and video library.
+An end-to-end encrypted photo and video library on `photos.<domain>`.
+Reference mostly Ente (`kutup-references/ente`: on-device face grouping,
+the Places map, the timeline); Proton's Photos section in its Drive web app
+(`kutup-references/WebClients/applications/drive/src/app/photos`, with
+albums) is the second reference.
 - **Library:** a timeline, albums, favourites, archive and hidden items, and
   trash.
 - **Photos are Drive files (decided 2026-09-26):** ordinary files in
