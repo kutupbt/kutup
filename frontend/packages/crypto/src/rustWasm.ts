@@ -305,6 +305,28 @@ export interface CryptoWasmModule {
     expectedRecipientAccount: string,
     expectedRecipientIncarnationId: string,
   ): string
+  sealFileShareEnvelope(
+    fileKeyBase64: string,
+    senderMasterKeyBase64: string,
+    recipientHpkePublicKeyBase64: string,
+    fileId: string,
+    generation: number,
+    senderAccount: string,
+    senderIncarnationId: string,
+    recipientAccount: string,
+    recipientIncarnationId: string,
+  ): string
+  openFileShareEnvelope(
+    envelopeBase64: string,
+    senderSigningPublicKeyBase64: string,
+    recipientHpkePrivateKeyBase64: string,
+    expectedFileId: string,
+    expectedGeneration: number,
+    expectedSenderAccount: string,
+    expectedSenderIncarnationId: string,
+    expectedRecipientAccount: string,
+    expectedRecipientIncarnationId: string,
+  ): string
   liveLocationSeal(
     keyBase64: string,
     streamIdHex: string,

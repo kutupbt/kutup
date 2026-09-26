@@ -1327,6 +1327,85 @@ pub fn open_named_share_envelope(
     Ok(STANDARD.encode(collection_key))
 }
 
+/// A single file's key for someone it is shared with
+/// (docs/plans/drive-file-sharing.md), sealed to them and signed by the owner.
+#[wasm_bindgen(js_name = sealFileShareEnvelope)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_file_share_envelope(
+    file_key_base64: &str,
+    sender_master_key_base64: &str,
+    recipient_hpke_public_key_base64: &str,
+    file_id: &str,
+    generation: u32,
+    sender_account: &str,
+    sender_incarnation_id: &str,
+    recipient_account: &str,
+    recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
+    let sender_master_key: [u8; 32] = sender_master_key
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let recipient_public_key = decode_canonical_base64(
+        recipient_hpke_public_key_base64,
+        "recipient HPKE public key",
+    )?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::named_share::FileShareEnvelopeV1::seal(
+        &file_key,
+        file_id,
+        generation,
+        sender_account,
+        sender_incarnation_id,
+        sender_identity.drive_signing_key(),
+        recipient_account,
+        recipient_incarnation_id,
+        &recipient_public_key,
+    )
+    .and_then(|envelope| envelope.encode_b64())
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[wasm_bindgen(js_name = openFileShareEnvelope)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_file_share_envelope(
+    envelope_base64: &str,
+    sender_signing_public_key_base64: &str,
+    recipient_hpke_private_key_base64: &str,
+    expected_file_id: &str,
+    expected_generation: u32,
+    expected_sender_account: &str,
+    expected_sender_incarnation_id: &str,
+    expected_recipient_account: &str,
+    expected_recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let sender_signing_public_key = decode_canonical_base64(
+        sender_signing_public_key_base64,
+        "sender signing public key",
+    )?;
+    let recipient_private_key = decode_canonical_base64(
+        recipient_hpke_private_key_base64,
+        "recipient HPKE private key",
+    )?;
+    let envelope = kutup_crypto::named_share::FileShareEnvelopeV1::decode_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let file_key = envelope
+        .open(
+            expected_file_id,
+            expected_generation,
+            expected_sender_account,
+            expected_sender_incarnation_id,
+            &sender_signing_public_key,
+            expected_recipient_account,
+            expected_recipient_incarnation_id,
+            &recipient_private_key,
+        )
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(file_key))
+}
+
 /// Your profile key for someone you share Drive folders with
 /// (docs/plans/unified-profile.md), sealed to them and signed by you.
 #[wasm_bindgen(js_name = sealProfileKeyEnvelope)]

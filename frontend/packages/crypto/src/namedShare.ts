@@ -95,3 +95,56 @@ export async function openProfileKeyEnvelope(
     expected.recipientIncarnationId,
   ))
 }
+
+/** What a single-file share is bound to (docs/plans/drive-file-sharing.md). */
+export interface FileShareContextV1 {
+  fileId: string
+  /** The file key's generation. */
+  generation: number
+  senderAccount: string
+  senderIncarnationId: string
+  recipientAccount: string
+  recipientIncarnationId: string
+}
+
+/** A single file's current key, sealed to someone and signed by the owner. */
+export async function sealFileShareEnvelope(
+  fileKey: Uint8Array,
+  senderMasterKey: Uint8Array,
+  recipientHpkePublicKeyBase64: string,
+  context: FileShareContextV1,
+): Promise<string> {
+  const module = await getCryptoWasm()
+  return module.sealFileShareEnvelope(
+    toBase64(fileKey),
+    toBase64(senderMasterKey),
+    recipientHpkePublicKeyBase64,
+    context.fileId,
+    context.generation,
+    context.senderAccount,
+    context.senderIncarnationId,
+    context.recipientAccount,
+    context.recipientIncarnationId,
+  )
+}
+
+/** The file's key, once the envelope checks out as the owner's, to this account. */
+export async function openFileShareEnvelope(
+  envelopeBase64: string,
+  senderSigningPublicKeyBase64: string,
+  recipientHpkePrivateKey: Uint8Array,
+  expected: FileShareContextV1,
+): Promise<Uint8Array> {
+  const module = await getCryptoWasm()
+  return fromBase64(module.openFileShareEnvelope(
+    envelopeBase64,
+    senderSigningPublicKeyBase64,
+    toBase64(recipientHpkePrivateKey),
+    expected.fileId,
+    expected.generation,
+    expected.senderAccount,
+    expected.senderIncarnationId,
+    expected.recipientAccount,
+    expected.recipientIncarnationId,
+  ))
+}

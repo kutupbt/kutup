@@ -1888,6 +1888,10 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
+    sqlx::query("DELETE FROM file_shares WHERE recipient_user_id = $1 OR sharer_user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
 
     // A destructive wipe terminates the old account incarnation. Retain its
     // append-only signed manifest history for peers' reset evidence, but remove

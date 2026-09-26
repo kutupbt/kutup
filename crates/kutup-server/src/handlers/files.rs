@@ -122,84 +122,7 @@ pub async fn list_files(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        id: Uuid,
-        collection_id: Uuid,
-        uploader_user_id: Uuid,
-        metadata_envelope: String,
-        file_key_envelope: String,
-        key_epoch: i32,
-        key_generation: i32,
-        metadata_revision: i64,
-        encrypted_size_bytes: i64,
-        created_at: time::OffsetDateTime,
-        updated_at: time::OffsetDateTime,
-        thumb_sm: Option<time::OffsetDateTime>,
-        thumb_lg: Option<time::OffsetDateTime>,
-        thumb_sm_generation: Option<i32>,
-        thumb_lg_generation: Option<i32>,
-        thumb_stale: bool,
-        original_key_generation: i32,
-        content_key_generation: i32,
-        key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
-    }
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.uploader_user_id,
-                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
-                  f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
-                  f.original_key_generation,
-                  {} AS key_history, {} AS content_key_generation,
-                  sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
-                  sm.key_generation AS thumb_sm_generation,
-                  lg.key_generation AS thumb_lg_generation,
-                  -- Drawn from something other than the latest version (or,
-                  -- with no versions, from a version at all).
-                  EXISTS (
-                    SELECT 1 FROM file_thumbnails t
-                    WHERE t.file_id = f.id
-                      AND t.source_version IS DISTINCT FROM (
-                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
-                        ORDER BY v.created_at DESC LIMIT 1)
-                  ) AS thumb_stale
-           FROM files f
-           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
-           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
-           WHERE f.collection_id = $1 AND f.deleted_at IS NULL
-           ORDER BY f.created_at DESC"#,
-        crate::models::FILE_KEY_HISTORY_SQL,
-        crate::models::CONTENT_KEY_GENERATION_SQL
-    ))
-    .bind(coll_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let out: Vec<FileRow> = rows
-        .into_iter()
-        .map(|r| FileRow {
-            id: r.id.to_string(),
-            collection_id: r.collection_id.to_string(),
-            uploader_user_id: r.uploader_user_id.to_string(),
-            metadata_envelope: r.metadata_envelope,
-            file_key_envelope: r.file_key_envelope,
-            key_epoch: r.key_epoch,
-            key_generation: r.key_generation,
-            metadata_revision: r.metadata_revision,
-            encrypted_size_bytes: r.encrypted_size_bytes,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-            thumbnails: FileThumbnails {
-                sm: r.thumb_sm,
-                lg: r.thumb_lg,
-                sm_key_generation: r.thumb_sm_generation,
-                lg_key_generation: r.thumb_lg_generation,
-            },
-            thumbnail_stale: r.thumb_stale,
-            original_key_generation: r.original_key_generation,
-            content_key_generation: r.content_key_generation,
-            key_history: r.key_history.0,
-        })
-        .collect();
+    let out = file_rows(&state.pool, "f.collection_id = $1", coll_id).await?;
     Ok(Json(out).into_response())
 }
 
@@ -425,15 +348,16 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let coll_id: Option<Uuid> =
+    let exists: Option<Uuid> =
         sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(file_id)
             .fetch_optional(&state.pool)
             .await?;
-    let Some(coll_id) = coll_id else {
+    if exists.is_none() {
         return Err(AppError::not_found("not found"));
-    };
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    }
+    // The folder's people, or someone the file itself is shared with.
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -627,4 +551,93 @@ async fn require_owner_or_uploader_with_delete(
     } else {
         Err(AppError::forbidden("forbidden"))
     }
+}
+
+/// File records as the folder listing returns them, for the files matching
+/// `filter` (an SQL condition on `f` with one UUID parameter, `$1`): a
+/// folder's files, or the files shared with someone by themselves.
+pub(crate) async fn file_rows(
+    pool: &sqlx::PgPool,
+    filter: &str,
+    id: Uuid,
+) -> Result<Vec<FileRow>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        collection_id: Uuid,
+        uploader_user_id: Uuid,
+        metadata_envelope: String,
+        file_key_envelope: String,
+        key_epoch: i32,
+        key_generation: i32,
+        metadata_revision: i64,
+        encrypted_size_bytes: i64,
+        created_at: time::OffsetDateTime,
+        updated_at: time::OffsetDateTime,
+        thumb_sm: Option<time::OffsetDateTime>,
+        thumb_lg: Option<time::OffsetDateTime>,
+        thumb_sm_generation: Option<i32>,
+        thumb_lg_generation: Option<i32>,
+        thumb_stale: bool,
+        original_key_generation: i32,
+        content_key_generation: i32,
+        key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
+    }
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        r#"SELECT f.id, f.collection_id, f.uploader_user_id,
+                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
+                  f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
+                  f.original_key_generation,
+                  {} AS key_history, {} AS content_key_generation,
+                  sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                  sm.key_generation AS thumb_sm_generation,
+                  lg.key_generation AS thumb_lg_generation,
+                  -- Drawn from something other than the latest version (or,
+                  -- with no versions, from a version at all).
+                  EXISTS (
+                    SELECT 1 FROM file_thumbnails t
+                    WHERE t.file_id = f.id
+                      AND t.source_version IS DISTINCT FROM (
+                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
+                        ORDER BY v.created_at DESC LIMIT 1)
+                  ) AS thumb_stale
+           FROM files f
+           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           WHERE {} AND f.deleted_at IS NULL
+           ORDER BY f.created_at DESC"#,
+        crate::models::FILE_KEY_HISTORY_SQL,
+        crate::models::CONTENT_KEY_GENERATION_SQL,
+        filter
+    ))
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| FileRow {
+            id: r.id.to_string(),
+            collection_id: r.collection_id.to_string(),
+            uploader_user_id: r.uploader_user_id.to_string(),
+            metadata_envelope: r.metadata_envelope,
+            file_key_envelope: r.file_key_envelope,
+            key_epoch: r.key_epoch,
+            key_generation: r.key_generation,
+            metadata_revision: r.metadata_revision,
+            encrypted_size_bytes: r.encrypted_size_bytes,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            thumbnails: FileThumbnails {
+                sm: r.thumb_sm,
+                lg: r.thumb_lg,
+                sm_key_generation: r.thumb_sm_generation,
+                lg_key_generation: r.thumb_lg_generation,
+            },
+            thumbnail_stale: r.thumb_stale,
+            original_key_generation: r.original_key_generation,
+            content_key_generation: r.content_key_generation,
+            key_history: r.key_history.0,
+        })
+        .collect())
 }

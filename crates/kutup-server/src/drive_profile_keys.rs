@@ -144,14 +144,20 @@ async fn local_user_by_name(pool: &PgPool, username: &str) -> AppResult<Option<L
     }))
 }
 
-/// Whether two local people share a folder, either way round.
+/// Whether two local people share a folder or a file, either way round.
 async fn local_pair_shares(pool: &PgPool, a: Uuid, b: Uuid) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM collection_shares cs
             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
             WHERE (c.owner_user_id = $1 AND cs.recipient_user_id = $2)
-               OR (c.owner_user_id = $2 AND cs.recipient_user_id = $1))",
+               OR (c.owner_user_id = $2 AND cs.recipient_user_id = $1))
+         OR EXISTS (
+            SELECT 1 FROM file_shares fs
+            JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+            JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+            WHERE (c.owner_user_id = $1 AND fs.recipient_user_id = $2)
+               OR (c.owner_user_id = $2 AND fs.recipient_user_id = $1))",
     )
     .bind(a)
     .bind(b)
@@ -237,7 +243,17 @@ pub async fn list_people(
              UNION
              SELECT c.owner_user_id FROM collection_shares cs
              JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
-             WHERE cs.recipient_user_id = $1)
+             WHERE cs.recipient_user_id = $1
+             UNION
+             SELECT fs.recipient_user_id FROM file_shares fs
+             JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+             JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+             WHERE c.owner_user_id = $1
+             UNION
+             SELECT c.owner_user_id FROM file_shares fs
+             JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+             JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+             WHERE fs.recipient_user_id = $1)
          ORDER BY u.username",
     )
     .bind(user_id)

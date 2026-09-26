@@ -452,7 +452,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
-        file_assets, file_thumbnails, file_versions, files, folder_access,
+        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
         sessions as session_routes, shares, trash, tus,
     };
 
@@ -589,6 +589,12 @@ fn build_router(state: AppState) -> Router {
             post(folder_access::rotate).route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/api/files/:id/rekey", post(folder_access::rekey))
+        // --- Sharing a single file (docs/plans/drive-file-sharing.md). ---
+        .route("/api/files/:id/share", post(file_shares::share_file))
+        .route("/api/files/:id/access", get(file_shares::file_access))
+        .route("/api/files/:id/shares", put(file_shares::reseal))
+        .route("/api/files/:id/rotate", post(file_shares::rotate))
+        .route("/api/shared-files", get(file_shares::shared_with_me))
         // --- Moving files and folders (docs/plans/drive-move.md). ---
         .route("/api/files/:id/move", post(drive_move::move_file))
         .route(

@@ -11,6 +11,7 @@ pub mod collections;
 pub mod devices;
 pub mod drive_move;
 pub mod file_assets;
+pub mod file_shares;
 pub mod file_thumbnails;
 pub mod file_versions;
 pub mod files;
@@ -75,13 +76,15 @@ pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id:
     shared.unwrap_or(0) > 0
 }
 
-/// Access check for a file — owner of its collection or a share recipient. Mirrors
-/// `FileVersionsHandler.canAccessFile` / `FileAssetsHandler.canAccessFile`.
+/// Access check for a file — owner of its collection, a recipient of the
+/// folder, or a recipient of the file itself (docs/plans/drive-file-sharing.md).
 pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
     let row: Option<(Uuid, bool)> = sqlx::query_as(
         r#"SELECT c.owner_user_id,
                   EXISTS(SELECT 1 FROM collection_shares cs
                          WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
+                  OR EXISTS(SELECT 1 FROM file_shares fs
+                            WHERE fs.file_id = f.id AND fs.recipient_user_id = $2)
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )

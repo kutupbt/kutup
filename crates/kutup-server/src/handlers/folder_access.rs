@@ -400,7 +400,7 @@ pub struct RotateResult {
 }
 
 /// Kept ∪ removed must be exactly `current`, with nothing in both.
-fn same_membership(current: &[Uuid], kept: &[Uuid], removed: &[Uuid]) -> bool {
+pub(crate) fn same_membership(current: &[Uuid], kept: &[Uuid], removed: &[Uuid]) -> bool {
     let current: BTreeSet<_> = current.iter().collect();
     let kept_set: BTreeSet<_> = kept.iter().collect();
     let removed_set: BTreeSet<_> = removed.iter().collect();

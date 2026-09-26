@@ -8,14 +8,18 @@ use uuid::Uuid;
 
 /// Whether `user_id` may change the file's content or its derived objects
 /// (versions, assets, thumbnails, collaborative edits): the folder owner, or
-/// a recipient whose share lets them add files ("can edit"). A read-only
-/// recipient may open and download, nothing more.
+/// a recipient whose share lets them add files ("can edit"), or a recipient
+/// of the file itself with "can edit". A read-only recipient may open and
+/// download, nothing more.
 pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
     sqlx::query_scalar::<_, bool>(
         r#"SELECT c.owner_user_id = $2
                   OR EXISTS(SELECT 1 FROM collection_shares cs
                             WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
                               AND cs.can_upload)
+                  OR EXISTS(SELECT 1 FROM file_shares fs
+                            WHERE fs.file_id = f.id AND fs.recipient_user_id = $2
+                              AND fs.can_edit)
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )

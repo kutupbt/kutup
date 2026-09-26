@@ -496,6 +496,27 @@ assert.equal(
   fileRing.keys[0],
 )
 
+// A single-file share opens only as a file share, for its file and generation.
+{
+  const owner = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 1).toString('base64'))
+  const reader = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 2).toString('base64'))
+  const fileId = '22222222-2222-4222-8222-222222222222'
+  const sealed = crypto.sealFileShareEnvelope(
+    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
+    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  )
+  const open = (file, generation) => crypto.openFileShareEnvelope(
+    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    file, generation, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  )
+  assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
+  assert.throws(() => open(fileId, 3))
+  assert.throws(() => crypto.openNamedShareEnvelope(
+    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  ))
+}
+
 // A live-location update: the canonical bytes open, a fresh seal round-trips,
 // and another stream's id or a tampered byte opens nothing.
 const live = vectors.liveLocation
