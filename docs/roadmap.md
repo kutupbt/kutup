@@ -421,6 +421,95 @@ traffic is enabled.
 
 ---
 
+## New apps (after v1)
+
+Two more apps join Drive and Chat, each built the same way (product owner,
+2026-09-26):
+- its own origin (`photos.<domain>`, `maps.<domain>`);
+- a place in the app switcher;
+- one sign-in through session forking, with client types `web-photos` and
+  `web-maps`, and `<platform>-photos` / `<platform>-maps` for the native
+  apps later;
+- the account's one end-to-end encrypted profile;
+- federation over the same signed stack.
+
+Each gets a plan in `docs/plans/` before any code. Upstream checkouts for
+reference are in `kutup-references/` (`ente`, `comaps`).
+
+### Photos (like Ente Photos)
+
+An end-to-end encrypted photo and video library.
+- **Library:** a timeline, albums, favourites, archive and hidden items, and
+  trash.
+- **Encryption:** every file, thumbnail and piece of metadata (EXIF, dates,
+  location, captions) is sealed under a file key. That key sits under an
+  album key, as Drive already does it.
+- **Sharing:** albums shared with people here and on other servers (named
+  shares), collaborative albums, and public album links with the key in the
+  URL fragment.
+- **Search on the device:** faces, objects and text found by ML models that
+  run in the client (Ente's approach), so the server never sees the photos
+  or the index.
+- **Uploads:** from the web; automatic backup from the native apps (with
+  mobile, see "Native iOS and Android apps").
+- **Places:** a map of where your photos were taken, like Ente's, inside the
+  Photos app, drawn with the shared map component. Photos cluster by area, and opening a spot shows
+  what was taken there. The locations come from the encrypted metadata and
+  are placed on the map in the browser, so the server learns nothing.
+- **Storage (decided 2026-09-26):** one storage quota per account, shared
+  by Drive and Photos, the way one Google One plan covers Google Drive and
+  Google Photos. Photos is still its own app and its own library, an album
+  rather than a file tree. Storage pages in both apps show the shared total
+  and what each app uses. Chat's separate media quota is unchanged.
+- **Open questions for the plan:** how are live photos, RAW files and
+  videos handled (thumbnails and streaming)? How are duplicates found
+  without the server learning which files match (a hash kept inside the
+  encrypted metadata)? Can a photo be added to Drive, or Drive images to an
+  album, without a second copy counting twice?
+
+### Maps (like CoMaps)
+
+A private map for Chat and Photos, plus lists of pinned places: no tracking,
+and your places are yours. It is not a navigation app. Where each part lives
+(product owner, 2026-09-26):
+1. **Places map, in the Photos app (`photos.`):** where each photo was
+   taken. It is part of Photos, not a view in the Maps app.
+2. **Pinned place lists, in the Maps app (`maps.`):** end-to-end encrypted lists
+   (trips, restaurants, meeting points) that several people edit together,
+   shared with people here and on other servers like Drive folders. Your own
+   saved pins sync across devices; lists import and export as KML/GPX.
+3. **Location, in the Chat app (`chat.`):** sending a place once, and live
+   location for a set time, like WhatsApp. Sent, shown and followed inside
+   Chat. Both travel end-to-end encrypted inside the chat; a
+   live location is a stream of encrypted updates that stops when the time
+   runs out or the sender stops it.
+
+Navigation, routing and turn-by-turn directions are not goals. A place can
+still be opened in the device's own maps app.
+
+A place is chosen by dropping a pin on the map or taking the device's
+current location. Searching for places by name (an OpenStreetMap geocoder
+such as Photon, self-hosted) may come later; it is not part of the first
+version.
+
+- **One map component:** a shared package (e.g. `@kutup/map`) that Photos,
+  Maps and Chat all use, the way `@kutup/ui` is shared. Each app shows the
+  map inside its own pages; none of them sends you to another app to see a
+  location.
+- **Map:** a web map (e.g. MapLibre) over OpenStreetMap vector tiles that
+  the instance serves itself (e.g. PMTiles). No third-party tile or search
+  services, so only your own server sees which areas you look at. Regions
+  can be saved for offline use, and are what the native apps use later.
+- **Showing a location costs nothing extra:** a shared place, a live
+  location or a photo's location is decrypted in the browser and drawn over
+  the tiles; the server never sees coordinates.
+- **Open questions for the plan:**
+  - How are live-location updates delivered in groups without the server
+    learning more than message timing?
+  - How are tile data updates distributed, and how large is a region?
+
+---
+
 ## Polish / smaller items (future)
 
 ### Chat app (web) follow-ups
