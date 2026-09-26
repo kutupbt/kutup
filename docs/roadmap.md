@@ -488,25 +488,27 @@ Navigation, routing and turn-by-turn directions are not goals. A place can
 still be opened in the device's own maps app.
 
 A place is chosen by dropping a pin on the map or taking the device's
-current location. Searching for places by name (an OpenStreetMap geocoder
-such as Photon, self-hosted) may come later; it is not part of the first
-version.
+current location. City search runs on the device from a downloaded cities
+list, as in Ente; searching places by name through a geocoder may come
+later.
 
 - **One map component:** a shared package (e.g. `@kutup/map`) that Photos,
   Maps and Chat all use, the way `@kutup/ui` is shared. Each app shows the
   map inside its own pages; none of them sends you to another app to see a
   location.
-- **Map:** a web map (e.g. MapLibre) over OpenStreetMap vector tiles that
-  the instance serves itself (e.g. PMTiles). No third-party tile or search
-  services, so only your own server sees which areas you look at. Regions
-  can be saved for offline use, and are what the native apps use later.
-- **Showing a location costs nothing extra:** a shared place, a live
-  location or a photo's location is decrypted in the browser and drawn over
-  the tiles; the server never sees coordinates.
-- **Open questions for the plan:**
-  - How are live-location updates delivered in groups without the server
-    learning more than message timing?
-  - How are tile data updates distributed, and how large is a region?
+- **Map data (decided 2026-09-26, docs/plans/maps.md):** no map data on the
+  server for now. Tiles come from providers that need no API key
+  (OpenFreeMap, OpenStreetMap) or the server's own tile server. The admin
+  chooses which are offered and whether traffic goes through a caching proxy
+  on the server (off, available or enforced), or turns maps off. Each user
+  turns maps on (off by default, with a notice like Ente's) and chooses from
+  the admin's list; users cannot add tile servers. Self-hosted map data (the
+  CoMaps way) is future work.
+- **Privacy:** places, live locations and photo locations stay end-to-end
+  encrypted and are drawn in the browser. Loading tiles still reveals the
+  area being viewed: directly to the provider, or through the proxy to the
+  Kutup server only. With maps off, nothing is requested.
+- **Open questions:** in docs/plans/maps.md.
 
 ---
 
