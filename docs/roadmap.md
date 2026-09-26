@@ -439,6 +439,7 @@ reference are in `kutup-references/` (`ente`, `comaps`).
 ### Photos (like Ente Photos)
 
 An end-to-end encrypted photo and video library on `photos.<domain>`.
+Plan: docs/plans/photos.md (2026-09-26).
 Reference mostly Ente (`kutup-references/ente`: on-device face grouping,
 the Places map, the timeline); Proton's Photos section in its Drive web app
 (`kutup-references/WebClients/applications/drive/src/app/photos`, with
@@ -548,7 +549,17 @@ and optional filtering/view modes backed by real behavior.
 Notes and place lists are edited together live across servers
 (docs/plans/collab-federation.md). Office documents and whiteboards from
 another server open for viewing and download only, until their editors use
-the routed endpoints that notes and lists already use. Also still to come:
+the routed endpoints that notes and lists already use. Deferred (product owner,
+2026-09-26) until OnlyOffice is brought into the repo as source we can change.
+What it needs, found while starting it:
+- **Peer lists across servers.** OnlyOffice drops changes from participants it
+  was not told about, and each server's room lists only its own peers. The
+  bridge must send its roster home and home must push the merged roster back.
+  Entries need a `server` so device ids, which are per server, cannot collide
+  (the office bridge keys peers and `indexUser` by device id).
+- **Whiteboard images:** `/files/:id/assets/:assetId` relayed like versions.
+- Socket, versions, restore and thumbnails taking the remote base, as notes
+  do. Also still to come:
 shared files in Drive search.
 
 ### Federation polish
