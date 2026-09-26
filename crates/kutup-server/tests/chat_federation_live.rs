@@ -20,6 +20,7 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
+use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
@@ -1202,6 +1203,15 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .verify_collection_key(&collection_key)
         .unwrap();
     assert_eq!(accepted_epoch.statement_hash(), epoch_statement_hash);
+    drive_profile_key_exchange(
+        c,
+        a,
+        b,
+        alice_token,
+        bob_token,
+        &alice_identity,
+        &bob_identity,
+    );
     assert_eq!(
         drive_envelope::open_b64(
             incoming[0]["nameEnvelope"].as_str().unwrap(),
@@ -1599,6 +1609,147 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
             "legacy route {legacy} must be absent"
         );
     }
+}
+
+/// People who share a folder across servers hand each other their profile
+/// keys (docs/plans/unified-profile.md): each way, only between them, and
+/// only as themselves.
+fn drive_profile_key_exchange(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    alice: &AccountIdentityKeysV1,
+    bob: &AccountIdentityKeysV1,
+) {
+    let alice_to_bob = ProfileKeyParties {
+        sender_account: "alicefed@a.test",
+        sender_incarnation_id: &alice.incarnation_id(),
+        recipient_account: "bobfed@b.test",
+        recipient_incarnation_id: &bob.incarnation_id(),
+    };
+    let bob_to_alice = ProfileKeyParties {
+        sender_account: "bobfed@b.test",
+        sender_incarnation_id: &bob.incarnation_id(),
+        recipient_account: "alicefed@a.test",
+        recipient_incarnation_id: &alice.incarnation_id(),
+    };
+    let alice_key = [0x61; 32];
+    let bob_key = [0x62; 32];
+    let alice_version = "a1".repeat(32);
+    let bob_version = "b2".repeat(32);
+    let seal = |key: &[u8; 32],
+                parties: &ProfileKeyParties<'_>,
+                from: &AccountIdentityKeysV1,
+                to: &AccountIdentityKeysV1| {
+        ProfileKeyEnvelopeV1::seal(
+            key,
+            parties,
+            from.drive_signing_key(),
+            &to.drive_hpke_public_key(),
+        )
+        .unwrap()
+        .encode_b64()
+        .unwrap()
+    };
+    let put = |base: &str, token: &str, recipient: &str, envelope: &str, version: &str| {
+        c.put(format!("{base}/api/drive/profile-keys"))
+            .bearer_auth(token)
+            .json(&json!({"recipientAccount": recipient, "envelope": envelope, "profileVersion": version}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    let person = |base: &str, token: &str, account: &str| -> Value {
+        let people = json_response(
+            c.get(format!("{base}/api/drive/people"))
+                .bearer_auth(token)
+                .send()
+                .unwrap(),
+            "list Drive people",
+        );
+        people["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["account"] == account)
+            .cloned()
+            .unwrap_or_else(|| panic!("{account} is not among the people shared with: {people}"))
+    };
+
+    // Owner to member, across servers.
+    let alice_envelope = seal(&alice_key, &alice_to_bob, alice, bob);
+    assert_eq!(
+        put(
+            a,
+            alice_token,
+            "bobfed@b.test",
+            &alice_envelope,
+            &alice_version
+        ),
+        204
+    );
+    let bob_sees = person(b, bob_token, "alicefed@a.test");
+    assert_eq!(bob_sees["local"], false);
+    let received =
+        ProfileKeyEnvelopeV1::decode_b64(bob_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        received
+            .open(
+                &alice_to_bob,
+                &alice.drive_signing_public_key(),
+                bob.drive_hpke_private_key()
+            )
+            .unwrap(),
+        alice_key
+    );
+    assert_eq!(
+        person(a, alice_token, "bobfed@b.test")["sentProfileVersion"],
+        alice_version
+    );
+
+    // Member to owner.
+    let bob_envelope = seal(&bob_key, &bob_to_alice, bob, alice);
+    assert_eq!(
+        put(b, bob_token, "alicefed@a.test", &bob_envelope, &bob_version),
+        204
+    );
+    let alice_sees = person(a, alice_token, "bobfed@b.test");
+    let received =
+        ProfileKeyEnvelopeV1::decode_b64(alice_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        received
+            .open(
+                &bob_to_alice,
+                &bob.drive_signing_public_key(),
+                alice.drive_hpke_private_key()
+            )
+            .unwrap(),
+        bob_key
+    );
+
+    // Not to someone they share nothing with, and never in someone else's name.
+    let stranger = ProfileKeyParties {
+        recipient_account: "nobody@b.test",
+        ..alice_to_bob
+    };
+    assert_eq!(
+        put(
+            a,
+            alice_token,
+            "nobody@b.test",
+            &seal(&alice_key, &stranger, alice, bob),
+            &alice_version
+        ),
+        404
+    );
+    let forged = seal(&bob_key, &bob_to_alice, bob, alice);
+    assert_eq!(
+        put(a, alice_token, "bobfed@b.test", &forged, &alice_version),
+        400
+    );
 }
 
 fn setup_phase(c: &Client, a: &str, b: &str) {

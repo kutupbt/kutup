@@ -3844,6 +3844,71 @@ pub fn account_profile_open(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileLookup {
+    /// Standard base64 of the 32-byte profile key.
+    key: String,
+    version: String,
+    /// Standard base64; sent as the access header when fetching.
+    access_key: String,
+}
+
+fn profile_lookup_of(key: &[u8]) -> std::result::Result<ProfileLookup, JsValue> {
+    Ok(ProfileLookup {
+        key: STANDARD.encode(key),
+        version: crate::profile::profile_version(key).map_err(chat_error)?,
+        access_key: STANDARD.encode(crate::profile::profile_access_key(key).map_err(chat_error)?),
+    })
+}
+
+/// The account's own profile key (to give to the people it shares files
+/// with), opened from the master key.
+#[wasm_bindgen(js_name = accountProfileKey)]
+pub fn account_profile_key(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: kutup_chat_proto::PutChatProfileRequest =
+        from_transport(current).map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+        .map_err(chat_error)?;
+    to_output(&profile_lookup_of(&profile.key)?)
+}
+
+/// Where to fetch someone's profile, from their profile key.
+#[wasm_bindgen(js_name = profileLookup)]
+pub fn profile_lookup(key: String) -> std::result::Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    to_output(&profile_lookup_of(&key)?)
+}
+
+/// Open someone's fetched profile with their profile key.
+#[wasm_bindgen(js_name = profileOpenPeer)]
+pub fn profile_open_peer(
+    peer: String,
+    encrypted: JsValue,
+    key: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    let encrypted: kutup_chat_proto::ChatProfileResponse =
+        from_transport(encrypted).map_err(chat_error)?;
+    let profile = crate::profile::open_peer_profile(peer, &encrypted, &key).map_err(chat_error)?;
+    to_output(&AccountProfileView {
+        display_name: profile.display_name.unwrap_or_default(),
+        about: profile.about,
+        avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+        avatar_content_type: profile.avatar_content_type,
+        revision: profile.revision.to_string(),
+    })
+}
+
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
     master_key: Vec<u8>,

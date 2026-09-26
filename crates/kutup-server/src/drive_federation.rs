@@ -197,14 +197,14 @@ struct ParsedUpload {
     digest: String,
 }
 
-fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
+pub(crate) fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
     state
         .federation
         .as_deref()
         .ok_or_else(|| AppError::bad_request("Drive federation is not configured"))
 }
 
-fn canonical_username(username: &str) -> AppResult<&str> {
+pub(crate) fn canonical_username(username: &str) -> AppResult<&str> {
     if username.is_empty()
         || username.len() > 64
         || !username.is_ascii()
@@ -219,7 +219,7 @@ fn canonical_username(username: &str) -> AppResult<&str> {
     Ok(username)
 }
 
-fn canonical_domain(domain: &str) -> AppResult<&str> {
+pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
     validate_server_name(domain).map_err(|error| AppError::bad_request(error.to_string()))?;
     Ok(domain)
 }
@@ -278,7 +278,7 @@ fn capability_hash(capability: &str) -> String {
     hex::encode(Sha256::digest(capability.as_bytes()))
 }
 
-fn gateway_error(error: anyhow::Error) -> AppError {
+pub(crate) fn gateway_error(error: anyhow::Error) -> AppError {
     if error
         .downcast_ref::<crate::federation::FederationAdmissionError>()
         .is_some()
@@ -2265,7 +2265,7 @@ async fn record_mutation(
     Ok(())
 }
 
-fn signed_json<T: Serialize>(
+pub(crate) fn signed_json<T: Serialize>(
     federation: &FederationStack,
     authenticated: &AuthenticatedFederationRequest,
     status: StatusCode,
@@ -2277,7 +2277,7 @@ fn signed_json<T: Serialize>(
     federation.signed_response(authenticated, status, JSON_CONTENT_TYPE, body)
 }
 
-fn signed_app_error(
+pub(crate) fn signed_app_error(
     federation: &FederationStack,
     authenticated: &AuthenticatedFederationRequest,
     error: AppError,

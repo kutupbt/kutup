@@ -8,6 +8,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { usePeople } from '../features/people/people'
 import { SearchBox } from '../features/search/SearchBox'
 import { StorageMeter } from './StorageMeter'
 
@@ -15,6 +16,8 @@ import { StorageMeter } from './StorageMeter'
 export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // Exchange profile keys with the people you share with while Drive is open.
+  usePeople()
   return (
     <AppShell
       appName={t('apps.drive')}

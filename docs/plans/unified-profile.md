@@ -1,6 +1,6 @@
 # One profile for the account
 
-**Status:** agreed 2026-09-26, in progress. Branch `feat/frontend-rewrite`.
+**Status:** agreed 2026-09-26, done (slices 1–3). Branch `feat/frontend-rewrite`.
 
 ## Problem
 
@@ -67,16 +67,27 @@ The account app has it. What changes:
 
 ## Drive sees profiles
 
-A share carries the sharer's profile key, encrypted to each recipient the
-way the folder key already is. A recipient's client:
-- fetches the profile (version and access key both come from the profile
-  key; federated like chat);
-- shows names and pictures in "Shared with me", the share dialog and the
-  file details.
+People who share a folder, either way round, give each other their profile
+key in a `ProfileKeyEnvelopeV1`: sealed to the other's Drive HPKE key and
+signed with their own Drive signing key, like a named share. Differences from
+the first sketch (a key per share):
+- The envelope is bound to the two accounts and incarnations, not to a
+  folder. The server keeps one per pair (`drive_profile_keys`: a "sent" row
+  for the giver, a "received" row for the recipient), so ten shared folders
+  mean one key, and rotating a folder does not touch it.
+- It is not part of the share request. Whenever Drive is open, the client
+  lists everyone it shares with (`GET /api/drive/people`), gives its current
+  key to anyone whose "sent" version is not current (a new share, a first
+  profile, a new key after blocking in Chat), and opens the keys it got.
+  The same path handles old shares; nothing needs a backfill.
+- Across servers the giver's server forwards the envelope
+  (`PUT /api/fed/drive/profile-keys`); each server checks that a share
+  exists between the two people and that the envelope names them.
 
-The owner learns members' profiles the same way: a recipient's client
-returns its own profile key when it accepts the share. A member without a
-profile shows as their username, as today.
+A recipient fetches the profile with the key (version and access key both
+come from it; federated like chat) and Drive shows the name and picture in
+"Shared with me" and the share dialog's access list. Anyone who has not
+given their key yet, or whose key is out of date, shows as their address.
 
 ## Slices
 
@@ -94,5 +105,11 @@ profile shows as their username, as today.
    - **Drive → Settings:** file-version retention (moved from Account) and
      this browser's default view (list/grid, folders first, previews).
    - Every app's "Settings" menu item opens the Profile page.
-3. Drive shows profiles: profile keys in shares, names and pictures in the
-   Drive UI, both ways and across servers.
+3. (done) Drive shows profiles: `ProfileKeyEnvelopeV1` in kutup-crypto (and
+   WASM), `drive_profile_keys` with `GET /api/drive/people`,
+   `PUT /api/drive/profile-keys` and the federated delivery (migration 054),
+   the chat WASM's `accountProfileKey`, `profileLookup` and
+   `profileOpenPeer`, and names and pictures in Drive's "Shared with me" and
+   access list. Covered by the Rust envelope tests, the two-server live test
+   (both directions, a stranger and a forged sender refused) and a browser
+   run on one server.

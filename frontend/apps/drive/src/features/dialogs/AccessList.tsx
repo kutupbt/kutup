@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import {
@@ -17,6 +18,7 @@ import {
 import { useDriveIdentity } from '../drive/identity'
 import type { Folder } from '../drive/model'
 import { publicLinkUrl } from '../drive/mutations'
+import { personOf, usePeople } from '../people/people'
 
 type Pending = { label: string; removal: Removal } | null
 
@@ -32,6 +34,7 @@ export function AccessList({ folder }: { folder: Folder }) {
   const access = useFolderAccess(folder)
   const identity = useDriveIdentity()
   const remove = useRemoveAccess()
+  const people = usePeople()
   const [pending, setPending] = useState<Pending>(null)
 
   if (access.isPending) return <LoadingPanel label={t('dialogs.access.loading')} />
@@ -80,27 +83,31 @@ export function AccessList({ folder }: { folder: Folder }) {
       <h3 className="text-sm font-semibold">{t('dialogs.access.title')}</h3>
       {empty ? <p className="text-sm text-muted-foreground">{t('dialogs.access.empty')}</p> : null}
       <ul className="divide-y divide-border rounded-md border border-border">
-        {data.members.map((m) => (
-          <Row
-            key={m.userId}
-            icon={<User className="size-4" aria-hidden />}
-            name={m.account}
-            detail={permission(m.canUpload)}
-            onRemove={() => setPending({ label: m.account, removal: { ...none, members: [m.userId] } })}
-            removeLabel={t('dialogs.access.removeNamed', { name: m.account })}
-            busy={remove.isPending}
-          />
-        ))}
+        {data.members.map((m) => {
+          const person = personOf(people.data, m.account)
+          return (
+            <Row
+              key={m.userId}
+              icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
+              name={person.name}
+              detail={person.profile ? `${m.account} · ${permission(m.canUpload)}` : permission(m.canUpload)}
+              onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.userId] } })}
+              removeLabel={t('dialogs.access.removeNamed', { name: person.name })}
+              busy={remove.isPending}
+            />
+          )
+        })}
         {data.federatedShares.map((f) => {
           const account = `${f.recipientUsername}@${f.recipientServer}`
+          const person = personOf(people.data, account)
           return (
             <Row
               key={f.id}
-              icon={<Server className="size-4" aria-hidden />}
-              name={account}
-              detail={`${permission(f.canUpload)} · ${t('dialogs.access.otherServer')}`}
-              onRemove={() => setPending({ label: account, removal: { ...none, federatedShares: [f.id] } })}
-              removeLabel={t('dialogs.access.removeNamed', { name: account })}
+              icon={person.profile ? <PersonAvatar {...person} /> : <Server className="size-4" aria-hidden />}
+              name={person.name}
+              detail={[person.profile ? account : null, permission(f.canUpload), t('dialogs.access.otherServer')].filter(Boolean).join(' · ')}
+              onRemove={() => setPending({ label: person.name, removal: { ...none, federatedShares: [f.id] } })}
+              removeLabel={t('dialogs.access.removeNamed', { name: person.name })}
               busy={remove.isPending}
             />
           )
@@ -142,6 +149,10 @@ export function AccessList({ folder }: { folder: Folder }) {
       {error ? <Alert variant="error">{error}</Alert> : null}
     </section>
   )
+}
+
+function PersonAvatar({ name, profile }: ReturnType<typeof personOf>) {
+  return <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={24} />
 }
 
 function Row({

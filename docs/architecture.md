@@ -189,6 +189,13 @@ use the same cryptographic envelope; federation adds only signed routing and a
 domain-bound delivery capability. The server stores the envelope but cannot
 open the collection key.
 
+People who share a folder also give each other their profile key, in a
+`ProfileKeyEnvelopeV1` sealed and signed the same way, so Drive shows names
+and pictures from the end-to-end encrypted profile. The server accepts one
+only between people with a share between them, forwards it to the other
+person's server when needed, and cannot read it
+(docs/plans/unified-profile.md).
+
 Public links use the same typed envelope implementation with the distinct
 `PublicLinkCollectionKey` purpose. The random link key stays exclusively in
 the URL fragment. The server validates the envelope's public header against

@@ -15,6 +15,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records, immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
 | File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
 | File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to the file and its key generation, never the folder |
+| Profile key for a share partner | — (new) | **Implemented end to end:** `ProfileKeyEnvelopeV1` (`KUTPPK1`), the same HPKE suite and Drive keys as a named share, bound to both accounts and incarnations, not to a folder |
 | Local/federated named share | Anonymous `crypto_box_seal` bytes | **Implemented end to end:** one `NamedShareEnvelopeV1` format for local and signed-federation routes, X25519 HPKE plus account-manifest-bound Ed25519 sender signature |
 | Public-link collection wrap | Secretbox under link key plus separate nonce | **Implemented end to end:** public-link purpose `DriveEnvelopeV1` bound to collection, owner and epoch; the independent link capability remains only in the URL fragment |
 | Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 80-byte authenticated context header, XChaCha key derived from the file key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
@@ -99,6 +100,14 @@ bind the collection UUID, epoch, canonical sender and recipient accounts, and
 both account incarnation IDs. The sender key is the manifest-bound Drive share
 signer; the recipient key is the manifest-bound Drive HPKE key. V1 intentionally
 provides no anonymous Drive sharing.
+
+`ProfileKeyEnvelopeV1` (magic `KUTPPK1\0`, HPKE info
+`kutup/drive/profile-key-hpke/v1\0`) carries a 32-byte profile key between
+two people who share a folder (docs/plans/unified-profile.md). The same suite
+and keys as a named share; the AAD and signature bind the magic, suite, both
+incarnation IDs and both canonical accounts, but no folder: one key serves
+every share between the pair. Tests in `profile_key_share.rs` (no vector: the
+format has one producer and one consumer, both in this crate and its WASM).
 
 `CollabFrameSuiteId = 1` uses magic `KUTPCF2\0` and a fixed 80-byte
 big-endian header containing suite, kind, file-key generation, document-key

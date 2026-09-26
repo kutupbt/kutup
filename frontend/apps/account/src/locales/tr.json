@@ -213,7 +213,7 @@
     },
     "profile": {
       "title": "Profil",
-      "description": "Sohbet ettiğiniz kişilere nasıl göründüğünüz.",
+      "description": "Sohbet ettiğiniz ve dosya paylaştığınız kişilere nasıl göründüğünüz.",
       "who": "Siz",
       "changeAvatar": "Resmi değiştir",
       "removeAvatar": "Resmi kaldır",
@@ -222,7 +222,7 @@
       "about": "Hakkında",
       "aboutPlaceholder": "Kendinizle ilgili bir satır (isteğe bağlı)",
       "aboutTooLong": "En fazla {{max}} karakter.",
-      "visibility": "Adınız, resminiz ve hakkında satırınız uçtan uca şifrelidir: sunucu bunları göremez. Sohbet ettiğiniz kişiler görür.",
+      "visibility": "Adınız, resminiz ve hakkında satırınız uçtan uca şifrelidir: sunucu bunları göremez. Yalnızca sohbet ettiğiniz ya da klasör paylaştığınız kişiler görür.",
       "save": "Kaydet",
       "saved": "Profil kaydedildi",
       "saveFailed": "Profil kaydedilemedi.",

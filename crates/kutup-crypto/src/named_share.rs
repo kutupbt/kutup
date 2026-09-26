@@ -338,7 +338,7 @@ impl NamedShareEnvelopeV1 {
     }
 }
 
-fn hpke_suite() -> Hpke<HpkeRustCrypto> {
+pub(crate) fn hpke_suite() -> Hpke<HpkeRustCrypto> {
     Hpke::new(
         Mode::Base,
         KemAlgorithm::DhKem25519,
@@ -347,7 +347,7 @@ fn hpke_suite() -> Hpke<HpkeRustCrypto> {
     )
 }
 
-fn canonical_account(value: &str) -> Result<String> {
+pub(crate) fn canonical_account(value: &str) -> Result<String> {
     if value.len() < 3
         || value.len() > MAX_ACCOUNT_LEN
         || value != value.trim()
@@ -379,7 +379,7 @@ fn canonical_account(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
-fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
+pub(crate) fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     if value.len() != 64
         || !value
             .bytes()
@@ -395,7 +395,7 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
         .expect("validated 32-byte hex"))
 }
 
-fn read_account(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<String> {
+pub(crate) fn read_account(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<String> {
     let len = read_u16(bytes, cursor)? as usize;
     if len == 0 || len > MAX_ACCOUNT_LEN {
         return Err(CryptoError::InvalidInput(format!(
@@ -407,13 +407,13 @@ fn read_account(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<String>
     canonical_account(value)
 }
 
-fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16> {
+pub(crate) fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16> {
     Ok(u16::from_be_bytes(
         take(bytes, cursor, 2)?.try_into().expect("two-byte slice"),
     ))
 }
 
-fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8]> {
+pub(crate) fn take<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8]> {
     let end = cursor.checked_add(len).ok_or(CryptoError::TooShort)?;
     let value = bytes.get(*cursor..end).ok_or(CryptoError::TooShort)?;
     *cursor = end;

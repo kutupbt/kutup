@@ -14,6 +14,7 @@ mod chat_mls;
 mod config;
 mod db;
 mod drive_federation;
+mod drive_profile_keys;
 mod drive_writes;
 mod error;
 mod federation;
@@ -547,6 +548,11 @@ fn build_router(state: AppState) -> Router {
             post(collections::share_collection),
         )
         .route(
+            "/api/drive/profile-keys",
+            put(drive_profile_keys::put_profile_key),
+        )
+        .route("/api/drive/people", get(drive_profile_keys::list_people))
+        .route(
             "/api/collections/:id/federated-shares",
             post(drive_federation::create_federated_share),
         )
@@ -1012,6 +1018,12 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/drive/users/:username",
             get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/profile-keys",
+            put(drive_profile_keys::receive_profile_key)
+                .route_layer(DefaultBodyLimit::max(16 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
             "/api/fed/drive/invite",

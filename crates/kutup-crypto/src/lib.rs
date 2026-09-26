@@ -46,6 +46,7 @@ pub mod local_state;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod profile_key_share;
 pub mod stream;
 pub mod thumbnail;
 

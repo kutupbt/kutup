@@ -1823,7 +1823,22 @@ export interface AccountProfileInput {
   avatarContentType?: string
 }
 
+/** Where someone's profile is, from their profile key. */
+export interface ProfileLookup {
+  /** Standard base64 of the 32-byte profile key. */
+  key: string
+  version: string
+  /** Standard base64; the `x-kutup-profile-access-key` header. */
+  accessKey: string
+}
+
 export interface ChatWasmModule extends InviteLinkCrypto {
+  /** The account's own profile key, from the master key. */
+  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string): ProfileLookup
+  /** Where to fetch a profile, from its key (standard base64). */
+  profileLookup(key: string): ProfileLookup
+  /** Open someone's fetched profile with their key (standard base64). */
+  profileOpenPeer(peer: string, encrypted: unknown, key: string): AccountProfileView
   /** Open the account's profile from the master key (no chat device). */
   accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
   /** Seal the next profile revision (or the first) as the account app. */

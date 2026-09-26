@@ -746,6 +746,60 @@ share row.
 
 ---
 
+## People you share with (profiles)
+
+People who share a folder, either way round and across servers, hand each
+other the key to their end-to-end encrypted profile so Drive can show names
+and pictures (docs/plans/unified-profile.md). One key per pair, however many
+folders they share.
+
+### GET /api/drive/people
+
+**Auth:** Bearer JWT
+
+Everyone you share a folder with or who shares one with you:
+
+```json
+{
+  "people": [{
+    "account": "bob@example.org",
+    "local": true,
+    "accountIncarnationId": "<hex>",
+    "drivePublicKey": "<base64>",
+    "driveSigningPublicKey": "<base64>",
+    "receivedEnvelope": "<ProfileKeyEnvelopeV1 base64> | null",
+    "sentProfileVersion": "<hex> | null"
+  }]
+}
+```
+
+For someone on another server (`local: false`) the three key fields are null:
+look them up with `GET /api/drive/federation/users/:username`. Open
+`receivedEnvelope` with your Drive key and check it with theirs; the profile
+key then fetches their profile through
+`GET /api/chat/users/:account/profile/:version`. When `sentProfileVersion` is
+not your current profile version, give them your key again.
+
+### PUT /api/drive/profile-keys
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "recipientAccount": "bob@example.org",
+  "envelope": "<ProfileKeyEnvelopeV1 base64>",
+  "profileVersion": "<hex, the version the key opens>"
+}
+```
+
+The server checks that the envelope is from you (your account, incarnation
+and Drive signing key), is for that account (and, here, its current
+incarnation), and that a share exists between you. Someone on another server
+gets it through `PUT /api/fed/drive/profile-keys`. `204`; `404` when there is
+no share between you; `400` for an envelope that does not match.
+
+---
+
 ## Files
 
 **Write rights.** Reading a file needs the folder's owner or any share on it.
@@ -895,7 +949,7 @@ recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
 ### GET /api/collections/:id/access
 
 Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
-accountIncarnationId, drivePublicKey, canUpload, canDelete, uploadQuotaBytes,
+accountIncarnationId, drivePublicKey, driveSigningPublicKey, canUpload, canDelete, uploadQuotaBytes,
 createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope?, expiresAt?,
 createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
 recipientIncarnationId, canUpload, canDelete, uploadQuotaBytes, createdAt }] }`.
@@ -1614,6 +1668,14 @@ must be bound to that same domain.
 ### GET /api/fed/drive/users/:username
 
 Return `{ "username", "server", "publicKey" }` for one active local user.
+
+### PUT /api/fed/drive/profile-keys
+
+Signed server-to-server delivery of a profile key
+(`{ senderAccount, recipientAccount, envelope, profileVersion }`). The sender
+must be on the calling server and the recipient here, the envelope must name
+both (and the recipient's current incarnation), and a share must exist
+between them. The recipient's client checks the sender's signature.
 
 ### GET /api/fed/drive/invite
 

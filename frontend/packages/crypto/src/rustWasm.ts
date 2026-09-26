@@ -305,6 +305,24 @@ export interface CryptoWasmModule {
     expectedRecipientAccount: string,
     expectedRecipientIncarnationId: string,
   ): string
+  sealProfileKeyEnvelope(
+    profileKeyBase64: string,
+    senderMasterKeyBase64: string,
+    recipientHpkePublicKeyBase64: string,
+    senderAccount: string,
+    senderIncarnationId: string,
+    recipientAccount: string,
+    recipientIncarnationId: string,
+  ): string
+  openProfileKeyEnvelope(
+    envelopeBase64: string,
+    senderSigningPublicKeyBase64: string,
+    recipientHpkePrivateKeyBase64: string,
+    expectedSenderAccount: string,
+    expectedSenderIncarnationId: string,
+    expectedRecipientAccount: string,
+    expectedRecipientIncarnationId: string,
+  ): string
 }
 
 let modulePromise: Promise<CryptoWasmModule> | null = null

@@ -13,6 +13,8 @@ import { useFolders } from '../drive/folders'
 import type { Folder } from '../drive/model'
 import { useLeaveRemoteShare } from '../drive/mutations'
 import { folderPath } from '../drive/paths'
+import { personOf, usePeople } from '../people/people'
+import { PersonLabel } from '../people/PersonLabel'
 import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
@@ -29,6 +31,7 @@ export function SharedPage() {
   const [inviting, setInviting] = useState(false)
   const [leaving, setLeaving] = useState<Folder | null>(null)
   const leave = useLeaveRemoteShare()
+  const people = usePeople()
 
   const byId = useMemo(() => new Map((folders.data?.sharedWithMe ?? []).map((f) => [f.remoteShareId ?? f.id, f])), [folders.data])
   const items: ExplorerItem[] = useMemo(
@@ -74,7 +77,9 @@ export function SharedPage() {
           onSelectionChange={setSelection}
           subtitleFor={(item) => {
             const f = byId.get(item.id)
-            return f?.ownerAccount ? t('shared.from', { account: f.ownerAccount }) : null
+            return f?.ownerAccount ? (
+              <PersonLabel account={f.ownerAccount} format={(name) => t('shared.from', { account: name })} />
+            ) : null
           }}
           onOpen={(item) => {
             const f = byId.get(item.id)
@@ -107,7 +112,7 @@ export function SharedPage() {
         open={leaving !== null}
         onOpenChange={(o) => !o && (setLeaving(null), leave.reset())}
         title={t('shared.leaveTitle')}
-        description={t('shared.leaveDescription', { name: leaving?.name ?? '', account: leaving?.ownerAccount ?? '' })}
+        description={t('shared.leaveDescription', { name: leaving?.name ?? '', account: leaving?.ownerAccount ? personOf(people.data, leaving.ownerAccount).name : '' })}
         submit={t('shared.leave')}
         pending={leave.isPending}
         error={leave.error}

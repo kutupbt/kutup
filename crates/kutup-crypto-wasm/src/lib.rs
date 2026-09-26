@@ -1327,6 +1327,81 @@ pub fn open_named_share_envelope(
     Ok(STANDARD.encode(collection_key))
 }
 
+/// Your profile key for someone you share Drive folders with
+/// (docs/plans/unified-profile.md), sealed to them and signed by you.
+#[wasm_bindgen(js_name = sealProfileKeyEnvelope)]
+pub fn seal_profile_key_envelope(
+    profile_key_base64: &str,
+    sender_master_key_base64: &str,
+    recipient_hpke_public_key_base64: &str,
+    sender_account: &str,
+    sender_incarnation_id: &str,
+    recipient_account: &str,
+    recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
+    let sender_master_key: [u8; 32] =
+        decode_canonical_base64(sender_master_key_base64, "master key")?
+            .try_into()
+            .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let recipient_public_key = decode_canonical_base64(
+        recipient_hpke_public_key_base64,
+        "recipient HPKE public key",
+    )?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
+        &profile_key,
+        &kutup_crypto::profile_key_share::ProfileKeyParties {
+            sender_account,
+            sender_incarnation_id,
+            recipient_account,
+            recipient_incarnation_id,
+        },
+        sender_identity.drive_signing_key(),
+        &recipient_public_key,
+    )
+    .and_then(|envelope| envelope.encode_b64())
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Someone's profile key, after checking it is from them, to you.
+#[wasm_bindgen(js_name = openProfileKeyEnvelope)]
+pub fn open_profile_key_envelope(
+    envelope_base64: &str,
+    sender_signing_public_key_base64: &str,
+    recipient_hpke_private_key_base64: &str,
+    expected_sender_account: &str,
+    expected_sender_incarnation_id: &str,
+    expected_recipient_account: &str,
+    expected_recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let sender_signing_public_key = decode_canonical_base64(
+        sender_signing_public_key_base64,
+        "sender signing public key",
+    )?;
+    let recipient_private_key = decode_canonical_base64(
+        recipient_hpke_private_key_base64,
+        "recipient HPKE private key",
+    )?;
+    let envelope =
+        kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::decode_b64(envelope_base64)
+            .map_err(|error| js_error(&error.to_string()))?;
+    let key = envelope
+        .open(
+            &kutup_crypto::profile_key_share::ProfileKeyParties {
+                sender_account: expected_sender_account,
+                sender_incarnation_id: expected_sender_incarnation_id,
+                recipient_account: expected_recipient_account,
+                recipient_incarnation_id: expected_recipient_incarnation_id,
+            },
+            &sender_signing_public_key,
+            &recipient_private_key,
+        )
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(key))
+}
+
 fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue> {
     let decoded = STANDARD
         .decode(value)

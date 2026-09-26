@@ -19,10 +19,10 @@ export function Avatar({
   image?: string
   contentType?: string
   group?: boolean
-  size?: 28 | 32 | 48 | 80
+  size?: 16 | 24 | 28 | 32 | 48 | 80
   className?: string
 }) {
-  const box = { 28: 'size-7 text-[0.625rem]', 32: 'size-8 text-xs', 48: 'size-12 text-sm', 80: 'size-20 text-2xl' }[size]
+  const box = { 16: 'size-4 text-[0.5rem]', 24: 'size-6 text-[0.5625rem]', 28: 'size-7 text-[0.625rem]', 32: 'size-8 text-xs', 48: 'size-12 text-sm', 80: 'size-20 text-2xl' }[size]
   return (
     <span
       aria-hidden

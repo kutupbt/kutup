@@ -213,7 +213,7 @@
     },
     "profile": {
       "title": "Profile",
-      "description": "How you appear to the people you chat with.",
+      "description": "How you appear to the people you chat and share files with.",
       "who": "You",
       "changeAvatar": "Change picture",
       "removeAvatar": "Remove picture",
@@ -222,7 +222,7 @@
       "about": "About",
       "aboutPlaceholder": "A line about you (optional)",
       "aboutTooLong": "At most {{max}} characters.",
-      "visibility": "Your name, picture and about are end-to-end encrypted: the server cannot see them. People you chat with see them.",
+      "visibility": "Your name, picture and about are end-to-end encrypted: the server cannot see them. Only people you chat or share folders with see them.",
       "save": "Save",
       "saved": "Profile saved",
       "saveFailed": "The profile could not be saved.",

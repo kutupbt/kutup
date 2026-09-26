@@ -65,8 +65,8 @@ export {
   createCollectionEpochStatement,
   verifyCollectionEpochStatement,
 } from './collectionEpoch'
-export { openNamedShareEnvelope, sealNamedShareEnvelope } from './namedShare'
-export type { NamedShareContextV1 } from './namedShare'
+export { openNamedShareEnvelope, openProfileKeyEnvelope, sealNamedShareEnvelope, sealProfileKeyEnvelope } from './namedShare'
+export type { NamedShareContextV1, ProfileKeyPartiesV1 } from './namedShare'
 export {
   openPublicLinkCollectionKeyV1,
   sealPublicLinkCollectionKeyV1,

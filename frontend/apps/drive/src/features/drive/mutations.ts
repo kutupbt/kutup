@@ -11,6 +11,7 @@ import {
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
+import { peopleKey } from '../people/people'
 import { foldersKey } from './folders'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { folderLocation, type DriveFile, type Folder } from './model'
@@ -30,6 +31,8 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
         queryClient.invalidateQueries({ queryKey: foldersKey }),
         queryClient.invalidateQueries({ queryKey: ['files'] }),
         queryClient.invalidateQueries({ queryKey: ['folder-access'] }),
+        // A new share is someone to exchange profile keys with.
+        queryClient.invalidateQueries({ queryKey: peopleKey }),
       ])
     },
   })

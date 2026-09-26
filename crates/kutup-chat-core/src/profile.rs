@@ -243,6 +243,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
 }
 
 /// What the account app edits (docs/plans/unified-profile.md).
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub struct AccountProfileUpdate {
     pub display_name: String,
     pub avatar: Option<Vec<u8>>,
@@ -254,6 +255,7 @@ pub struct AccountProfileUpdate {
 /// current one (same key, one revision later), or the first one with a fresh
 /// key. Only the master key is needed; no chat device takes part. Returns the
 /// exact upload.
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn seal_account_profile<R: Rng + CryptoRng>(
     master_key: &[u8; 32],
     current: Option<&PutChatProfileRequest>,
@@ -298,6 +300,7 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
 }
 
 /// The account's own profile as the account app shows it.
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn open_account_profile(
     master_key: &[u8; 32],
     current: &PutChatProfileRequest,
@@ -1012,7 +1015,10 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        assert_eq!((first.revision, first.source_device_id), (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE));
+        assert_eq!(
+            (first.revision, first.source_device_id),
+            (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE)
+        );
         let opened = open_account_profile(&master, &first, RECIPIENT).unwrap();
         assert_eq!(opened.display_name, "Ada");
         assert_eq!(opened.about.as_deref(), Some("Counting things"));
@@ -1031,13 +1037,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(next.revision, 2);
-        assert_eq!(next.version, first.version, "same key: contacts keep reading it");
+        assert_eq!(
+            next.version, first.version,
+            "same key: contacts keep reading it"
+        );
         // A chat device opens it with the same master-derived wrapping key.
-        let device_view = open_own_profile(&next, &derive_wrapping_key(&master).unwrap(), RECIPIENT).unwrap();
+        let device_view =
+            open_own_profile(&next, &derive_wrapping_key(&master).unwrap(), RECIPIENT).unwrap();
         assert_eq!(device_view.display_name, "Ada L.");
         assert_eq!(device_view.about, None);
         // Another master key opens nothing.
         assert!(open_account_profile(&[8u8; 32], &next, RECIPIENT).is_err());
     }
-
 }
