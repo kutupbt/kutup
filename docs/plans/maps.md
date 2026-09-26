@@ -209,7 +209,26 @@ goes beyond Signal parity.
    through one's own server, wrong capability, older update, wrong write
    secret, reading after the end).
 4. **The Maps app (`maps.`):** pinned place lists, shared and edited
-   together (local and federated), KML/GPX import and export.
+   together, KML/GPX import and export. Decided 2026-09-26:
+   - **Lists are Drive files**, like Google My Maps in Google Drive: each
+     list is a `.kutupmap` file (a Yjs document: title, places with name,
+     note, coordinates, who added them and when) in its own folder under
+     "Maps" in the owner's Drive. Drive's encryption, sharing, versions,
+     trash and quota apply; Drive shows the folders and opens lists in Maps.
+   - **Everything is done in the Maps app:** create, rename, delete, share,
+     see who has access and remove them, and edit together live. Nobody
+     needs to open Drive for a list.
+   - **Sharing a list is sharing its folder.** For now only the owner shares
+     (as in Drive); anyone in a list can send one of its places into a chat
+     as a location message. "Editors can share" (the owner allowing members
+     to add people) is a later change to Drive sharing as a whole.
+   - Editing a list with someone on another server waits for editing across
+     servers in Drive generally (notes included); they can view and
+     download it.
+   Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
+   co-editing session moved into shared packages, Drive unchanged), 4b lists
+   (format, the app, live co-editing), 4c sharing from Maps, Drive
+   integration, KML/GPX.
 5. **Photos' Places:** with the Photos app.
 
 ## Open questions
