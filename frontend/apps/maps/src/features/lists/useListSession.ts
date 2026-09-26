@@ -1,16 +1,16 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
-import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
+import { fileKeyAt } from '@kutup/drive-core/keyring'
 import type { DriveFile } from '@kutup/drive-core/model'
-import { fillDoc, parseListJson, placesMap, placesOf, replacePlaces, type Place } from '@kutup/map/list'
-import api from '@kutup/session/client'
+import { fillDoc, placesMap, placesOf, replacePlaces, type Place } from '@kutup/map/list'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { useRequiredSession } from '@kutup/session/store'
+import { savedPlacesKey, uploadedPlaces } from './savedPlaces'
 
 export type ListStatus = 'connecting' | 'ready' | 'error'
 
@@ -24,13 +24,6 @@ export interface ListSession {
   collaborators: number
 }
 
-/** The places a list was created with (its upload), for a list never saved. */
-async function uploadedPlaces(file: DriveFile): Promise<Place[]> {
-  const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/download`, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(file, file.contentKeyGeneration)
-  return parseListJson(await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context))
-}
-
 /**
  * A place list, live: everyone's changes as they happen, sealed under the
  * file's key and relayed like a note's (docs/plans/maps.md, step 4). Saved
@@ -39,6 +32,7 @@ async function uploadedPlaces(file: DriveFile): Promise<Place[]> {
  */
 export function useListSession(file: DriveFile | null, readOnly: boolean): ListSession {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const account = useRequiredSession()
   const [status, setStatus] = useState<ListStatus>('connecting')
   const [places, setPlaces] = useState<Place[]>([])
@@ -53,6 +47,9 @@ export function useListSession(file: DriveFile | null, readOnly: boolean): ListS
     const controller = new AbortController()
     let session: CollabSession | null = null
     let unobserve: (() => void) | null = null
+    // Changed here since the last save: saved on leaving, so the home map
+    // (which shows saved places) is right at once.
+    let dirty = false
     setStatus('connecting')
     void (async () => {
       try {
@@ -87,8 +84,15 @@ export function useListSession(file: DriveFile | null, readOnly: boolean): ListS
         const doc = session.doc
         const map = placesMap(doc)
         const refresh = () => setPlaces(placesOf(doc))
+        const markDirty = (_update: Uint8Array, origin: unknown) => {
+          if (origin !== 'remote') dirty = true
+        }
         map.observeDeep(refresh)
-        unobserve = () => map.unobserveDeep(refresh)
+        doc.on('update', markDirty)
+        unobserve = () => {
+          map.unobserveDeep(refresh)
+          doc.off('update', markDirty)
+        }
         refresh()
         setLive({ doc, session })
       } catch {
@@ -98,8 +102,18 @@ export function useListSession(file: DriveFile | null, readOnly: boolean): ListS
     return () => {
       controller.abort()
       unobserve?.()
-      session?.close()
       setLive(null)
+      const leaving = session
+      if (!leaving) return
+      if (!dirty || !leaving.trigger) return leaving.close()
+      void leaving
+        .flush()
+        .then(() => leaving.trigger?.forceSave())
+        .catch(() => undefined)
+        .finally(() => {
+          leaving.close()
+          void queryClient.invalidateQueries({ queryKey: savedPlacesKey(file.id) })
+        })
     }
     // The file as it opened; see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

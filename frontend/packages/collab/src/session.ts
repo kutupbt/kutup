@@ -98,6 +98,12 @@ export interface CollabSession {
   /** Absent for viewers. */
   trigger: SnapshotTrigger | null
   restore: ((versionId: string, choice: RestoreChoice) => Promise<void>) | null
+  /**
+   * Resolves once every local change so far is sealed and handed to the open
+   * relay socket (a socket closes only after sending what it holds). For an
+   * editor that joins, changes something and leaves.
+   */
+  flush: (timeoutMs?: number) => Promise<void>
   close: () => void
 }
 
@@ -188,9 +194,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     })
 
   // 4. Local updates and awareness changes, sealed and sent.
+  // Local changes still being sealed and sent (see flush).
+  const sending = new Set<Promise<void>>()
   const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
     if (origin === 'remote') return
-    void (async () => {
+    const sent = (async () => {
       outboundSeq++
       const frame = await encryptCollabFrameV1(
         update,
@@ -201,6 +209,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       )
       transport?.send(frame)
     })()
+    sending.add(sent)
+    void sent.catch(() => undefined).finally(() => sending.delete(sent))
   }
   doc.on('update', onLocalUpdate)
 
@@ -343,5 +353,15 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     },
   })
 
-  return { doc, awareness, trigger, restore, close }
+  const flush = async (timeoutMs = 10_000) => {
+    const deadline = Date.now() + timeoutMs
+    while (sending.size > 0) await Promise.allSettled([...sending])
+    // Frames sealed while the socket was reconnecting wait in its queue.
+    while ((transport?.pendingCount() ?? 0) > 0) {
+      if (Date.now() > deadline) throw new Error('collab: changes not sent')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
+  return { doc, awareness, trigger, restore, flush, close }
 }

@@ -15,6 +15,14 @@ export interface MapMarker extends MapPoint {
   id?: string
   /** Its name, for the tooltip and screen readers. */
   label?: string
+  /** Its colour (e.g. the list it belongs to); the default blue otherwise. */
+  color?: string
+}
+
+/** Fly to a point; a new `seq` flies again, even to the same point. */
+export interface MapFocus extends MapPoint {
+  zoom: number
+  seq: number
 }
 
 export interface MapViewProps {
@@ -24,12 +32,18 @@ export interface MapViewProps {
   /** The marker drawn highlighted. */
   selectedId?: string | null
   onMarkerClick?: (id: string) => void
-  /** Frame all markers once, when there first are some (instead of `center`). */
-  fitMarkers?: boolean
+  /**
+   * Frame all markers: once for each new key, as soon as there are markers
+   * (a map showing one list after another fits each in turn).
+   */
+  fitKey?: string | null
+  focus?: MapFocus | null
   /** False for a small map in a message: no panning, no zoom buttons. */
   interactive?: boolean
   /** Called with the point clicked or tapped, for choosing a place. */
   onPick?: (point: MapPoint) => void
+  /** A right-click on the map: the point, and where on the map it was (pixels). */
+  onContextMenu?: (point: MapPoint & { x: number; y: number }) => void
   /** Shown instead of the map while maps are off for this person. */
   fallback?: ReactNode
   className?: string
@@ -66,9 +80,11 @@ export function MapView({
   markers = [],
   selectedId = null,
   onMarkerClick,
-  fitMarkers = false,
+  fitKey = null,
+  focus = null,
   interactive = true,
   onPick,
+  onContextMenu,
   fallback = null,
   className,
   ariaLabel,
@@ -79,9 +95,11 @@ export function MapView({
   const markerRefs = useRef<maplibregl.Marker[]>([])
   const pick = useRef(onPick)
   pick.current = onPick
+  const contextMenu = useRef(onContextMenu)
+  contextMenu.current = onContextMenu
   const markerClick = useRef(onMarkerClick)
   markerClick.current = onMarkerClick
-  const fitted = useRef(false)
+  const fitted = useRef<string | null>(null)
   const initial = useRef({ center, zoom })
   const styleKey = effective ? `${effective.provider.id}:${effective.url}` : null
 
@@ -102,6 +120,11 @@ export function MapView({
     })
     if (interactive) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.on('click', (event) => pick.current?.({ lat: event.lngLat.lat, lon: event.lngLat.lng }))
+    map.on('contextmenu', (event) => {
+      if (!contextMenu.current) return
+      event.originalEvent.preventDefault()
+      contextMenu.current({ lat: event.lngLat.lat, lon: event.lngLat.lng, x: event.point.x, y: event.point.y })
+    })
     mapRef.current = map
 
     // An expired token fails relayed requests with 401: refresh it once and
@@ -129,14 +152,14 @@ export function MapView({
     mapRef.current?.jumpTo({ center: [center.lon, center.lat], zoom })
   }, [center.lat, center.lon, zoom, styleKey])
 
-  const markerKey = markers.map((m) => `${m.id ?? ''}:${m.lat},${m.lon}:${m.label ?? ''}`).join(';')
+  const markerKey = markers.map((m) => `${m.id ?? ''}:${m.lat},${m.lon}:${m.label ?? ''}:${m.color ?? ''}`).join(';')
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
     for (const marker of markerRefs.current) marker.remove()
     markerRefs.current = markers.map((m) => {
       const selected = m.id !== undefined && m.id === selectedId
-      const marker = new maplibregl.Marker(selected ? { color: '#0369a1', scale: 1.2 } : {}).setLngLat([m.lon, m.lat])
+      const marker = new maplibregl.Marker(selected ? { color: '#0369a1', scale: 1.25 } : m.color ? { color: m.color } : {}).setLngLat([m.lon, m.lat])
       const element = marker.getElement()
       if (m.label) {
         element.title = m.label
@@ -152,6 +175,11 @@ export function MapView({
           markerClick.current?.(id)
         }
         element.addEventListener('click', activate)
+        // A right-click on a pin opens it too, rather than the map's menu.
+        element.addEventListener('contextmenu', (event) => {
+          event.preventDefault()
+          activate(event)
+        })
         element.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') activate(event)
         })
@@ -159,8 +187,8 @@ export function MapView({
       if (selected) element.style.zIndex = '1'
       return marker.addTo(map)
     })
-    if (fitMarkers && !fitted.current && markers.length > 0) {
-      fitted.current = true
+    if (fitKey !== null && fitted.current !== fitKey && markers.length > 0) {
+      fitted.current = fitKey
       if (markers.length === 1) {
         map.jumpTo({ center: [markers[0].lon, markers[0].lat], zoom: 14 })
       } else {
@@ -170,7 +198,12 @@ export function MapView({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markerKey, selectedId, styleKey])
+  }, [markerKey, selectedId, styleKey, fitKey])
+
+  useEffect(() => {
+    if (focus) mapRef.current?.flyTo({ center: [focus.lon, focus.lat], zoom: focus.zoom, duration: 600 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.seq])
 
   if (!effective) return <>{fallback}</>
   if (interactive) {

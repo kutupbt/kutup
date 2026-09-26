@@ -4,10 +4,19 @@ import { useTranslation } from 'react-i18next'
 import { CITIES_ATTRIBUTION, loadCities, searchCities, type City } from '@kutup/map/cities'
 import { MAX_NAME, MAX_NOTE } from '@kutup/map/list'
 import { Button } from '@kutup/ui/components/button'
+import { Checkbox } from '@kutup/ui/components/checkbox'
+import { Label } from '@kutup/ui/components/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Textarea } from '@kutup/ui/components/textarea'
+
+/** A list a new place can go into. */
+export interface ListOption {
+  id: string
+  title: string
+  color: string
+}
 
 export interface PlaceDraft {
   name: string
@@ -24,14 +33,21 @@ export function PlaceDialog({
   open,
   mode,
   initial,
+  lists,
+  initialLists = [],
+  busy = false,
   onClose,
   onSubmit,
 }: {
   open: boolean
   mode: 'add' | 'edit'
   initial: PlaceDraft
+  /** Adding: the lists it can go into, to choose one or more (as Google Maps' "Save to"). */
+  lists?: ListOption[]
+  initialLists?: string[]
+  busy?: boolean
   onClose: () => void
-  onSubmit: (place: { name: string; note: string; lat: number; lon: number }) => void
+  onSubmit: (place: { name: string; note: string; lat: number; lon: number }, lists: string[]) => void
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(initial.name)
@@ -39,6 +55,7 @@ export function PlaceDialog({
   const [lat, setLat] = useState(initial.lat?.toFixed(6) ?? '')
   const [lon, setLon] = useState(initial.lon?.toFixed(6) ?? '')
   const [query, setQuery] = useState('')
+  const [chosen, setChosen] = useState<string[]>(initialLists)
   const [cities, setCities] = useState<Awaited<ReturnType<typeof loadCities>> | null>(null)
   const [citiesFailed, setCitiesFailed] = useState(false)
 
@@ -49,6 +66,9 @@ export function PlaceDialog({
     setLat(initial.lat?.toFixed(6) ?? '')
     setLon(initial.lon?.toFixed(6) ?? '')
     setQuery('')
+    setChosen(initialLists)
+    // initialLists is read when the dialog opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initial])
 
   useEffect(() => {
@@ -70,12 +90,13 @@ export function PlaceDialog({
   const lonBad = lon.trim() === '' || !Number.isFinite(lonValue) || lonValue < -180 || lonValue > 180
   const nameBad = name.trim().length === 0 || [...name.trim()].length > MAX_NAME
   const noteBad = [...note].length > MAX_NOTE
-  const invalid = latBad || lonBad || nameBad || noteBad
+  const noList = lists !== undefined && chosen.length === 0
+  const invalid = latBad || lonBad || nameBad || noteBad || noList
 
   function submit(event: FormEvent) {
     event.preventDefault()
     if (invalid) return
-    onSubmit({ name: name.trim(), note, lat: latValue, lon: lonValue })
+    onSubmit({ name: name.trim(), note, lat: latValue, lon: lonValue }, chosen)
   }
 
   return (
@@ -138,11 +159,35 @@ export function PlaceDialog({
               {(field) => <Input {...field} value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" />}
             </Field>
           </div>
+          {lists ? (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">{t('place.saveTo')}</legend>
+              {lists.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t('place.noLists')}</p>
+              ) : (
+                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                  {lists.map((list) => (
+                    <li key={list.id} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`place-list-${list.id}`}
+                        checked={chosen.includes(list.id)}
+                        onCheckedChange={(v) => setChosen((c) => (v === true ? [...c, list.id] : c.filter((id) => id !== list.id)))}
+                      />
+                      <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: list.color }} aria-hidden />
+                      <Label htmlFor={`place-list-${list.id}`} className="min-w-0 flex-1 truncate font-normal">
+                        {list.title}
+                      </Label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </fieldset>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={invalid}>
+            <Button type="submit" disabled={invalid || busy} loading={busy}>
               {mode === 'add' ? t('place.add') : t('place.save')}
             </Button>
           </DialogFooter>

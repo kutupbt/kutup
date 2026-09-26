@@ -11,13 +11,8 @@
     "title": "Sayfa bulunamadı",
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
   },
-  "nav": {
-    "lists": "Haritalarınız",
-    "settings": "Ayarlar"
-  },
   "home": {
     "title": "Haritalarınız",
-    "description": "Drive’ınızda uçtan uca şifreli tutulan ve birlikte canlı düzenlenen yer listeleri.",
     "new": "Yeni harita",
     "newTitle": "Yeni harita",
     "newDescription": "{{folder}} içine kaydedilir. Sonra Drive’da taşıyabilirsiniz.",
@@ -46,7 +41,11 @@
     "importedSkipped_other": "{{count}} yer içe aktarıldı. Tek nokta olmadığı için alınmayan (çizgiler, rotalar, izler): {{skipped}}.",
     "importUnreadable": "Bu bir KML, GPX veya Kutup harita dosyası değil.",
     "importTooLarge": "Bu dosya içe aktarmak için çok büyük.",
-    "importFailed": "Dosya içe aktarılamadı."
+    "importFailed": "Dosya içe aktarılamadı.",
+    "settings": "Ayarlar",
+    "mapLabel": "Tüm yerleriniz",
+    "placesUpdated_one": "{{count}} yer · {{date}} güncellendi",
+    "placesUpdated_other": "{{count}} yer · {{date}} güncellendi"
   },
   "title": {
     "label": "Başlık",
@@ -99,10 +98,7 @@
     "removed": "{{name}} kaldırıldı",
     "addedBy": "{{name}} {{date}} tarihinde ekledi",
     "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
-    "mapRegion": "Harita",
     "mapLabel": "{{title}} haritası",
-    "mapsOff": "Haritalar sizin için kapalı, bu yüzden harita gösterilmiyor; yerleri yine de şehir veya koordinatla ekleyebilirsiniz.",
-    "turnOn": "Açın",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
     "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
     "restoredLabel": "Geri yüklendi ({{time}})",
@@ -119,7 +115,10 @@
     "importedSkipped_other": "{{count}} yer eklendi. Tek nokta olmadığı için alınmayan: {{skipped}}.",
     "importUnreadable": "Bu bir KML, GPX veya Kutup harita dosyası değil.",
     "importTooLarge": "Bu dosya içe aktarmak için çok büyük.",
-    "importFailed": "Dosya içe aktarılamadı."
+    "importFailed": "Dosya içe aktarılamadı.",
+    "placeCount_one": "{{count}} yer",
+    "placeCount_other": "{{count}} yer",
+    "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın."
   },
   "place": {
     "addTitle": "Yer ekle",
@@ -138,7 +137,12 @@
     "latInvalid": "-90 ile 90 arası.",
     "lonInvalid": "-180 ile 180 arası.",
     "add": "Ekle",
-    "save": "Kaydet"
+    "save": "Kaydet",
+    "saveTo": "Kaydet",
+    "noLists": "Henüz değiştirebileceğiniz bir harita yok. Önce bir tane oluşturun.",
+    "addFailed": "{{list}} haritasına eklenemedi.",
+    "addedTo_one": "{{count}} haritaya eklendi",
+    "addedTo_other": "{{count}} haritaya eklendi"
   },
   "settings": {
     "title": "Ayarlar",
@@ -151,5 +155,25 @@
     "display": "Harita görünümü",
     "displayHint": "Haritaların gösterilip gösterilmeyeceği, harita sağlayıcısı ve karoların sunucunuz üzerinden gelip gelmeyeceği hesabınızda ayarlanır.",
     "openDisplay": "Harita ayarlarını aç"
+  },
+  "layout": {
+    "map": "Harita",
+    "mapsOff": "Haritalar sizin için kapalı, bu yüzden harita gösterilmiyor; yerleri yine de şehir veya koordinatla ekleyebilirsiniz.",
+    "turnOn": "Açın",
+    "collapse": "Haritayı daha çok göster",
+    "expand": "Paneli daha çok göster",
+    "mapMenu": "Buradaki harita işlemleri",
+    "addHere": "Buraya yer ekle"
+  },
+  "card": {
+    "label": "{{name}}",
+    "close": "Kapat",
+    "lists": "Haritalarınızda",
+    "noLists": "Görebildiğiniz hiçbir haritada değil.",
+    "viewOnly": "(yalnızca görüntüleme)",
+    "openList": "{{list}} haritasını aç",
+    "added": "{{list}} haritasına eklendi",
+    "removed": "{{list}} haritasından kaldırıldı",
+    "failed": "{{list}} değiştirilemedi. Yeniden deneyin."
   }
 }

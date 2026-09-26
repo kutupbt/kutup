@@ -8,7 +8,7 @@ import { useMapConfig, useSaveMapPreferences } from '@kutup/map/config'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
-import { Card } from '@kutup/ui/components/card'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
@@ -28,8 +28,8 @@ function pathOf(index: FolderIndex, folder: Folder, myFiles: string): string {
   return parts.join(' / ')
 }
 
-/** Where new lists go, and a way to the map display settings (in the account). */
-export function SettingsPage() {
+/** Where new lists go, and a way to the map display settings (in the account). Over the map, at `/settings`. */
+export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation()
   const folders = useFolders()
   const config = useMapConfig()
@@ -45,9 +45,7 @@ export function SettingsPage() {
       .sort((a, b) => a.label.localeCompare(b.label))
   }, [folders.data, t])
 
-  if (folders.isPending || config.isPending) return <LoadingPanel label={t('common.loading')} />
-  if (!config.data || !folders.data) return <Alert variant="error">{t('settings.loadFailed')}</Alert>
-  const preferences = config.data.preferences
+  const preferences = config.data?.preferences
 
   function choose(value: string) {
     if (!config.data) return
@@ -58,9 +56,19 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl space-y-5 px-4 py-6 md:px-6">
-      <h1 className="font-display text-2xl font-semibold tracking-tight">{t('settings.title')}</h1>
-      <Card className="space-y-3 p-5">
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('settings.title')}</DialogTitle>
+          <DialogDescription className="sr-only">{t('settings.saveToHint')}</DialogDescription>
+        </DialogHeader>
+        {folders.isPending || config.isPending ? (
+          <LoadingPanel label={t('common.loading')} />
+        ) : !config.data || !folders.data || !preferences ? (
+          <Alert variant="error">{t('settings.loadFailed')}</Alert>
+        ) : (
+      <div className="space-y-6">
+      <section className="space-y-3">
         <div>
           <Label htmlFor="save-folder" className="text-base font-semibold">{t('settings.saveTo')}</Label>
           <p className="text-sm text-muted-foreground">{t('settings.saveToHint')}</p>
@@ -80,8 +88,8 @@ export function SettingsPage() {
         </Select>
         {fellBack && preferences.saveFolderId ? <Alert variant="warn">{t('settings.saveFolderGone')}</Alert> : null}
         {save.error ? <Alert variant="error">{apiErrorMessage(save.error, t('settings.saveFailed'))}</Alert> : null}
-      </Card>
-      <Card className="space-y-3 p-5">
+      </section>
+      <section className="space-y-3 border-t border-border pt-5">
         <div>
           <h2 className="text-base font-semibold">{t('settings.display')}</h2>
           <p className="text-sm text-muted-foreground">{t('settings.displayHint')}</p>
@@ -91,7 +99,10 @@ export function SettingsPage() {
             <ExternalLink /> {t('settings.openDisplay')}
           </a>
         </Button>
-      </Card>
-    </div>
+      </section>
+      </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

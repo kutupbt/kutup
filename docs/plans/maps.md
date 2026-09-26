@@ -297,6 +297,24 @@ goes beyond Signal parity.
      it;
    - KML and GPX exports holding the places and notes;
    - a GPX import that the viewer saw live.
+   Layout (2026-09-26, asked for by the product owner): like Google Maps.
+   - **One map stays in place.** A panel beside it (a sheet over it on a
+     phone) shows your maps or one list, and the address follows the panel.
+   - **Home map:** shows every list's places, each list in its own colour.
+     The pins are each list's last saved places; opening a list joins its
+     live session, and leaving a list saves what you changed.
+   - **Right-click → "Add a place here":** you choose the lists it goes into
+     (one or more, like "Save to"). A place added to several lists keeps one
+     id in all of them.
+   - **Place card:** choosing a pin (click or right-click) opens a card over
+     the map's right side with the name, the note, who added it, and every
+     list it is in. You tick or untick lists to add it or take it out, and
+     can send it to a chat. A list that is not open is changed by joining
+     its live session briefly, then saving a version, so people in it see
+     the change live.
+   Also fixed: Drive, Chat and Maps restarted themselves on some page
+   changes. The start-up re-ran when the router's `navigate` changed, which
+   remounted everything, including Maps' map.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

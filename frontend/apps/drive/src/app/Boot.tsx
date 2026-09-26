@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { bootChildApp } from '@kutup/session/childBoot'
@@ -15,7 +15,12 @@ type State = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error' }
  */
 export function Boot({ children }: { children: ReactNode }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
+  // A new function whenever the location changes: read through a ref, so
+  // moving between pages never starts the app over (which would remount
+  // everything below, e.g. Maps' map).
+  const navigateNow = useNavigate()
+  const navigate = useRef(navigateNow)
+  navigate.current = navigateNow
   const [state, setState] = useState<State>({ kind: 'loading' })
 
   const run = useCallback(() => {
@@ -23,11 +28,11 @@ export function Boot({ children }: { children: ReactNode }) {
     bootChildApp('drive')
       .then((result) => {
         if (result.kind === 'redirecting') return
-        if (result.next) void navigate(result.next, { replace: true })
+        if (result.next) void navigate.current(result.next, { replace: true })
         setState({ kind: 'ready' })
       })
       .catch(() => setState({ kind: 'error' }))
-  }, [navigate])
+  }, [])
 
   useEffect(run, [run])
 

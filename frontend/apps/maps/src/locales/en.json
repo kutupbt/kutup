@@ -11,13 +11,8 @@
     "title": "Page not found",
     "description": "The address may be mistyped, or the page may have moved."
   },
-  "nav": {
-    "lists": "Your maps",
-    "settings": "Settings"
-  },
   "home": {
     "title": "Your maps",
-    "description": "Lists of places, kept end-to-end encrypted in your Drive and edited together live.",
     "new": "New map",
     "newTitle": "New map",
     "newDescription": "It is saved in {{folder}}. You can move it later in Drive.",
@@ -46,7 +41,11 @@
     "importedSkipped_other": "Imported {{count}} places. Left out, as they are not single points (lines, routes, tracks): {{skipped}}.",
     "importUnreadable": "That is not a KML, GPX or Kutup map file.",
     "importTooLarge": "That file is too large to import.",
-    "importFailed": "The file could not be imported."
+    "importFailed": "The file could not be imported.",
+    "settings": "Settings",
+    "mapLabel": "All your places",
+    "placesUpdated_one": "{{count}} place · updated {{date}}",
+    "placesUpdated_other": "{{count}} places · updated {{date}}"
   },
   "title": {
     "label": "Title",
@@ -99,10 +98,7 @@
     "removed": "Removed {{name}}",
     "addedBy": "Added by {{name}} on {{date}}",
     "tooMany": "This map has as many places as it can hold.",
-    "mapRegion": "Map",
     "mapLabel": "Map of {{title}}",
-    "mapsOff": "Maps are off for you, so no map is shown; places can still be added by city or coordinates.",
-    "turnOn": "Turn them on",
     "quota": "Your storage is full, so changes are no longer saved as versions.",
     "preRestoreLabel": "Before restoring ({{time}})",
     "restoredLabel": "Restored ({{time}})",
@@ -119,7 +115,10 @@
     "importedSkipped_other": "Added {{count}} places. Left out, as they are not single points: {{skipped}}.",
     "importUnreadable": "That is not a KML, GPX or Kutup map file.",
     "importTooLarge": "That file is too large to import.",
-    "importFailed": "The file could not be imported."
+    "importFailed": "The file could not be imported.",
+    "placeCount_one": "{{count}} place",
+    "placeCount_other": "{{count}} places",
+    "rightClickHint": "Or right-click the map where the place is."
   },
   "place": {
     "addTitle": "Add a place",
@@ -138,7 +137,12 @@
     "latInvalid": "From -90 to 90.",
     "lonInvalid": "From -180 to 180.",
     "add": "Add",
-    "save": "Save"
+    "save": "Save",
+    "saveTo": "Save to",
+    "noLists": "No map you can change yet. Make one first.",
+    "addFailed": "It could not be added to {{list}}.",
+    "addedTo_one": "Added to {{count}} map",
+    "addedTo_other": "Added to {{count}} maps"
   },
   "settings": {
     "title": "Settings",
@@ -151,5 +155,25 @@
     "display": "Map display",
     "displayHint": "Whether maps are shown, which map provider, and whether tiles go through your server are set in your account.",
     "openDisplay": "Open map settings"
+  },
+  "layout": {
+    "map": "Map",
+    "mapsOff": "Maps are off for you, so no map is shown; places can still be added by city or coordinates.",
+    "turnOn": "Turn them on",
+    "collapse": "Show more of the map",
+    "expand": "Show more of the panel",
+    "mapMenu": "Map actions here",
+    "addHere": "Add a place here"
+  },
+  "card": {
+    "label": "{{name}}",
+    "close": "Close",
+    "lists": "In your maps",
+    "noLists": "In no map you can see.",
+    "viewOnly": "(view only)",
+    "openList": "Open {{list}}",
+    "added": "Added to {{list}}",
+    "removed": "Removed from {{list}}",
+    "failed": "{{list}} could not be changed. Try again."
   }
 }
