@@ -452,6 +452,10 @@ pub struct MapPreferences {
     pub enabled: bool,
     pub provider: Option<ProviderId>,
     pub via_proxy: bool,
+    /// Where the Maps app puts new lists: one of your own folders, or null
+    /// for My files.
+    #[serde(default)]
+    pub save_folder_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -465,22 +469,25 @@ pub struct MapConfigResponse {
 }
 
 async fn preferences_of(pool: &PgPool, user_id: uuid::Uuid) -> AppResult<MapPreferences> {
-    let row: Option<(bool, Option<String>, bool)> = sqlx::query_as(
-        "SELECT enabled, provider, via_proxy FROM user_map_preferences WHERE user_id = $1",
+    let row: Option<(bool, Option<String>, bool, Option<uuid::Uuid>)> = sqlx::query_as(
+        "SELECT enabled, provider, via_proxy, save_folder_id
+         FROM user_map_preferences WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
     Ok(match row {
-        Some((enabled, provider, via_proxy)) => MapPreferences {
+        Some((enabled, provider, via_proxy, save_folder_id)) => MapPreferences {
             enabled,
             provider: provider.as_deref().and_then(ProviderId::parse),
             via_proxy,
+            save_folder_id,
         },
         None => MapPreferences {
             enabled: false,
             provider: None,
             via_proxy: true,
+            save_folder_id: None,
         },
     })
 }
@@ -550,19 +557,36 @@ pub async fn put_preferences(
         }
     }
     let user_id = trusted_uuid(&user.user_id)?;
+    if let Some(folder) = request.save_folder_id {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM collections
+                           WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+        )
+        .bind(folder)
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !owned {
+            return Err(AppError::bad_request(
+                "new maps go into one of your own folders",
+            ));
+        }
+    }
     sqlx::query(
-        "INSERT INTO user_map_preferences (user_id, enabled, provider, via_proxy)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO user_map_preferences (user_id, enabled, provider, via_proxy, save_folder_id)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (user_id) DO UPDATE SET
              enabled = EXCLUDED.enabled,
              provider = EXCLUDED.provider,
              via_proxy = EXCLUDED.via_proxy,
+             save_folder_id = EXCLUDED.save_folder_id,
              updated_at = now()",
     )
     .bind(user_id)
     .bind(request.enabled)
     .bind(request.provider.map(ProviderId::as_str))
     .bind(request.via_proxy)
+    .bind(request.save_folder_id)
     .execute(&state.pool)
     .await?;
     Ok(Json(config_response(&settings, request)))

@@ -40,6 +40,7 @@
     "@kutup/drive-core": "workspace:*",
     "@kutup/files": "workspace:*",
     "@kutup/i18n": "workspace:*",
+    "@kutup/map": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
     "@tanstack/react-query": "^5",

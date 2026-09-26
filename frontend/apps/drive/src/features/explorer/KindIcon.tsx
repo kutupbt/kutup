@@ -12,6 +12,7 @@ import {
   Play,
   Presentation,
   Sheet,
+  MapPin,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@kutup/ui/lib/cn'
@@ -23,6 +24,7 @@ const GLYPHS: Record<FileKind, LucideIcon> = {
   spreadsheet: Sheet,
   presentation: Presentation,
   whiteboard: PenTool,
+  map: MapPin,
   pdf: FileText,
   image: Image,
   video: Play,
@@ -39,6 +41,7 @@ const TILES: Record<FileKind, string> = {
   spreadsheet: 'bg-kind-spreadsheet',
   presentation: 'bg-kind-presentation',
   whiteboard: 'bg-kind-whiteboard',
+  map: 'bg-kind-map',
   pdf: 'bg-kind-pdf',
   image: 'bg-kind-image',
   video: 'bg-kind-video',

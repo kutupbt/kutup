@@ -636,6 +636,12 @@ does not allow fetching the same tiles repeatedly. If your own tile server
 is only reachable from the Kutup server (e.g. on the Docker network), set
 map traffic to **always**.
 
+The Maps app (`KUTUP_MAPS_URL`, e.g. `maps.example.org`, served by the same
+frontend image) keeps people's place lists. Each list is an encrypted Drive
+file (`.kutupmap`) that counts against its owner's storage, so no separate
+storage or service is needed. Lists work with maps turned off: places are
+then added by city (searched on the device) or by coordinates.
+
 ---
 
 ## Security Hardening

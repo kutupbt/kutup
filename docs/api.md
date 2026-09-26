@@ -833,8 +833,10 @@ is a MapLibre style; a raster provider's is a `{z}/{x}/{y}` template.
 
 ### PUT /api/maps/preferences
 
-**Auth:** Bearer JWT. Body: `{ enabled, provider, viaProxy }`; `provider` must
-be one on offer (or null). Returns the same shape as `GET /api/maps`.
+**Auth:** Bearer JWT. Body: `{ enabled, provider, viaProxy, saveFolderId }`;
+`provider` must be one on offer (or null). `saveFolderId` is where the Maps
+app puts new lists: one of your own folders, not in the trash (`400`
+otherwise), or null for My files. Returns the same shape as `GET /api/maps`.
 
 ### GET /api/maps/proxy/:provider/*path
 

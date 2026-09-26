@@ -305,6 +305,9 @@ importers:
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@kutup/map':
+        specifier: workspace:*
+        version: link:../../packages/map
       '@kutup/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -390,6 +393,79 @@ importers:
       '@tailwindcss/typography':
         specifier: ^0.5.20
         version: 0.5.20
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
+
+  apps/maps:
+    dependencies:
+      '@kutup/chat-core':
+        specifier: workspace:*
+        version: link:../../packages/chat-core
+      '@kutup/collab':
+        specifier: workspace:*
+        version: link:../../packages/collab
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../../packages/drive-core
+      '@kutup/files':
+        specifier: workspace:*
+        version: link:../../packages/files
+      '@kutup/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      '@kutup/map':
+        specifier: workspace:*
+        version: link:../../packages/map
+      '@kutup/session':
+        specifier: workspace:*
+        version: link:../../packages/session
+      '@kutup/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5
+        version: 5.103.2(react@18.3.1)
+      axios:
+        specifier: ^1.18.0
+        version: 1.18.0
+      i18next:
+        specifier: ^26.0.6
+        version: 26.4.2(typescript@5.9.3)
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.47.0(react@18.3.1)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      react-router-dom:
+        specifier: ^7.1.1
+        version: 7.18.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.8(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      y-protocols:
+        specifier: ^1.0.7
+        version: 1.0.7(yjs@13.6.30)
+      yjs:
+        specifier: ^13.6.30
+        version: 13.6.30
+    devDependencies:
+      '@kutup/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       vite:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
@@ -553,6 +629,9 @@ importers:
       maplibre-gl:
         specifier: ^5.24.0
         version: 5.24.0
+      yjs:
+        specifier: ^13.6.30
+        version: 13.6.30
     devDependencies:
       '@types/react':
         specifier: ^18.3.3

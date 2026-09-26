@@ -28,7 +28,7 @@ import { useFolderFiles } from '@kutup/drive-core/files'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
-import { filePath, folderPath } from '../drive/paths'
+import { folderPath, openFile } from '../drive/paths'
 import { moveRefusal, type MoveRefusal } from '../drive/move'
 import { useCopy } from '../drive/useCopy'
 import { useMove } from '../drive/useMove'
@@ -198,7 +198,7 @@ export function FolderPage() {
         void downloadFile(target.folder, target.file).catch(() => {})
         return
       }
-      void navigate(filePath(target.folder, target.file.id))
+      openFile(navigate, target.folder, target.file)
     },
     [lookup, navigate],
   )
@@ -619,7 +619,7 @@ export function FolderPage() {
         }
         onOpen={(target) => {
           setLooking(null)
-          void navigate(filePath(target.folder, target.file.id))
+          openFile(navigate, target.folder, target.file)
         }}
         onDownload={(target) => void download([target])}
       />

@@ -13,7 +13,7 @@ import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
 import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
-import { filePath, folderPath } from '../drive/paths'
+import { folderPath, openFile } from '../drive/paths'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { PersonLabel } from '../people/PersonLabel'
 import { Explorer } from '../explorer/Explorer'
@@ -111,7 +111,7 @@ export function SharedPage() {
           onOpen={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              if (s?.file.fileKey) void navigate(filePath(s.container, s.file.id))
+              if (s?.file.fileKey) openFile(navigate, s.container, s.file)
               else if (s?.state === 'waiting') toast.info(t('shared.waitingHint'))
               return
             }
@@ -123,7 +123,7 @@ export function SharedPage() {
               const s = filesById.get(item.id)
               if (!s?.file.fileKey) return []
               return [
-                { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => void navigate(filePath(s.container, s.file.id)) },
+                { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) },
                 {
                   id: 'download',
                   label: t('drive.actions.download'),

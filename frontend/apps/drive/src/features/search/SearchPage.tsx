@@ -8,7 +8,7 @@ import { folderHex } from '../drive/colors'
 import { downloadFile, downloadFolderZip, FsaRequiredError } from '../drive/downloads'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { filePath, folderPath } from '../drive/paths'
+import { folderPath, openFile } from '../drive/paths'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
@@ -96,7 +96,7 @@ export function SearchPage() {
     } else if (hit.folder.source === 'remote') {
       void save(hit)
     } else {
-      void navigate(filePath(hit.folder, hit.file.id))
+      openFile(navigate, hit.folder, hit.file)
     }
   }
 

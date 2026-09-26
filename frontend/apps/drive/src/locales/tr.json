@@ -57,6 +57,7 @@
       "spreadsheet": "Tablolar",
       "presentation": "Sunumlar",
       "whiteboard": "Beyaz tahtalar",
+      "map": "Haritalar",
       "pdf": "PDF'ler",
       "image": "Görseller",
       "video": "Videolar",
@@ -83,14 +84,16 @@
       "document": "Belge",
       "spreadsheet": "Tablo",
       "presentation": "Sunum",
-      "whiteboard": "Beyaz tahta"
+      "whiteboard": "Beyaz tahta",
+      "map": "Harita"
     },
     "untitled": {
       "note": "Adsız not",
       "document": "Adsız belge",
       "spreadsheet": "Adsız tablo",
       "presentation": "Adsız sunum",
-      "whiteboard": "Adsız beyaz tahta"
+      "whiteboard": "Adsız beyaz tahta",
+      "map": "Adsız harita"
     }
   },
   "drive": {

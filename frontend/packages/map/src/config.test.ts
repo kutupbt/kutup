@@ -22,7 +22,7 @@ const base: MapConfig = {
       attribution: '© OpenStreetMap contributors',
     },
   ],
-  preferences: { enabled: true, provider: 'openstreetmap', viaProxy: true },
+  preferences: { enabled: true, provider: 'openstreetmap', viaProxy: true, saveFolderId: null },
 }
 
 describe('effectiveMap', () => {

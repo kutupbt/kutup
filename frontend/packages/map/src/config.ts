@@ -24,6 +24,8 @@ export interface MapPreferences {
   enabled: boolean
   provider: ProviderId | null
   viaProxy: boolean
+  /** Where the Maps app puts new lists: one of your own folders; null is My files. */
+  saveFolderId: string | null
 }
 
 export interface MapConfig {

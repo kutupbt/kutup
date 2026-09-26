@@ -1,7 +1,9 @@
+import { encodeListJson, LIST_EXTENSION, LIST_MIME } from '@kutup/map/list'
+
 // What "New → …" creates. Each is an ordinary encrypted upload of a small
 // starting file; the editors take it from there.
 
-export const NEW_DOCUMENTS = ['note', 'document', 'spreadsheet', 'presentation', 'whiteboard'] as const
+export const NEW_DOCUMENTS = ['note', 'document', 'spreadsheet', 'presentation', 'whiteboard', 'map'] as const
 export type NewDocument = (typeof NEW_DOCUMENTS)[number]
 
 const EXTENSION: Record<NewDocument, string> = {
@@ -10,6 +12,7 @@ const EXTENSION: Record<NewDocument, string> = {
   spreadsheet: 'xlsx',
   presentation: 'pptx',
   whiteboard: 'excalidraw',
+  map: LIST_EXTENSION,
 }
 
 const MIME: Record<NewDocument, string> = {
@@ -18,6 +21,7 @@ const MIME: Record<NewDocument, string> = {
   spreadsheet: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   presentation: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   whiteboard: 'application/vnd.excalidraw+json',
+  map: LIST_MIME,
 }
 
 /** `Untitled.docx`, then `Untitled (1).docx`, … — never an existing name (case-insensitive). */
@@ -45,6 +49,8 @@ function initialBytes(type: NewDocument, name: string): Uint8Array {
           files: {},
         }),
       )
+    case 'map':
+      return encodeListJson([])
     default:
       return new Uint8Array([0])
   }

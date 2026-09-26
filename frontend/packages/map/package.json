@@ -12,7 +12,8 @@
     "@kutup/session": "workspace:*",
     "@tanstack/react-query": "^5",
     "maplibre-gl": "^5.24.0",
-    "@kutup/ui": "workspace:*"
+    "@kutup/ui": "workspace:*",
+    "yjs": "^13.6.30"
   },
   "peerDependencies": {
     "react": "^18.3.1"

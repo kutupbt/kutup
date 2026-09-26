@@ -1,0 +1,130 @@
+{
+  "app": {
+    "title": "Kutup Haritalar"
+  },
+  "boot": {
+    "opening": "Haritalarınız açılıyor…",
+    "failedTitle": "Haritalar açılamadı",
+    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "nav": {
+    "lists": "Haritalarınız",
+    "settings": "Ayarlar"
+  },
+  "home": {
+    "title": "Haritalarınız",
+    "description": "Drive’ınızda uçtan uca şifreli tutulan ve birlikte canlı düzenlenen yer listeleri.",
+    "new": "Yeni harita",
+    "newTitle": "Yeni harita",
+    "newDescription": "{{folder}} içine kaydedilir. Sonra Drive’da taşıyabilirsiniz.",
+    "untitled": "Adsız harita",
+    "create": "Oluştur",
+    "myFiles": "Dosyalarım",
+    "encrypted": "[şifreli]",
+    "in": "{{folder}} içinde",
+    "inShared": "{{folder}} içinde, {{name}} paylaştı",
+    "from": "{{name}} paylaştı",
+    "updated": "{{date}} güncellendi",
+    "sharedMark": "Paylaşıldı",
+    "loading": "Haritalarınız yükleniyor…",
+    "loadFailed": "Haritalarınız yüklenemedi.",
+    "emptyTitle": "Henüz harita yok",
+    "emptyDescription": "Yerleri bir arada tutmak için bir harita oluşturun: geziler, sevdiğiniz yerler, buluşma noktaları. Paylaşıp başkalarıyla birlikte düzenleyin.",
+    "saveFolderGone": "Yeni haritalar için seçtiğiniz klasör artık yok, bu yüzden yeni haritalar Dosyalarım’a gidiyor.",
+    "changeSaveFolder": "Başka birini seçin"
+  },
+  "title": {
+    "label": "Başlık",
+    "required": "Bir başlık girin.",
+    "tooLong": "En fazla {{max}} karakter.",
+    "slash": "Başlık / veya \\ içeremez.",
+    "failed": "Kaydedilemedi."
+  },
+  "list": {
+    "opening": "Harita açılıyor…",
+    "failedTitle": "Bu harita açılamıyor",
+    "backToLists": "Haritalarınıza dönün",
+    "failure": {
+      "notFound": "Çöp kutusuna taşınmış ya da artık erişiminiz olmayabilir.",
+      "undecryptable": "Anahtarları hesabınızla çözülemedi. Sahibinden yeniden paylaşmasını isteyin.",
+      "waiting": "Bu harita yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup’u yeniden açtığında açılır.",
+      "notAList": "Bu dosya bir harita değil. Onun yerine Drive’da açın.",
+      "loadFailed": "Yüklenemedi. Bağlantınızı kontrol edip yeniden deneyin."
+    },
+    "status": {
+      "connecting": "Bağlanıyor…",
+      "live": "Canlı",
+      "viewOnly": "Yalnızca görüntüleme",
+      "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
+      "error": "Çevrimdışı"
+    },
+    "collaborators_one": "Burada {{count}} kişi daha var",
+    "collaborators_other": "Burada {{count}} kişi daha var",
+    "menu": "Harita işlemleri",
+    "rename": "Yeniden adlandır",
+    "renameTitle": "Haritayı yeniden adlandır",
+    "renameSubmit": "Yeniden adlandır",
+    "download": "İndir",
+    "trash": "Çöp kutusuna taşı",
+    "trashTitle": "“{{title}}” çöp kutusuna taşınsın mı?",
+    "trashDescription": "Paylaşıldığı herkes de onu kaybeder. Drive’daki çöp kutusundan geri yükleyebilirsiniz.",
+    "trashed": "“{{title}}” çöp kutusuna taşındı",
+    "trashFailed": "Çöp kutusuna taşınamadı.",
+    "addOnMap": "Haritada ekle",
+    "addByDetails": "Ad veya koordinatla ekle",
+    "pickHint": "Yerin olduğu noktaya haritada tıklayın.",
+    "editsWaitHint": "Bu haritanın bulunduğu klasörden biri ayrıldı. Sahibi Kutup’u açtığında yeniden düzenleyebilirsiniz.",
+    "loadingPlaces": "Yerler yükleniyor…",
+    "empty": "Henüz yer yok.",
+    "emptyEditor": "Henüz yer yok. Haritada ya da bir şehir veya koordinatlarla ekleyin.",
+    "placesLabel": "Yerler",
+    "placeActions": "{{name}} için işlemler",
+    "editPlace": "Düzenle",
+    "removePlace": "Kaldır",
+    "removed": "{{name}} kaldırıldı",
+    "addedBy": "{{name}} {{date}} tarihinde ekledi",
+    "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
+    "mapRegion": "Harita",
+    "mapLabel": "{{title}} haritası",
+    "mapsOff": "Haritalar sizin için kapalı, bu yüzden harita gösterilmiyor; yerleri yine de şehir veya koordinatla ekleyebilirsiniz.",
+    "turnOn": "Açın",
+    "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
+    "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
+    "restoredLabel": "Geri yüklendi ({{time}})"
+  },
+  "place": {
+    "addTitle": "Yer ekle",
+    "editTitle": "Yeri düzenle",
+    "description": "Bu haritadaki herkes hemen görür.",
+    "name": "Ad",
+    "nameInvalid": "En fazla {{max}} karakterlik bir ad girin.",
+    "note": "Not",
+    "noteTooLong": "En fazla {{max}} karakter.",
+    "searchCity": "Şehir bul",
+    "citiesFailed": "Şehir listesi yüklenemedi.",
+    "noCities": "Bu adla şehir yok.",
+    "citiesAttribution": "Şehir araması bu cihazda çalışır. Veri: {{source}}.",
+    "lat": "Enlem",
+    "lon": "Boylam",
+    "latInvalid": "-90 ile 90 arası.",
+    "lonInvalid": "-180 ile 180 arası.",
+    "add": "Ekle",
+    "save": "Kaydet"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "loadFailed": "Ayarlar yüklenemedi.",
+    "saveTo": "Yeni haritaları kaydet",
+    "saveToHint": "Burada oluşturduğunuz haritalar Drive’ınızdaki bu klasöre gider. Her haritayı sonra taşıyabilirsiniz.",
+    "saveFolderGone": "Seçtiğiniz klasör artık yok ya da çöp kutusunda, bu yüzden yeni haritalar Dosyalarım’a gidiyor.",
+    "saved": "Kaydedildi",
+    "saveFailed": "Kaydedilemedi.",
+    "display": "Harita görünümü",
+    "displayHint": "Haritaların gösterilip gösterilmeyeceği, harita sağlayıcısı ve karoların sunucunuz üzerinden gelip gelmeyeceği hesabınızda ayarlanır.",
+    "openDisplay": "Harita ayarlarını aç"
+  }
+}

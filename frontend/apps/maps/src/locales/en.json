@@ -1,0 +1,130 @@
+{
+  "app": {
+    "title": "Kutup Maps"
+  },
+  "boot": {
+    "opening": "Opening your maps…",
+    "failedTitle": "Maps could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The address may be mistyped, or the page may have moved."
+  },
+  "nav": {
+    "lists": "Your maps",
+    "settings": "Settings"
+  },
+  "home": {
+    "title": "Your maps",
+    "description": "Lists of places, kept end-to-end encrypted in your Drive and edited together live.",
+    "new": "New map",
+    "newTitle": "New map",
+    "newDescription": "It is saved in {{folder}}. You can move it later in Drive.",
+    "untitled": "Untitled map",
+    "create": "Create",
+    "myFiles": "My files",
+    "encrypted": "[encrypted]",
+    "in": "In {{folder}}",
+    "inShared": "In {{folder}}, from {{name}}",
+    "from": "Shared by {{name}}",
+    "updated": "Updated {{date}}",
+    "sharedMark": "Shared",
+    "loading": "Loading your maps…",
+    "loadFailed": "Your maps could not be loaded.",
+    "emptyTitle": "No maps yet",
+    "emptyDescription": "Make a map to keep places together: trips, favourite spots, meeting points. Share it and edit it with others.",
+    "saveFolderGone": "The folder you chose for new maps is gone, so new maps go to My files.",
+    "changeSaveFolder": "Choose another"
+  },
+  "title": {
+    "label": "Title",
+    "required": "Enter a title.",
+    "tooLong": "At most {{max}} characters.",
+    "slash": "A title cannot contain / or \\.",
+    "failed": "It could not be saved."
+  },
+  "list": {
+    "opening": "Opening the map…",
+    "failedTitle": "This map can't be opened",
+    "backToLists": "Back to your maps",
+    "failure": {
+      "notFound": "It may have been moved to the trash, or you may no longer have access to it.",
+      "undecryptable": "Its keys could not be decrypted with your account. Ask its owner to share it again.",
+      "waiting": "This map moved to a new key, and its owner has not updated your access yet. It opens once they open Kutup again.",
+      "notAList": "This file is not a map. Open it in Drive instead.",
+      "loadFailed": "It could not be loaded. Check your connection and try again."
+    },
+    "status": {
+      "connecting": "Connecting…",
+      "live": "Live",
+      "viewOnly": "View only",
+      "editsWait": "View only until the owner updates access",
+      "error": "Offline"
+    },
+    "collaborators_one": "{{count}} other person here",
+    "collaborators_other": "{{count}} other people here",
+    "menu": "Map actions",
+    "rename": "Rename",
+    "renameTitle": "Rename map",
+    "renameSubmit": "Rename",
+    "download": "Download",
+    "trash": "Move to trash",
+    "trashTitle": "Move “{{title}}” to the trash?",
+    "trashDescription": "Everyone it is shared with loses it too. You can restore it from the trash in Drive.",
+    "trashed": "“{{title}}” moved to the trash",
+    "trashFailed": "It could not be moved to the trash.",
+    "addOnMap": "Add on the map",
+    "addByDetails": "Add by name or coordinates",
+    "pickHint": "Click the map where the place is.",
+    "editsWaitHint": "Someone left the folder this map is in. You can edit again once its owner opens Kutup.",
+    "loadingPlaces": "Loading places…",
+    "empty": "No places yet.",
+    "emptyEditor": "No places yet. Add one on the map, or by a city or its coordinates.",
+    "placesLabel": "Places",
+    "placeActions": "Actions for {{name}}",
+    "editPlace": "Edit",
+    "removePlace": "Remove",
+    "removed": "Removed {{name}}",
+    "addedBy": "Added by {{name}} on {{date}}",
+    "tooMany": "This map has as many places as it can hold.",
+    "mapRegion": "Map",
+    "mapLabel": "Map of {{title}}",
+    "mapsOff": "Maps are off for you, so no map is shown; places can still be added by city or coordinates.",
+    "turnOn": "Turn them on",
+    "quota": "Your storage is full, so changes are no longer saved as versions.",
+    "preRestoreLabel": "Before restoring ({{time}})",
+    "restoredLabel": "Restored ({{time}})"
+  },
+  "place": {
+    "addTitle": "Add a place",
+    "editTitle": "Edit place",
+    "description": "Everyone in this map sees it at once.",
+    "name": "Name",
+    "nameInvalid": "Enter a name of at most {{max}} characters.",
+    "note": "Note",
+    "noteTooLong": "At most {{max}} characters.",
+    "searchCity": "Find a city",
+    "citiesFailed": "The city list could not be loaded.",
+    "noCities": "No city by that name.",
+    "citiesAttribution": "City search runs on this device. Data: {{source}}.",
+    "lat": "Latitude",
+    "lon": "Longitude",
+    "latInvalid": "From -90 to 90.",
+    "lonInvalid": "From -180 to 180.",
+    "add": "Add",
+    "save": "Save"
+  },
+  "settings": {
+    "title": "Settings",
+    "loadFailed": "Settings could not be loaded.",
+    "saveTo": "Save new maps to",
+    "saveToHint": "Maps you make here go into this folder of your Drive. You can move any map later.",
+    "saveFolderGone": "The folder you chose is gone or in the trash, so new maps go to My files.",
+    "saved": "Saved",
+    "saveFailed": "It could not be saved.",
+    "display": "Map display",
+    "displayHint": "Whether maps are shown, which map provider, and whether tiles go through your server are set in your account.",
+    "openDisplay": "Open map settings"
+  }
+}

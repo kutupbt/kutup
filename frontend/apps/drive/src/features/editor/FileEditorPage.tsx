@@ -22,7 +22,8 @@ import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { folderPath } from '../drive/paths'
+import { folderPath, mapsListUrl } from '../drive/paths'
+import { isListName } from '@kutup/map/list'
 import { currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
@@ -108,6 +109,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   useEffect(() => {
     if (picked || !listsLoaded) return
     if (sharedFile?.state === 'waiting') setFailure('waitingForOwner')
+    // A place list opens in Maps (a link to it here, from before, still works).
+    else if (folder && file && isListName(file.name)) window.location.replace(mapsListUrl(folder, file.id))
     else if (folder && file) setPicked({ folder, file })
     // A document just created from New may not be in the cached list yet:
     // only a list fresh from the server can say the file is not there.

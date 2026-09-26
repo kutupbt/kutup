@@ -10,10 +10,22 @@ export interface MapPoint {
   lon: number
 }
 
+/** A marker; with an id it can be selected and clicked. */
+export interface MapMarker extends MapPoint {
+  id?: string
+  /** Its name, for the tooltip and screen readers. */
+  label?: string
+}
+
 export interface MapViewProps {
   center: MapPoint
   zoom?: number
-  markers?: MapPoint[]
+  markers?: MapMarker[]
+  /** The marker drawn highlighted. */
+  selectedId?: string | null
+  onMarkerClick?: (id: string) => void
+  /** Frame all markers once, when there first are some (instead of `center`). */
+  fitMarkers?: boolean
   /** False for a small map in a message: no panning, no zoom buttons. */
   interactive?: boolean
   /** Called with the point clicked or tapped, for choosing a place. */
@@ -52,6 +64,9 @@ export function MapView({
   center,
   zoom = 13,
   markers = [],
+  selectedId = null,
+  onMarkerClick,
+  fitMarkers = false,
   interactive = true,
   onPick,
   fallback = null,
@@ -64,6 +79,9 @@ export function MapView({
   const markerRefs = useRef<maplibregl.Marker[]>([])
   const pick = useRef(onPick)
   pick.current = onPick
+  const markerClick = useRef(onMarkerClick)
+  markerClick.current = onMarkerClick
+  const fitted = useRef(false)
   const initial = useRef({ center, zoom })
   const styleKey = effective ? `${effective.provider.id}:${effective.url}` : null
 
@@ -111,14 +129,48 @@ export function MapView({
     mapRef.current?.jumpTo({ center: [center.lon, center.lat], zoom })
   }, [center.lat, center.lon, zoom, styleKey])
 
-  const markerKey = markers.map((m) => `${m.lat},${m.lon}`).join(';')
+  const markerKey = markers.map((m) => `${m.id ?? ''}:${m.lat},${m.lon}:${m.label ?? ''}`).join(';')
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
     for (const marker of markerRefs.current) marker.remove()
-    markerRefs.current = markers.map((m) => new maplibregl.Marker().setLngLat([m.lon, m.lat]).addTo(map))
+    markerRefs.current = markers.map((m) => {
+      const selected = m.id !== undefined && m.id === selectedId
+      const marker = new maplibregl.Marker(selected ? { color: '#0369a1', scale: 1.2 } : {}).setLngLat([m.lon, m.lat])
+      const element = marker.getElement()
+      if (m.label) {
+        element.title = m.label
+        element.setAttribute('aria-label', m.label)
+      }
+      if (m.id !== undefined && interactive) {
+        const id = m.id
+        element.style.cursor = 'pointer'
+        element.setAttribute('role', 'button')
+        element.tabIndex = 0
+        const activate = (event: Event) => {
+          event.stopPropagation()
+          markerClick.current?.(id)
+        }
+        element.addEventListener('click', activate)
+        element.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') activate(event)
+        })
+      }
+      if (selected) element.style.zIndex = '1'
+      return marker.addTo(map)
+    })
+    if (fitMarkers && !fitted.current && markers.length > 0) {
+      fitted.current = true
+      if (markers.length === 1) {
+        map.jumpTo({ center: [markers[0].lon, markers[0].lat], zoom: 14 })
+      } else {
+        const bounds = new maplibregl.LngLatBounds()
+        for (const m of markers) bounds.extend([m.lon, m.lat])
+        map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 0 })
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markerKey, styleKey])
+  }, [markerKey, selectedId, styleKey])
 
   if (!effective) return <>{fallback}</>
   if (interactive) {

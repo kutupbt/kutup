@@ -1,4 +1,4 @@
-import { HardDrive, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound } from 'lucide-react'
+import { HardDrive, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -59,6 +59,7 @@ export function ChatShell() {
           apps={[
             { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
+            { id: 'maps', name: t('apps.maps'), href: appUrl('maps'), icon: <MapIcon /> },
             { id: 'account', name: t('apps.account'), href: appUrl('account'), icon: <UserRound /> },
           ]}
         />

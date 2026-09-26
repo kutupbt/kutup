@@ -1,4 +1,4 @@
-import { FileSpreadsheet, FileText, FileType, FolderPlus, FolderUp, PenTool, Presentation, Upload } from 'lucide-react'
+import { FileSpreadsheet, FileText, FileType, FolderPlus, FolderUp, MapPin, PenTool, Presentation, Upload } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -8,7 +8,7 @@ import { NameDialog } from '../dialogs/NameDialog'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { Folder } from '@kutup/drive-core/model'
 import { useCreateFolder } from '@kutup/drive-core/mutations'
-import { filePath } from '../drive/paths'
+import { openFile } from '../drive/paths'
 import type { ExplorerAction } from '../explorer/Explorer'
 import { uploadOne, useUploadActions } from '../uploads/useUploadActions'
 import { newDocumentFile, type NewDocument } from './templates'
@@ -19,6 +19,7 @@ const DOCUMENTS: { type: NewDocument; icon: ReactNode }[] = [
   { type: 'spreadsheet', icon: <FileSpreadsheet /> },
   { type: 'presentation', icon: <Presentation /> },
   { type: 'whiteboard', icon: <PenTool /> },
+  { type: 'map', icon: <MapPin /> },
 ]
 
 /**
@@ -56,7 +57,7 @@ export function useCreateActions(target: Folder | null): {
       const file = newDocumentFile(type, t(`newMenu.untitled.${type}`), existing.flatMap((f) => (f.name ? [f.name] : [])))
       const uploaded = await uploadOne(folder, file)
       settled()
-      if (uploaded) void navigate(filePath(folder, uploaded.fileId))
+      if (uploaded) openFile(navigate, folder, { id: uploaded.fileId, name: file.name })
     } catch {
       toast.error(t('newMenu.createFailed'))
     } finally {

@@ -17,6 +17,7 @@
     "dev:account": "pnpm -C apps/account dev",
     "dev:drive": "pnpm -C apps/drive dev",
     "dev:chat": "pnpm -C apps/chat dev",
+    "dev:maps": "pnpm -C apps/maps dev",
     "dev:office": "pnpm -C apps/office dev"
   },
   "devDependencies": {

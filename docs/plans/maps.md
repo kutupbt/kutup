@@ -248,6 +248,32 @@ goes beyond Signal parity.
    058). Also fixed: opening a Drive or Chat link while signed out now
    lands on that link after signing in (the app's start ran twice in
    development and the retry forgot the link).
+   4b progress (2026-09-26): lists work end to end.
+   - The `.kutupmap` format is in `@kutup/map/list`: a Yjs map of places
+     keyed by id, and JSON when stored or downloaded.
+   - The Maps app (`apps/maps`):
+     - your maps: your own lists wherever they are, those in folders shared
+       with you, and those shared with you by themselves;
+     - a new map is saved to the "Save new maps to" folder, kept as
+       `saveFolderId` in the map preferences, migration 060;
+     - a list page with the map, the places, and adding a place by clicking
+       the map, by a city found on the device, or by coordinates;
+     - editing and removing places live with everyone in the list;
+     - rename, download, and move to the trash.
+   - Drive: New → Map; a list opens in Maps, from the folder, search, Shared
+     with me, or an old `/file/…` link; a list has its own file kind; a
+     download gives the current places.
+   Checked in the browser:
+   - a map made in Maps, with places added all three ways;
+   - two browsers editing live;
+   - a person the list is shared with by itself (edit) adding a place that
+     the owner sees live;
+   - Drive's download holding the current places;
+   - Drive opening the list in Maps;
+   - New → Map from Drive;
+   - the save folder.
+   Lists in folders on other servers are left out of the Maps app until
+   editing across servers exists.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

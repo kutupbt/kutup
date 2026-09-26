@@ -48,7 +48,7 @@ RUN o=apps/office/public/onlyoffice \
     && grep -Fx '2025.6.0' $o/templates/.version
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat office; do cp -r apps/$app/dist /out/$app; done
+    && for app in account drive chat maps office; do cp -r apps/$app/dist /out/$app; done
 
 FROM nginx:1.29-alpine
 COPY --from=builder /out /usr/share/nginx/html

@@ -104,6 +104,7 @@
   --kind-spreadsheet: #15803d;
   --kind-presentation: #c2410c;
   --kind-whiteboard: #6965db;
+  --kind-map: #4d7c0f;
   --kind-pdf: #dc2626;
   --kind-image: #a21caf;
   --kind-video: #be185d;
@@ -161,6 +162,7 @@
   --kind-spreadsheet: #4ade80;
   --kind-presentation: #fb923c;
   --kind-whiteboard: #a8a5ff;
+  --kind-map: #a3e635;
   --kind-pdf: #f87171;
   --kind-image: #e879f9;
   --kind-video: #f472b6;
@@ -229,6 +231,7 @@
   --color-kind-spreadsheet: var(--kind-spreadsheet);
   --color-kind-presentation: var(--kind-presentation);
   --color-kind-whiteboard: var(--kind-whiteboard);
+  --color-kind-map: var(--kind-map);
   --color-kind-pdf: var(--kind-pdf);
   --color-kind-image: var(--kind-image);
   --color-kind-video: var(--kind-video);

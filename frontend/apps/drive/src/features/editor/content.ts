@@ -3,6 +3,7 @@ import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
 import { sealedAt } from '@kutup/drive-core/keyring'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { isListName, stateToListJson } from '@kutup/map/list'
 import { editorKindFor } from './editorKind'
 
 /**
@@ -19,6 +20,8 @@ export type FileContent =
   | { kind: 'plain'; bytes: Uint8Array; versionId: string }
 
 export async function currentContent(folder: Folder, file: DriveFile): Promise<FileContent> {
+  // A place list keeps its places as Yjs state, like a note its text.
+  if (isListName(file.name)) return listContent(file)
   const kind = file.name ? editorKindFor(file.name) : null
   if (!kind || !file.fileKey) return { kind: 'original' }
   const versions = await listVersions(file.id)
@@ -39,4 +42,15 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
   } finally {
     doc.destroy()
   }
+}
+
+/** A place list's current places as list JSON (docs/plans/maps.md). */
+async function listContent(file: DriveFile): Promise<FileContent> {
+  if (!file.fileKey) return { kind: 'original' }
+  const latest = (await listVersions(file.id))[0]
+  if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
+  const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+  const sealed = await sealedAt(file, latest.keyGeneration)
+  const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
+  return { kind: 'plain', bytes: stateToListJson(state), versionId: latest.id }
 }

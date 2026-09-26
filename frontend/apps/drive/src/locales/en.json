@@ -57,6 +57,7 @@
       "spreadsheet": "Spreadsheets",
       "presentation": "Presentations",
       "whiteboard": "Whiteboards",
+      "map": "Maps",
       "pdf": "PDFs",
       "image": "Images",
       "video": "Videos",
@@ -83,14 +84,16 @@
       "document": "Document",
       "spreadsheet": "Spreadsheet",
       "presentation": "Presentation",
-      "whiteboard": "Whiteboard"
+      "whiteboard": "Whiteboard",
+      "map": "Map"
     },
     "untitled": {
       "note": "Untitled note",
       "document": "Untitled document",
       "spreadsheet": "Untitled spreadsheet",
       "presentation": "Untitled presentation",
-      "whiteboard": "Untitled whiteboard"
+      "whiteboard": "Untitled whiteboard",
+      "map": "Untitled map"
     }
   },
   "drive": {

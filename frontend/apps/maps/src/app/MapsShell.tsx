@@ -1,30 +1,26 @@
-import { HardDrive, Map as MapIcon, MessagesSquare, Settings, Trash2, UserRound, Users } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { HardDrive, Map as MapIcon, MessagesSquare, Settings, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
+import { usePeople } from '@kutup/drive-core/people'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
-import { usePeople } from '@kutup/drive-core/people'
-import { SearchBox } from '../features/search/SearchBox'
-import { StorageMeter } from './StorageMeter'
 
-/** Drive's frame: New, My files / Shared with me / Trash, storage, account menu. */
-export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
+/** The Maps frame: your lists, settings, the account menu. */
+export function MapsShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
-  // Exchange profile keys with the people you share with while Drive is open.
+  // Names and pictures of the people lists are shared with.
   usePeople()
   return (
     <AppShell
-      appName={t('apps.drive')}
-      flush
+      appName={t('apps.maps')}
       switcher={
         <AppSwitcher
-          currentId="drive"
+          currentId="maps"
           apps={[
             { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
@@ -33,17 +29,12 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
           ]}
         />
       }
-      primaryAction={primaryAction}
       nav={
         <>
-          <SidebarNavLink to="/" end icon={<HardDrive />} label={t('nav.myFiles')} />
-          <SidebarNavLink to="/shared" icon={<Users />} label={t('nav.shared')} />
-          <SidebarNavLink to="/trash" icon={<Trash2 />} label={t('nav.trash')} />
+          <SidebarNavLink to="/" end icon={<MapIcon />} label={t('nav.lists')} />
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('nav.settings')} />
         </>
       }
-      sidebarFooter={<StorageMeter />}
-      headerStart={<SearchBox />}
       headerEnd={
         <UserMenu
           name={session.username ?? session.email}
