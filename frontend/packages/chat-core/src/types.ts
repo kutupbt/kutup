@@ -32,6 +32,10 @@ export interface ChatContentView {
   poll?: ChatPollV1
   /** A place sent once (docs/plans/maps.md). */
   location?: ChatLocationV1
+  /** A live location: its stream and key (docs/plans/maps.md). */
+  liveLocation?: ChatLiveLocationV1
+  /** The sharer ended a live location early. */
+  liveLocationStop?: { shareId: string }
   pollVote?: ChatPollVoteV1
   pollTerminate?: { targetMessageId: string }
   /** A group change, written by this device's engine from an applied Commit. */
@@ -152,6 +156,28 @@ export interface ChatLocationV1 {
 }
 
 export const LOCATION_LABEL_MAX = 100
+
+/**
+ * A live location's stream (docs/plans/maps.md "Live location"): generation 1
+ * starts the share; each later generation is a new stream and key for the
+ * same share.
+ */
+export interface ChatLiveLocationV1 {
+  shareId: string
+  generation: number
+  /** The sharer's server, which holds the stream. */
+  server: string
+  /** 16 random bytes, lowercase hex. */
+  streamId: string
+  /** The stream key, standard base64 (32 bytes). */
+  key: string
+  /** Standard base64 (32 bytes); presented to read the stream. */
+  readCapability: string
+  /** When the share ends, Unix milliseconds. */
+  untilMs: number
+}
+
+export const LIVE_LOCATION_MAX_MS = 8 * 3600 * 1000
 
 /** A view-once photo or video was opened on one of this account's devices. */
 export interface ChatViewOnceOpenedV1 {
@@ -1581,7 +1607,7 @@ export interface WasmChatClientHandle {
     incarnation: string,
     mlsGroupId: Uint8Array,
     sentAt: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'groupCall',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'liveLocation' | 'liveLocationStop' | 'groupCall',
     body: unknown,
     createdAtMs: string,
     expiresAfterSeconds?: number,
@@ -1742,7 +1768,7 @@ export interface WasmChatClientHandle {
     sendId: string,
     peer: string,
     sentAt: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'liveLocation' | 'liveLocationStop',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<SendSummary>

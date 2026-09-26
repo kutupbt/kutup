@@ -1546,15 +1546,9 @@ impl Session {
         if let Some(Err(error)) = transcript.as_ref().map(|body| {
             body.content
                 .extras()
-                .and_then(|_| {
-                    match body
-                        .content
-                        .poll_content_is_valid()
-                        .or_else(|| body.content.location_content_is_valid())
-                    {
-                        Some(false) => Err(format!("invalid Chat {}", body.content.kind)),
-                        _ => Ok(()),
-                    }
+                .and_then(|_| match body.content.structured_content_is_valid() {
+                    Some(false) => Err(format!("invalid Chat {}", body.content.kind)),
+                    _ => Ok(()),
                 })
                 .and_then(|_| refuse_group_only(&body.content))
         }) {
@@ -1660,14 +1654,9 @@ impl Session {
                 if let Err(error) = content
                     .disappearing_after_seconds()
                     .and_then(|_| content.extras())
-                    .and_then(|_| {
-                        match content
-                            .poll_content_is_valid()
-                            .or_else(|| content.location_content_is_valid())
-                        {
-                            Some(false) => Err(format!("invalid Chat {}", content.kind)),
-                            _ => Ok(()),
-                        }
+                    .and_then(|_| match content.structured_content_is_valid() {
+                        Some(false) => Err(format!("invalid Chat {}", content.kind)),
+                        _ => Ok(()),
                     })
                     .and_then(|_| refuse_group_only(content))
                 {

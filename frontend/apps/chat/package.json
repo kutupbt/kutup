@@ -14,9 +14,11 @@
     "@kutup/crypto": "workspace:*",
     "@kutup/files": "workspace:*",
     "@kutup/i18n": "workspace:*",
+    "@kutup/map": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
     "@tanstack/react-query": "^5",
+    "axios": "^1.18.0",
     "i18next": "^26.0.6",
     "livekit-client": "^2.22.3",
     "lucide-react": "^1.8.0",
@@ -26,8 +28,7 @@
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.4",
     "react-router-dom": "^7.1.1",
-    "sonner": "^2.0.7",
-    "@kutup/map": "workspace:*"
+    "sonner": "^2.0.7"
   },
   "devDependencies": {
     "@kutup/config": "workspace:*",

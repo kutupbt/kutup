@@ -6,6 +6,7 @@ import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
 import { ChatGate } from './app/ChatGate'
+import { LiveShareRunner } from './features/location/LiveShareRunner'
 import { ChatJobs } from './app/ChatJobs'
 import { ChatShell } from './app/ChatShell'
 import { SettingsPage } from './features/settings/SettingsPage'
@@ -29,6 +30,7 @@ export function App() {
           <UnauthenticatedHandler />
           <ChatGate>
             <ChatJobs />
+            <LiveShareRunner />
             <Routes>
               <Route element={<ChatShell />}>
                 <Route index element={<ChatsPage />} />

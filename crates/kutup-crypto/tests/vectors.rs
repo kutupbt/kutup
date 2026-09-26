@@ -42,10 +42,32 @@ struct CryptoVectors {
     collection_keyring: KeyringVec,
     #[serde(rename = "fileKeyring")]
     file_keyring: FileKeyringVec,
+    #[serde(rename = "liveLocation")]
+    live_location: LiveLocationVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
     #[serde(rename = "localState")]
     local_state: LocalStateVecs,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationVec {
+    key: String,
+    stream_id: String,
+    counter: u64,
+    nonce: String,
+    point: LiveLocationPointVec,
+    envelope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationPointVec {
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: u64,
 }
 
 #[derive(Deserialize)]
@@ -694,4 +716,29 @@ fn print_file_bound_vectors() {
             "collabFrame": frame,
         })
     );
+}
+
+#[test]
+fn live_location_update_matches_canonical_vector() {
+    use kutup_crypto::live_location::{self, LiveLocationPoint};
+    let v = load_crypto().live_location;
+    let key = b64(&v.key);
+    let stream_id = hex::decode(&v.stream_id).expect("hex stream id");
+    let nonce: [u8; 24] = b64(&v.nonce).try_into().expect("24-byte nonce");
+    let point = LiveLocationPoint {
+        lat: v.point.lat,
+        lon: v.point.lon,
+        accuracy_m: v.point.accuracy_m,
+        at_ms: v.point.at_ms,
+    };
+    let envelope = b64(&v.envelope);
+    assert_eq!(
+        live_location::seal_with_nonce(&key, &stream_id, v.counter, &point, &nonce).unwrap(),
+        envelope
+    );
+    assert_eq!(
+        live_location::open(&key, &stream_id, &envelope).unwrap(),
+        (v.counter, point)
+    );
+    assert_eq!(live_location::counter_of(&envelope).unwrap(), v.counter);
 }

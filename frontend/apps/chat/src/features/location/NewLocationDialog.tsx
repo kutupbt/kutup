@@ -1,4 +1,4 @@
-import { Loader2, LocateFixed, MapPin, Search } from 'lucide-react'
+import { Loader2, LocateFixed, MapPin, Radio, Search } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LOCATION_LABEL_MAX, type ChatLocationV1 } from '@kutup/chat-core/types'
@@ -11,11 +11,19 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Skeleton } from '@kutup/ui/components/skeleton'
+import { LiveShareError } from './liveShares'
 import { formatCoordinates } from './places'
 
 const MapView = lazy(() => import('@kutup/map/MapView').then((m) => ({ default: m.MapView })))
 
 type Point = { lat: number; lon: number }
+
+/** How long a live location can be shared, as in WhatsApp. */
+const LIVE_DURATIONS = [
+  { ms: 15 * 60_000, label: 'chat.liveLocation.for15m' },
+  { ms: 60 * 60_000, label: 'chat.liveLocation.for1h' },
+  { ms: 8 * 60 * 60_000, label: 'chat.liveLocation.for8h' },
+] as const
 
 /** The whole world, before a place is chosen. */
 const WORLD = { center: { lat: 30, lon: 15 }, zoom: 1.2 }
@@ -29,10 +37,16 @@ export function NewLocationDialog({
   open,
   onOpenChange,
   send,
+  startLive,
+  sharingLive,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   send: (location: ChatLocationV1) => Promise<void>
+  /** Share this device's live location for a while (absent in Note to Self). */
+  startLive?: (durationMs: number) => Promise<void>
+  /** This tab is already sharing its live location here. */
+  sharingLive?: boolean
 }) {
   const { t } = useTranslation()
   const config = useMapConfig()
@@ -46,6 +60,7 @@ export function NewLocationDialog({
   const [locating, setLocating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [startingLive, setStartingLive] = useState<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -94,6 +109,26 @@ export function NewLocationDialog({
     if (!label.trim()) setLabel(city.name)
   }
 
+  async function shareLive(durationMs: number) {
+    if (!startLive || startingLive !== null) return
+    setStartingLive(durationMs)
+    setError(null)
+    try {
+      await startLive(durationMs)
+      onOpenChange(false)
+    } catch (failure) {
+      setError(
+        failure instanceof LiveShareError
+          ? failure.reason === 'denied'
+            ? t('chat.location.denied')
+            : t('chat.location.unavailable')
+          : t('chat.liveLocation.startFailed'),
+      )
+    } finally {
+      setStartingLive(null)
+    }
+  }
+
   const trimmed = label.trim()
   const labelTooLong = [...trimmed].length > LOCATION_LABEL_MAX
 
@@ -119,6 +154,38 @@ export function NewLocationDialog({
             <DialogTitle>{t('chat.location.title')}</DialogTitle>
             <DialogDescription>{t('chat.location.description')}</DialogDescription>
           </DialogHeader>
+
+          {startLive ? (
+            <section className="space-y-2 rounded-lg border border-border p-3" data-testid="chat-live-location-start">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <Radio className="size-4 text-primary" aria-hidden />
+                {t('chat.liveLocation.share')}
+              </p>
+              {sharingLive ? (
+                <p className="text-sm text-muted-foreground">{t('chat.liveLocation.alreadySharing')}</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {LIVE_DURATIONS.map((duration) => (
+                      <Button
+                        key={duration.ms}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={startingLive !== null || busy}
+                        onClick={() => void shareLive(duration.ms)}
+                        data-testid={`chat-live-location-${duration.ms}`}
+                      >
+                        {startingLive === duration.ms ? <Loader2 className="animate-spin" /> : null}
+                        {t(duration.label)}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('chat.liveLocation.tabHint')}</p>
+                </>
+              )}
+            </section>
+          ) : null}
 
           {map ? (
             <div className="space-y-1">

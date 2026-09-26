@@ -364,7 +364,8 @@
       "poll": "Anket: {{question}}",
       "sticker": "Çıkartma {{emoji}}",
       "location": "Konum: {{label}}",
-      "locationUnnamed": "Konum"
+      "locationUnnamed": "Konum",
+      "liveLocation": "Canlı konum"
     },
     "time": {
       "now": "şimdi",
@@ -884,6 +885,24 @@
       "openInMaps": "Haritada aç",
       "copy": "Kopyala",
       "copied": "Koordinatlar kopyalandı"
+    },
+    "liveLocation": {
+      "share": "Canlı konum paylaş",
+      "for15m": "15 dakika",
+      "for1h": "1 saat",
+      "for8h": "8 saat",
+      "tabHint": "Kutup bu tarayıcı sekmesinde açık kaldıkça güncellenir. Sohbetteki herkes görür; süresi dolunca kendiliğinden biter.",
+      "alreadySharing": "Burada canlı konumunuzu paylaşıyorsunuz. Mesajından durdurabilirsiniz.",
+      "startFailed": "Canlı konum başlatılamadı.",
+      "until": "{{time}} saatine kadar canlı",
+      "ended": "Canlı konum sona erdi",
+      "waiting": "İlk konum bekleniyor…",
+      "noPosition": "Konum yok",
+      "updatedNow": "az önce güncellendi",
+      "updatedAgo_one": "{{count}} dakika önce güncellendi",
+      "updatedAgo_other": "{{count}} dakika önce güncellendi",
+      "stop": "Paylaşmayı durdur",
+      "mapLabel": "Canlı konumun haritası"
     }
   },
   "boot": {

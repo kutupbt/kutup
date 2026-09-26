@@ -847,6 +847,28 @@ not offered or a resource it does not have, `429` above 1,200 requests a
 minute per person, `502` when the provider fails (an expired cached copy is
 served instead when there is one).
 
+### Live-location streams
+
+A live location's stream on the sharer's server (docs/chat-protocol.md
+"Live locations"). The server keeps only the latest sealed update and
+deletes the stream at its end.
+
+- `POST /api/live-locations` (Bearer JWT):
+  `{ streamId: <16 bytes hex>, writeSecret: <32 bytes b64>,
+  readCapability: <32 bytes b64>, expiresAtMs }`, at most 8 hours ahead.
+  `201`; `409` for a taken id; `429` above 60 a hour per person.
+- `PUT /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+  `{ update: <88-byte LiveLocationUpdateV1 b64> }`. `204`; `404` for a wrong
+  secret or an ended stream; `409` when the counter is not above the stored
+  one; `429` within 3 s of the last write.
+- `GET /api/live-locations/:streamId[?server=]` (Bearer JWT,
+  `x-kutup-live-read`): `{ update, updatedAtMs, expiresAtMs }`; with
+  `server`, read from the sharer's server over signed federation
+  (`GET /api/fed/chat/live-locations/:streamId`). `404` for a wrong
+  capability or an ended stream; `429` above 600 reads a minute per person.
+- `DELETE /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+  `204`.
+
 ---
 
 ## Files

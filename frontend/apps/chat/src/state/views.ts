@@ -5,6 +5,7 @@ import {
   directConversation,
   parseAccountAddress,
 } from '@kutup/chat-core/identity'
+import { foldLiveLocations, type LiveShareState } from './liveLocations'
 import { isVisibleChatMessage, reduceDisappearingTimers } from '@kutup/chat-core/disappearing'
 import { compareContentOperations } from '@kutup/chat-core/ordering'
 import {
@@ -320,6 +321,8 @@ export interface MessageView {
   poll: PollState | null
   /** A notice: the author ended a poll. */
   pollEnded: { question: string } | null
+  /** A live location this message started. */
+  liveLocation: LiveShareState | null
 }
 
 export interface PollState {
@@ -408,6 +411,7 @@ export function threadView(
     }
   }
   const polls = foldPolls(inThread, selfAddress)
+  const liveShares = foldLiveLocations(inThread, (m) => messageActor(m, selfAddress))
   // "Alice ended the poll": the author's own end, once, as a notice.
   const endNotices = new Set<ChatHistoryEntry>()
   const noticed = new Set<string>()
@@ -462,6 +466,7 @@ export function threadView(
       pollEnded: endNotices.has(entry)
         ? { question: polls.get(entry.content.pollTerminate!.targetMessageId)!.poll.question }
         : null,
+      liveLocation: entry.content.liveLocation ? (liveShares.get(id) ?? null) : null,
     }
   })
   if (opened.size === 0) return views
@@ -493,6 +498,7 @@ export function threadView(
       viewedOnce: { video: body.video },
       poll: null,
       pollEnded: null,
+      liveLocation: null,
     }
   })
   return [...views, ...placeholders].sort((a, b) => a.entry.timestampMs - b.entry.timestampMs)

@@ -66,6 +66,7 @@ export function messagePreview(
   }
   if (entry.content.disappearingTimer) return t('chat.preview.timer')
   if (entry.content.poll) return t('chat.preview.poll', { question: entry.content.poll.question })
+  if (entry.content.liveLocation) return t('chat.preview.liveLocation')
   if (entry.content.location) {
     return entry.content.location.label
       ? t('chat.preview.location', { label: entry.content.location.label })

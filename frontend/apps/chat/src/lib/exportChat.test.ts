@@ -25,6 +25,7 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
     viewedOnce: null,
     poll: null,
     pollEnded: null,
+    liveLocation: null,
     ...extra,
   }
 }

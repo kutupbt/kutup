@@ -364,7 +364,8 @@
       "poll": "Poll: {{question}}",
       "sticker": "Sticker {{emoji}}",
       "location": "Location: {{label}}",
-      "locationUnnamed": "Location"
+      "locationUnnamed": "Location",
+      "liveLocation": "Live location"
     },
     "time": {
       "now": "now",
@@ -884,6 +885,24 @@
       "openInMaps": "Open in maps",
       "copy": "Copy",
       "copied": "Coordinates copied"
+    },
+    "liveLocation": {
+      "share": "Share live location",
+      "for15m": "15 minutes",
+      "for1h": "1 hour",
+      "for8h": "8 hours",
+      "tabHint": "Updates while Kutup stays open in this browser tab. Everyone in the chat sees it; it ends on its own.",
+      "alreadySharing": "You are sharing your live location here. Stop it from its message.",
+      "startFailed": "Live location could not be started.",
+      "until": "Live until {{time}}",
+      "ended": "Live location ended",
+      "waiting": "Waiting for the first position…",
+      "noPosition": "No position",
+      "updatedNow": "updated just now",
+      "updatedAgo_one": "updated {{count}} minute ago",
+      "updatedAgo_other": "updated {{count}} minutes ago",
+      "stop": "Stop sharing",
+      "mapLabel": "Map of the live location"
     }
   },
   "boot": {

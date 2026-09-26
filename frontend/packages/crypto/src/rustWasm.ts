@@ -305,6 +305,16 @@ export interface CryptoWasmModule {
     expectedRecipientAccount: string,
     expectedRecipientIncarnationId: string,
   ): string
+  liveLocationSeal(
+    keyBase64: string,
+    streamIdHex: string,
+    counter: number,
+    lat: number,
+    lon: number,
+    accuracyM: number,
+    atMs: number,
+  ): string
+  liveLocationOpen(keyBase64: string, streamIdHex: string, envelopeBase64: string): LiveLocationUpdate
   sealProfileKeyEnvelope(
     profileKeyBase64: string,
     senderMasterKeyBase64: string,
@@ -323,6 +333,15 @@ export interface CryptoWasmModule {
     expectedRecipientAccount: string,
     expectedRecipientIncarnationId: string,
   ): string
+}
+
+/** One opened live-location update. */
+export interface LiveLocationUpdate {
+  counter: number
+  lat: number
+  lon: number
+  accuracyM: number
+  atMs: number
 }
 
 let modulePromise: Promise<CryptoWasmModule> | null = null

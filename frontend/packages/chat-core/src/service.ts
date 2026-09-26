@@ -15,6 +15,7 @@ import type {
   ChatTypingEvent,
   ChatAccountControl,
   ChatMessageExtras,
+  ChatLiveLocationV1,
   ChatLocationV1,
   ChatPollV1,
   ChatStickerV1,
@@ -562,6 +563,20 @@ export class ChatService {
     )
   }
 
+  /**
+   * A live location's stream and key (docs/plans/maps.md): generation 1
+   * starts the share (with the chat's disappearing timer); later ones hand
+   * over a new stream.
+   */
+  sendLiveLocation(conversation: ConversationId, share: ChatLiveLocationV1, expiresAfterSeconds?: number): Promise<SendSummary> {
+    return this.sendPollContent(conversation, 'liveLocation', share, share.generation === 1 ? expiresAfterSeconds : undefined)
+  }
+
+  /** End a live location this account is sharing. */
+  stopLiveLocation(conversation: ConversationId, shareId: string): Promise<SendSummary> {
+    return this.sendPollContent(conversation, 'liveLocationStop', { shareId })
+  }
+
   /** This account's choice in a poll; an empty list takes the vote back. */
   votePoll(conversation: ConversationId, targetMessageId: string, options: number[]): Promise<SendSummary> {
     return this.sendPollContent(conversation, 'pollVote', { targetMessageId, options: [...options].sort((a, b) => a - b) })
@@ -574,7 +589,7 @@ export class ChatService {
 
   private async sendPollContent(
     conversation: ConversationId,
-    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'location' | 'liveLocation' | 'liveLocationStop',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<SendSummary> {

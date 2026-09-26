@@ -1,5 +1,5 @@
 import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, Timer, UserPlus, Users, Video } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -41,6 +41,8 @@ import { DROPDOWN_PARTS } from '../list/menuParts'
 import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { ViewedOnce, ViewOnceBody } from '../media/ViewOnceBody'
+import { LiveLocationBody } from '../location/LiveLocationBody'
+import { liveShares } from '../location/liveShares'
 import { LocationBody } from '../location/LocationBody'
 import { NewLocationDialog } from '../location/NewLocationDialog'
 import { NewPollDialog } from '../polls/NewPollDialog'
@@ -145,6 +147,8 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
   const [newPoll, setNewPoll] = useState(false)
   const [newLocation, setNewLocation] = useState(false)
+  const liveSharing = useSyncExternalStore(liveShares.subscribe, liveShares.getSnapshot)
+  const sharingHere = liveSharing.length > 0 && liveShares.sharingIn(conversation)
 
   /** "Save sticker": add a received sticker to this account's collection. */
   async function saveSticker(attachment: ChatAttachmentDescriptorV1) {
@@ -489,6 +493,20 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                     attachment={view.entry.content.attachment}
                     accepted={model.contact?.state !== 'pendingIncoming' && model.contact?.state !== 'blocked'}
                   />
+                ) : view.liveLocation ? (
+                  <LiveLocationBody
+                    state={view.liveLocation}
+                    localServer={chat.capabilities?.serverName ?? ''}
+                    onStop={
+                      own
+                        ? async () => {
+                            const shareId = view.liveLocation!.shareId
+                            if (liveShares.isSharing(shareId)) await liveShares.stop(shareId)
+                            else await chat.service?.stopLiveLocation(conversation, shareId)
+                          }
+                        : undefined
+                    }
+                  />
                 ) : view.entry.content.location ? (
                   <LocationBody location={view.entry.content.location} />
                 ) : view.poll ? (
@@ -631,7 +649,13 @@ export function ConversationView({ conversation }: { conversation: ConversationI
 
       <ForwardDialog view={forwarding} onOpenChange={(open) => !open && setForwarding(null)} />
       <NewPollDialog open={newPoll} onOpenChange={setNewPoll} send={actions.sendPoll} />
-      <NewLocationDialog open={newLocation} onOpenChange={setNewLocation} send={actions.sendLocation} />
+      <NewLocationDialog
+        open={newLocation}
+        onOpenChange={setNewLocation}
+        send={actions.sendLocation}
+        startLive={model.note ? undefined : actions.startLiveLocation}
+        sharingLive={sharingHere}
+      />
 
       <DeleteMessageDialog
         open={deleting !== null}

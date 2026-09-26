@@ -1402,6 +1402,82 @@ pub fn open_profile_key_envelope(
     Ok(STANDARD.encode(key))
 }
 
+fn live_location_inputs(
+    key_base64: &str,
+    stream_id_hex: &str,
+) -> Result<(Vec<u8>, Vec<u8>), JsValue> {
+    let key = decode_canonical_base64(key_base64, "live location key")?;
+    let stream_id = hex::decode(stream_id_hex)
+        .ok()
+        .filter(|bytes| hex::encode(bytes) == stream_id_hex)
+        .ok_or_else(|| js_error("live location stream id must be lowercase hex"))?;
+    Ok((key, stream_id))
+}
+
+fn whole_number(value: f64, field: &str) -> Result<u64, JsValue> {
+    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
+        return Err(js_error(&format!(
+            "{field} must be a positive whole number"
+        )));
+    }
+    Ok(value as u64)
+}
+
+/// Seal update number `counter` of a live-location stream
+/// (docs/plans/maps.md); standard base64 of the 88-byte update.
+#[wasm_bindgen(js_name = liveLocationSeal)]
+pub fn live_location_seal(
+    key_base64: &str,
+    stream_id_hex: &str,
+    counter: f64,
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: f64,
+) -> Result<String, JsValue> {
+    let (key, stream_id) = live_location_inputs(key_base64, stream_id_hex)?;
+    let point = kutup_crypto::live_location::LiveLocationPoint {
+        lat,
+        lon,
+        accuracy_m,
+        at_ms: whole_number(at_ms, "time")?,
+    };
+    kutup_crypto::live_location::seal(&key, &stream_id, whole_number(counter, "counter")?, &point)
+        .map(|sealed| STANDARD.encode(sealed))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationUpdateJson {
+    counter: f64,
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: f64,
+}
+
+/// Open a live-location update: `{counter, lat, lon, accuracyM, atMs}`.
+#[wasm_bindgen(js_name = liveLocationOpen)]
+pub fn live_location_open(
+    key_base64: &str,
+    stream_id_hex: &str,
+    envelope_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let (key, stream_id) = live_location_inputs(key_base64, stream_id_hex)?;
+    let envelope = decode_canonical_base64(envelope_base64, "live location update")?;
+    let (counter, point) = kutup_crypto::live_location::open(&key, &stream_id, &envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&LiveLocationUpdateJson {
+        counter: counter as f64,
+        lat: point.lat,
+        lon: point.lon,
+        accuracy_m: point.accuracy_m,
+        at_ms: point.at_ms as f64,
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
 fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue> {
     let decoded = STANDARD
         .decode(value)

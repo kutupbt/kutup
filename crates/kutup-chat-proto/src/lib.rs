@@ -80,7 +80,10 @@ pub use invite_link::{
     InviteLinkRequestEntryV1, InviteLinkResultV1, InviteRequestStatusV1, INVITE_LINK_TOKEN_BYTES,
     MAX_INVITE_PREVIEW_SEALED_BYTES, MAX_INVITE_REQUEST_SEALED_BYTES, MAX_PENDING_INVITE_REQUESTS,
 };
-pub use locations::{LocationBody, MAX_LOCATION_LABEL_CHARS};
+pub use locations::{
+    LiveLocationBody, LiveLocationStopBody, LocationBody, MAX_LIVE_LOCATION_MS,
+    MAX_LOCATION_LABEL_CHARS,
+};
 pub use media::{
     ChatAttachmentDescriptorV1, ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerEntryV1,
     ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,

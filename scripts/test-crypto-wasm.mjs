@@ -496,6 +496,15 @@ assert.equal(
   fileRing.keys[0],
 )
 
+// A live-location update: the canonical bytes open, a fresh seal round-trips,
+// and another stream's id or a tampered byte opens nothing.
+const live = vectors.liveLocation
+assert.deepEqual(crypto.liveLocationOpen(live.key, live.streamId, live.envelope), { counter: live.counter, ...live.point })
+const liveSealed = crypto.liveLocationSeal(live.key, live.streamId, 8, 40.99, 29.02, 5, 1790000000123)
+assert.deepEqual(crypto.liveLocationOpen(live.key, live.streamId, liveSealed), { counter: 8, lat: 40.99, lon: 29.02, accuracyM: 5, atMs: 1790000000123 })
+assert.throws(() => crypto.liveLocationOpen(live.key, '00'.repeat(16), live.envelope))
+assert.throws(() => crypto.liveLocationSeal(live.key, live.streamId, 0, 1, 1, 1, 1))
+
 // Whiteboard assets and collaboration frames sit under the file key.
 const assetVector = vectors.asset
 assert.equal(

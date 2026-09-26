@@ -359,6 +359,33 @@ with "Open in maps". Choosing the place (tapping a map, the device's
 location, or a city found in a list searched on the device) sends nothing
 anywhere. Live location is a separate channel, not a stream of these.
 
+### Live locations
+
+A live location is a short-lived stream on the sharer's server, not a series
+of messages (docs/plans/maps.md "Live location"):
+
+- `liveLocation` (`LiveLocationBody`): `{shareId, generation, server,
+  streamId, key, readCapability, untilMs}`. Generation 1 starts the share,
+  is visible, and may carry `expiresAfterSeconds`. Each later generation (a
+  new stream and key, every hour and as soon as anyone leaves a group) is
+  hidden and folded into the share; it counts only from the same sharer in
+  the same conversation and never extends `untilMs`. A share lasts at most
+  8 hours.
+- `liveLocationStop`: `{shareId}`, the sharer ending it early (hidden).
+- The stream holds only the latest update: a fixed 88-byte
+  `LiveLocationUpdateV1` (`kutup-crypto/src/live_location.rs`, vector
+  `liveLocation`), XChaCha20-Poly1305 under `key`, authenticating the
+  stream id and a counter that must increase. The server stores hashes of
+  the write secret (kept by the sharing device) and of `readCapability`,
+  the update and times; no account, conversation or position.
+- Readers poll every 10 s while the message is on screen; a reader on
+  another server reads through its own (`/api/fed/chat/live-locations`).
+  After a new generation the old stream is deleted, so someone who left has
+  a key to nothing new.
+- The sharing device writes about every 15–30 s while moving and every
+  3 minutes while still, only while its tab is open (browsers give pages no
+  location in the background).
+
 ### Account state across devices
 
 Signal keeps pinned, archived and muted chats in a storage service and syncs

@@ -15,7 +15,7 @@
       "expectedLoginKey": "qNkq6mdxINkd3KUhY93wx1pmJvyyljLOD15ruEfRxFA="
     },
     {
-      "password": "\u00fcn\u00efc\u00f6d\u00e9\ud83d\udd10 p\u00e4ssw\u00f6rd",
+      "password": "ünïcödé🔐 pässwörd",
       "salt": "c2FsdHktc2FsdC0xNmJ5dA==",
       "expectedRoot": "xx4Zo7GZS5aPs7Pn+XsdpA8/KX6dKkWcVIg9ii2MYxY=",
       "expectedKek": "DUZLG8UDmfLmmCjlZXxJA1nKnY8sqkOIt3ojHA0QALA=",
@@ -178,5 +178,18 @@
         "previousKeyEnvelope": "S1VUUERFMQAAAQoAAAAAAwAAAAAAAAABERERERERQRGBEREREREREREREREREUERgRERERERERFTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MAAAAwK7NGZ1w7LVoOg4m517K6yAtQ7nJdzqN/yI4R1lSCNvWZcafRRm9/ODAdkri5t2Tl"
       }
     ]
+  },
+  "liveLocation": {
+    "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "streamId": "6465666768696a6b6c6d6e6f70717273",
+    "counter": 7,
+    "nonce": "yMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f",
+    "point": {
+      "lat": 41.0082,
+      "lon": 28.9784,
+      "accuracyM": 25,
+      "atMs": 1790000000000
+    },
+    "envelope": "S1VUUExMMQAAAAAAAAAAB8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zksqYjw55WEGJeMzizhV2kY1MX+p5srEee+Gg/jvp44PAtsismAeBj6xAxWXKKKPw=="
   }
 }

@@ -42,6 +42,7 @@ pub mod error;
 pub mod file_keyring;
 pub mod identity;
 pub mod kdf;
+pub mod live_location;
 pub mod local_state;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;

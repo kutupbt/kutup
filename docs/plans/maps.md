@@ -1,6 +1,6 @@
 # Maps
 
-**Status:** decisions agreed 2026-09-26; slices 1 and 2 done. Branch
+**Status:** decisions agreed 2026-09-26; slices 1–3 done. Branch
 `feat/frontend-rewrite`. Roadmap entry: `docs/roadmap.md` → "New apps (after
 v1)" → Maps.
 
@@ -190,8 +190,24 @@ goes beyond Signal parity.
    Checked in a browser: 1:1 by city with maps off on both sides, the
    receiver turning maps on and seeing the map, and a group by current
    location with a name.
-3. **Chat: live location:** 15 minutes / 1 hour / 8 hours, stop at any
-   time; the live channel above.
+3. (done) **Chat: live location:** 15 minutes / 1 hour / 8 hours from
+   "Send a location", stop from the message (on any of the sharer's
+   devices):
+   - `LiveLocationUpdateV1` in kutup-crypto with a canonical vector (Rust
+     and WASM);
+   - the `liveLocation` and `liveLocationStop` kinds, validated on every
+     receive path;
+   - `live_location_streams` (migration 056) and the stream endpoints,
+     with the federated read under `/api/fed/chat/` and a sweeper;
+   - the sharing tab's manager: pacing, re-keying hourly and when someone
+     leaves (the old stream deleted), ending at the end time or when nobody
+     else is left, surviving a reload of the tab (session storage).
+   Checked: in a browser, 1:1 (position, a move, stop) and a group of three
+   where one member leaves mid-share (one stream left open; the remaining
+   member keeps seeing moves; the one who left sees the share end at their
+   last known position); across two servers at the API level (reading
+   through one's own server, wrong capability, older update, wrong write
+   secret, reading after the end).
 4. **The Maps app (`maps.`):** pinned place lists, shared and edited
    together (local and federated), KML/GPX import and export.
 5. **Photos' Places:** with the Photos app.

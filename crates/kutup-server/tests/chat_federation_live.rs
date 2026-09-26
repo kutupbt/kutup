@@ -1752,6 +1752,84 @@ fn drive_profile_key_exchange(
     );
 }
 
+/// A live-location stream on A, read by an account of B through its own
+/// server (docs/plans/maps.md): only with the read capability, only the
+/// latest update, never an older one in place of a newer one.
+fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+    use kutup_crypto::live_location::{self, LiveLocationPoint};
+    let stream_id = "0102030405060708090a0b0c0d0e0f10";
+    let key = [0x42u8; 32];
+    let write = STANDARD.encode([0x57u8; 32]);
+    let read = STANDARD.encode([0x52u8; 32]);
+    let expires = OffsetDateTime::now_utc().unix_timestamp() * 1000 + 3_600_000;
+    assert_eq!(
+        c.post(format!("{a}/api/live-locations"))
+            .bearer_auth(alice_token)
+            .json(&json!({"streamId": stream_id, "writeSecret": write, "readCapability": read, "expiresAtMs": expires}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        201
+    );
+    let point = |lat: f64| LiveLocationPoint {
+        lat,
+        lon: 29.0,
+        accuracy_m: 10,
+        at_ms: 1_790_000_000_000,
+    };
+    let put = |counter: u64, lat: f64, secret: &str| {
+        let update =
+            live_location::seal(&key, &hex::decode(stream_id).unwrap(), counter, &point(lat))
+                .unwrap();
+        c.put(format!("{a}/api/live-locations/{stream_id}"))
+            .bearer_auth(alice_token)
+            .header("x-kutup-live-write", secret)
+            .json(&json!({"update": STANDARD.encode(update)}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    assert_eq!(put(1, 41.0, &write), 204);
+    assert_eq!(put(1, 42.0, &write), 409, "not newer");
+    assert_eq!(
+        put(2, 42.0, &STANDARD.encode([1u8; 32])),
+        404,
+        "wrong write secret"
+    );
+    let read_from_b = |capability: &str| {
+        c.get(format!("{b}/api/live-locations/{stream_id}?server=a.test"))
+            .bearer_auth(bob_token)
+            .header("x-kutup-live-read", capability)
+            .send()
+            .unwrap()
+    };
+    let response = read_from_b(&read);
+    assert_eq!(response.status().as_u16(), 200);
+    let body: Value = response.json().unwrap();
+    let update = STANDARD.decode(body["update"].as_str().unwrap()).unwrap();
+    let (counter, got) =
+        live_location::open(&key, &hex::decode(stream_id).unwrap(), &update).unwrap();
+    assert_eq!((counter, got.lat), (1, 41.0));
+    assert_eq!(
+        read_from_b(&STANDARD.encode([9u8; 32])).status().as_u16(),
+        404,
+        "wrong read capability"
+    );
+    assert_eq!(
+        c.delete(format!("{a}/api/live-locations/{stream_id}"))
+            .bearer_auth(alice_token)
+            .header("x-kutup-live-write", &write)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        204
+    );
+    assert_eq!(read_from_b(&read).status().as_u16(), 404, "ended");
+}
+
 fn setup_phase(c: &Client, a: &str, b: &str) {
     let discovery_a = json_response(
         c.get(format!("{a}/.well-known/kutup/federation.json"))
@@ -1833,6 +1911,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let (bob_token, bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     drive_round_trip(c, a, b, &alice_token, &bob_token);
+    live_location_across_servers(c, a, b, &alice_token, &bob_token);
 
     // Drive is deliberately the first feature to contact B. Capture the one
     // shared identity pin before Chat uses the same federation stack.

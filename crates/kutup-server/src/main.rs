@@ -23,6 +23,7 @@ mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod live_locations;
 mod maps;
 mod middleware;
 mod models;
@@ -305,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    live_locations::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
@@ -562,6 +564,18 @@ fn build_router(state: AppState) -> Router {
         .route("/api/maps", get(maps::get_config))
         .route("/api/maps/preferences", put(maps::put_preferences))
         .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
+        // --- Live-location streams (docs/plans/maps.md). ---
+        .route(
+            "/api/live-locations",
+            post(live_locations::create).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/live-locations/:streamId",
+            get(live_locations::read)
+                .put(live_locations::write)
+                .delete(live_locations::delete)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
         .route(
             "/api/collections/:id/federated-shares",
             post(drive_federation::create_federated_share),
@@ -1028,6 +1042,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/drive/users/:username",
             get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/live-locations/:streamId",
+            get(live_locations::federated_read)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
             "/api/fed/drive/profile-keys",

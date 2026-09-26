@@ -10,6 +10,7 @@ import { uploadAndSend } from '../../lib/sendMedia'
 import { getDefaultTimerSeconds } from '../../state/prefs'
 import { owePendingDefaultTimer, pendingDefaultTimer } from '../../lib/pendingTimers'
 import { conversationKey } from '@kutup/chat-core/identity'
+import { liveShares } from '../location/liveShares'
 
 /**
  * What can be done in one conversation, each followed by a reload so the
@@ -145,6 +146,13 @@ export function useConversationActions(
     [run, after, service, conversation, timerFor],
   )
 
+  const startLiveLocation = useCallback(
+    async (durationMs: number) => {
+      await liveShares.start(conversation, durationMs, await timerFor())
+    },
+    [conversation, timerFor],
+  )
+
   const votePoll = useCallback(
     (pollId: string, options: number[]) => run(async () => after(await service!.votePoll(conversation, pollId, options))),
     [run, after, service, conversation],
@@ -155,5 +163,5 @@ export function useConversationActions(
     [run, after, service, conversation],
   )
 
-  return { send, edit, remove, deleteForMe, react, setTimer, sendFile, sendPoll, sendLocation, votePoll, endPoll }
+  return { send, edit, remove, deleteForMe, react, setTimer, sendFile, sendPoll, sendLocation, startLiveLocation, votePoll, endPoll }
 }

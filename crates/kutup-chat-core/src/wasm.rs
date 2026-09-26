@@ -95,6 +95,8 @@ export interface KutupChatContentView {
   groupUpdate?: unknown;
   poll?: unknown;
   location?: unknown;
+  liveLocation?: unknown;
+  liveLocationStop?: unknown;
   pollVote?: unknown;
   pollTerminate?: unknown;
   mentions?: unknown;
@@ -3371,6 +3373,10 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<kutup_chat_proto::LocationBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    live_location: Option<kutup_chat_proto::LiveLocationBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_location_stop: Option<kutup_chat_proto::LiveLocationStopBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     poll_vote: Option<kutup_chat_proto::PollVoteBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     poll_terminate: Option<kutup_chat_proto::PollTerminateBody>,
@@ -3410,6 +3416,8 @@ impl From<ChatContent> for ContentView {
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
+        let live_location = content.as_live_location();
+        let live_location_stop = content.as_live_location_stop();
         let poll_vote = content.as_poll_vote();
         let poll_terminate = content.as_poll_terminate();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
@@ -3441,6 +3449,8 @@ impl From<ChatContent> for ContentView {
             group_update,
             poll,
             location,
+            live_location,
+            live_location_stop,
             poll_vote,
             poll_terminate,
             mentions: extras.mentions,
@@ -4016,6 +4026,20 @@ fn build_poll_content(
             seq,
             &serde_json::from_value(body.clone()).map_err(|_| decode("location"))?,
         )?,
+        kutup_chat_proto::content::kind::LIVE_LOCATION => ChatContent::live_location_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("live location"))?,
+        )?,
+        kutup_chat_proto::content::kind::LIVE_LOCATION_STOP => {
+            ChatContent::live_location_stop_with_id(
+                send_id,
+                sent_at,
+                seq,
+                &serde_json::from_value(body.clone()).map_err(|_| decode("live location stop"))?,
+            )?
+        }
         kutup_chat_proto::content::kind::GROUP_CALL => ChatContent::group_call_with_id(
             send_id,
             sent_at,
@@ -4027,7 +4051,8 @@ fn build_poll_content(
     match expires_after_seconds {
         Some(seconds)
             if kind == kutup_chat_proto::content::kind::POLL
-                || kind == kutup_chat_proto::content::kind::LOCATION =>
+                || kind == kutup_chat_proto::content::kind::LOCATION
+                || kind == kutup_chat_proto::content::kind::LIVE_LOCATION =>
         {
             content.with_disappearing_after(seconds)
         }

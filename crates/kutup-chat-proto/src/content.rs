@@ -71,6 +71,11 @@ pub mod kind {
     pub const POLL_TERMINATE: &str = "pollTerminate";
     /// A place sent once: coordinates and an optional label (visible). [IMPL]
     pub const LOCATION: &str = "location";
+    /// A live location: its stream and key (generation 1 visible, later
+    /// generations folded into it). [IMPL]
+    pub const LIVE_LOCATION: &str = "liveLocation";
+    /// The sharer ended a live location early. [IMPL]
+    pub const LIVE_LOCATION_STOP: &str = "liveLocationStop";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
     pub const MESSAGE_MUTATION: &str = "messageMutation";
     /// Attachment descriptor for the immutable encrypted Chat-media object;
@@ -473,7 +478,7 @@ impl ChatContent {
     pub fn with_disappearing_after(mut self, seconds: u32) -> Result<Self, String> {
         if !matches!(
             self.kind.as_str(),
-            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION
+            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION | kind::LIVE_LOCATION
         ) {
             return Err("only visible Chat messages may disappear".into());
         }
@@ -494,7 +499,7 @@ impl ChatContent {
         };
         if !matches!(
             self.kind.as_str(),
-            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION
+            kind::TEXT | kind::ATTACHMENT | kind::POLL | kind::LOCATION | kind::LIVE_LOCATION
         ) {
             return Err("only visible Chat messages may carry an expiry".into());
         }
@@ -853,6 +858,8 @@ impl ChatContent {
                     | kind::POLL_VOTE
                     | kind::POLL_TERMINATE
                     | kind::LOCATION
+                    | kind::LIVE_LOCATION
+                    | kind::LIVE_LOCATION_STOP
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
                     | kind::GROUP_CONTROL
