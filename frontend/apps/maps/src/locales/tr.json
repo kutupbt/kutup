@@ -35,7 +35,18 @@
     "emptyTitle": "Henüz harita yok",
     "emptyDescription": "Yerleri bir arada tutmak için bir harita oluşturun: geziler, sevdiğiniz yerler, buluşma noktaları. Paylaşıp başkalarıyla birlikte düzenleyin.",
     "saveFolderGone": "Yeni haritalar için seçtiğiniz klasör artık yok, bu yüzden yeni haritalar Dosyalarım’a gidiyor.",
-    "changeSaveFolder": "Başka birini seçin"
+    "changeSaveFolder": "Başka birini seçin",
+    "import": "İçe aktar",
+    "importHint": "KML veya GPX dosyasından harita oluşturun (Google Haritam, Google Earth, GPS uygulamaları).",
+    "importPlaceName": "Yer {{n}}",
+    "importEmpty": "Bu dosyada hiç yer yok.",
+    "imported_one": "{{count}} yer içe aktarıldı",
+    "imported_other": "{{count}} yer içe aktarıldı",
+    "importedSkipped_one": "{{count}} yer içe aktarıldı. Tek nokta olmadığı için alınmayan (çizgiler, rotalar, izler): {{skipped}}.",
+    "importedSkipped_other": "{{count}} yer içe aktarıldı. Tek nokta olmadığı için alınmayan (çizgiler, rotalar, izler): {{skipped}}.",
+    "importUnreadable": "Bu bir KML, GPX veya Kutup harita dosyası değil.",
+    "importTooLarge": "Bu dosya içe aktarmak için çok büyük.",
+    "importFailed": "Dosya içe aktarılamadı."
   },
   "title": {
     "label": "Başlık",
@@ -94,7 +105,21 @@
     "turnOn": "Açın",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
     "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
-    "restoredLabel": "Geri yüklendi ({{time}})"
+    "restoredLabel": "Geri yüklendi ({{time}})",
+    "share": "Paylaş",
+    "import": "Yerleri içe aktar",
+    "exportKml": "KML olarak dışa aktar",
+    "exportGpx": "GPX olarak dışa aktar",
+    "sendToChat": "Sohbete gönder",
+    "importPlaceName": "Yer {{n}}",
+    "importEmpty": "Bu dosyada hiç yer yok.",
+    "imported_one": "{{count}} yer eklendi",
+    "imported_other": "{{count}} yer eklendi",
+    "importedSkipped_one": "{{count}} yer eklendi. Tek nokta olmadığı için alınmayan: {{skipped}}.",
+    "importedSkipped_other": "{{count}} yer eklendi. Tek nokta olmadığı için alınmayan: {{skipped}}.",
+    "importUnreadable": "Bu bir KML, GPX veya Kutup harita dosyası değil.",
+    "importTooLarge": "Bu dosya içe aktarmak için çok büyük.",
+    "importFailed": "Dosya içe aktarılamadı."
   },
   "place": {
     "addTitle": "Yer ekle",

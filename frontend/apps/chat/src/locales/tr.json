@@ -903,6 +903,12 @@
       "updatedAgo_other": "{{count}} dakika önce güncellendi",
       "stop": "Paylaşmayı durdur",
       "mapLabel": "Canlı konumun haritası"
+    },
+    "sendPlace": {
+      "title": "Yeri gönder",
+      "description": "{{place}}: göndermek için en fazla {{count}} sohbet seçin.",
+      "sent_one": "{{count}} sohbete gönderildi",
+      "sent_other": "{{count}} sohbete gönderildi"
     }
   },
   "boot": {

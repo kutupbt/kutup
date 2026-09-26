@@ -1,8 +1,9 @@
 import { User } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
+import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -16,14 +17,14 @@ import { CannotShareWithSelf, useFileAccess, useRemoveFileAccess, useShareFile }
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
-import { PersonAvatar, Row } from './AccessList'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile }
 
 /**
  * Share one file with someone on this server, like Proton Drive and CryptPad
  * (docs/plans/drive-file-sharing.md): they get the file's own key, never its
- * folder's. Only the folder's owner shares.
+ * folder's. Only the folder's owner shares. Used by Drive and by Maps (a
+ * place list is a Drive file).
  */
 export function FileShareDialog({ target, onClose }: { target: FileShareTarget | null; onClose: () => void }) {
   const { t } = useTranslation()
@@ -49,7 +50,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
         onSuccess: (result) => {
           setRecipient('')
           share.reset()
-          toast.success(t('dialogs.share.shared', { account: result.account }))
+          toast.success(t('fileShare.shared', { account: result.account }))
         },
       },
     )
@@ -57,23 +58,23 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
 
   const errorText = share.error
     ? share.error instanceof RecipientNotFound
-      ? t('dialogs.shareFile.notFound')
+      ? t('fileShare.notFound')
       : share.error instanceof CannotShareWithSelf
-        ? t('dialogs.shareFile.self')
+        ? t('fileShare.self')
         : share.error instanceof AccessChanged
-          ? t('dialogs.access.changed')
-          : apiErrorMessage(share.error, t('dialogs.shareFile.failed'))
+          ? t('fileShare.changed')
+          : apiErrorMessage(share.error, t('fileShare.failed'))
     : null
 
   return (
     <Dialog open={target !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('dialogs.share.title', { name: target?.file.name ?? '' })}</DialogTitle>
-          <DialogDescription>{t('dialogs.shareFile.description')}</DialogDescription>
+          <DialogTitle>{t('fileShare.title', { name: target?.file.name ?? '' })}</DialogTitle>
+          <DialogDescription>{t('fileShare.description')}</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={submit}>
-          <Field label={t('dialogs.shareFile.recipient')} description={t('dialogs.shareFile.recipientHint')} required>
+          <Field label={t('fileShare.recipient')} description={t('fileShare.recipientHint')} required>
             {(field) => (
               <Input {...field} value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus type="email"
                 autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
@@ -82,16 +83,16 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
           <div className="flex items-start gap-2">
             <Checkbox id="share-file-edit" checked={canEdit} onCheckedChange={(v) => setCanEdit(v === true)} />
             <div>
-              <Label htmlFor="share-file-edit">{t('dialogs.shareFile.canEdit')}</Label>
-              <p className="text-xs text-muted-foreground">{t('dialogs.shareFile.canEditHint')}</p>
+              <Label htmlFor="share-file-edit">{t('fileShare.canEdit')}</Label>
+              <p className="text-xs text-muted-foreground">{t('fileShare.canEditHint')}</p>
             </div>
           </div>
-          <Alert>{t('dialogs.shareFile.note')}</Alert>
+          <Alert>{t('fileShare.note')}</Alert>
           {errorText ? <Alert variant="error">{errorText}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>{t('common.close')}</Button>
             <Button type="submit" loading={share.isPending} disabled={!recipient.trim()}>
-              {t('dialogs.share.submit')}
+              {t('fileShare.submit')}
             </Button>
           </DialogFooter>
         </form>
@@ -113,8 +114,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const people = usePeople()
   const [pending, setPending] = useState<{ userId: string; name: string } | null>(null)
 
-  if (access.isPending) return <LoadingPanel label={t('dialogs.access.loading')} />
-  if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
+  if (access.isPending) return <LoadingPanel label={t('fileShare.loading')} />
+  if (access.isError || !access.data) return <Alert variant="error">{t('fileShare.loadFailed')}</Alert>
   const { members } = access.data
 
   function confirm() {
@@ -124,7 +125,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
       {
         onSuccess: () => {
           setPending(null)
-          toast.success(t('dialogs.access.removed'))
+          toast.success(t('fileShare.removed'))
         },
         onError: () => setPending(null),
       },
@@ -133,21 +134,21 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
 
   const error = remove.error
     ? remove.error instanceof AccessChanged
-      ? t('dialogs.access.changed')
-      : t('dialogs.access.failed')
+      ? t('fileShare.changed')
+      : t('fileShare.removeFailed')
     : null
 
   return (
-    <section className="space-y-3" aria-label={t('dialogs.access.title')}>
-      <h3 className="text-sm font-semibold">{t('dialogs.access.title')}</h3>
+    <section className="space-y-3" aria-label={t('fileShare.accessTitle')}>
+      <h3 className="text-sm font-semibold">{t('fileShare.accessTitle')}</h3>
       {members.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('dialogs.shareFile.empty')}</p>
+        <p className="text-sm text-muted-foreground">{t('fileShare.empty')}</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
           {members.map((m) => {
             const person = personOf(people.data, m.account)
-            const permission = m.canEdit ? t('dialogs.shareFile.canEditShort') : t('dialogs.access.canView')
-            const behind = m.keyGeneration < access.data.keyGeneration ? t('dialogs.shareFile.updating') : null
+            const permission = m.canEdit ? t('fileShare.canEdit') : t('fileShare.canView')
+            const behind = m.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null
             return (
               <Row
                 key={m.userId}
@@ -155,7 +156,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 name={person.name}
                 detail={[person.profile ? m.account : null, permission, behind].filter(Boolean).join(' · ')}
                 onRemove={() => setPending({ userId: m.userId, name: person.name })}
-                removeLabel={t('dialogs.access.removeNamed', { name: person.name })}
+                removeLabel={t('fileShare.removeNamed', { name: person.name })}
                 busy={remove.isPending}
               />
             )
@@ -164,19 +165,53 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
       )}
       {pending ? (
         <Alert variant="warn">
-          <p className="font-medium">{t('dialogs.access.confirmTitle', { name: pending.name })}</p>
-          <p className="mt-1 text-sm">{t('dialogs.shareFile.confirmBody')}</p>
+          <p className="font-medium">{t('fileShare.confirmTitle', { name: pending.name })}</p>
+          <p className="mt-1 text-sm">{t('fileShare.confirmBody')}</p>
           <div className="mt-3 flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setPending(null)} disabled={remove.isPending}>
               {t('common.cancel')}
             </Button>
             <Button size="sm" variant="destructive" onClick={confirm} loading={remove.isPending}>
-              {t('dialogs.access.remove')}
+              {t('fileShare.remove')}
             </Button>
           </div>
         </Alert>
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
     </section>
+  )
+}
+
+function PersonAvatar({ name, profile }: ReturnType<typeof personOf>) {
+  return <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={24} />
+}
+
+function Row({
+  icon,
+  name,
+  detail,
+  onRemove,
+  removeLabel,
+  busy,
+}: {
+  icon: ReactNode
+  name: string
+  detail: string
+  onRemove: () => void
+  removeLabel: string
+  busy: boolean
+}) {
+  const { t } = useTranslation()
+  return (
+    <li className="flex items-center gap-3 px-3 py-2">
+      <span className="text-muted-foreground">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{name}</p>
+        <p className="truncate text-xs text-muted-foreground">{detail}</p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={onRemove} disabled={busy} aria-label={removeLabel}>
+        {t('fileShare.remove')}
+      </Button>
+    </li>
   )
 }

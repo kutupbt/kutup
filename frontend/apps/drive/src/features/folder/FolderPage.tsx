@@ -17,7 +17,7 @@ import { ColorDialog } from '../dialogs/ColorDialog'
 import { FolderPickerDialog } from '../dialogs/FolderPickerDialog'
 import { LinkDialog } from '../dialogs/LinkDialog'
 import { NameDialog } from '../dialogs/NameDialog'
-import { FileShareDialog } from '../dialogs/FileShareDialog'
+import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import { ShareDialog } from '../dialogs/ShareDialog'
 import { canShareFile } from '@kutup/drive-core/fileShares'
 import { folderHex } from '../drive/colors'
@@ -29,6 +29,7 @@ import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
 import { folderPath, openFile } from '../drive/paths'
+import { isListName } from '@kutup/map/list'
 import { moveRefusal, type MoveRefusal } from '../drive/move'
 import { useCopy } from '../drive/useCopy'
 import { useMove } from '../drive/useMove'
@@ -281,7 +282,12 @@ export function FolderPage() {
             : []
         }
         if (container.source !== 'remote') {
-          actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
+          actions.push({
+            id: 'open',
+            label: isListName(file.name) ? t('drive.actions.openInMaps') : t('drive.actions.open'),
+            icon: <ExternalLink />,
+            onSelect: () => open(item),
+          })
         }
         actions.push({ id: 'preview', label: t('drive.actions.quickLook'), icon: <Eye />, onSelect: () => setLooking({ folder: container, file }) })
         actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download([target]) })

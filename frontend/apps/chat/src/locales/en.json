@@ -903,6 +903,12 @@
       "updatedAgo_other": "updated {{count}} minutes ago",
       "stop": "Stop sharing",
       "mapLabel": "Map of the live location"
+    },
+    "sendPlace": {
+      "title": "Send place",
+      "description": "{{place}}: choose up to {{count}} chats to send it to.",
+      "sent_one": "Sent to {{count}} chat",
+      "sent_other": "Sent to {{count}} chats"
     }
   },
   "boot": {

@@ -11,6 +11,7 @@ import { ChatJobs } from './app/ChatJobs'
 import { ChatShell } from './app/ChatShell'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { JoinLinkRoute } from './features/groupLink/JoinLinkRoute'
+import { SharePlaceRoute } from './features/location/SharePlaceRoute'
 import { NotFoundPage } from './NotFoundPage'
 import { ChatsPage } from './pages/ChatsPage'
 
@@ -36,6 +37,7 @@ export function App() {
                 <Route index element={<ChatsPage />} />
                 <Route path="/c/:key" element={<ChatsPage />} />
                 <Route path="/join" element={<JoinLinkRoute />} />
+                <Route path="/share-place" element={<SharePlaceRoute />} />
                 <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
                 <Route path="/settings/:section" element={<SettingsPage />} />
                 <Route path="*" element={<NotFoundPage />} />

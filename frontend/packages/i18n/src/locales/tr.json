@@ -38,5 +38,32 @@
     "dark": "Koyu tema",
     "light": "Açık tema",
     "system": "Sistem temasını kullan"
+  },
+  "fileShare": {
+    "title": "“{{name}}” paylaş",
+    "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
+    "recipient": "E-posta",
+    "recipientHint": "Bu sunucuda hesabı olan biri.",
+    "canEdit": "Düzenleyebilir",
+    "canEditHint": "Dosyayı değiştirip sürüm kaydedebilirler. Bu olmadan yalnızca görüntüleyebilirler. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
+    "canView": "Görüntüleyebilir",
+    "note": "Aynı kişiyle yeniden paylaşmak neler yapabileceğini değiştirir.",
+    "submit": "Paylaş",
+    "shared": "{{account}} ile paylaşıldı",
+    "notFound": "Bu sunucuda bu e-postaya sahip kimse yok. Dosyalar henüz başka sunucularla paylaşılamıyor.",
+    "self": "Bu sizin kendi hesabınız.",
+    "failed": "Dosya paylaşılamadı.",
+    "accessTitle": "Kimlerin erişimi var",
+    "loading": "Erişimi olanlar yükleniyor…",
+    "loadFailed": "Erişimi olanlar yüklenemedi.",
+    "empty": "Bu dosyayı yalnızca klasörünü açabilenler açabilir.",
+    "updating": "erişim güncelleniyor",
+    "remove": "Kaldır",
+    "removeNamed": "{{name}} kişisini kaldır",
+    "confirmTitle": "{{name}} kaldırılsın mı?",
+    "confirmBody": "Erişimlerini hemen kaybederler ve dosya asla alamayacakları yeni bir anahtara geçer: bundan sonra değişen hiçbir şeyi okuyamazlar. Daha önce açtıkları veya indirdikleri onlarda kalır.",
+    "removed": "Erişim kaldırıldı",
+    "changed": "Bu arada erişimi olanlar değişti. Listeyi kontrol edip yeniden deneyin.",
+    "removeFailed": "Erişim kaldırılamadı. Yeniden deneyin."
   }
 }

@@ -2,6 +2,7 @@ import { Check, Loader2, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import type { ChatLocationV1 } from '@kutup/chat-core/types'
 import { canonicalAccountAddress, conversationKey, directConversation, parseAccountAddress } from '@kutup/chat-core/identity'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -12,23 +13,36 @@ import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
 import { conversationTitle } from '../../lib/names'
 import { attachmentFile, uploadAndSend } from '../../lib/sendMedia'
+import { closeSharedPlace, useSharedPlace } from '../../lib/sharedPlace'
 import { useNow } from '../../lib/useNow'
+import { formatCoordinates } from '../location/places'
 import { activeTimers, conversationList, groupIdOf, type ConversationSummary, type MessageView } from '../../state/views'
 
 /** Signal lets a message go to up to five chats at once. */
 const MAX_TARGETS = 5
 
+/** A place sent from Maps, if any: the same chooser, sending a location. */
+export function SharedPlaceHost() {
+  const place = useSharedPlace()
+  const chat = useChat()
+  if (!chat.self) return null
+  return <ForwardDialog view={null} place={place} onOpenChange={(open) => !open && closeSharedPlace()} />
+}
+
 /**
  * Forward a message, as Signal does: choose up to five chats; the message
  * goes to each marked "Forwarded" (mentions stay behind; an attachment is
  * uploaded again, since the original is its sender's), with each chat's own
- * disappearing-message timer.
+ * disappearing-message timer. With `place` instead, that place is sent to
+ * each as a location (a place from a Maps list).
  */
 export function ForwardDialog({
   view,
+  place = null,
   onOpenChange,
 }: {
   view: MessageView | null
+  place?: ChatLocationV1 | null
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -38,7 +52,7 @@ export function ForwardDialog({
   const [query, setQuery] = useState('')
   const [chosen, setChosen] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
-  const open = view !== null
+  const open = view !== null || place !== null
   const attachment = view?.entry.content.attachment
 
   useEffect(() => {
@@ -97,7 +111,7 @@ export function ForwardDialog({
 
   async function forward() {
     const service = chat.service
-    if (!view || !service || chosen.length === 0) return
+    if ((!view && !place) || !service || chosen.length === 0) return
     setBusy(true)
     const timers = activeTimers(chat.snapshot.history)
     const targets = candidates.filter((item) => chosen.includes(item.key))
@@ -106,19 +120,21 @@ export function ForwardDialog({
       const file = attachment ? await attachmentFile(attachment) : null
       for (const { key, conversation: target } of targets) {
         const timerSeconds = timers.get(key)
-        if (file && chat.capabilities) {
+        if (place) {
+          await service.sendLocation(target, place, timerSeconds)
+        } else if (file && chat.capabilities) {
           await uploadAndSend(service, chat.capabilities, target, file, {
             timerSeconds,
             durationMs: attachment?.durationMs,
             extras: { forwarded: true },
           })
         } else {
-          const text = view.mutation?.editedText ?? view.entry.content.text ?? ''
+          const text = view?.mutation?.editedText ?? view?.entry.content.text ?? ''
           await service.send(target, text, undefined, timerSeconds, { forwarded: true })
         }
         sent += 1
       }
-      toast.success(t('chat.forward.sent', { count: sent }))
+      toast.success(place ? t('chat.sendPlace.sent', { count: sent }) : t('chat.forward.sent', { count: sent }))
       onOpenChange(false)
     } catch (error) {
       toast.error(sent > 0 ? t('chat.forward.partial', { sent, total: targets.length }) : chatErrorMessage(error, t))
@@ -132,8 +148,12 @@ export function ForwardDialog({
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="sm:max-w-md" data-testid="chat-forward-dialog">
         <DialogHeader>
-          <DialogTitle>{t('chat.forward.title')}</DialogTitle>
-          <DialogDescription>{t('chat.forward.description', { count: MAX_TARGETS })}</DialogDescription>
+          <DialogTitle>{place ? t('chat.sendPlace.title') : t('chat.forward.title')}</DialogTitle>
+          <DialogDescription>
+            {place
+              ? t('chat.sendPlace.description', { place: place.label ?? formatCoordinates(place), count: MAX_TARGETS })
+              : t('chat.forward.description', { count: MAX_TARGETS })}
+          </DialogDescription>
         </DialogHeader>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />

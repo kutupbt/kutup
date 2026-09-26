@@ -299,6 +299,9 @@ importers:
       '@kutup/drive-core':
         specifier: workspace:*
         version: link:../../packages/drive-core
+      '@kutup/drive-ui':
+        specifier: workspace:*
+        version: link:../../packages/drive-ui
       '@kutup/files':
         specifier: workspace:*
         version: link:../../packages/files
@@ -411,6 +414,9 @@ importers:
       '@kutup/drive-core':
         specifier: workspace:*
         version: link:../../packages/drive-core
+      '@kutup/drive-ui':
+        specifier: workspace:*
+        version: link:../../packages/drive-ui
       '@kutup/files':
         specifier: workspace:*
         version: link:../../packages/files
@@ -577,6 +583,34 @@ importers:
       axios:
         specifier: ^1.18.0
         version: 1.18.0
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.3
+        version: 18.3.28
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+
+  packages/drive-ui:
+    dependencies:
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../drive-core
+      '@kutup/i18n':
+        specifier: workspace:*
+        version: link:../i18n
+      '@kutup/ui':
+        specifier: workspace:*
+        version: link:../ui
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.47.0(react@18.3.1)
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.8(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
     devDependencies:
       '@types/react':
         specifier: ^18.3.3

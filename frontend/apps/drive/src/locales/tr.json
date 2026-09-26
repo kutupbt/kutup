@@ -113,6 +113,7 @@
     "clearSelection": "Seçimi temizle",
     "actions": {
       "open": "Aç",
+      "openInMaps": "Haritalar’da aç",
       "download": "İndir",
       "downloadZip": "ZIP olarak indir",
       "rename": "Yeniden adlandır",
@@ -253,21 +254,6 @@
       "changed": "Bu arada erişim değişti. Listeyi kontrol edip yeniden deneyin.",
       "recipientChanged": "{{account}} hesabını sıfırladı. Onu çıkarın, isterseniz sonra yeniden paylaşın.",
       "failed": "Erişim kaldırılamadı. Yeniden deneyin."
-    },
-    "shareFile": {
-      "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
-      "recipient": "E-posta",
-      "recipientHint": "Bu sunucuda hesabı olan biri.",
-      "canEdit": "Düzenleyebilir",
-      "canEditHint": "Dosyayı değiştirip sürüm kaydedebilirler. Bu olmadan yalnızca görüntüleyebilirler. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
-      "canEditShort": "Düzenleyebilir",
-      "note": "Aynı kişiyle yeniden paylaşmak neler yapabileceğini değiştirir.",
-      "notFound": "Bu sunucuda bu e-postaya sahip kimse yok. Dosyalar henüz başka sunucularla paylaşılamıyor.",
-      "self": "Bu sizin kendi hesabınız.",
-      "failed": "Dosya paylaşılamadı.",
-      "empty": "Bu dosyayı yalnızca klasörünü açabilenler açabilir.",
-      "updating": "erişim güncelleniyor",
-      "confirmBody": "Erişimlerini hemen kaybederler ve dosya asla alamayacakları yeni bir anahtara geçer: bundan sonra değişen hiçbir şeyi okuyamazlar. Daha önce açtıkları veya indirdikleri onlarda kalır."
     }
   },
   "shared": {

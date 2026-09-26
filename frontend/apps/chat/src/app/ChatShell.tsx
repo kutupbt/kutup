@@ -11,6 +11,7 @@ import { Button } from '@kutup/ui/components/button'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { CallHost } from '../features/calls/CallScreen'
 import { JoinGroupHost } from '../features/groupLink/JoinGroupDialog'
+import { SharedPlaceHost } from '../features/thread/ForwardDialog'
 import { NewChatDialog } from '../features/list/NewChatDialog'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
 import { BackupIndicator } from '../features/settings/BackupIndicator'
@@ -112,6 +113,7 @@ export function ChatShell() {
       <Outlet />
       <NewChatDialog open={newChat} onOpenChange={setNewChat} />
       <JoinGroupHost />
+      <SharedPlaceHost />
       <ChatNotifier unread={unread} />
       <CallHost />
       <Shortcuts onNewChat={openNewChat} />

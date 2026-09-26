@@ -1,11 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, Eye, MapPin, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, Download, Eye, FileDown, MapPin, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, Upload, UserPlus, Users, X } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
-import { useSharedFiles } from '@kutup/drive-core/fileShares'
+import { canShareFile, useSharedFiles } from '@kutup/drive-core/fileShares'
+import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
+import { LOCATION_LABEL_MAX } from '@kutup/chat-core/types'
+import { toGpx, toKml } from '@kutup/map/exchange'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
@@ -25,6 +28,7 @@ import { LoadingPanel } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { formatFileDate } from '@kutup/ui/lib/format'
 import { PersonName } from '../people/PersonName'
+import { asPlaces, IMPORT_ACCEPT, PlaceFileTooLarge, readChosenFile, saveFile, UnreadablePlaceFile } from './files'
 import { PlaceDialog, type PlaceDraft } from './PlaceDialog'
 import { TitleDialog } from './TitleDialog'
 import { useListSession } from './useListSession'
@@ -127,6 +131,7 @@ type Dialog =
   | { kind: 'place'; draft: PlaceDraft; placeId?: string }
   | { kind: 'rename' }
   | { kind: 'trash' }
+  | { kind: 'share' }
   | null
 
 function Workspace({
@@ -157,6 +162,7 @@ function Workspace({
   const [picking, setPicking] = useState(false)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [view, setView] = useState<{ center: { lat: number; lon: number }; zoom: number }>(WORLD)
+  const importInput = useRef<HTMLInputElement>(null)
 
   const title = listTitle(file.name ?? '')
   const mayRename = folder.source !== 'file' && (folder.canManage || (folder.canDelete && file.uploaderUserId === session.userId))
@@ -186,13 +192,47 @@ function Workspace({
   }
 
   function download() {
-    const blob = new Blob([encodeListJson(list.places).slice()], { type: LIST_MIME })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = file.name ?? `list.${LIST_EXTENSION}`
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    saveFile(file.name ?? `list.${LIST_EXTENSION}`, encodeListJson(list.places).slice(), LIST_MIME)
+  }
+
+  /** Add the places in a KML, GPX or Kutup list file, read on this device. */
+  async function importPlaces(event: ChangeEvent<HTMLInputElement>) {
+    const chosen = event.target.files?.[0]
+    event.target.value = ''
+    if (!chosen || !list.doc) return
+    try {
+      const imported = await readChosenFile(chosen, (n) => t('list.importPlaceName', { n }))
+      if (imported.places.length === 0) return void toast.error(t('list.importEmpty'))
+      const doc = list.doc
+      let added = 0
+      doc.transact(() => {
+        for (const place of asPlaces(imported, me)) {
+          try {
+            addPlace(doc, place)
+            added += 1
+          } catch {
+            break
+          }
+        }
+      })
+      const skipped = imported.skipped + imported.places.length - added
+      toast.success(skipped > 0 ? t('list.importedSkipped', { count: added, skipped }) : t('list.imported', { count: added }))
+    } catch (error) {
+      toast.error(
+        error instanceof UnreadablePlaceFile
+          ? t('list.importUnreadable')
+          : error instanceof PlaceFileTooLarge
+            ? t('list.importTooLarge')
+            : t('list.importFailed'),
+      )
+    }
+  }
+
+  /** Send a place into a chat: Chat asks which ones; the place travels in the link's fragment only. */
+  function sendToChat(place: Place) {
+    const label = [...place.name].slice(0, LOCATION_LABEL_MAX).join('')
+    const fragment = new URLSearchParams({ lat: String(place.lat), lon: String(place.lon), label })
+    window.open(appUrl('chat', `/share-place#${fragment.toString()}`), '_blank', 'noopener')
   }
 
   const statusText =
@@ -249,11 +289,28 @@ function Workspace({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {canShareFile(folder, file) ? (
+                <DropdownMenuItem onSelect={() => setDialog({ kind: 'share' })}>
+                  <UserPlus /> {t('list.share')}
+                </DropdownMenuItem>
+              ) : null}
               {mayRename ? (
                 <DropdownMenuItem onSelect={() => setDialog({ kind: 'rename' })}>
                   <Pencil /> {t('list.rename')}
                 </DropdownMenuItem>
               ) : null}
+              {editable ? (
+                <DropdownMenuItem onSelect={() => importInput.current?.click()}>
+                  <Upload /> {t('list.import')}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => saveFile(`${title}.kml`, toKml(title, list.places), 'application/vnd.google-earth.kml+xml')} disabled={list.status === 'connecting'}>
+                <FileDown /> {t('list.exportKml')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => saveFile(`${title}.gpx`, toGpx(title, list.places), 'application/gpx+xml')} disabled={list.status === 'connecting'}>
+                <FileDown /> {t('list.exportGpx')}
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={download} disabled={list.status === 'connecting'}>
                 <Download /> {t('list.download')}
               </DropdownMenuItem>
@@ -348,29 +405,34 @@ function Workspace({
                             </span>
                           ) : null}
                         </button>
-                        {editable ? (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="size-8" aria-label={t('list.placeActions', { name: place.name })}>
-                                <MoreHorizontal />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onSelect={() => setDialog({ kind: 'place', placeId: place.id, draft: { name: place.name, note: place.note, lat: place.lat, lon: place.lon } })}>
-                                <Pencil /> {t('list.editPlace')}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                destructive
-                                onSelect={() => {
-                                  if (list.doc) removePlace(list.doc, place.id)
-                                  toast.success(t('list.removed', { name: place.name }))
-                                }}
-                              >
-                                <Trash2 /> {t('list.removePlace')}
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        ) : null}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="size-8" aria-label={t('list.placeActions', { name: place.name })}>
+                              <MoreHorizontal />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => sendToChat(place)}>
+                              <MessageSquare /> {t('list.sendToChat')}
+                            </DropdownMenuItem>
+                            {editable ? (
+                              <>
+                                <DropdownMenuItem onSelect={() => setDialog({ kind: 'place', placeId: place.id, draft: { name: place.name, note: place.note, lat: place.lat, lon: place.lon } })}>
+                                  <Pencil /> {t('list.editPlace')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  destructive
+                                  onSelect={() => {
+                                    if (list.doc) removePlace(list.doc, place.id)
+                                    toast.success(t('list.removed', { name: place.name }))
+                                  }}
+                                >
+                                  <Trash2 /> {t('list.removePlace')}
+                                </DropdownMenuItem>
+                              </>
+                            ) : null}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </li>
                   )
@@ -452,6 +514,8 @@ function Workspace({
           rename.mutate({ folder, file, name: `${next}.${LIST_EXTENSION}` }, { onSuccess: () => setDialog(null) })
         }
       />
+      <FileShareDialog target={dialog?.kind === 'share' ? { folder, file } : null} onClose={() => setDialog(null)} />
+      <input ref={importInput} type="file" accept={IMPORT_ACCEPT} className="hidden" onChange={(e) => void importPlaces(e)} data-testid="import-places" />
       <ConfirmDestructive
         open={dialog?.kind === 'trash'}
         onOpenChange={(o) => !o && (setDialog(null), trash.reset())}

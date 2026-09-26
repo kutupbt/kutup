@@ -121,7 +121,7 @@ folders, and a move keeps the key generation, so shares survive a move.
 - Web: `@kutup/drive-core/fileShares` (list, share, remove, keep current).
   In Drive:
   - "Share" on your own files, with a dialog and access list
-    (`FileShareDialog`);
+    (`FileShareDialog` in `@kutup/drive-ui`, also used by the Maps app);
   - a "Shared" mark;
   - files under "Shared with me";
   - `/shared/file/:fid`, which opens a shared file in the same editors and

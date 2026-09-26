@@ -1,5 +1,7 @@
-import { MapPin, Plus, Users } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { MapPin, Plus, Upload, Users } from 'lucide-react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { toast } from 'sonner'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
 import { listTitle } from '@kutup/map/list'
@@ -9,6 +11,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatFileDate } from '@kutup/ui/lib/format'
 import { PersonName } from '../people/PersonName'
+import { asPlaces, IMPORT_ACCEPT, PlaceFileTooLarge, readChosenFile, titleOf, UnreadablePlaceFile } from './files'
 import { useCreateList, useLists, useSaveFolder, type ListEntry } from './lists'
 import { TitleDialog } from './TitleDialog'
 
@@ -22,6 +25,9 @@ export function HomePage() {
   const [naming, setNaming] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<unknown>(null)
+  const identity = useDriveIdentity()
+  const importInput = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
 
   const sorted = useMemo(() => [...lists].sort((a, b) => b.file.updatedAt.localeCompare(a.file.updatedAt)), [lists])
 
@@ -40,6 +46,38 @@ export function HomePage() {
     }
   }
 
+  /** A KML, GPX or Kutup list file becomes a new map, read on this device. */
+  async function importFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !saveFolder || !identity.data) return
+    setImporting(true)
+    try {
+      const imported = await readChosenFile(file, (n) => t('home.importPlaceName', { n }))
+      if (imported.places.length === 0) {
+        toast.error(t('home.importEmpty'))
+        return
+      }
+      const path = await createList(saveFolder, titleOf(imported, file), asPlaces(imported, identity.data.account))
+      toast.success(
+        imported.skipped > 0
+          ? t('home.importedSkipped', { count: imported.places.length, skipped: imported.skipped })
+          : t('home.imported', { count: imported.places.length }),
+      )
+      void navigate(path)
+    } catch (error) {
+      toast.error(
+        error instanceof UnreadablePlaceFile
+          ? t('home.importUnreadable')
+          : error instanceof PlaceFileTooLarge
+            ? t('home.importTooLarge')
+            : t('home.importFailed'),
+      )
+    } finally {
+      setImporting(false)
+    }
+  }
+
   const where = (entry: ListEntry) => {
     if (entry.shared) return <PersonName account={entry.shared.ownerAccount} format={(name) => t('home.from', { name })} />
     if (entry.folder.ownerAccount) return <PersonName account={entry.folder.ownerAccount} format={(name) => t('home.inShared', { folder: entry.folder.name ?? '', name })} />
@@ -53,9 +91,13 @@ export function HomePage() {
           <h1 className="font-display text-2xl font-semibold tracking-tight">{t('home.title')}</h1>
           <p className="text-sm text-muted-foreground">{t('home.description')}</p>
         </div>
+        <Button variant="outline" onClick={() => importInput.current?.click()} disabled={!saveFolder || !identity.data || importing} loading={importing} title={t('home.importHint')}>
+          <Upload /> {t('home.import')}
+        </Button>
         <Button onClick={() => (setCreateError(null), setNaming(true))} disabled={!saveFolder}>
           <Plus /> {t('home.new')}
         </Button>
+        <input ref={importInput} type="file" accept={IMPORT_ACCEPT} className="hidden" onChange={(e) => void importFile(e)} data-testid="import-file" />
       </div>
       {fellBack ? (
         <Alert variant="warn">

@@ -4,7 +4,7 @@ import { useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
-import { encodeListJson, isListName, LIST_EXTENSION, LIST_MIME } from '@kutup/map/list'
+import { encodeListJson, isListName, LIST_EXTENSION, LIST_MIME, type Place } from '@kutup/map/list'
 import { useMapConfig } from '@kutup/map/config'
 import { freshAccessToken } from '@kutup/session/client'
 
@@ -88,15 +88,15 @@ export function uniqueListName(title: string, taken: Iterable<string>): string {
   }
 }
 
-/** Make an empty list in `folder`; returns where it opens. */
+/** Make a list in `folder` (empty, or with imported places); returns where it opens. */
 export function useCreateList() {
   const queryClient = useQueryClient()
-  return async (folder: Folder, title: string): Promise<string> => {
+  return async (folder: Folder, title: string, places: Place[] = []): Promise<string> => {
     if (!folder.key || !folder.canUpload) throw new Error('folder is not open')
     const existing = await loadFolderFiles(folder)
     const name = uniqueListName(title.trim(), existing.flatMap((f) => (f.name ? [f.name] : [])))
     const uploaded = await streamUpload({
-      file: new File([encodeListJson([]).slice()], name, { type: LIST_MIME }),
+      file: new File([encodeListJson(places).slice()], name, { type: LIST_MIME }),
       collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
       accessToken: freshAccessToken,
     })

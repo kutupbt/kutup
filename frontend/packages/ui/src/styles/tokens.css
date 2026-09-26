@@ -29,6 +29,7 @@
 @source '../';
 /* The shared map component (@kutup/map) styles its own elements. */
 @source '../../../map/src';
+@source '../../../drive-ui/src';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

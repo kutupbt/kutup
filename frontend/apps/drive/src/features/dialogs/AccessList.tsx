@@ -151,11 +151,11 @@ export function AccessList({ folder }: { folder: Folder }) {
   )
 }
 
-export function PersonAvatar({ name, profile }: ReturnType<typeof personOf>) {
+function PersonAvatar({ name, profile }: ReturnType<typeof personOf>) {
   return <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={24} />
 }
 
-export function Row({
+function Row({
   icon,
   name,
   detail,

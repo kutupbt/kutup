@@ -274,6 +274,29 @@ goes beyond Signal parity.
    - the save folder.
    Lists in folders on other servers are left out of the Maps app until
    editing across servers exists.
+   4c progress (2026-09-26): step 4 is complete.
+   - **Sharing from Maps:** the list's owner shares it from its menu with the
+     same Share dialog as Drive (moved to `@kutup/drive-ui`): view or edit,
+     who has access, remove.
+   - **Send to a chat:** anyone in a list can send one of its places into a
+     chat. Maps opens Chat at `/share-place#lat=…&lon=…&label=…`. The place
+     rides in the fragment, which the browser never sends to a server. Chat
+     asks which chats (up to five, as when forwarding) and sends it as a
+     location message.
+   - **KML and GPX:**
+     - Import makes a new map from a file, or adds places to a list.
+     - Export gives KML or GPX.
+     - Only points come in: KML placemarks with a Point, GPX waypoints.
+       Lines, routes and tracks are counted and the person is told.
+     - Everything is read and written on the device (`@kutup/map/exchange`).
+   - **Drive:** a map's menu says "Open in Maps".
+   Checked in the browser:
+   - a KML import (two places, one line left out);
+   - sharing from Maps with a viewer;
+   - the viewer sending a place to their chat with the owner, who received
+     it;
+   - KML and GPX exports holding the places and notes;
+   - a GPX import that the viewer saw live.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

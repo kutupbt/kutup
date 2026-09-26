@@ -35,7 +35,18 @@
     "emptyTitle": "No maps yet",
     "emptyDescription": "Make a map to keep places together: trips, favourite spots, meeting points. Share it and edit it with others.",
     "saveFolderGone": "The folder you chose for new maps is gone, so new maps go to My files.",
-    "changeSaveFolder": "Choose another"
+    "changeSaveFolder": "Choose another",
+    "import": "Import",
+    "importHint": "Make a map from a KML or GPX file (Google My Maps, Google Earth, GPS apps).",
+    "importPlaceName": "Place {{n}}",
+    "importEmpty": "That file has no places in it.",
+    "imported_one": "Imported {{count}} place",
+    "imported_other": "Imported {{count}} places",
+    "importedSkipped_one": "Imported {{count}} place. Left out, as they are not single points (lines, routes, tracks): {{skipped}}.",
+    "importedSkipped_other": "Imported {{count}} places. Left out, as they are not single points (lines, routes, tracks): {{skipped}}.",
+    "importUnreadable": "That is not a KML, GPX or Kutup map file.",
+    "importTooLarge": "That file is too large to import.",
+    "importFailed": "The file could not be imported."
   },
   "title": {
     "label": "Title",
@@ -94,7 +105,21 @@
     "turnOn": "Turn them on",
     "quota": "Your storage is full, so changes are no longer saved as versions.",
     "preRestoreLabel": "Before restoring ({{time}})",
-    "restoredLabel": "Restored ({{time}})"
+    "restoredLabel": "Restored ({{time}})",
+    "share": "Share",
+    "import": "Import places",
+    "exportKml": "Export as KML",
+    "exportGpx": "Export as GPX",
+    "sendToChat": "Send to a chat",
+    "importPlaceName": "Place {{n}}",
+    "importEmpty": "That file has no places in it.",
+    "imported_one": "Added {{count}} place",
+    "imported_other": "Added {{count}} places",
+    "importedSkipped_one": "Added {{count}} place. Left out, as they are not single points: {{skipped}}.",
+    "importedSkipped_other": "Added {{count}} places. Left out, as they are not single points: {{skipped}}.",
+    "importUnreadable": "That is not a KML, GPX or Kutup map file.",
+    "importTooLarge": "That file is too large to import.",
+    "importFailed": "The file could not be imported."
   },
   "place": {
     "addTitle": "Add a place",
