@@ -107,6 +107,10 @@ services:
       S3_REGION: us-east-1
       APP_ENV: test
       SERVER_URL: http://a.test
+      KUTUP_ACCOUNT_URL: http://account.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
       # Group calls hosted on A (no SFU runs: the live test checks tokens).
       CHAT_SFU_URL: ws://sfu.a.test
       CHAT_SFU_API_KEY: federation-sfu-key
@@ -149,6 +153,10 @@ services:
       S3_REGION: us-east-1
       APP_ENV: test
       SERVER_URL: http://b.test
+      KUTUP_ACCOUNT_URL: http://account.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
       ADMIN_ACCOUNT: federation-admin-b@example.test:adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
@@ -172,16 +180,36 @@ services:
       seaweedfs-init-b:
         condition: service_completed_successfully
 
-  frontend:
+  # The web apps, one container per server, each app on its own host
+  # (<app>.a.test / <app>.b.test on the published port). A browser reaches
+  # them by resolving *.a.test and *.b.test to 127.0.0.1.
+  frontend-a:
+    image: ${KUTUP_FEDERATION_FRONTEND_IMAGE:-kutup-federation-frontend:local}
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    environment:
+      KUTUP_ACCOUNT_URL: http://account.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
+
+  frontend-b:
+    image: ${KUTUP_FEDERATION_FRONTEND_IMAGE:-kutup-federation-frontend:local}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      KUTUP_ACCOUNT_URL: http://account.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
 
   edge-a:
     image: nginx:alpine
     environment:
       BACKEND: backend-a
-      FRONTEND: frontend
+      FRONTEND: frontend-a
     ports:
       - "127.0.0.1:${KUTUP_FED_A_PORT:-39081}:80"
     volumes:
@@ -192,7 +220,7 @@ services:
           - a.test
     depends_on:
       - backend-a
-      - frontend
+      - frontend-a
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
       interval: 1s
@@ -203,7 +231,7 @@ services:
     image: nginx:alpine
     environment:
       BACKEND: backend-b
-      FRONTEND: frontend
+      FRONTEND: frontend-b
     ports:
       - "127.0.0.1:${KUTUP_FED_B_PORT:-39082}:80"
     volumes:
@@ -214,7 +242,7 @@ services:
           - b.test
     depends_on:
       - backend-b
-      - frontend
+      - frontend-b
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
       interval: 1s

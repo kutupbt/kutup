@@ -241,8 +241,18 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
-| `frontend` | Compiled React app (served by Nginx) |
+| `frontend` | The web apps — account, Drive, Chat and the OnlyOffice sandbox — each on its own hostname (Nginx) |
 | `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
+
+**The web apps and their hostnames.** Each app has its own origin:
+`account.`, `drive.`, `chat.` and `office.` under `KUTUP_BASE_DOMAIN` (or the
+explicit `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`). The backend and the
+`frontend` container read the same settings: the backend publishes the map to
+the apps, and the `frontend` container serves one app per hostname (any other
+hostname gets `404`) and sends the OnlyOffice sandbox's Content Security
+Policy, which only Drive may embed. Point all four names at the server, cover
+them with the certificate, and keep the `Host` header when proxying; the
+bundled `nginx` does.
 
 ---
 
@@ -596,7 +606,7 @@ Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
 binaries use stable filenames and form one deployment unit with the web bundle
 and API server. They must be revalidated and must never receive an immutable
 cache policy from an outer reverse proxy or CDN. The bundled frontend sends
-`Cache-Control: no-cache, must-revalidate` for both paths. Preserve that header
+`Cache-Control: no-cache` for both paths. Preserve that header
 when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
 and may remain immutable.
 

@@ -288,13 +288,25 @@ the local dev stack):
 **Next, in order**
 
 1. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
-   examples), per-origin CSP including the office sandbox, removing
-   `src-tauri/`, the Playwright suite ported, docs, and a rebuilt frontend
-   image (the browser half of the federation gate needs it).
+   examples), per-origin CSP for account, Drive and Chat, removing
+   `src-tauri/`, the Playwright suite ported (the browser half of the
+   federation gate still runs the old specs), and docs.
+   - (done 2026-09-26) The frontend image builds the four apps and serves
+     one per hostname from `KUTUP_BASE_DOMAIN` or `KUTUP_*_URL`, with the
+     office sandbox's CSP; the federation compose runs one per server
+     (`<app>.a.test`, `<app>.b.test`), and a cross-server Drive share was
+     checked in a browser against it.
 
 **Known gaps (to go to `docs/roadmap.md` in phase 5)**
 
 - The upload panel labels copies as uploads.
+- A federated invite link points at `SERVER_URL` (`https://<domain>/invite`),
+  where no app is served any more; pasting it into Drive works, opening it
+  does not. It should open the recipient's own Drive, or the bare domain
+  should redirect to the account app.
+- Plain-HTTP test hosts other than `*.localhost` are not secure contexts, so
+  browser tests on the federation stack start Chromium with
+  `--unsafely-treat-insecure-origin-as-secure` for the eight app origins.
 
 ## Resolved questions (2026-09-23)
 
