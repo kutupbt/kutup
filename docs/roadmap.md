@@ -441,34 +441,43 @@ reference are in `kutup-references/` (`ente`, `comaps`).
 An end-to-end encrypted photo and video library.
 - **Library:** a timeline, albums, favourites, archive and hidden items, and
   trash.
-- **Encryption:** every file, thumbnail and piece of metadata (EXIF, dates,
-  location, captions) is sealed under a file key. That key sits under an
-  album key, as Drive already does it.
-- **Sharing:** albums shared with people here and on other servers (named
-  shares), collaborative albums, and public album links with the key in the
-  URL fragment.
+- **Photos are Drive files (decided 2026-09-26), as in Proton Photos:**
+  they live in Drive's storage, in a separate Photos area that is not mixed
+  into My files, with Drive's encryption (every photo, thumbnail and piece of
+  metadata — EXIF, dates, location, captions — under the photo's file key),
+  quota, versions, trash and sharing. The Photos app organises them by when
+  and where, not by folder. A photo can be moved into a Drive folder and
+  back; it is one file either way and counts once.
+- **Albums are views:** an album lists photos without copying them, so one
+  photo can be in several albums and still count once.
+- **Photo handling:** dates and locations kept per photo (encrypted),
+  thumbnails at several sizes, video streaming.
+- **Sharing:** one photo with single-file sharing
+  (docs/plans/drive-file-sharing.md); albums shared with people here and on
+  other servers, collaborative albums, and public album links with the key
+  in the URL fragment.
 - **Search on the device:** faces, objects and text found by ML models that
   run in the client (Ente's approach), so the server never sees the photos
   or the index.
 - **Uploads:** from the web; automatic backup from the native apps (with
-  mobile, see "Native iOS and Android apps").
+  mobile, see "Native iOS and Android apps"), into the Photos area so
+  thousands of photos never flood your folders.
 - **Places:** a map of where your photos were taken, like Ente's, inside the
   Photos app, drawn with the shared map component. Photos cluster by area, and opening a spot shows
   what was taken there. The locations come from the encrypted metadata and
   are placed on the map in the browser, so the server learns nothing.
 - **Storage (decided 2026-09-26):** one storage quota per account, shared
   by Drive and Photos, the way one Google One plan covers Google Drive and
-  Google Photos. Photos is still its own app and its own library, an album
-  rather than a file tree. Storage pages in both apps show the shared total
-  and what each app uses. Chat's separate media quota is unchanged.
-- **Where things are saved:** like Maps' "Save new maps to", a setting
-  for the Drive folder that photos saved from Photos into Drive (and
-  exports) go to, default My files.
+  Google Photos; as Drive files, photos use it without anything extra.
+  Storage pages in both apps show the shared total and what each app (the
+  Photos area and the rest of Drive) uses. Chat's separate media quota is
+  unchanged.
 - **Open questions for the plan:** how are live photos, RAW files and
   videos handled (thumbnails and streaming)? How are duplicates found
   without the server learning which files match (a hash kept inside the
-  encrypted metadata)? Can a photo be added to Drive, or Drive images to an
-  album, without a second copy counting twice?
+  encrypted metadata)? How is the Photos area kept apart from My files
+  (a separate root per account, as Proton does), and how do albums of
+  photos shared with you work?
 
 ### Maps (like CoMaps)
 
