@@ -3,7 +3,6 @@ import {
   CircleUser,
   Globe,
   HardDrive,
-  KeyRound,
   LayoutGrid,
   MessagesSquare,
   MonitorSmartphone,
@@ -54,8 +53,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/profile" icon={<CircleUser />} label={t('nav.profile')} />
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
-          <SidebarNavLink to="/settings/sessions" icon={<MonitorSmartphone />} label={t('nav.sessions')} />
-          <SidebarNavLink to="/settings/devices" icon={<KeyRound />} label={t('nav.devices')} />
+          <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
           {session.isAdmin ? (
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
@@ -71,7 +69,7 @@ export function AccountShell() {
         <UserMenu
           name={session.username ?? session.email}
           email={session.email}
-          settingsHref={appUrl('account', '/settings/account')}
+          settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => navigate('/login', { replace: true }))
           }}

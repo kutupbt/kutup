@@ -40,6 +40,26 @@ function writeStored(value: Stored): void {
   }
 }
 
+/** This browser's default sort and view, as Drive → Settings edits them. */
+export interface DefaultView {
+  view: ViewMode
+  foldersFirst: boolean
+  showPreviews: boolean
+}
+
+export function readDefaultView(): DefaultView {
+  const stored = readStored()
+  return {
+    view: stored.view ?? 'list',
+    foldersFirst: stored.foldersFirst ?? DEFAULT_SORT.foldersFirst,
+    showPreviews: stored.showPreviews ?? true,
+  }
+}
+
+export function writeDefaultView(patch: Partial<DefaultView>): void {
+  writeStored({ ...readStored(), ...patch })
+}
+
 function oneOf<T extends string>(value: string | null, options: readonly T[]): T | undefined {
   return options.find((o) => o === value)
 }

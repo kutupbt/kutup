@@ -22,7 +22,8 @@
     "activity": "Etkinlik",
     "federation": "Federasyon",
     "serverSettings": "Sunucu ayarları",
-    "profile": "Profil"
+    "profile": "Profil",
+    "devicesSessions": "Cihazlar ve oturumlar"
   },
   "auth": {
     "fields": {
@@ -146,18 +147,6 @@
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
       "colourAuto": "Otomatik",
       "colourFailed": "Renk kaydedilemedi.",
-      "versions": "Dosya sürümleri",
-      "versionsDescription": "Bir belgenin her kaydı geri yükleyebileceğin bir sürüm tutar. Son gün tamamen, son hafta saatte bir, daha eskileri günde bir sürüm olarak saklanır. Adlandırdığın sürümler süresiz saklanır. Sürümler depolama alanına sayılır.",
-      "versionsKeep": "Sürümleri şu süre sakla",
-      "versionsFailed": "Ayar kaydedilemedi.",
-      "retention": {
-        "d7": "1 hafta",
-        "d30": "30 gün",
-        "d90": "90 gün",
-        "d180": "6 ay",
-        "d365": "1 yıl",
-        "d3650": "10 yıl"
-      },
       "details": "Hesap bilgileri"
     },
     "security": {
@@ -207,7 +196,7 @@
       "emptyDescription": "Açık bir giriş yok."
     },
     "devices": {
-      "title": "Düzenleme cihazları",
+      "title": "Düzenleyici anahtarları",
       "description": "Başkalarıyla belge düzenleyen her tarayıcı değişikliklerini kendi anahtarıyla imzalar. Artık kullanmadığınız cihazı iptal edin.",
       "unnamed": "Adsız cihaz",
       "revoked": "İptal edildi",
@@ -243,6 +232,17 @@
       "copy": "Adresi kopyala",
       "copied": "Adres kopyalandı",
       "copyFailed": "Adres kopyalanamadı"
+    },
+    "devicesSessions": {
+      "title": "Cihazlar ve oturumlar",
+      "description": "Hesabınızın oturum açtığı her şey: tarayıcılar ve komut satırı, Sohbet kurulu tarayıcılar ve düzenlemelerinizi imzalayan anahtarlar."
+    },
+    "chatDevices": {
+      "title": "Sohbet cihazları",
+      "description": "Sohbet'in kurulu olduğu tarayıcılar. Birini kaldırmak onu gruplarınızdan da çıkarır, bu yüzden Sohbet'te yapılır.",
+      "manage": "Sohbet'te yönet",
+      "none": "Sohbet henüz hiçbir tarayıcıda kurulu değil.",
+      "unnamed": "Tarayıcı"
     }
   },
   "admin": {

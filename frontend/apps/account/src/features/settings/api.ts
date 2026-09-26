@@ -22,8 +22,6 @@ export interface Me {
   versionRetentionDays: number
 }
 
-/** The retention periods the server accepts. */
-export const VERSION_RETENTION_DAYS = [7, 30, 90, 180, 365, 3650] as const
 
 export function useMe() {
   return useQuery({
@@ -48,15 +46,6 @@ export function useUpdateColor() {
   })
 }
 
-export function useUpdateVersionRetention() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (days: number) => {
-      await api.patch('/user/me', { versionRetentionDays: days })
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: meKey }),
-  })
-}
 
 // --- two-factor ---------------------------------------------------------
 

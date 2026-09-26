@@ -14,7 +14,8 @@
   "nav": {
     "myFiles": "My files",
     "shared": "Shared with me",
-    "trash": "Trash"
+    "trash": "Trash",
+    "settings": "Settings"
   },
   "storage": {
     "label": "Storage used",
@@ -481,5 +482,29 @@
   },
   "viewer": {
     "imageUnreadable": "This browser can't display this image. Download it to open it on your device."
+  },
+  "settings": {
+    "title": "Drive settings",
+    "description": "How Drive keeps your files and opens folders. Your profile and security are in your account settings.",
+    "versions": {
+      "title": "File versions",
+      "description": "Every save of a document keeps a version you can restore. The last day is kept whole, the last week one per hour, and older versions one per day. Versions you name are kept forever. Versions count towards your storage.",
+      "keep": "Keep versions for",
+      "failed": "The setting could not be saved.",
+      "retention": {
+        "d7": "1 week",
+        "d30": "30 days",
+        "d90": "90 days",
+        "d180": "6 months",
+        "d365": "1 year",
+        "d3650": "10 years"
+      }
+    },
+    "view": {
+      "title": "Default view",
+      "description": "How folders open in this browser.",
+      "list": "List",
+      "grid": "Grid"
+    }
   }
 }

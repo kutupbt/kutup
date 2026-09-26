@@ -15,6 +15,7 @@ import { PublicSharePage } from './features/public/PublicSharePage'
 import { SearchPage } from './features/search/SearchPage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
+import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
 import { UploadPanel } from './features/uploads/UploadPanel'
 import { setThumbnailStoredListener } from './features/thumbnails/queue'
 import { NotFoundPage } from './NotFoundPage'
@@ -54,6 +55,7 @@ function SignedIn() {
             <Route path="/shared" element={<SharedPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/trash" element={<TrashPage />} />
+            <Route path="/settings" element={<DriveSettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

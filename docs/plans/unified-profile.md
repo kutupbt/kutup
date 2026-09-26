@@ -85,7 +85,14 @@ profile shows as their username, as today.
    the account app (with the presence colour and your address), and Chat's
    Profile settings becoming a preview with "Edit profile". The avatar
    helpers moved to `@kutup/ui`.
-2. Settings layout: Account (storage), Security, one Devices & sessions
-   list, and Drive → Settings with version retention.
+2. (done) Settings layout:
+   - **Account:** details and storage only.
+   - **Devices & sessions:** one page with sign-in sessions, chat devices
+     (listed; removing one opens Chat, which re-signs the device list and
+     takes the device out of groups) and editor keys. `/settings/sessions`
+     redirects there.
+   - **Drive → Settings:** file-version retention (moved from Account) and
+     this browser's default view (list/grid, folders first, previews).
+   - Every app's "Settings" menu item opens the Profile page.
 3. Drive shows profiles: profile keys in shares, names and pictures in the
    Drive UI, both ways and across servers.

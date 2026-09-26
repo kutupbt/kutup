@@ -20,9 +20,8 @@ import { RegisterPage } from './features/auth/RegisterPage'
 import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
 import { ProfilePage } from './features/settings/ProfilePage'
-import { DevicesPage } from './features/settings/DevicesPage'
+import { DevicesSessionsPage } from './features/settings/DevicesSessionsPage'
 import { SecurityPage } from './features/settings/SecurityPage'
-import { SessionsPage } from './features/settings/SessionsPage'
 import { NotFoundPage } from './NotFoundPage'
 
 /** When the server ends this sign-in (revoked elsewhere, expired), go to sign-in. */
@@ -60,8 +59,8 @@ export function App() {
               <Route path="/settings/profile" element={<ProfilePage />} />
               <Route path="/settings/account" element={<AccountSettingsPage />} />
               <Route path="/settings/security" element={<SecurityPage />} />
-              <Route path="/settings/sessions" element={<SessionsPage />} />
-              <Route path="/settings/devices" element={<DevicesPage />} />
+              <Route path="/settings/sessions" element={<Navigate to="/settings/devices" replace />} />
+              <Route path="/settings/devices" element={<DevicesSessionsPage />} />
               <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
               <Route path="/admin/users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
               <Route path="/admin/users/new" element={<RequireAdmin><NewUserPage /></RequireAdmin>} />

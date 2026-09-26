@@ -1,4 +1,4 @@
-import { HardDrive, MessagesSquare, Trash2, UserRound, Users } from 'lucide-react'
+import { HardDrive, MessagesSquare, Settings, Trash2, UserRound, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -35,6 +35,7 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
           <SidebarNavLink to="/" end icon={<HardDrive />} label={t('nav.myFiles')} />
           <SidebarNavLink to="/shared" icon={<Users />} label={t('nav.shared')} />
           <SidebarNavLink to="/trash" icon={<Trash2 />} label={t('nav.trash')} />
+          <SidebarNavLink to="/settings" icon={<Settings />} label={t('nav.settings')} />
         </>
       }
       sidebarFooter={<StorageMeter />}
@@ -43,7 +44,7 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
         <UserMenu
           name={session.username ?? session.email}
           email={session.email}
-          settingsHref={appUrl('account', '/settings/account')}
+          settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => window.location.assign(appUrl('account', '/login')))
           }}

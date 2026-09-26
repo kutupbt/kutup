@@ -14,7 +14,8 @@
   "nav": {
     "myFiles": "Dosyalarım",
     "shared": "Benimle paylaşılanlar",
-    "trash": "Çöp kutusu"
+    "trash": "Çöp kutusu",
+    "settings": "Ayarlar"
   },
   "storage": {
     "label": "Kullanılan alan",
@@ -481,5 +482,29 @@
   },
   "viewer": {
     "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
+  },
+  "settings": {
+    "title": "Drive ayarları",
+    "description": "Drive'ın dosyalarınızı nasıl sakladığı ve klasörleri nasıl açtığı. Profiliniz ve güvenliğiniz hesap ayarlarınızdadır.",
+    "versions": {
+      "title": "Dosya sürümleri",
+      "description": "Bir belgenin her kaydı geri yükleyebileceğin bir sürüm tutar. Son gün tamamen, son hafta saatte bir, daha eskileri günde bir sürüm olarak saklanır. Adlandırdığın sürümler süresiz saklanır. Sürümler depolama alanına sayılır.",
+      "keep": "Sürümleri şu süre sakla",
+      "failed": "Ayar kaydedilemedi.",
+      "retention": {
+        "d7": "1 hafta",
+        "d30": "30 gün",
+        "d90": "90 gün",
+        "d180": "6 ay",
+        "d365": "1 yıl",
+        "d3650": "10 yıl"
+      }
+    },
+    "view": {
+      "title": "Varsayılan görünüm",
+      "description": "Klasörlerin bu tarayıcıda nasıl açıldığı.",
+      "list": "Liste",
+      "grid": "Izgara"
+    }
   }
 }

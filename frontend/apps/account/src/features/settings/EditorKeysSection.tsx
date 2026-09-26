@@ -7,7 +7,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Mono } from '@kutup/ui/components/mono'
-import { PageBody, PageHeader } from '@kutup/ui/components/page'
+import { Section } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
@@ -18,7 +18,7 @@ import { useDevices, useRevokeDevice, type EditorDevice } from './api'
  * (notes, office documents, whiteboards). Revoking one makes its signatures
  * stop being accepted and closes its live editing connections.
  */
-export function DevicesPage() {
+export function EditorKeysSection() {
   const { t, i18n } = useTranslation()
   const devices = useDevices()
   const revoke = useRevokeDevice()
@@ -26,8 +26,7 @@ export function DevicesPage() {
   const rows = devices.data ? [...devices.data].sort((a, b) => Number(b.isActive) - Number(a.isActive)) : []
 
   return (
-    <PageBody width="prose">
-      <PageHeader title={t('settings.devices.title')} description={t('settings.devices.description')} />
+    <Section title={t('settings.devices.title')} description={t('settings.devices.description')}>
       {devices.isError ? (
         <Alert variant="error">{apiErrorMessage(devices.error, t('common.tryAgain'))}</Alert>
       ) : null}
@@ -88,6 +87,6 @@ export function DevicesPage() {
           })
         }}
       />
-    </PageBody>
+    </Section>
   )
 }

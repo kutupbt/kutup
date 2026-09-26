@@ -93,7 +93,7 @@ export function ChatShell() {
         <UserMenu
           name={session.username ?? session.email}
           email={session.email}
-          settingsHref={appUrl('account', '/settings/account')}
+          settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             // A signed-out browser is not woken for this account any more.
             if (chat.self) clearDrafts(chat.self.address)

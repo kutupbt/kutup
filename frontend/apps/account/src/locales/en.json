@@ -22,7 +22,8 @@
     "activity": "Activity",
     "federation": "Federation",
     "serverSettings": "Server settings",
-    "profile": "Profile"
+    "profile": "Profile",
+    "devicesSessions": "Devices & sessions"
   },
   "auth": {
     "fields": {
@@ -146,18 +147,6 @@
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
       "colourAuto": "Automatic",
       "colourFailed": "The colour could not be saved.",
-      "versions": "File versions",
-      "versionsDescription": "Every save of a document keeps a version you can restore. The last day is kept whole, the last week one per hour, and older versions one per day. Versions you name are kept forever. Versions count towards your storage.",
-      "versionsKeep": "Keep versions for",
-      "versionsFailed": "The setting could not be saved.",
-      "retention": {
-        "d7": "1 week",
-        "d30": "30 days",
-        "d90": "90 days",
-        "d180": "6 months",
-        "d365": "1 year",
-        "d3650": "10 years"
-      },
       "details": "Account details"
     },
     "security": {
@@ -207,7 +196,7 @@
       "emptyDescription": "No sign-ins are active."
     },
     "devices": {
-      "title": "Editor devices",
+      "title": "Editor keys",
       "description": "Each browser that edits documents with others signs its changes with its own key. Revoke a device you no longer use.",
       "unnamed": "Unnamed device",
       "revoked": "Revoked",
@@ -243,6 +232,17 @@
       "copy": "Copy address",
       "copied": "Address copied",
       "copyFailed": "Could not copy the address"
+    },
+    "devicesSessions": {
+      "title": "Devices & sessions",
+      "description": "Everything your account is signed in with: browsers and the command line, the browsers with Chat, and the keys that sign your edits."
+    },
+    "chatDevices": {
+      "title": "Chat devices",
+      "description": "Browsers with Chat set up. Removing one also takes it out of your groups, so it happens in Chat.",
+      "manage": "Manage in Chat",
+      "none": "Chat is not set up in any browser yet.",
+      "unnamed": "Browser"
     }
   },
   "admin": {

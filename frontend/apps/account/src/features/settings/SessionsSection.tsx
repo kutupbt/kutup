@@ -7,7 +7,7 @@ import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
-import { PageBody, PageHeader } from '@kutup/ui/components/page'
+import { Section } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -46,7 +46,7 @@ const CLIENT_KEYS: Record<string, string> = {
   cli: 'settings.sessions.cli',
 }
 
-export function SessionsPage() {
+export function SessionsSection() {
   const { t, i18n } = useTranslation()
   const sessions = useSessions()
   const revoke = useRevokeSession()
@@ -58,19 +58,18 @@ export function SessionsPage() {
   const others = groups.filter((g) => !g.current)
 
   return (
-    <PageBody width="prose">
-      <PageHeader
-        title={t('settings.sessions.title')}
-        description={t('settings.sessions.description')}
-        actions={
-          others.length > 0 ? (
-            <Button variant="outline" onClick={() => setEndingOthers(true)}>
-              <LogOut />
-              {t('settings.sessions.endOthers')}
-            </Button>
-          ) : null
-        }
-      />
+    <Section
+      title={t('settings.sessions.title')}
+      description={t('settings.sessions.description')}
+      actions={
+        others.length > 0 ? (
+          <Button variant="outline" onClick={() => setEndingOthers(true)}>
+            <LogOut />
+            {t('settings.sessions.endOthers')}
+          </Button>
+        ) : null
+      }
+    >
       {sessions.isError ? (
         <Alert variant="error">{apiErrorMessage(sessions.error, t('common.tryAgain'))}</Alert>
       ) : null}
@@ -176,6 +175,6 @@ export function SessionsPage() {
           })
         }}
       />
-    </PageBody>
+    </Section>
   )
 }
