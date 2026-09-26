@@ -10,8 +10,9 @@ import { freshAccessToken } from '@kutup/session/client'
 
 // A place list is a Drive file (docs/plans/maps.md, step 4). The Maps app
 // shows every one this account can reach: its own wherever they are, in
-// folders shared with it, and files shared with it by themselves. Folders on
-// other servers are left out until editing across servers exists.
+// folders shared with it, and files shared with it by themselves, here or on
+// other servers. Those on other servers are view only until editing across
+// servers exists.
 
 export interface ListEntry {
   folder: Folder
@@ -22,14 +23,16 @@ export interface ListEntry {
   path: string
 }
 
-export function listPath(folder: Pick<Folder, 'id' | 'source'>, fileId: string): string {
-  return folder.source === 'file' ? `/shared/${fileId}` : `/lists/${folder.id}/${fileId}`
+export function listPath(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'>, fileId: string): string {
+  if (folder.source === 'file') return `/shared/${fileId}`
+  if (folder.source === 'remote' && folder.remoteShareId) return `/remote/${folder.remoteShareId}/${fileId}`
+  return `/lists/${folder.id}/${fileId}`
 }
 
 export function useLists() {
   const folders = useFolders()
   const sharedFiles = useSharedFiles()
-  const readable = (folders.data?.all ?? []).filter((f) => f.key && f.source !== 'remote')
+  const readable = (folders.data?.all ?? []).filter((f) => f.key)
   const listings = useQueries({
     queries: readable.map((folder) => ({
       queryKey: folderFilesKey(folder),

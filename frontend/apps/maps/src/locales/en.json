@@ -71,7 +71,8 @@
       "live": "Live",
       "viewOnly": "View only",
       "editsWait": "View only until the owner updates access",
-      "error": "Offline"
+      "error": "Offline",
+      "otherServer": "From another server · view only"
     },
     "collaborators_one": "{{count}} other person here",
     "collaborators_other": "{{count}} other people here",

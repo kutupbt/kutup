@@ -1,4 +1,4 @@
-import { Link2, User } from 'lucide-react'
+import { Link2, Server, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,8 +13,8 @@ import { Label } from '@kutup/ui/components/label'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
-import { AccessChanged } from '@kutup/drive-core/access'
-import { CannotShareWithSelf, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
+import { AccessChanged, RecipientChanged } from '@kutup/drive-core/access'
+import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
@@ -33,11 +33,14 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
   const share = useShareFile()
   const [recipient, setRecipient] = useState('')
   const [canEdit, setCanEdit] = useState(false)
+  // An invite for someone on another server, to send them.
+  const [invite, setInvite] = useState<{ url: string; account: string } | null>(null)
 
   useEffect(() => {
     if (target) {
       setRecipient('')
       setCanEdit(false)
+      setInvite(null)
       share.reset()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when a new file is chosen
@@ -52,7 +55,8 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
         onSuccess: (result) => {
           setRecipient('')
           share.reset()
-          toast.success(t('fileShare.shared', { account: result.account }))
+          if (result.kind === 'federated') setInvite({ url: result.inviteUrl, account: result.account })
+          else toast.success(t('fileShare.shared', { account: result.account }))
         },
       },
     )
@@ -65,6 +69,8 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
       ? t('fileShare.notFound')
       : share.error instanceof CannotShareWithSelf
         ? t('fileShare.self')
+        : share.error instanceof OnlyOwnersShareAcross
+          ? t('fileShare.onlyOwnerAcross')
         : share.error instanceof AccessChanged
           ? t('fileShare.changed')
           : apiErrorMessage(share.error, t('fileShare.failed'))
@@ -80,7 +86,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
         <form className="space-y-4" onSubmit={submit}>
           <Field label={t('fileShare.recipient')} description={t('fileShare.recipientHint')} required>
             {(field) => (
-              <Input {...field} value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus type="email"
+              <Input {...field} value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus
                 autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
             )}
           </Field>
@@ -92,6 +98,27 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
             </div>
           </div>
           <Alert>{t('fileShare.note')}</Alert>
+          {invite ? (
+            <Alert>
+              <p className="font-medium">{t('fileShare.inviteTitle', { account: invite.account })}</p>
+              <p className="mt-1 text-sm">{t('fileShare.inviteBody')}</p>
+              <div className="mt-2 flex gap-2">
+                <Input readOnly value={invite.url} aria-label={t('fileShare.inviteLink')} onFocus={(e) => e.target.select()} data-testid="file-invite-link" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(invite.url).then(
+                      () => toast.success(t('fileShare.linkCopied')),
+                      () => toast.error(t('common.tryAgain')),
+                    )
+                  }
+                >
+                  {t('fileShare.copy')}
+                </Button>
+              </div>
+            </Alert>
+          ) : null}
           {errorText ? <Alert variant="error">{errorText}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>{t('common.close')}</Button>
@@ -119,14 +146,14 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const remove = useRemoveFileAccess()
   const people = usePeople()
   // Someone, or a link, about to be removed (either moves the file to a new key).
-  const [pending, setPending] = useState<{ userId?: string; linkId?: string; name: string } | null>(null)
+  const [pending, setPending] = useState<{ userId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
   const createLink = useCreateFileLink()
   const identity = useDriveIdentity()
   const [newLink, setNewLink] = useState<string | null>(null)
 
   if (access.isPending) return <LoadingPanel label={t('fileShare.loading')} />
   if (access.isError || !access.data) return <Alert variant="error">{t('fileShare.loadFailed')}</Alert>
-  const { members, publicLinks } = access.data
+  const { members, publicLinks, federatedShares } = access.data
 
   async function copy(url: string) {
     try {
@@ -140,7 +167,12 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   function confirm() {
     if (!pending) return
     remove.mutate(
-      { ...target, removed: pending.userId ? [pending.userId] : [], removedLinks: pending.linkId ? [pending.linkId] : [] },
+      {
+        ...target,
+        removed: pending.userId ? [pending.userId] : [],
+        removedLinks: pending.linkId ? [pending.linkId] : [],
+        removedFederated: pending.federatedId ? [pending.federatedId] : [],
+      },
       {
         onSuccess: () => {
           setPending(null)
@@ -154,13 +186,15 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const error = remove.error
     ? remove.error instanceof AccessChanged
       ? t('fileShare.changed')
-      : t('fileShare.removeFailed')
+      : remove.error instanceof RecipientChanged
+        ? t('fileShare.recipientChanged', { account: remove.error.account })
+        : t('fileShare.removeFailed')
     : null
 
   return (
     <section className="space-y-3" aria-label={t('fileShare.accessTitle')}>
       <h3 className="text-sm font-semibold">{t('fileShare.accessTitle')}</h3>
-      {members.length === 0 ? (
+      {members.length + federatedShares.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('fileShare.empty')}</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
@@ -175,6 +209,22 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 name={person.name}
                 detail={[person.profile ? m.account : null, permission, behind].filter(Boolean).join(' · ')}
                 onRemove={owner ? () => setPending({ userId: m.userId, name: person.name }) : undefined}
+                removeLabel={t('fileShare.removeNamed', { name: person.name })}
+                busy={remove.isPending}
+              />
+            )
+          })}
+          {federatedShares.map((f) => {
+            const account = `${f.recipientUsername}@${f.recipientServer}`
+            const person = personOf(people.data, account)
+            const behind = f.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null
+            return (
+              <Row
+                key={f.id}
+                icon={person.profile ? <PersonAvatar {...person} /> : <Server className="size-4" aria-hidden />}
+                name={person.name}
+                detail={[person.profile ? account : null, t('fileShare.canView'), t('fileShare.otherServer'), behind].filter(Boolean).join(' · ')}
+                onRemove={owner ? () => setPending({ federatedId: f.id, name: person.name }) : undefined}
                 removeLabel={t('fileShare.removeNamed', { name: person.name })}
                 busy={remove.isPending}
               />

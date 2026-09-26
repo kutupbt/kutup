@@ -263,12 +263,12 @@
     "from": "From {{account}}",
     "addInvite": "Add from invite link",
     "invite": {
-      "title": "Add a shared folder",
-      "description": "Paste the invite link someone on another Kutup server sent you.",
+      "title": "Add from an invite link",
+      "description": "Paste the invite link someone on another Kutup server sent you, for a folder or a single file.",
       "link": "Invite link",
       "invalid": "That is not a Kutup invite link.",
       "submit": "Add",
-      "added": "Shared folder added",
+      "added": "Added to Shared with me",
       "notFound": "This invite does not exist or was already used.",
       "notForYou": "This invite is for a different account.",
       "failed": "The invite could not be added."
@@ -280,7 +280,12 @@
     "waitingName": "Waiting for the owner",
     "waiting": "waiting for the owner to update access",
     "editsWait": "view only until the owner updates access",
-    "waitingHint": "This file moved to a new key. It opens once its owner opens Kutup Drive again."
+    "waitingHint": "This file moved to a new key. It opens once its owner opens Kutup Drive again.",
+    "goneName": "No longer shared",
+    "gone": "no longer shared, or its server cannot be reached",
+    "remove": "Remove",
+    "removeFileTitle": "Remove this file from Shared with me?",
+    "removeFileDescription": "“{{name}}” is on another server. You stop seeing it; to see it again you need a new invite."
   },
   "trash": {
     "empty": "Empty trash",

@@ -9,7 +9,7 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { downloadFile, downloadFolderZip } from '../drive/downloads'
-import { useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
+import { useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import { NameDialog } from '../dialogs/NameDialog'
@@ -40,6 +40,8 @@ export function SharedPage() {
   const [leaving, setLeaving] = useState<Folder | null>(null)
   const leave = useLeaveRemoteShare()
   const rename = useRenameFile()
+  const leaveFile = useLeaveRemoteFileShare()
+  const [leavingFile, setLeavingFile] = useState<SharedFile | null>(null)
   // By id: the file's key and name refresh while a dialog is open.
   const [sharing, setSharing] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -60,7 +62,7 @@ export function SharedPage() {
       ...(sharedFiles.data ?? []).map((s) => ({
         type: 'file' as const,
         id: s.file.id,
-        name: s.file.name ?? (s.state === 'waiting' ? t('shared.waitingName') : t('drive.encrypted')),
+        name: s.file.name ?? (s.state === 'waiting' ? t('shared.waitingName') : s.state === 'gone' ? t('shared.goneName') : t('drive.encrypted')),
         kind: s.file.kind,
         size: s.file.name ? s.file.size : null,
         modifiedAt: s.file.updatedAt,
@@ -69,6 +71,12 @@ export function SharedPage() {
     [folders.data, sharedFiles.data, t],
   )
   const shown = sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language)
+
+  function downloadShared(s: SharedFile) {
+    return downloadFile(s.container, s.file).catch(
+      (e: unknown) => !(e instanceof DOMException && e.name === 'AbortError') && toast.error(t('drive.downloadFailed')),
+    )
+  }
 
   if (folders.isPending || sharedFiles.isPending) return <LoadingPanel label={t('common.loading')} />
 
@@ -102,7 +110,9 @@ export function SharedPage() {
               const s = filesById.get(item.id)
               if (!s) return null
               const from = <PersonLabel account={s.ownerAccount} format={(name) => t('shared.from', { account: name })} />
-              return s.state === 'waiting' ? (
+              return s.state === 'gone' ? (
+                <>{from} · {t('shared.gone')}</>
+              ) : s.state === 'waiting' ? (
                 <>{from} · {t('shared.waiting')}</>
               ) : s.state === 'editsWait' && s.canEdit ? (
                 <>{from} · {t('shared.editsWait')}</>
@@ -118,7 +128,9 @@ export function SharedPage() {
           onOpen={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              if (s?.file.fileKey) openFile(navigate, s.container, s.file)
+              // From another server: downloaded, as files in folders there are.
+              if (s?.file.fileKey && s.remoteShareId) void downloadShared(s)
+              else if (s?.file.fileKey) openFile(navigate, s.container, s.file)
               else if (s?.state === 'waiting') toast.info(t('shared.waitingHint'))
               return
             }
@@ -128,18 +140,21 @@ export function SharedPage() {
           actionsFor={(item) => {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
-              if (!s?.file.fileKey) return []
+              const leave = s?.remoteShareId
+                ? [{ id: 'leave', label: t('shared.remove'), icon: <LogOut />, onSelect: () => setLeavingFile(s), destructive: true, separated: true }]
+                : []
+              if (!s?.file.fileKey) return leave
               return [
-                { id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) },
+                ...(s.remoteShareId
+                  ? []
+                  : [{ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => openFile(navigate, s.container, s.file) }]),
                 {
                   id: 'download',
                   label: t('drive.actions.download'),
                   icon: <Download />,
-                  onSelect: () =>
-                    void downloadFile(s.container, s.file).catch(
-                      (e: unknown) => !(e instanceof DOMException && e.name === 'AbortError') && toast.error(t('drive.downloadFailed')),
-                    ),
+                  onSelect: () => void downloadShared(s),
                 },
+                ...leave,
                 // An editor renames, and shares on when the owner lets them.
                 ...(s.canEdit && s.state === 'ready'
                   ? [{ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setRenaming(s.file.id), separated: true }]
@@ -169,6 +184,17 @@ export function SharedPage() {
         />
       )}
       <AcceptInviteDialog open={inviting} onClose={() => setInviting(false)} />
+      <ConfirmDestructive
+        open={leavingFile !== null}
+        onOpenChange={(o) => !o && (setLeavingFile(null), leaveFile.reset())}
+        title={t('shared.removeFileTitle')}
+        description={t('shared.removeFileDescription', { name: leavingFile?.file.name ?? t('shared.goneName') })}
+        submit={t('shared.remove')}
+        pending={leaveFile.isPending}
+        error={leaveFile.error}
+        errorFallback={t('shared.leaveFailed')}
+        onConfirm={() => leavingFile && leaveFile.mutate(leavingFile, { onSuccess: () => setLeavingFile(null) })}
+      />
       <FileShareDialog
         target={(() => {
           const s: SharedFile | undefined = sharing ? filesById.get(sharing) : undefined

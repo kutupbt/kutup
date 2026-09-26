@@ -1809,6 +1809,44 @@ if the owner's signed history (`GET /api/fed/drive/epochs`) descends from the
 stored epoch. A revoked share fails from the owner's server. **Response:** the
 refreshed share.
 
+### GET /api/drive/federation/shares/:shareId/files/:fileId/state
+
+A note's or place list's latest saved Yjs state in the remote folder, relayed:
+`{ keyGeneration, state }` (state base64, sealed under the file key of that
+generation), `404` when it has none. Their edits are not whole-file versions,
+so the browser turns the state back into the file.
+
+### Files shared by themselves across servers
+
+A file can be shared with someone on another server
+(docs/plans/drive-file-sharing.md, slice 2). It works like a folder invite,
+with a capability for that file alone. Across servers it is view and download
+only; editing waits for the live-editing relay to federate.
+
+- **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
+  `{ recipientUsername, recipientServer, shareEnvelope }`. The envelope is a
+  `FileShareEnvelopeV1` at the file's current generation, sealed to the
+  remote account (looked up with `GET /api/drive/federation/users/:username`).
+  **Response:** `201 { inviteUrl }`, of the form
+  `…/invite#server=…&capability=…&kind=file`. Only the capability's hash is
+  kept.
+  - The file's `access` lists these recipients (`federatedShares`).
+  - A rotation re-seals them (`federatedShares: [{ id, shareEnvelope }]`, to
+    the same account incarnation) or removes them (`removedFederated`).
+  - `PUT /api/files/:id/shares` re-seals any left behind, and `pending`
+    lists files whose remote recipients wait.
+- **`POST /api/drive/federation/file-shares`** (recipient's server):
+  `{ server, capability }`. The server fetches the invite over the pinned
+  peer, checks it is for this account and sealed by the named owner, and
+  keeps the capability. The browser never gets it.
+- **`GET /api/drive/federation/file-shares`**: the accepted files.
+  **`GET …/file-shares/:id`**: the file as it is now on its owner's server
+  (`{ file, shareEnvelope, keyGeneration, owner… }`), checked again. It must
+  still be the owner first accepted; `404` once no longer shared.
+- **`GET …/file-shares/:id/content`**: the content, relayed.
+  **`GET …/file-shares/:id/state`**: the saved state, as above.
+  **`DELETE …/file-shares/:id`**: stop seeing it.
+
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
 
 Move a file this share uploaded to the owner's trash, when `canDelete`
@@ -1848,6 +1886,21 @@ List ciphertext file metadata for the capability-authorized collection.
 ### GET /api/fed/drive/epochs
 
 The capability-authorized folder's key history, signed.
+
+### GET /api/fed/drive/files/:fileId/state
+
+A note's or place list's latest saved state in the capability-authorized
+folder, signed (`404` when none).
+
+### GET /api/fed/drive/file-invite · file-content · file-state
+
+The capability names one file shared by itself:
+- `file-invite`: its record, its key sealed to the recipient, and the owner's
+  identity;
+- `file-content`: its current ciphertext, as a signed stream with its digest;
+- `file-state`: its saved Yjs state.
+
+A file (or its folder) in the trash answers `404`.
 
 ### GET /api/fed/drive/files/:fileId/content
 

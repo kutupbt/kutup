@@ -5,7 +5,7 @@ import { generateKey, openFileMetadataV1, openFileShareEnvelope, rekeyFileRecord
 import { openOwnerLinkKeyV1, sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
-import { AccessChanged } from './access'
+import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
@@ -47,8 +47,10 @@ interface SharedFileRow {
  *   to its folder's current key (someone left the folder).
  * - `waiting`: someone else moved the file to a new key; the owner's app has
  *   not handed it on yet. Nothing current can be opened.
+ * - `gone`: a file from another server that is no longer shared (or its
+ *   server cannot be reached); it can only be removed from the list.
  */
-export type SharedFileState = 'ready' | 'editsWait' | 'waiting'
+export type SharedFileState = 'ready' | 'editsWait' | 'waiting' | 'gone'
 
 export interface SharedFile {
   file: DriveFile
@@ -60,6 +62,8 @@ export interface SharedFile {
   state: SharedFileState
   ownerAccount: string
   sharedAt: string
+  /** From another server: the accepted invite's id here (to remove it). */
+  remoteShareId?: string
 }
 
 export const sharedFilesKey = ['shared-files'] as const
@@ -68,7 +72,7 @@ type Opened = { fileKey: Uint8Array; metadata: { name: string; mimeType: string;
 
 const opened = new Map<string, Promise<Opened>>()
 
-async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<SharedFile> {
+async function openShared(row: SharedFileRow, me: DriveIdentity, remoteShareId?: string): Promise<SharedFile> {
   const { file } = row
   const current = row.keyGeneration === file.keyGeneration
   let result: Opened = null
@@ -120,6 +124,7 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
       createdAt: file.createdAt,
       updatedAt: file.updatedAt ?? file.createdAt,
       ownerAccount: row.ownerAccount,
+      remoteFileShareId: remoteShareId,
       canUpload: row.canEdit && state === 'ready',
       canDelete: false,
       canManage: false,
@@ -130,18 +135,111 @@ async function openShared(row: SharedFileRow, me: DriveIdentity): Promise<Shared
     state,
     ownerAccount: row.ownerAccount,
     sharedAt: row.sharedAt,
+    remoteShareId,
   }
 }
 
-/** Files other people here shared with you by themselves. */
+/** An accepted file from another server, as it is now there (checked by this server). */
+interface RemoteFileShareNow {
+  id: string
+  remoteDomain: string
+  file: FileRowLike
+  shareEnvelope: string
+  keyGeneration: number
+  ownerUserId: string
+  ownerAccount: string
+  ownerIncarnationId: string
+  ownerSigningPublicKey: string
+  createdAt: string
+}
+
+interface RemoteFileShareRow {
+  id: string
+  remoteDomain: string
+  remoteFileId: string
+  ownerAccount: string
+  createdAt: string
+}
+
+/**
+ * A file shared from another server (docs/plans/drive-file-sharing.md,
+ * slice 2): read through this server; viewing and downloading only, as
+ * editing across servers is not there yet. Only owners share across servers.
+ */
+async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<SharedFile> {
+  try {
+    const { data } = await api.get<RemoteFileShareNow>(`/drive/federation/file-shares/${row.id}`)
+    return await openShared(
+      {
+        file: data.file,
+        shareEnvelope: data.shareEnvelope,
+        canEdit: false,
+        keyGeneration: data.keyGeneration,
+        folderKeyCurrent: true,
+        ownerUserId: data.ownerUserId,
+        ownerAccount: data.ownerAccount,
+        ownerIncarnationId: data.ownerIncarnationId,
+        ownerSigningPublicKey: data.ownerSigningPublicKey,
+        sharerAccount: data.ownerAccount,
+        sharerIncarnationId: data.ownerIncarnationId,
+        sharerSigningPublicKey: data.ownerSigningPublicKey,
+        editorsCanShare: false,
+        sharedAt: data.createdAt,
+      },
+      me,
+      row.id,
+    )
+  } catch {
+    // No longer shared, or its server unreachable: listed, to be removed.
+    const file = toDriveFile(
+      {
+        id: row.remoteFileId,
+        collectionId: row.remoteFileId,
+        metadataEnvelope: '',
+        fileKeyEnvelope: '',
+        keyEpoch: 1,
+        keyGeneration: 1,
+        metadataRevision: 1,
+        encryptedSizeBytes: 0,
+        createdAt: row.createdAt,
+        originalKeyGeneration: 1,
+        contentKeyGeneration: 1,
+      },
+      null,
+    )
+    return {
+      file,
+      container: {
+        source: 'file', id: row.remoteFileId, parentId: null, name: null, key: null, keyEpoch: 1, ownerUserId: '',
+        ownerAuthorityPublicKey: '', epochStatementHash: '', nameRevision: 0, color: null, createdAt: row.createdAt,
+        updatedAt: row.createdAt, ownerAccount: row.ownerAccount, remoteFileShareId: row.id, canUpload: false,
+        canDelete: false, canManage: false, isRoot: false,
+      },
+      canEdit: false,
+      canShare: false,
+      state: 'gone',
+      ownerAccount: row.ownerAccount,
+      sharedAt: row.createdAt,
+      remoteShareId: row.id,
+    }
+  }
+}
+
+/** Files other people shared with you by themselves, here and from other servers. */
 export function useSharedFiles({ enabled = true }: { enabled?: boolean } = {}) {
   const identity = useDriveIdentity()
   return useQuery({
     queryKey: [...sharedFilesKey, identity.data?.userId],
     enabled: enabled && identity.isSuccess,
     queryFn: async () => {
-      const { data } = await api.get<SharedFileRow[]>('/shared-files')
-      return Promise.all(data.map((row) => openShared(row, identity.data!)))
+      const [{ data: local }, { data: remote }] = await Promise.all([
+        api.get<SharedFileRow[]>('/shared-files'),
+        api.get<RemoteFileShareRow[]>('/drive/federation/file-shares').catch(() => ({ data: [] as RemoteFileShareRow[] })),
+      ])
+      return Promise.all([
+        ...local.map((row) => openShared(row, identity.data!)),
+        ...remote.map((row) => openRemote(row, identity.data!)),
+      ])
     },
   })
 }
@@ -170,12 +268,42 @@ export interface FileLink {
   createdAt: string
 }
 
+/** Someone on another server the file is shared with. */
+export interface FederatedFileMember {
+  id: string
+  recipientUsername: string
+  recipientServer: string
+  recipientIncarnationId: string
+  keyGeneration: number
+  createdAt: string
+}
+
 export interface FileAccess {
   keyGeneration: number
   members: FileAccessMember[]
+  federatedShares: FederatedFileMember[]
   /** People with edit access may share it on. */
   editorsCanShare: boolean
   publicLinks: FileLink[]
+}
+
+interface RemoteRecipient {
+  account: string
+  driveHpkePublicKey: string
+  accountIncarnationId: string
+}
+
+/** Their Drive key through the signed federation lookup, still the same account incarnation. */
+async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientUsername' | 'recipientServer' | 'recipientIncarnationId'>): Promise<RemoteRecipient> {
+  const { data } = await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(member.recipientUsername)}`, {
+    params: { server: member.recipientServer },
+  })
+  if (data.accountIncarnationId !== member.recipientIncarnationId) throw new RecipientChanged(data.account)
+  return data
+}
+
+function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: RemoteRecipient) {
+  return sealFor(me, file.id, key, generation, { account: to.account, accountIncarnationId: to.accountIncarnationId, drivePublicKey: to.driveHpkePublicKey })
 }
 
 /** A file link's key, from the owner's copy. */
@@ -260,7 +388,8 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
   if (access.keyGeneration !== fresh.keyGeneration) throw new AccessChanged()
   const behind = access.members.filter((m) => m.keyGeneration < access.keyGeneration)
   const linksBehind = access.publicLinks.filter((l) => l.keyGeneration < access.keyGeneration)
-  if (behind.length > 0 || linksBehind.length > 0) {
+  const remoteBehind = access.federatedShares.filter((f) => f.keyGeneration < access.keyGeneration)
+  if (behind.length > 0 || linksBehind.length > 0 || remoteBehind.length > 0) {
     const members = await Promise.all(
       behind.map(async (m) => ({
         userId: m.userId,
@@ -273,8 +402,14 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
         keyEnvelope: await wrapForLink(fresh, fresh.fileKey!, fresh.keyGeneration, await fileLinkKey(l, me), me),
       })),
     )
+    const federatedShares = await Promise.all(
+      remoteBehind.map(async (f) => ({
+        id: f.id,
+        shareEnvelope: await sealForRemote(me, fresh, fresh.fileKey!, fresh.keyGeneration, await remoteRecipient(f)),
+      })),
+    )
     try {
-      await api.put(`/files/${fresh.id}/shares`, { members, publicLinks })
+      await api.put(`/files/${fresh.id}/shares`, { members, publicLinks, federatedShares })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()
       throw error
@@ -300,37 +435,83 @@ export class CannotShareWithSelf extends Error {
  * Share a file with someone on this server (by email), or change what they
  * may do with it. Across servers, files are not shared by themselves yet.
  */
+/** Sharing gave someone here access, or made an invite for someone on another server. */
+export type FileShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
+
+export class OnlyOwnersShareAcross extends Error {
+  constructor() {
+    super('only the owner shares with other servers')
+  }
+}
+
+/**
+ * Share a file with someone here (their email), or change what they may do
+ * with it; or with someone on another server (`user@server`), which returns
+ * an invite link to send them. Across servers it is view only for now.
+ */
 export function useShareFile() {
   const queryClient = useQueryClient()
   return useDriveMutation(
-    async (input: { folder: Folder; file: DriveFile; recipient: string; canEdit: boolean }, me) => {
-      const email = input.recipient.trim()
+    async (input: { folder: Folder; file: DriveFile; recipient: string; canEdit: boolean }, me): Promise<FileShareResult> => {
+      const address = input.recipient.trim()
       const owner = canShareFile(input.folder, input.file)
       if (!owner && !(input.folder.source === 'file' && input.file.fileKey)) throw new Error('file is not open')
-      let recipient: LocalRecipient
+      let recipient: LocalRecipient | null = null
       try {
-        recipient = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(email)}`)).data
+        recipient = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(address)}`)).data
       } catch (error) {
-        if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
-        throw error
+        if (!(isAxiosError(error) && error.response?.status === 404)) throw error
       }
-      if (recipient.userId === me.userId) throw new CannotShareWithSelf()
-      // The owner first brings the file and its shares up to date; an editor
-      // shares the key they hold (the server takes it only if it is current).
-      const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file
-      const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
-        account: recipient.account,
-        accountIncarnationId: recipient.accountIncarnationId,
-        drivePublicKey: recipient.driveHpkePublicKey,
-      })
       try {
+        if (!recipient) {
+          // Not an account here: `user@server` on another Kutup server.
+          const at = address.lastIndexOf('@')
+          const username = address.slice(0, at)
+          const server = address.slice(at + 1).toLowerCase()
+          if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+          if (!owner) throw new OnlyOwnersShareAcross()
+          let remote: RemoteRecipient
+          try {
+            remote = (
+              await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
+            ).data
+          } catch (error) {
+            if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
+            throw error
+          }
+          const file = await bringFileSharesUpToDate(input.folder, input.file, me)
+          const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
+          const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
+            recipientUsername: username,
+            recipientServer: server,
+            shareEnvelope,
+          })
+          return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
+        }
+        if (recipient.userId === me.userId) throw new CannotShareWithSelf()
+        // The owner first brings the file and its shares up to date; an editor
+        // shares the key they hold (the server takes it only if it is current).
+        const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file
+        const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
+          account: recipient.account,
+          accountIncarnationId: recipient.accountIncarnationId,
+          drivePublicKey: recipient.driveHpkePublicKey,
+        })
         await api.post(`/files/${file.id}/share`, { recipientUserId: recipient.userId, shareEnvelope, canEdit: input.canEdit })
+        return { kind: 'local', account: recipient.account }
       } finally {
-        await queryClient.invalidateQueries({ queryKey: fileAccessKey(file.id) })
+        await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })
       }
-      return { account: recipient.account }
     },
   )
+}
+
+/** Stop seeing a file shared from another server. */
+export function useLeaveRemoteFileShare() {
+  return useDriveMutation(async (shared: SharedFile) => {
+    if (!shared.remoteShareId) throw new Error('not a file from another server')
+    await api.delete(`/drive/federation/file-shares/${shared.remoteShareId}`)
+  })
 }
 
 /**
@@ -340,7 +521,10 @@ export function useShareFile() {
  */
 export function useRemoveFileAccess() {
   const queryClient = useQueryClient()
-  return useDriveMutation(async ({ folder, file, removed, removedLinks = [] }: { folder: Folder; file: DriveFile; removed: string[]; removedLinks?: string[] }, me) => {
+  return useDriveMutation(async (
+    { folder, file, removed, removedLinks = [], removedFederated = [] }: { folder: Folder; file: DriveFile; removed: string[]; removedLinks?: string[]; removedFederated?: string[] },
+    me,
+  ) => {
     if (!canShareFile(folder, file)) throw new Error('file is not open')
     try {
       const access = await loadFileAccess(file.id)
@@ -362,6 +546,11 @@ export function useRemoveFileAccess() {
           .filter((l) => !removedLinks.includes(l.id))
           .map(async (l) => ({ id: l.id, keyEnvelope: await wrapForLink(file, next.fileKey, next.keyGeneration, await fileLinkKey(l, me), me) })),
       )
+      const federatedShares = await Promise.all(
+        access.federatedShares
+          .filter((f) => !removedFederated.includes(f.id))
+          .map(async (f) => ({ id: f.id, shareEnvelope: await sealForRemote(me, file, next.fileKey, next.keyGeneration, await remoteRecipient(f)) })),
+      )
       await api.post(`/files/${file.id}/rotate`, {
         fromGeneration: file.keyGeneration,
         fileKeyEnvelope: next.fileKeyEnvelope,
@@ -371,6 +560,8 @@ export function useRemoveFileAccess() {
         removed,
         publicLinks,
         removedLinks,
+        federatedShares,
+        removedFederated,
       })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()

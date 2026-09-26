@@ -7,7 +7,7 @@ import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
 import { filesKey } from '@kutup/drive-core/files'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
-import type { DriveFile } from '@kutup/drive-core/model'
+import { fileLocation, type DriveFile } from '@kutup/drive-core/model'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import { fillDoc, placesMap, replacePlaces } from '@kutup/map/list'
 import { useRequiredSession } from '@kutup/session/store'
@@ -87,7 +87,14 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
   )
 
   const editable = useCallback(
-    (entry: ListEntry) => Boolean(entry.file.fileKey && entry.folder.canUpload && (!entry.shared || entry.shared.state === 'ready')),
+    (entry: ListEntry) =>
+      Boolean(
+        entry.file.fileKey &&
+          entry.folder.canUpload &&
+          // Editing across servers is not there yet.
+          fileLocation(entry.folder).kind === 'local' &&
+          (!entry.shared || entry.shared.state === 'ready'),
+      ),
     [],
   )
 

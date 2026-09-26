@@ -6,10 +6,15 @@ const capability = 'A'.repeat(43)
 describe('parseInvite', () => {
   it('reads server and capability from the fragment', () => {
     expect(parseInvite(`https://drive.a.example/invite#server=a.example&capability=${capability}`)).toEqual({
+      kind: 'folder',
       server: 'a.example',
       capability,
     })
     expect(parseInvite(`  https://a.example/invite/#server=a.example&capability=${capability} `)).not.toBeNull()
+  })
+
+  it('tells a file invite from a folder one', () => {
+    expect(parseInvite(`https://a.example/invite#server=a.example&capability=${capability}&kind=file`)?.kind).toBe('file')
   })
 
   it('refuses anything that is not an invite', () => {

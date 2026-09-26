@@ -14,6 +14,7 @@ mod chat_mls;
 mod config;
 mod db;
 mod drive_federation;
+mod drive_federation_files;
 mod drive_profile_keys;
 mod drive_writes;
 mod error;
@@ -1090,6 +1091,26 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/drive/file-invite",
+            get(drive_federation_files::get_file_invite)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/file-content",
+            get(drive_federation_files::get_file_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId/state",
+            get(drive_federation_files::get_folder_file_state)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/file-state",
+            get(drive_federation_files::get_file_state)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/files/:fileId",
             delete(drive_federation::delete_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1104,6 +1125,32 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/drive/federation/shares/:shareId",
             delete(drive_federation::remove_incoming_share),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/state",
+            get(drive_federation_files::proxy_folder_file_state),
+        )
+        .route(
+            "/api/drive/federation/file-shares",
+            post(drive_federation_files::accept_file_share)
+                .get(drive_federation_files::list_file_shares),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id",
+            get(drive_federation_files::get_file_share)
+                .delete(drive_federation_files::remove_file_share),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/content",
+            get(drive_federation_files::proxy_file_content),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/state",
+            get(drive_federation_files::proxy_file_state),
+        )
+        .route(
+            "/api/files/:id/federated-shares",
+            post(drive_federation_files::create_federated_file_share),
         )
         .route(
             "/api/drive/federation/shares/:shareId/files",

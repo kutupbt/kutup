@@ -70,6 +70,8 @@ pub struct FileAccess {
     pub editors_can_share: bool,
     /// Public links to the file (for its owner only).
     pub public_links: Vec<FileLink>,
+    /// People on other servers (for its owner only).
+    pub federated_shares: Vec<FederatedFileMember>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -87,6 +89,9 @@ pub struct ResealRequest {
     /// The file's links left behind, re-wrapped at the current generation.
     #[serde(default)]
     pub public_links: Vec<LinkEnvelope>,
+    /// People on other servers left behind, re-sealed.
+    #[serde(default)]
+    pub federated_shares: Vec<FederatedEnvelope>,
 }
 
 /// A link to the file, its key sealed under the link key (purpose 11).
@@ -95,6 +100,28 @@ pub struct ResealRequest {
 pub struct LinkEnvelope {
     pub id: Uuid,
     pub key_envelope: String,
+}
+
+/// Someone on another server the file is shared with, for its owner.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedFileMember {
+    pub id: Uuid,
+    pub recipient_username: String,
+    pub recipient_server: String,
+    pub recipient_incarnation_id: String,
+    /// The generation their envelope opens; below the file's, it waits.
+    pub key_generation: i32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// An envelope for someone on another server, at a new generation.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedEnvelope {
+    pub id: Uuid,
+    pub share_envelope: String,
 }
 
 /// A public link to the file, for its owner.
@@ -134,6 +161,12 @@ pub struct RotateFileAccessRequest {
     /// Links removed.
     #[serde(default)]
     pub removed_links: Vec<Uuid>,
+    /// Everyone on other servers who stays, re-sealed for the new generation.
+    #[serde(default)]
+    pub federated_shares: Vec<FederatedEnvelope>,
+    /// People on other servers removed.
+    #[serde(default)]
+    pub removed_federated: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -489,16 +522,20 @@ async fn file_access_of(
             .bind(file_id)
             .fetch_one(&state.pool)
             .await?;
-    let public_links = if owner {
-        file_links(&state.pool, file_id).await?
+    let (public_links, federated_shares) = if owner {
+        (
+            file_links(&state.pool, file_id).await?,
+            federated_members(&state.pool, file_id).await?,
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     Ok(FileAccess {
         key_generation: generation,
         members: members(&state.pool, file_id, &state.config.chat_server_name).await?,
         editors_can_share,
         public_links,
+        federated_shares,
     })
 }
 
@@ -535,6 +572,85 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
             },
         )
         .collect())
+}
+
+async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FederatedFileMember>> {
+    type Row = (Uuid, String, String, String, i32, OffsetDateTime);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, recipient_username, recipient_domain, recipient_incarnation_id,
+                key_generation, created_at
+         FROM federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
+    )
+    .bind(file_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                recipient_username,
+                recipient_server,
+                recipient_incarnation_id,
+                key_generation,
+                created_at,
+            )| {
+                FederatedFileMember {
+                    id,
+                    recipient_username,
+                    recipient_server,
+                    recipient_incarnation_id,
+                    key_generation,
+                    created_at,
+                }
+            },
+        )
+        .collect())
+}
+
+/// Check and store envelopes at `generation` for people on other servers:
+/// sealed by the owner to the same remote account and incarnation as before.
+async fn store_federated_envelopes(
+    tx: &mut Transaction<'_, Postgres>,
+    file_id: Uuid,
+    generation: i32,
+    owner: &Party,
+    envelopes: &[FederatedEnvelope],
+) -> AppResult<()> {
+    for member in envelopes {
+        let target: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT recipient_username, recipient_domain, recipient_incarnation_id
+             FROM federated_outgoing_file_shares WHERE id = $1 AND file_id = $2",
+        )
+        .bind(member.id)
+        .bind(file_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let Some((username, domain, incarnation)) = target else {
+            return Err(AppError::conflict("the file's access changed; reload"));
+        };
+        let recipient = Party {
+            account: format!("{username}@{domain}"),
+            incarnation,
+            signing_public_key: None,
+        };
+        verify_envelope(
+            &member.share_envelope,
+            file_id,
+            generation,
+            owner,
+            &recipient,
+        )?;
+        sqlx::query(
+            "UPDATE federated_outgoing_file_shares SET share_envelope = $2, key_generation = $3 WHERE id = $1",
+        )
+        .bind(member.id)
+        .bind(&member.share_envelope)
+        .bind(generation)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Check and store link wraps at `generation`.
@@ -642,6 +758,7 @@ pub async fn reseal(
     )
     .await?;
     store_link_envelopes(&mut tx, file_id, user_id, generation, &req.public_links).await?;
+    store_federated_envelopes(&mut tx, file_id, generation, &owner, &req.federated_shares).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -691,9 +808,18 @@ pub async fn rotate(
     .fetch_all(&mut *tx)
     .await?;
     let kept_links: Vec<Uuid> = req.public_links.iter().map(|l| l.id).collect();
+    let current_federated: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM federated_outgoing_file_shares WHERE file_id = $1")
+            .bind(file_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let kept_federated: Vec<Uuid> = req.federated_shares.iter().map(|f| f.id).collect();
     if !same_membership(&current, &kept, &req.removed)
         || !same_membership(&current_links, &kept_links, &req.removed_links)
-        || (req.removed.is_empty() && req.removed_links.is_empty())
+        || !same_membership(&current_federated, &kept_federated, &req.removed_federated)
+        || (req.removed.is_empty()
+            && req.removed_links.is_empty()
+            && req.removed_federated.is_empty())
     {
         return Err(AppError::conflict("the file's access changed; reload"));
     }
@@ -756,6 +882,12 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     store_link_envelopes(&mut tx, file_id, user_id, next, &req.public_links).await?;
+    sqlx::query("DELETE FROM federated_outgoing_file_shares WHERE file_id = $1 AND id = ANY($2)")
+        .bind(file_id)
+        .bind(&req.removed_federated)
+        .execute(&mut *tx)
+        .await?;
+    store_federated_envelopes(&mut tx, file_id, next, &owner, &req.federated_shares).await?;
     store_envelopes(
         &mut tx,
         &state.pool,
@@ -920,7 +1052,10 @@ pub async fn pending(
                           AND (fs.key_generation < f.key_generation OR f.key_epoch < c.key_epoch))
              OR EXISTS (SELECT 1 FROM public_shares ps
                         WHERE ps.share_type = 'file' AND ps.target_id = f.id
-                          AND (ps.collection_key_epoch < f.key_generation OR f.key_epoch < c.key_epoch)))",
+                          AND (ps.collection_key_epoch < f.key_generation OR f.key_epoch < c.key_epoch))
+             OR EXISTS (SELECT 1 FROM federated_outgoing_file_shares fo
+                        WHERE fo.file_id = f.id
+                          AND (fo.key_generation < f.key_generation OR f.key_epoch < c.key_epoch)))",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -980,14 +1115,16 @@ pub async fn shared_by_me(
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
          UNION ALL
          SELECT f.collection_id, f.id,
-                (SELECT count(*) FROM file_shares fs WHERE fs.file_id = f.id), 0,
+                (SELECT count(*) FROM file_shares fs WHERE fs.file_id = f.id),
+                (SELECT count(*) FROM federated_outgoing_file_shares fo WHERE fo.file_id = f.id),
                 (SELECT count(*) FROM public_shares ps
                   WHERE ps.share_type = 'file' AND ps.target_id = f.id
                     AND (ps.expires_at IS NULL OR ps.expires_at > now()))
          FROM files f JOIN collections c ON c.id = f.collection_id
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL AND f.deleted_at IS NULL
            AND (EXISTS (SELECT 1 FROM file_shares fs WHERE fs.file_id = f.id)
-             OR EXISTS (SELECT 1 FROM public_shares ps WHERE ps.share_type = 'file' AND ps.target_id = f.id))",
+             OR EXISTS (SELECT 1 FROM public_shares ps WHERE ps.share_type = 'file' AND ps.target_id = f.id)
+             OR EXISTS (SELECT 1 FROM federated_outgoing_file_shares fo WHERE fo.file_id = f.id))",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

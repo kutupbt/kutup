@@ -2,7 +2,8 @@ import { listVersions } from '@kutup/collab/api'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
 import { sealedAt } from '@kutup/drive-core/keyring'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
+import { fromBase64 } from '@kutup/crypto'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { editorKindFor } from './editorKind'
 
@@ -20,6 +21,8 @@ export type FileContent =
   | { kind: 'plain'; bytes: Uint8Array; versionId: string }
 
 export async function currentContent(folder: Folder, file: DriveFile): Promise<FileContent> {
+  const location = fileLocation(folder)
+  if (location.kind !== 'local') return remoteContent(location, file)
   // A place list keeps its places as Yjs state, like a note its text.
   if (isListName(file.name)) return listContent(file)
   const kind = file.name ? editorKindFor(file.name) : null
@@ -53,4 +56,32 @@ async function listContent(file: DriveFile): Promise<FileContent> {
   const sealed = await sealedAt(file, latest.keyGeneration)
   const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
   return { kind: 'plain', bytes: stateToListJson(state), versionId: latest.id }
+}
+
+/**
+ * A file on another server: a note or place list as last saved (its state
+ * relayed through this server), anything else as it is there.
+ */
+async function remoteContent(location: FileLocation, file: DriveFile): Promise<FileContent> {
+  const list = isListName(file.name)
+  const path = remoteStatePath(location, file.id)
+  if (!path || !file.fileKey || (!list && (!file.name || editorKindFor(file.name) !== 'text'))) return { kind: 'original' }
+  let saved: { keyGeneration: number; state: string }
+  try {
+    saved = (await api.get<{ keyGeneration: number; state: string }>(path)).data
+  } catch (error) {
+    if ((error as { response?: { status?: number } }).response?.status === 404) return { kind: 'original' }
+    throw error
+  }
+  const sealed = await sealedAt(file, saved.keyGeneration)
+  const state = await decryptFileBlobV1(fromBase64(saved.state), sealed.fileKey, sealed.context)
+  if (list) return { kind: 'plain', bytes: stateToListJson(state), versionId: 'remote' }
+  const Y = await import('yjs')
+  const doc = new Y.Doc()
+  try {
+    Y.applyUpdateV2(doc, state)
+    return { kind: 'plain', bytes: new TextEncoder().encode(doc.getText('content').toJSON()), versionId: 'remote' }
+  } finally {
+    doc.destroy()
+  }
 }

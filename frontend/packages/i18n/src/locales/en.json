@@ -42,15 +42,15 @@
   "fileShare": {
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",
-    "recipient": "Email",
-    "recipientHint": "Someone with an account on this server.",
+    "recipient": "Email or Kutup address",
+    "recipientHint": "An email for someone on this server, or user@other-server. On another server they can view it (editing across servers comes later).",
     "canEdit": "Can edit",
     "canEditHint": "They can change it and save versions. Without this they can only view it. Only you can rename, move or delete it.",
     "canView": "Can view",
     "note": "Sharing again with the same person changes what they can do.",
     "submit": "Share",
     "shared": "Shared with {{account}}",
-    "notFound": "No one on this server has that email. Files cannot be shared with other servers yet.",
+    "notFound": "No one with that address. For another Kutup server use user@server.",
     "self": "This is your own account.",
     "failed": "The file could not be shared.",
     "accessTitle": "Who has access",
@@ -79,6 +79,12 @@
     "removeLink": "Remove this link",
     "createLink": "Create a public link",
     "linkFailed": "The link could not be made.",
-    "confirmLinkBody": "The link stops working now, and the file moves to a new key the link never gets. Anyone who already downloaded it keeps their copy."
+    "confirmLinkBody": "The link stops working now, and the file moves to a new key the link never gets. Anyone who already downloaded it keeps their copy.",
+    "onlyOwnerAcross": "Only the file's owner can share it with other servers.",
+    "inviteTitle": "Send {{account}} this link",
+    "inviteBody": "They are on another Kutup server: they add it under Shared with me. It works only for them.",
+    "inviteLink": "Invite link",
+    "otherServer": "on another server",
+    "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to."
   }
 }

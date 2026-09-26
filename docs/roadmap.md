@@ -543,17 +543,15 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
-### Drive · single-file sharing, slices 2 and 3
+### Drive · editing across servers
 
-Slice 1 is done: one file shared with people on this server, with view or
-edit, removal by re-keying, and owner re-seal (docs/plans/drive-file-sharing.md).
-Two slices remain:
-
-- **Slice 2:** sharing a file with someone on another server. This needs a
-  file invite (a capability for one file), with reads and writes through the
-  recipient's server, as for federated folders.
-
-Still to come: shared files in Drive search.
+Folders and files shared across servers can be opened and downloaded (with
+notes and place lists as last saved), but not edited together live: the
+collaboration relay (`/api/files/:id/collab/ws`) is per server. Editing
+across servers needs a federated relay: the owner's server hosting the room,
+and remote editors' servers bridging to it over the signed transport.
+Uploads into shared folders already cross servers. Also still to come:
+shared files in Drive search.
 
 ### Federation polish
 

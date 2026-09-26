@@ -41,6 +41,7 @@ export function App() {
                 <Route path="/settings" element={<HomePanel settings />} />
                 <Route path="/lists/:cid/:fid" element={<ListPanel />} />
                 <Route path="/shared/:fid" element={<ListPanel shared />} />
+                <Route path="/remote/:shareId/:fid" element={<ListPanel remote />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

@@ -6,7 +6,7 @@ import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import { sealedAt } from '@kutup/drive-core/keyring'
-import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { contentPath, fileLocation, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
 /**
  * Save one file: decrypted as it streams, straight to disk where the browser
@@ -22,17 +22,11 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
   const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
   try {
     const base = await resolveApiBase()
-    const location = folderLocation(folder)
-    const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
+    const content = await currentContent(folder, file)
     if (content.kind === 'plain') {
       await sink.write(content.bytes)
     } else {
-      const url =
-        content.kind === 'version'
-          ? `${base}${content.path}`
-          : location.kind === 'local'
-            ? `${base}/files/${file.id}/download`
-            : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
+      const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
       // Sealed under the key generation of the content served (a file
       // re-keyed since keeps older content under its older key).
       const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
@@ -52,7 +46,7 @@ export { FsaRequiredError }
 /** One ZIP entry: the file's current content (latest edit), at `path` inside the archive. */
 async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
   const location = folderLocation(folder)
-  const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
+  const content = await currentContent(folder, file)
   const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
   const entry: ZipFile = {
     id: file.id,
@@ -61,9 +55,9 @@ async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<
     size: file.size,
     fileKey: sealed.fileKey,
   }
+  if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
   if (location.kind === 'remote') return { ...entry, isRemote: true, remoteShareId: location.shareId }
   if (content.kind === 'version') return { ...entry, contentPath: content.path }
-  if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
   return entry
 }
 

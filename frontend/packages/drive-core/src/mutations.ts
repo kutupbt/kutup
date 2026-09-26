@@ -235,24 +235,30 @@ export class RecipientNotFound extends Error {
 const SERVER_NAME = /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,256}$/
 
-/** Parse a federated invite link (`https://…/invite#server=…&capability=…`); null if it is not one. */
-export function parseInvite(value: string): { server: string; capability: string } | null {
+/**
+ * Parse a federated invite link (`https://…/invite#server=…&capability=…`,
+ * with `&kind=file` for one file); null if it is not one.
+ */
+export function parseInvite(value: string): { server: string; capability: string; kind: 'folder' | 'file' } | null {
   try {
     const url = new URL(value.trim())
     if (url.pathname.replace(/\/+$/, '') !== '/invite') return null
     const params = new URLSearchParams(url.hash.slice(1))
     const server = params.get('server') ?? ''
     const capability = params.get('capability') ?? ''
-    return SERVER_NAME.test(server) && CAPABILITY.test(capability) ? { server, capability } : null
+    const kind = params.get('kind') === 'file' ? 'file' : 'folder'
+    return SERVER_NAME.test(server) && CAPABILITY.test(capability) ? { server, capability, kind } : null
   } catch {
     return null
   }
 }
 
-/** Accept a folder shared from another server. */
 export function useAcceptInvite() {
-  return useDriveMutation(async (invite: { server: string; capability: string }) => {
-    await api.post('/drive/federation/shares', invite)
+  return useDriveMutation(async (invite: { server: string; capability: string; kind: 'folder' | 'file' }) => {
+    await api.post(invite.kind === 'file' ? '/drive/federation/file-shares' : '/drive/federation/shares', {
+      server: invite.server,
+      capability: invite.capability,
+    })
   })
 }
 

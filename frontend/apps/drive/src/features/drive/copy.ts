@@ -9,7 +9,7 @@ import { sealedAt } from '@kutup/drive-core/keyring'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
-import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { contentPath, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
 // Copying, end to end encrypted: the server never holds a readable file, so
 // a copy is the browser reading the file (decrypting as it streams) and
@@ -44,16 +44,10 @@ export function isWithin(index: FolderIndex, candidate: Folder, folder: Folder):
 /** The file's current plaintext (its latest edit, for documents), as a Blob. */
 export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSignal): Promise<Blob> {
   if (!file.fileKey) throw new Error('file is not open')
-  const location = folderLocation(folder)
-  const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
+  const content = await currentContent(folder, file)
   if (content.kind === 'plain') return new Blob([content.bytes as BlobPart], { type: file.mimeType })
   const base = await resolveApiBase()
-  const url =
-    content.kind === 'version'
-      ? `${base}${content.path}`
-      : location.kind === 'local'
-        ? `${base}/files/${file.id}/download`
-        : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
+  const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
   const parts: BlobPart[] = []
   const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
   for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {

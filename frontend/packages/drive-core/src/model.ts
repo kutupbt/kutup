@@ -19,6 +19,11 @@ export interface Folder {
   id: string
   /** Present for remote shares: the local id of the incoming share. */
   remoteShareId?: string
+  /**
+   * For a file shared by itself from another server (source `file`): the
+   * local id of the accepted invite, through which its content is read.
+   */
+  remoteFileShareId?: string
   parentId: string | null
   /** Null when it could not be decrypted (a damaged or foreign record). */
   name: string | null
@@ -81,4 +86,44 @@ export function folderLocation(folder: Pick<Folder, 'id' | 'source' | 'remoteSha
   return folder.source === 'remote' && folder.remoteShareId
     ? { kind: 'remote', shareId: folder.remoteShareId }
     : { kind: 'local', collectionId: folder.id }
+}
+
+/** Where one file's content (and a note's or place list's saved state) is read from. */
+export type FileLocation =
+  | { kind: 'local' }
+  | { kind: 'remoteFolder'; shareId: string }
+  | { kind: 'remoteFile'; shareId: string }
+
+export function fileLocation(folder: Pick<Folder, 'source' | 'remoteShareId' | 'remoteFileShareId'>): FileLocation {
+  if (folder.remoteFileShareId) return { kind: 'remoteFile', shareId: folder.remoteFileShareId }
+  if (folder.source === 'remote' && folder.remoteShareId) return { kind: 'remoteFolder', shareId: folder.remoteShareId }
+  return { kind: 'local' }
+}
+
+/** The file's current encrypted content, under the API base. */
+export function contentPath(location: FileLocation, fileId: string): string {
+  switch (location.kind) {
+    case 'local':
+      return `/files/${fileId}/download`
+    case 'remoteFolder':
+      return `/drive/federation/shares/${location.shareId}/files/${fileId}/content`
+    case 'remoteFile':
+      return `/drive/federation/file-shares/${location.shareId}/content`
+  }
+}
+
+/**
+ * For a file on another server: where its saved Yjs state (a note's or place
+ * list's edits) is relayed from, as `{ keyGeneration, state }`. Local files
+ * read their versions instead.
+ */
+export function remoteStatePath(location: FileLocation, fileId: string): string | null {
+  switch (location.kind) {
+    case 'local':
+      return null
+    case 'remoteFolder':
+      return `/drive/federation/shares/${location.shareId}/files/${fileId}/state`
+    case 'remoteFile':
+      return `/drive/federation/file-shares/${location.shareId}/state`
+  }
 }

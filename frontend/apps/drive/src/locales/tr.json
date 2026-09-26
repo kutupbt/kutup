@@ -263,12 +263,12 @@
     "from": "{{account}} tarafından",
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
-      "title": "Paylaşılan klasör ekle",
-      "description": "Başka bir Kutup sunucusundaki birinin gönderdiği davet bağlantısını yapıştırın.",
+      "title": "Davet bağlantısından ekle",
+      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör veya tek dosya davet bağlantısını yapıştırın.",
       "link": "Davet bağlantısı",
       "invalid": "Bu bir Kutup davet bağlantısı değil.",
       "submit": "Ekle",
-      "added": "Paylaşılan klasör eklendi",
+      "added": "Benimle paylaşılanlar’a eklendi",
       "notFound": "Bu davet yok ya da zaten kullanılmış.",
       "notForYou": "Bu davet başka bir hesap için.",
       "failed": "Davet eklenemedi."
@@ -280,7 +280,12 @@
     "waitingName": "Sahibi bekleniyor",
     "waiting": "sahibinin erişimi güncellemesi bekleniyor",
     "editsWait": "sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
-    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Drive’ı yeniden açtığında açılır."
+    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "goneName": "Artık paylaşılmıyor",
+    "gone": "artık paylaşılmıyor ya da sunucusuna ulaşılamıyor",
+    "remove": "Kaldır",
+    "removeFileTitle": "Bu dosya Benimle paylaşılanlar’dan kaldırılsın mı?",
+    "removeFileDescription": "“{{name}}” başka bir sunucuda. Artık görmezsiniz; yeniden görmek için yeni bir davet gerekir."
   },
   "trash": {
     "empty": "Çöp kutusunu boşalt",

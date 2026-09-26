@@ -42,15 +42,15 @@
   "fileShare": {
     "title": "“{{name}}” paylaş",
     "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
-    "recipient": "E-posta",
-    "recipientHint": "Bu sunucuda hesabı olan biri.",
+    "recipient": "E-posta veya Kutup adresi",
+    "recipientHint": "Bu sunucudaki biri için e-posta ya da kullanici@diger-sunucu. Başka sunucudakiler görüntüleyebilir (sunucular arası düzenleme daha sonra gelecek).",
     "canEdit": "Düzenleyebilir",
     "canEditHint": "Dosyayı değiştirip sürüm kaydedebilirler. Bu olmadan yalnızca görüntüleyebilirler. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
     "canView": "Görüntüleyebilir",
     "note": "Aynı kişiyle yeniden paylaşmak neler yapabileceğini değiştirir.",
     "submit": "Paylaş",
     "shared": "{{account}} ile paylaşıldı",
-    "notFound": "Bu sunucuda bu e-postaya sahip kimse yok. Dosyalar henüz başka sunucularla paylaşılamıyor.",
+    "notFound": "Bu adreste kimse yok. Başka bir Kutup sunucusu için kullanici@sunucu kullanın.",
     "self": "Bu sizin kendi hesabınız.",
     "failed": "Dosya paylaşılamadı.",
     "accessTitle": "Kimlerin erişimi var",
@@ -79,6 +79,12 @@
     "removeLink": "Bu bağlantıyı kaldır",
     "createLink": "Herkese açık bağlantı oluştur",
     "linkFailed": "Bağlantı oluşturulamadı.",
-    "confirmLinkBody": "Bağlantı hemen çalışmayı bırakır ve dosya bağlantının asla alamayacağı yeni bir anahtara geçer. Daha önce indirenlerin kopyası onlarda kalır."
+    "confirmLinkBody": "Bağlantı hemen çalışmayı bırakır ve dosya bağlantının asla alamayacağı yeni bir anahtara geçer. Daha önce indirenlerin kopyası onlarda kalır.",
+    "onlyOwnerAcross": "Dosyayı başka sunucularla yalnızca sahibi paylaşabilir.",
+    "inviteTitle": "{{account}} kişisine bu bağlantıyı gönderin",
+    "inviteBody": "Başka bir Kutup sunucusundalar: bağlantıyı Benimle paylaşılanlar altında eklerler. Yalnızca onlar için çalışır.",
+    "inviteLink": "Davet bağlantısı",
+    "otherServer": "başka sunucuda",
+    "recipientChanged": "{{account}} hesabını sıfırladı. Onu kaldırın, isterseniz yeniden paylaşın."
   }
 }

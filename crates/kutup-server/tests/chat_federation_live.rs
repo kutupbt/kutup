@@ -2514,6 +2514,9 @@ fn browser_setup_phase(c: &Client, a: &str, b: &str) {
     let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
+    // Drive too, for sharing folders and files across the two servers.
+    update_feature_mode(c, a, &admin_a, "drive", "open");
+    update_feature_mode(c, b, &admin_b, "drive", "open");
 }
 
 /// Group call tokens and group invite links across servers: an account of B

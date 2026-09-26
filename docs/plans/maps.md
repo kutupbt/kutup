@@ -315,6 +315,10 @@ goes beyond Signal parity.
    Also fixed: Drive, Chat and Maps restarted themselves on some page
    changes. The start-up re-ran when the router's `navigate` changed, which
    remounted everything, including Maps' map.
+   Across servers (2026-09-26): lists in folders shared from another server,
+   and lists shared by themselves from another server, show in Maps with
+   their places as last saved (relayed by your server), view only. Waiting
+   lists keep their name. Editing across servers waits for Drive's.
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live

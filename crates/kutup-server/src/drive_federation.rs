@@ -41,12 +41,12 @@ use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-const JSON_CONTENT_TYPE: &str = "application/json";
-const OCTET_STREAM_CONTENT_TYPE: &str = "application/octet-stream";
-const SHARE_CAPABILITY_HEADER: &str = "kutup-share-capability";
-const MAX_DIRECTORY_RESPONSE_BYTES: usize = 256 * 1024;
-const MAX_LIST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DRIVE_OBJECT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
+pub(crate) const OCTET_STREAM_CONTENT_TYPE: &str = "application/octet-stream";
+pub(crate) const SHARE_CAPABILITY_HEADER: &str = "kutup-share-capability";
+pub(crate) const MAX_DIRECTORY_RESPONSE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_LIST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_DRIVE_OBJECT_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -170,9 +170,9 @@ pub struct FederatedDriveUploadResponse {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct OutgoingShare {
+pub(crate) struct OutgoingShare {
     id: Uuid,
-    collection_id: Uuid,
+    pub(crate) collection_id: Uuid,
     sharer_user_id: Uuid,
     recipient_username: String,
     can_upload: bool,
@@ -182,9 +182,9 @@ struct OutgoingShare {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct IncomingShareSecret {
-    remote_domain: String,
-    remote_capability: String,
+pub(crate) struct IncomingShareSecret {
+    pub(crate) remote_domain: String,
+    pub(crate) remote_capability: String,
 }
 
 #[derive(Debug)]
@@ -224,7 +224,7 @@ pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
     Ok(domain)
 }
 
-fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
+pub(crate) fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| AppError::bad_request("invalid Drive identity key"))?;
@@ -263,7 +263,7 @@ fn capability_header(capability: &str) -> AppResult<(HeaderName, HeaderValue)> {
     Ok((HeaderName::from_static(SHARE_CAPABILITY_HEADER), value))
 }
 
-fn validate_capability(capability: &str) -> AppResult<()> {
+pub(crate) fn validate_capability(capability: &str) -> AppResult<()> {
     if !(32..=256).contains(&capability.len())
         || !capability
             .bytes()
@@ -274,7 +274,7 @@ fn validate_capability(capability: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn capability_hash(capability: &str) -> String {
+pub(crate) fn capability_hash(capability: &str) -> String {
     hex::encode(Sha256::digest(capability.as_bytes()))
 }
 
@@ -292,7 +292,7 @@ pub(crate) fn gateway_error(error: anyhow::Error) -> AppError {
     }
 }
 
-fn drive_spec(
+pub(crate) fn drive_spec(
     method: Method,
     path: String,
     content_type: String,
@@ -1021,7 +1021,7 @@ pub async fn remove_incoming_share(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-async fn incoming_share(
+pub(crate) async fn incoming_share(
     state: &AppState,
     user: &AuthUser,
     share_id: &str,
@@ -1878,7 +1878,7 @@ pub async fn delete_file(
     }
 }
 
-async fn outgoing_share(
+pub(crate) async fn outgoing_share(
     state: &AppState,
     authenticated: &AuthenticatedFederationRequest,
     headers: &HeaderMap,
@@ -2070,7 +2070,7 @@ impl SpooledBody {
 }
 
 /// A version's ciphertext digest, computed once and cached on its row.
-async fn ensure_version_digest(
+pub(crate) async fn ensure_version_digest(
     state: &AppState,
     version: Uuid,
     content: &crate::file_content::CurrentContent,
@@ -2113,7 +2113,7 @@ async fn sha256_hex(object: aws_sdk_s3::primitives::ByteStream) -> AppResult<Str
     Ok(hex::encode(digest.finalize()))
 }
 
-async fn ensure_ciphertext_digest(
+pub(crate) async fn ensure_ciphertext_digest(
     state: &AppState,
     file_id: Uuid,
     storage_path: &str,

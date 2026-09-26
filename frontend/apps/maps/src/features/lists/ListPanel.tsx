@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Download, Eye, FileDown, MapPin, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, Upload, UserPlus, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { shareRole, useSharedFiles } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { useRenameFile, useTrashFile } from '@kutup/drive-core/mutations'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
@@ -28,6 +28,7 @@ import { sendToChat } from './chat'
 import { asPlaces, IMPORT_ACCEPT, PlaceFileTooLarge, readChosenFile, saveFile, UnreadablePlaceFile } from './files'
 import { PlaceDialog, type PlaceDraft } from './PlaceDialog'
 import { TitleDialog } from './TitleDialog'
+import { savedPlaces, savedPlacesKey } from './savedPlaces'
 import { useListSession } from './useListSession'
 
 type Failure = 'notFound' | 'undecryptable' | 'waiting' | 'notAList' | 'loadFailed'
@@ -37,38 +38,46 @@ type Failure = 'notFound' | 'undecryptable' | 'waiting' | 'notAList' | 'loadFail
  * (shared by itself): its places, edited live with everyone in it, on the
  * map beside it.
  */
-export function ListPanel({ shared = false }: { shared?: boolean }) {
-  const { cid = '', fid = '' } = useParams()
-  return <OpenList key={`${shared ? 'shared' : cid}/${fid}`} cid={shared ? null : cid} fid={fid} />
+export function ListPanel({ shared = false, remote = false }: { shared?: boolean; remote?: boolean }) {
+  const { cid = '', fid = '', shareId = '' } = useParams()
+  const key = shared ? `shared/${fid}` : remote ? `remote/${shareId}/${fid}` : `${cid}/${fid}`
+  return <OpenList key={key} cid={shared ? null : cid} shareId={remote ? shareId : null} fid={fid} />
 }
 
-function OpenList({ cid, fid }: { cid: string | null; fid: string }) {
+function OpenList({ cid, shareId, fid }: { cid: string | null; shareId: string | null; fid: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const folders = useFolders()
-  const inFolder = folders.data?.byId.get(cid ?? '')
+  // A folder here, or (`/remote/:shareId/…`) one shared from another server.
+  const inFolder = shareId
+    ? folders.data?.sharedWithMe.find((f) => f.remoteShareId === shareId)
+    : folders.data?.byId.get(cid ?? '')
   const folderFiles = useFolderFiles(inFolder)
-  const sharedFiles = useSharedFiles({ enabled: cid === null })
-  const sharedFile = cid === null ? sharedFiles.data?.find((s) => s.file.id === fid) : undefined
-  const folder = cid === null ? sharedFile?.container : inFolder
-  const file = cid === null ? sharedFile?.file : folderFiles.data?.find((f) => f.id === fid)
-  const files = cid === null ? sharedFiles : folderFiles
+  const byItself = cid === null && shareId === null
+  const sharedFiles = useSharedFiles({ enabled: byItself })
+  const sharedFile = byItself ? sharedFiles.data?.find((s) => s.file.id === fid) : undefined
+  const folder = byItself ? sharedFile?.container : inFolder
+  const file = byItself ? sharedFile?.file : folderFiles.data?.find((f) => f.id === fid)
+  const files = byItself ? sharedFiles : folderFiles
 
   // The file as it opened: its key is what the session holds (a rename
   // refetches the list, and fresh key copies must not reopen the session).
   const [picked, setPicked] = useState<{ folder: Folder; file: DriveFile } | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
 
-  const listsLoaded = cid === null ? files.isSuccess : folders.isSuccess && (!folder?.key || files.isSuccess)
+  const listsLoaded = byItself ? files.isSuccess : folders.isSuccess && (!folder?.key || files.isSuccess)
   const refetching = folders.isFetching || files.isFetching
   useEffect(() => {
     if (picked || failure || !listsLoaded) return
     if (sharedFile?.state === 'waiting') return setFailure('waiting')
+    if (sharedFile?.state === 'gone') return setFailure('notFound')
     if (folder && file) {
       if ((!folder.key && folder.source !== 'file') || !file.fileKey || !file.name) return setFailure('undecryptable')
       if (!isListName(file.name)) return setFailure('notAList')
-      // An editor writes only under the folder's current key.
-      if (folder.canUpload && folder.source !== 'file' && file.keyEpoch < folder.keyEpoch) {
+      // An editor writes only under the folder's current key (in folders
+      // here: a file shared by itself or from another server is not re-keyed).
+      const localFolder = folder.source === 'owned' || folder.source === 'shared'
+      if (localFolder && folder.canUpload && file.keyEpoch < folder.keyEpoch) {
         rekeyFile(folder, file).then(
           (rekeyed) => {
             void queryClient.invalidateQueries({ queryKey: filesKey(folder.id) })
@@ -99,7 +108,9 @@ function OpenList({ cid, fid }: { cid: string | null; fid: string }) {
       folder={folder ?? picked.folder}
       file={file ?? picked.file}
       opened={picked.file}
-      readOnly={!picked.folder.canUpload}
+      // On another server: its places as last saved, view only.
+      live={fileLocation(picked.folder).kind === 'local'}
+      readOnly={!picked.folder.canUpload || fileLocation(picked.folder).kind !== 'local'}
       editsWait={sharedFile?.state === 'editsWait' && sharedFile.canEdit}
     />
   )
@@ -130,6 +141,7 @@ function Workspace({
   folder,
   file,
   opened,
+  live,
   readOnly,
   editsWait,
 }: {
@@ -138,6 +150,8 @@ function Workspace({
   file: DriveFile
   /** The file as it opened, whose key the session uses. */
   opened: DriveFile
+  /** Edited together here; false for a list on another server. */
+  live: boolean
   readOnly: boolean
   editsWait: boolean
 }) {
@@ -147,7 +161,21 @@ function Workspace({
   const session = useRequiredSession()
   const stage = useStage()
   const atlas = useAtlas()
-  const list = useListSession(opened, readOnly)
+  const liveList = useListSession(live ? opened : null, readOnly)
+  const saved = useQuery({
+    queryKey: [...savedPlacesKey(opened.id), 'remote', opened.keyGeneration],
+    enabled: !live,
+    queryFn: () => savedPlaces(opened, folder),
+  })
+  const list = live
+    ? liveList
+    : {
+        status: (saved.isPending ? 'connecting' : saved.isError ? 'error' : 'ready'),
+        places: saved.data ?? [],
+        doc: null,
+        session: null,
+        collaborators: 0,
+      }
   const effectiveMap = useEffectiveMap()
   const rename = useRenameFile()
   const trash = useTrashFile()
@@ -258,8 +286,9 @@ function Workspace({
     }
   }
 
-  const statusText =
-    list.status === 'error'
+  const statusText = !live
+    ? t('list.status.otherServer')
+    : list.status === 'error'
       ? t('list.status.error')
       : list.status === 'connecting'
         ? t('list.status.connecting')

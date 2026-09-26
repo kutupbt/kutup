@@ -71,7 +71,8 @@
       "live": "Canlı",
       "viewOnly": "Yalnızca görüntüleme",
       "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
-      "error": "Çevrimdışı"
+      "error": "Çevrimdışı",
+      "otherServer": "Başka sunucudan · yalnızca görüntüleme"
     },
     "collaborators_one": "Burada {{count}} kişi daha var",
     "collaborators_other": "Burada {{count}} kişi daha var",
