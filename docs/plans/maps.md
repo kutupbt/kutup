@@ -78,6 +78,50 @@ offline, no web build. Hosting map data ourselves is future work (below).
    own origin; matching happens on the device. Searching places by name
    through a geocoder is later, and would follow the same provider model.
 
+## Live location (decided 2026-09-26)
+
+A live location is its own short-lived channel, not a stream of chat
+messages, for 1:1 chats and groups alike.
+
+- **Why not chat messages:** every group message is sealed once per
+  recipient device, so an update every 15 s for 8 h in a 50-person group
+  (about 150 devices) would be about 290,000 envelopes; offline devices
+  would come back to hundreds of stale positions; and the steady beat would
+  show the server that someone in the conversation is sharing.
+- **Start:** the sharer's app makes a random stream ID, a random stream key
+  and a write secret, and sends them to the conversation in one ordinary
+  end-to-end encrypted message together with the end time ("until 14:30").
+  That message is the only trace in the chat.
+- **Updates:** each update is encrypted once with the stream key (and a
+  counter) and written to the stream's single slot on the sharer's server,
+  which keeps only the latest update. Writing needs the write secret, not
+  the sharer's account, so the server does not learn whose stream it is or
+  which conversation it belongs to. Members read the slot while the map is
+  open; members on other servers read through their own server.
+- **Keys:** one key per stream and a counter per update, so a reader can
+  open the latest update directly, with no ratchet to skip through. A new
+  key every hour, and at once when anyone leaves the conversation, goes out
+  in a new ordinary group message to the remaining members only; a removed
+  member's key shows nothing new. (WhatsApp ratchets per update and added a
+  fast-forward for missed updates; with shares of at most 8 hours, hourly
+  and on-leave rekeying gives most of that for much less.)
+- **Temporary:** updates are never chat history, previews or backups. The
+  stream is deleted when the sharer stops or the end time passes; if the
+  sharer's app vanishes, readers stop at the end time from the start
+  message and the server deletes the slot.
+- **Rate:** about every 15–30 s while moving; a heartbeat every few minutes
+  while still; the map shows how old the last update is.
+- **Devices:** every device of every member can follow a live location
+  (WhatsApp limits this to primary phones). On the web, sharing continues
+  only while a Kutup tab is open; background sharing comes with the native
+  apps.
+- **What the server sees:** that a stream exists, its size and how often it
+  is written and read, and which servers read it; never coordinates, the
+  sharer or the conversation.
+
+Signal has no live location (a static location on Android only), so this
+goes beyond Signal parity.
+
 ## What the server learns
 
 - **Direct:** the provider sees the user's IP address and the tiles, i.e.
@@ -115,16 +159,14 @@ offline, no web build. Hosting map data ourselves is future work (below).
    encrypted location message; the map card (or the coordinates card with
    maps off); "Open in maps app".
 3. **Chat: live location:** 15 minutes / 1 hour / 8 hours, stop at any
-   time; encrypted updates at a bounded rate; groups (open question below).
+   time; the live channel above.
 4. **The Maps app (`maps.`):** pinned place lists, shared and edited
    together (local and federated), KML/GPX import and export.
 5. **Photos' Places:** with the Photos app.
 
 ## Open questions
 
-- Live location in groups: delivering frequent updates without the server
-  learning more than message timing, and without exhausting MLS key
-  packages.
+None at the moment.
 
 ## Future work
 
