@@ -57,9 +57,9 @@ function fromBase64url(value: string): Uint8Array {
  * user wanted is remembered under a random `state` in this tab's
  * sessionStorage and restored after the fork. Does not return.
  */
-export function requestFork(app: ForkChild): void {
+export function requestFork(app: ForkChild, returnTo?: string): void {
   const state = randomToken()
-  const returnTo = window.location.pathname + window.location.search + window.location.hash
+  returnTo ??= window.location.pathname + window.location.search + window.location.hash
   sessionStorage.setItem(STATE_PREFIX + state, returnTo)
   window.location.replace(
     appUrl('account', `/authorize?app=${app}&state=${encodeURIComponent(state)}`),
@@ -71,7 +71,22 @@ export function requestFork(app: ForkChild): void {
  * navigate to (on the child's configured origin, from the server — never
  * from a request parameter).
  */
-export async function produceFork(child: ForkChild, state: string): Promise<string> {
+export function produceFork(child: ForkChild, state: string): Promise<string> {
+  // One fork per request: the authorize page may mount again (sign-in,
+  // development's double effects), and each call would mint another.
+  const key = `${child}:${state}`
+  let pending = producing.get(key)
+  if (!pending) {
+    pending = mintFork(child, state)
+    producing.set(key, pending)
+    pending.catch(() => producing.delete(key))
+  }
+  return pending
+}
+
+const producing = new Map<string, Promise<string>>()
+
+async function mintFork(child: ForkChild, state: string): Promise<string> {
   const session = getSession()
   if (!session) throw new Error('produceFork() needs a signed-in account session')
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(state)) throw new Error('invalid fork state')
@@ -103,6 +118,16 @@ export function hasForkInLocation(): boolean {
     window.location.pathname === FORK_CONSUME_PATH &&
     new URLSearchParams(window.location.hash.slice(1)).has('selector')
   )
+}
+
+/**
+ * Where a fork in this page's address asked to go, without using it up: a
+ * fork that cannot be redeemed asks for another one to the same place.
+ */
+export function pendingForkReturnTo(): string {
+  const state = new URLSearchParams(window.location.hash.slice(1)).get('state')
+  const saved = state ? sanitizeNext(sessionStorage.getItem(STATE_PREFIX + state)) : null
+  return saved && !saved.startsWith(FORK_CONSUME_PATH) ? saved : '/'
 }
 
 /**

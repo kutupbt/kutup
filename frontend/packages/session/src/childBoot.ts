@@ -3,7 +3,7 @@
 
 import { isAxiosError } from 'axios'
 import { loadAppDirectory } from './apps'
-import { consumeFork, hasForkInLocation, requestFork, type ForkChild } from './fork'
+import { consumeFork, hasForkInLocation, pendingForkReturnTo, requestFork, type ForkChild } from './fork'
 import { restoreSession } from './persist'
 
 export type ChildBootResult =
@@ -20,13 +20,13 @@ function attempts(): number {
   return Number(sessionStorage.getItem(ATTEMPTS_KEY) ?? '0')
 }
 
-function askAccount(app: ForkChild): ChildBootResult {
+function askAccount(app: ForkChild, returnTo?: string): ChildBootResult {
   if (attempts() >= MAX_ATTEMPTS) {
     sessionStorage.removeItem(ATTEMPTS_KEY)
     throw new Error('the sign-in hand-off from the account app keeps failing')
   }
   sessionStorage.setItem(ATTEMPTS_KEY, String(attempts() + 1))
-  requestFork(app)
+  requestFork(app, returnTo)
   return { kind: 'redirecting' }
 }
 
@@ -40,16 +40,39 @@ function askAccount(app: ForkChild): ChildBootResult {
  * a fresh one; repeated failures throw rather than bounce between origins.
  * Network failures throw with any stored session intact.
  */
-export async function bootChildApp(app: ForkChild): Promise<ChildBootResult> {
+export function bootChildApp(app: ForkChild): Promise<ChildBootResult> {
+  // Once per page load: a second start (development's double effects, a
+  // re-render) must not find the fork already consumed and ask again.
+  booting ??= boot(app).catch((error: unknown) => {
+    booting = null
+    throw error
+  })
+  // Where to go is said once: a later caller (a re-rendered Boot) must not
+  // send the user back there after they moved on.
+  return booting.then((result) => {
+    if (result.kind !== 'ready' || !result.next) return result
+    if (nextTaken) return { kind: 'ready' }
+    nextTaken = true
+    return result
+  })
+}
+
+let nextTaken = false
+
+let booting: Promise<ChildBootResult> | null = null
+
+async function boot(app: ForkChild): Promise<ChildBootResult> {
   await loadAppDirectory()
   if (hasForkInLocation()) {
+    // Kept for a retry: the link that was asked for, not this /login page.
+    const returnTo = pendingForkReturnTo()
     try {
       const next = await consumeFork()
       sessionStorage.removeItem(ATTEMPTS_KEY)
       return { kind: 'ready', next }
     } catch (error) {
       if (isAxiosError(error) && !error.response) throw error
-      return askAccount(app)
+      return askAccount(app, returnTo)
     }
   }
   if ((await restoreSession()) === 'restored') {
@@ -57,4 +80,10 @@ export async function bootChildApp(app: ForkChild): Promise<ChildBootResult> {
     return { kind: 'ready' }
   }
   return askAccount(app)
+}
+
+/** Test seam: forget the page load's start. */
+export function resetChildBootForTesting(): void {
+  booting = null
+  nextTaken = false
 }

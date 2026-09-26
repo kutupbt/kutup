@@ -245,8 +245,9 @@ goes beyond Signal parity.
    counter as the log position, so saving trimmed the whole relay log and
    people who joined later missed edits (now the relay announces positions,
    saves record the applied one, and positions never restart; migration
-   058). Known gap: after a sign-in hand-off from the account app, a child
-   app opens at its home page rather than the link that was asked for.
+   058). Also fixed: opening a Drive or Chat link while signed out now
+   lands on that link after signing in (the app's start ran twice in
+   development and the retry forgot the link).
    Parts: 4a groundwork (the `maps.` origin; Drive's core and the live
    co-editing session moved into shared packages, Drive unchanged); then
    single-file sharing in Drive; 4b lists (format, the app, live
