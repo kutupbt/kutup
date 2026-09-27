@@ -744,6 +744,10 @@ The capability appears only in the fragment so browsers do not send it to the
 sharer's web origin. It is shown once and cannot be recovered from the outgoing
 share row.
 
+For a Photos album (`kind = 'album'`) the link ends in `&kind=album`, and the
+share is view only: `canUpload`, `canDelete` and `uploadQuotaBytes` must be
+`false`/`null`, else `400`.
+
 ---
 
 ## People you share with (profiles)
@@ -1882,17 +1886,20 @@ intended recipient username match the authenticated local account. Success is
   "canUpload": true,
   "canDelete": false,
   "uploadQuotaBytes": null,
+  "collectionKind": "folder",
   "createdAt": "<RFC3339>"
 }
 ```
 
 The retained remote capability is secret server-side state and is omitted from
-all responses.
+all responses. `collectionKind` is `folder` or `album`, as the owner's server
+states in the invite.
 
 ### GET /api/drive/federation/shares
 
 List the authenticated user's accepted remote shares. Returns the same public
-shape as acceptance, without any capability.
+shape as acceptance, without any capability. `?kind=folder` (the default)
+lists folders, for Drive; `?kind=album` lists Photos albums.
 
 ### DELETE /api/drive/federation/shares/:shareId
 
@@ -1931,6 +1938,19 @@ A note's or place list's latest saved Yjs state in the remote folder, relayed:
 `{ keyGeneration, state }` (state base64, sealed under the file key of that
 generation), `404` when it has none. Their edits are not whole-file versions,
 so the browser turns the state back into the file.
+
+### GET /api/drive/federation/shares/:shareId/album
+
+The photos of an album on another server, relayed and verified: each item
+is `{ file, thumbnails, fileKeyEnvelope, keyGeneration, albumEpoch }`, the
+file key sealed under the album key (Drive envelope purpose 12). Content is
+read through `…/files/:fileId/content` above. `404` when the owner stopped
+sharing it.
+
+### GET /api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant
+
+A thumbnail (`sm` or `lg`) of a file the share reaches, relayed (still
+sealed under the file key) after its signed digest is checked.
 
 ### Files shared by themselves across servers
 
@@ -2024,6 +2044,17 @@ List ciphertext file metadata for the capability-authorized collection.
 ### GET /api/fed/drive/epochs
 
 The capability-authorized folder's key history, signed.
+
+### GET /api/fed/drive/album
+
+The capability-authorized album's photos, signed (see the relayed route
+above). `404` when the share is not for an album. For an album share,
+`GET /api/fed/drive/files/:fileId/content` reaches the album's items.
+
+### GET /api/fed/drive/files/:fileId/thumbnails/:variant
+
+A thumbnail of a file the capability reaches (a file in the folder, or a
+photo in the album), as a signed stream with its digest.
 
 ### GET /api/fed/drive/files/:fileId/state
 

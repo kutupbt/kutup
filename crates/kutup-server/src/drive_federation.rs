@@ -104,6 +104,13 @@ pub struct DriveInviteResponse {
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
+    /// `folder` or `album` (docs/plans/photos.md); older invites are folders.
+    #[serde(default = "folder_kind")]
+    pub collection_kind: String,
+}
+
+fn folder_kind() -> String {
+    "folder".to_owned()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -133,8 +140,17 @@ pub struct IncomingDriveShare {
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
+    /// `folder` or `album`.
+    pub collection_kind: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+/// `?kind=` on the incoming-share list: Drive lists folders (the default),
+/// Photos lists albums.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct IncomingShareListQuery {
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
@@ -433,17 +449,26 @@ pub async fn create_federated_share(
     let owner = trusted_uuid(&user.user_id)?;
     let collection_id =
         Uuid::parse_str(&collection_id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let collection: Option<(Uuid, i32)> = sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    let collection: Option<(Uuid, i32, String)> = sqlx::query_as(
+        "SELECT owner_user_id, key_epoch, kind FROM collections WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(collection_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((actual_owner, key_epoch)) = collection else {
+    let Some((actual_owner, key_epoch, kind)) = collection else {
         return Err(AppError::forbidden("forbidden"));
     };
     if actual_owner != owner {
         return Err(AppError::forbidden("forbidden"));
+    }
+    // People on other servers see an album's photos; adding their own would
+    // put files from their server into it, which albums cannot hold yet.
+    if kind == "album"
+        && (request.can_upload || request.can_delete || request.upload_quota_bytes.is_some())
+    {
+        return Err(AppError::bad_request(
+            "albums are shared with other servers to view only",
+        ));
     }
 
     let sender: (Option<String>, String, String) = sqlx::query_as(
@@ -493,10 +518,12 @@ pub async fn create_federated_share(
     .await?;
 
     let invite_url = format!(
-        "{}/invite#server={}&capability={}",
+        "{}/invite#server={}&capability={}{}",
         state.config.server_url.trim_end_matches('/'),
         federation.server_name(),
-        capability
+        capability,
+        // Tells the recipient's apps where it goes (Photos); the invite itself says so too.
+        if kind == "album" { "&kind=album" } else { "" },
     );
     Ok((
         StatusCode::CREATED,
@@ -615,8 +642,8 @@ pub async fn accept_incoming_share(
              key_epoch, name_revision, epoch_statement, epoch_statement_hash,
              owner_user_id, owner_account, owner_incarnation_id,
              owner_signing_public_key, owner_authority_public_key,
-             can_upload, can_delete, upload_quota_bytes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             can_upload, can_delete, upload_quota_bytes, collection_kind)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
          ON CONFLICT (user_id, remote_domain, capability_hash) DO UPDATE SET
              remote_collection_id = EXCLUDED.remote_collection_id,
              named_share_envelope = EXCLUDED.named_share_envelope,
@@ -632,7 +659,8 @@ pub async fn accept_incoming_share(
              owner_authority_public_key = EXCLUDED.owner_authority_public_key,
              can_upload = EXCLUDED.can_upload,
              can_delete = EXCLUDED.can_delete,
-             upload_quota_bytes = EXCLUDED.upload_quota_bytes
+             upload_quota_bytes = EXCLUDED.upload_quota_bytes,
+             collection_kind = EXCLUDED.collection_kind
          RETURNING id",
     )
     .bind(user_id)
@@ -654,6 +682,7 @@ pub async fn accept_incoming_share(
     .bind(invite.can_upload)
     .bind(invite.can_delete)
     .bind(invite.upload_quota_bytes)
+    .bind(&invite.collection_kind)
     .fetch_one(&state.pool)
     .await?;
     Ok((
@@ -676,6 +705,7 @@ pub async fn accept_incoming_share(
             can_upload: invite.can_upload,
             can_delete: invite.can_delete,
             upload_quota_bytes: invite.upload_quota_bytes,
+            collection_kind: invite.collection_kind,
             created_at: OffsetDateTime::now_utc(),
         }),
     )
@@ -907,7 +937,7 @@ pub async fn refresh_incoming_share(
                    epoch_statement_hash, owner_user_id, owner_account,
                    owner_incarnation_id, owner_signing_public_key,
                    owner_authority_public_key, can_upload, can_delete,
-                   upload_quota_bytes, created_at",
+                   upload_quota_bytes, collection_kind, created_at",
     )
     .bind(share_uuid)
     .bind(user_id)
@@ -971,24 +1001,32 @@ pub async fn proxy_list_epochs(
     path = "/api/drive/federation/shares",
     tag = "drive federation",
     security(("BearerAuth" = [])),
+    params(IncomingShareListQuery),
     responses((status = 200, description = "Incoming federated shares", body = Vec<IncomingDriveShare>))
 )]
 pub async fn list_incoming_shares(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(query): Query<IncomingShareListQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let kind = match query.kind.as_deref() {
+        None | Some("folder") => "folder",
+        Some("album") => "album",
+        Some(_) => return Err(AppError::bad_request("unknown kind")),
+    };
     let rows: Vec<IncomingDriveShare> = sqlx::query_as(
         "SELECT id, remote_domain, remote_collection_id, named_share_envelope,
                   name_envelope, key_epoch, name_revision, epoch_statement,
                   epoch_statement_hash, owner_user_id, owner_account,
                   owner_incarnation_id, owner_signing_public_key,
                   owner_authority_public_key, can_upload, can_delete,
-                  upload_quota_bytes, created_at
+                  upload_quota_bytes, collection_kind, created_at
            FROM federated_incoming_shares
-           WHERE user_id = $1 ORDER BY created_at ASC",
+           WHERE user_id = $1 AND collection_kind = $2 ORDER BY created_at ASC",
     )
     .bind(user_id)
+    .bind(kind)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows).into_response())
@@ -1289,13 +1327,14 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             String,
             String,
             String,
+            String,
         );
         let collection: Option<InviteRow> = sqlx::query_as(
             "SELECT c.id, c.name_envelope, c.key_epoch, c.name_revision,
                     c.epoch_statement, c.epoch_statement_hash, c.owner_user_id,
                     s.named_share_envelope, owner.username,
                     owner.account_incarnation_id, owner.drive_signing_public_key,
-                    owner.account_authority_public_key
+                    owner.account_authority_public_key, c.kind
          FROM collections c
          JOIN federated_outgoing_shares s ON s.collection_id = c.id
          JOIN users owner ON owner.id = c.owner_user_id
@@ -1317,6 +1356,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             owner_incarnation_id,
             owner_signing_public_key,
             owner_authority_public_key,
+            collection_kind,
         )) = collection
         else {
             return signed_app_error(
@@ -1347,6 +1387,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
                 can_upload: share.can_upload,
                 can_delete: share.can_delete,
                 upload_quota_bytes: share.upload_quota_bytes,
+                collection_kind,
             },
         )
     }
@@ -1479,7 +1520,8 @@ pub async fn download_file(
         };
         let file: Option<Option<String>> = sqlx::query_scalar(
             "SELECT ciphertext_sha256
-         FROM files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL",
+         FROM files WHERE id = $1 AND deleted_at IS NULL AND (collection_id = $2
+             OR id IN (SELECT file_id FROM album_items WHERE album_id = $2))",
         )
         .bind(file_id)
         .bind(share.collection_id)

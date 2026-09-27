@@ -1,13 +1,11 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { Copy, Link2, Link2Off, UserMinus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { sealNamedShareEnvelope } from '@kutup/crypto'
 import { openLinkKey, useFolderAccess, type AccessLink } from '@kutup/drive-core/access'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { publicLinkUrl, useCreatePublicLink } from '@kutup/drive-core/mutations'
-import api from '@kutup/session/client'
+import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -15,22 +13,15 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
-import { albumsKey, useRemoveAlbumAccess, type Album } from './albums'
-
-interface LocalRecipient {
-  userId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
-class NotHere extends Error {}
+import { useRemoveAlbumAccess, type Album } from './albums'
 
 /**
- * Share an album with people on this server (docs/plans/photos.md): its key
- * sealed to each person's Drive key, as a folder's is. "Can add photos" lets
- * them put their own photos in. Removing someone moves the album to a new
- * key, with every photo re-sealed under it.
+ * Share an album (docs/plans/photos.md): its key sealed to each person's
+ * Drive key, as a folder's is. People on this server are found by email;
+ * "Can add photos" lets them put their own photos in. People on other
+ * servers (`user@server`) view it only, and add it from an invite link.
+ * Removing someone moves the album to a new key, with every photo re-sealed
+ * under it.
  */
 export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open: boolean; onClose: () => void }) {
   const { t, i18n } = useTranslation()
@@ -47,6 +38,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
       setEmail('')
       setCanAdd(false)
       setCreated(null)
+      setInvite(null)
     }
   }, [open])
 
@@ -68,47 +60,35 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
     }
   }
 
-  const share = useMutation({
-    mutationFn: async () => {
-      const me = identity.data
-      if (!me) throw new Error('not ready')
-      let recipient: LocalRecipient
-      try {
-        recipient = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(email.trim())}`)).data
-      } catch (error) {
-        if ((error as { response?: { status?: number } }).response?.status === 404) throw new NotHere()
-        throw error
-      }
-      const namedShareEnvelope = await sealNamedShareEnvelope(album.key, me.masterKey, recipient.driveHpkePublicKey, {
-        collectionId: album.id,
-        epoch: album.folder.keyEpoch,
-        senderAccount: me.account,
-        senderIncarnationId: me.incarnationId,
-        recipientAccount: recipient.account,
-        recipientIncarnationId: recipient.accountIncarnationId,
-      })
-      await api.post(`/collections/${album.id}/share`, {
-        recipientUserId: recipient.userId,
-        namedShareEnvelope,
+  const shareFolder = useShareFolder()
+  const [invite, setInvite] = useState<{ url: string; account: string } | null>(null)
+  function share() {
+    setInvite(null)
+    shareFolder.mutate(
+      {
+        folder: album.folder,
+        recipient: email.trim(),
         canUpload: canAdd,
         canDelete: false,
         uploadQuotaBytes: null,
-      })
-      return recipient.account
-    },
-    onSuccess: async (account) => {
-      toast.success(t('share.shared', { account }))
-      setEmail('')
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['folder-access', album.id] }),
-        queryClient.invalidateQueries({ queryKey: albumsKey }),
-      ])
-    },
-    onError: (error) => toast.error(error instanceof NotHere ? t('share.notHere') : t('share.failed')),
-  })
+        viewOnlyAcrossServers: true,
+      },
+      {
+        onSuccess: (result) => {
+          toast.success(t('share.shared', { account: result.account }))
+          setEmail('')
+          // Someone on another server adds the album from this link.
+          if (result.kind === 'federated') setInvite({ url: result.inviteUrl, account: result.account })
+          void queryClient.invalidateQueries({ queryKey: ['folder-access', album.id] })
+        },
+        onError: (error) => toast.error(error instanceof RecipientNotFound ? t('share.notFound') : t('share.failed')),
+      },
+    )
+  }
 
   const members = access.data?.members ?? []
   const links = access.data?.publicLinks ?? []
+  const federated = access.data?.federatedShares ?? []
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -120,7 +100,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
-            if (email.trim()) share.mutate()
+            if (email.trim()) share()
           }}
         >
           <Field label={t('share.email')}>
@@ -130,8 +110,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             <Checkbox id="album-can-add" checked={canAdd} onCheckedChange={(v) => setCanAdd(v === true)} />
             <Label htmlFor="album-can-add">{t('share.canAdd')}</Label>
           </div>
+          <p className="text-xs text-muted-foreground">{t('share.otherServersHint')}</p>
           <div className="flex justify-end">
-            <Button type="submit" disabled={!email.trim() || share.isPending}>
+            <Button type="submit" disabled={!email.trim() || shareFolder.isPending}>
               {t('share.submit')}
             </Button>
           </div>
@@ -139,7 +120,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
         <section className="space-y-2 pt-2">
           <h3 className="text-sm font-medium">{t('share.people')}</h3>
           {access.isPending ? <Spinner label={t('share.loading')} /> : null}
-          {access.data && members.length === 0 ? <p className="text-sm text-muted-foreground">{t('share.nobody')}</p> : null}
+          {access.data && members.length + federated.length === 0 ? <p className="text-sm text-muted-foreground">{t('share.nobody')}</p> : null}
           <ul className="divide-y divide-border rounded-lg border border-border empty:hidden">
             {members.map((m) => (
               <li key={m.userId} className="flex items-center gap-2 px-3 py-2">
@@ -166,7 +147,47 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                 </Button>
               </li>
             ))}
+            {federated.map((f) => {
+              const account = `${f.recipientUsername}@${f.recipientServer}`
+              return (
+                <li key={f.id} className="flex items-center gap-2 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm">{account}</p>
+                    <p className="text-xs text-muted-foreground">{t('share.otherServer')}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={removeAccess.isPending}
+                    aria-label={t('share.remove', { account })}
+                    onClick={() =>
+                      removeAccess.mutate(
+                        { album, removed: { members: [], publicLinks: [], federatedShares: [f.id] } },
+                        {
+                          onSuccess: () => toast.success(t('share.removed', { account })),
+                          onError: () => toast.error(t('share.failed')),
+                        },
+                      )
+                    }
+                  >
+                    <UserMinus />
+                  </Button>
+                </li>
+              )
+            })}
           </ul>
+          {invite ? (
+            <Field label={t('share.inviteLink', { account: invite.account })} description={t('share.inviteHint')}>
+              {(field) => (
+                <div className="flex gap-2">
+                  <Input {...field} readOnly value={invite.url} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+                  <Button type="button" variant="outline" size="icon" aria-label={t('share.copyInvite')} onClick={() => void copy(invite.url)}>
+                    <Copy />
+                  </Button>
+                </div>
+              )}
+            </Field>
+          ) : null}
         </section>
         <section className="space-y-2 pt-2">
           <div className="flex items-center justify-between gap-2">

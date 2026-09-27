@@ -120,6 +120,16 @@ the whole link sees every photo in the album, including ones added later,
 until the owner removes the link, which re-keys the album; the same caveat
 about photos' own keys applies to a copy made while the link worked.
 
+An album shared with someone on another server works as a shared folder
+does across servers: its key is sealed to their account and bound to both
+identities; their server holds the capability and relays their reads; the
+owner's server serves only the album's items (their records, keys sealed
+under the album key, thumbnails and content) to that capability, over the
+signed federation transport. Their server learns what any relaying server
+learns of a folder: how many photos, their sizes and when they change. The
+share is view only. Removing them re-keys the album as for a local member,
+with the same caveat about the photos' own keys.
+
 ## Metadata not hidden in V1
 
 Servers see accounts, collection/file relationships, ciphertext lengths,

@@ -131,6 +131,21 @@ export function contentPath(location: FileLocation, fileId: string): string {
 }
 
 /**
+ * Where a file's sealed thumbnail is read, under the API base; null where
+ * there is no route for one (a single file shared from another server).
+ */
+export function thumbnailPath(location: FileLocation, fileId: string, variant: 'sm' | 'lg'): string | null {
+  switch (location.kind) {
+    case 'local':
+      return `/files/${fileId}/thumbnails/${variant}`
+    case 'remoteFolder':
+      return `/drive/federation/shares/${location.shareId}/files/${fileId}/thumbnails/${variant}`
+    case 'remoteFile':
+      return null
+  }
+}
+
+/**
  * For a file on another server: where its saved Yjs state (a note's or place
  * list's edits) is relayed from, as `{ keyGeneration, state }`. Local files
  * read their versions instead.

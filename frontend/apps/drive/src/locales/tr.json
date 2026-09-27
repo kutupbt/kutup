@@ -260,14 +260,16 @@
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
       "title": "Davet bağlantısından ekle",
-      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör veya tek dosya davet bağlantısını yapıştırın.",
+      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör, tek dosya veya Fotoğraflar albümü davet bağlantısını yapıştırın.",
       "link": "Davet bağlantısı",
       "invalid": "Bu bir Kutup davet bağlantısı değil.",
       "submit": "Ekle",
       "added": "Benimle paylaşılanlar’a eklendi",
       "notFound": "Bu davet yok ya da zaten kullanılmış.",
       "notForYou": "Bu davet başka bir hesap için.",
-      "failed": "Davet eklenemedi."
+      "failed": "Davet eklenemedi.",
+      "albumAdded": "Albüm eklendi. Fotoğraflar'da.",
+      "openPhotos": "Fotoğraflar'da aç"
     },
     "leave": "Ayrıl",
     "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",

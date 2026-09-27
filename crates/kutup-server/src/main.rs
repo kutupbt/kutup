@@ -16,6 +16,7 @@ mod collab_federation;
 mod config;
 mod db;
 mod drive_federation;
+mod drive_federation_albums;
 mod drive_federation_files;
 mod drive_profile_keys;
 mod drive_writes;
@@ -342,8 +343,15 @@ async fn main() -> anyhow::Result<()> {
     // `/api/collections/`). This mirrors Fiber's default `StrictRouting = false`, which the
     // Go CLI relies on (it calls e.g. `/collections/` with a trailing slash).
     let app = NormalizePathLayer::trim_trailing_slash().layer(build_router(state));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    tracing::info!("listening on :3000");
+    // PORT (default 3000): e.g. a second local server for federation testing.
+    let port: u16 = match std::env::var("PORT") {
+        Ok(value) if !value.is_empty() => value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("PORT must be a port number"))?,
+        _ => 3000,
+    };
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    tracing::info!("listening on :{port}");
     // into_make_service_with_connect_info exposes the peer address so the rate-limit
     // layers can key on the client IP (Fiber's c.IP()). `ServiceExt` provides it for the
     // NormalizePath-wrapped service (not just a bare Router).
@@ -1189,6 +1197,16 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/drive/album",
+            get(drive_federation_albums::album_items)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId/thumbnails/:variant",
+            get(drive_federation_albums::thumbnail)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/file-state",
             get(drive_federation_files::get_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1212,6 +1230,14 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/state",
             get(drive_federation_files::proxy_folder_file_state),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/album",
+            get(drive_federation_albums::proxy_album_items),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant",
+            get(drive_federation_albums::proxy_thumbnail),
         )
         // Live editing of files on other servers, relayed through this one:
         // the same suffixes as `/api/files/:id/…`.

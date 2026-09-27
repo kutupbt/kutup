@@ -12,7 +12,7 @@ export interface CollectionRowWithTimes extends CollectionRow {
   updatedAt: string
 }
 
-interface IncomingShare {
+export interface IncomingShare {
   id: string
   remoteDomain: string
   remoteCollectionId: string
@@ -30,6 +30,8 @@ interface IncomingShare {
   canUpload: boolean
   canDelete: boolean
   uploadQuotaBytes: number | null
+  /** `folder` or `album`: Drive lists folders, Photos albums. */
+  collectionKind: 'folder' | 'album'
   createdAt: string
 }
 
@@ -93,7 +95,8 @@ export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): P
   }
 }
 
-async function openRemote(share: IncomingShare, me: DriveIdentity): Promise<Folder | null> {
+/** A share from another server, verified and opened; null when it does not verify. */
+export async function openRemote(share: IncomingShare, me: DriveIdentity): Promise<Folder | null> {
   const result = await openOnce(`r:${share.id}:${share.namedShareEnvelope}:${share.nameEnvelope}`, () =>
     openSharedCollectionV1(
       {

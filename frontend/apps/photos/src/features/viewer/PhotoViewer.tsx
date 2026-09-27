@@ -187,8 +187,8 @@ function LivePlayer({ video }: { video: Photo }) {
 
 function Picture({ photo }: { photo: Photo }) {
   const { t } = useTranslation()
-  const small = useThumbnail(photo.file, 'sm')
-  const large = useThumbnail(photo.file, 'lg')
+  const small = useThumbnail(photo.file, 'sm', photo.folder)
+  const large = useThumbnail(photo.file, 'lg', photo.folder)
   const original = useOriginal(photo)
   const raw = isRawName(photo.file.name ?? '')
   // RAW never draws; HEIC draws in Safari only. Either is converted here.

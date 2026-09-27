@@ -26,7 +26,7 @@ interface TileProps {
  */
 export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected, favourite, selecting, onOpen, onToggle }: TileProps) {
   const { t, i18n } = useTranslation()
-  const url = useThumbnail(photo.file)
+  const url = useThumbnail(photo.file, 'sm', photo.folder)
   const [broken, setBroken] = useState(false)
   const needs = !photo.media || !photo.file.thumbnails.sm
 

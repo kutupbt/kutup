@@ -260,14 +260,16 @@
     "addInvite": "Add from invite link",
     "invite": {
       "title": "Add from an invite link",
-      "description": "Paste the invite link someone on another Kutup server sent you, for a folder or a single file.",
+      "description": "Paste the invite link someone on another Kutup server sent you, for a folder, a single file or a Photos album.",
       "link": "Invite link",
       "invalid": "That is not a Kutup invite link.",
       "submit": "Add",
       "added": "Added to Shared with me",
       "notFound": "This invite does not exist or was already used.",
       "notForYou": "This invite is for a different account.",
-      "failed": "The invite could not be added."
+      "failed": "The invite could not be added.",
+      "albumAdded": "Album added. It is in Photos.",
+      "openPhotos": "Open in Photos"
     },
     "leave": "Leave",
     "leaveTitle": "Leave this shared folder?",

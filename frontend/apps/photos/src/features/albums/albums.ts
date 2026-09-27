@@ -3,7 +3,7 @@ import { createOwnedCollectionV1, openFileMetadataV1, renameOwnedCollectionV1 } 
 import { openAlbumFileKeyV1, sealAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { rotateFolder, type FolderAccess, type Removal } from '@kutup/drive-core/access'
 import { toDriveFile } from '@kutup/drive-core/files'
-import { openRow, type CollectionRowWithTimes, type FolderIndex } from '@kutup/drive-core/folders'
+import { openRemote, openRow, type CollectionRowWithTimes, type FolderIndex, type IncomingShare } from '@kutup/drive-core/folders'
 import { useDriveIdentity, type DriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
 import type { FileRow } from '@kutup/session/api-types'
@@ -16,7 +16,8 @@ import { newestFirst } from '../library/timeline'
 // album key; the photo stays one file wherever it is, counted once. An album
 // is opened, shared and re-keyed as a Drive folder is (it is one to
 // drive-core), so its owner shares it with people who may view it or add
-// their own photos to it.
+// their own photos to it, and with people on other servers, who view it
+// through their own server (`/drive/federation/shares/:id/album`).
 
 export interface Album {
   /** The album as a collection: its key, epoch, owner and this account's rights. */
@@ -41,6 +42,22 @@ interface AlbumItemWire {
   albumEpoch: number
   addedBy?: string
   addedAt: string
+}
+
+/** An album on another server that its owner stopped sharing with you (or deleted). */
+export class AlbumGone extends Error {
+  constructor() {
+    super('album no longer shared')
+  }
+}
+
+/** An item of an album on another server, as its owner's server lists it. */
+interface RemoteAlbumItemWire {
+  file: Omit<FileRow, 'thumbnails'>
+  thumbnails: FileRow['thumbnails']
+  fileKeyEnvelope: string
+  keyGeneration: number
+  albumEpoch: number
 }
 
 interface AlbumKeyWire {
@@ -75,8 +92,18 @@ export function useAlbums() {
     enabled: identity.isSuccess,
     queryFn: async (): Promise<Album[]> => {
       const me = identity.data!
-      const { data } = await api.get<(CollectionRowWithTimes & { itemCount: number })[]>('/albums')
-      const opened = await Promise.all(data.map(async (row) => toAlbum(await openRow(row, me), row.itemCount)))
+      const [local, remote] = await Promise.all([
+        api.get<(CollectionRowWithTimes & { itemCount: number })[]>('/albums'),
+        api.get<IncomingShare[]>('/drive/federation/shares', { params: { kind: 'album' } }),
+      ])
+      const opened = await Promise.all([
+        ...local.data.map(async (row) => toAlbum(await openRow(row, me), row.itemCount)),
+        // From another server: shown once it verifies; its count comes with its photos.
+        ...remote.data.map(async (share) => {
+          const folder = await openRemote(share, me)
+          return folder ? toAlbum(folder, 0) : null
+        }),
+      ])
       return opened.filter((a): a is Album => Boolean(a)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
   })
@@ -88,10 +115,11 @@ export function useAlbums() {
  * album: it can be viewed and downloaded, not changed, moved or shared).
  */
 function folderFor(index: FolderIndex | undefined, row: FileRow, album: Album): Folder {
-  const known = index?.byId.get(row.collectionId)
+  const known = album.folder.source === 'remote' ? undefined : index?.byId.get(row.collectionId)
   if (known) return known
   return {
-    source: 'shared',
+    // On another server, the photo is read through the album's share there.
+    ...(album.folder.source === 'remote' ? { source: 'remote' as const, remoteShareId: album.folder.remoteShareId } : { source: 'shared' as const }),
     id: row.collectionId,
     parentId: null,
     name: null,
@@ -118,8 +146,10 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
   return useQuery({
     queryKey: [...albumItemsKey(album?.id ?? ''), album?.folder.keyEpoch],
     enabled: Boolean(album),
+    retry: (count, error) => !(error instanceof AlbumGone) && count < 2,
     queryFn: async (): Promise<Photo[]> => {
       const a = album!
+      if (a.folder.source === 'remote') return remoteAlbumItems(a, () => queryClient.invalidateQueries({ queryKey: albumsKey }))
       const { data } = await api.get<AlbumItemWire[]>(`/albums/${a.id}/items`)
       const stale: Photo[] = []
       const photos = await Promise.all(
@@ -153,6 +183,47 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
       return newestFirst(joinLivePhotos(photos.filter((p): p is Photo => Boolean(p))))
     },
   })
+}
+
+/**
+ * The photos of an album on another server. When its owner has moved it to
+ * a new key since this server last looked, the share is refreshed first
+ * (the new key comes sealed to this account, its epoch chain checked), and
+ * the album list reloads with it.
+ */
+async function remoteAlbumItems(album: Album, reloadAlbums: () => Promise<void>): Promise<Photo[]> {
+  const shareId = album.folder.remoteShareId!
+  let data: RemoteAlbumItemWire[]
+  try {
+    data = (await api.get<RemoteAlbumItemWire[]>(`/drive/federation/shares/${shareId}/album`)).data
+  } catch (error) {
+    if ((error as { response?: { status?: number } }).response?.status === 404) throw new AlbumGone()
+    throw error
+  }
+  if (data.some((item) => item.albumEpoch > album.folder.keyEpoch)) {
+    await api.post(`/drive/federation/shares/${shareId}/refresh`)
+    await reloadAlbums()
+    return []
+  }
+  const photos = await Promise.all(
+    data.map(async (item): Promise<Photo | null> => {
+      try {
+        if (item.keyGeneration !== item.file.keyGeneration) return null
+        const fileKey = await openAlbumFileKeyV1(item.fileKeyEnvelope, album.key, {
+          fileId: item.file.id,
+          albumId: album.id,
+          albumEpoch: item.albumEpoch,
+          generation: item.keyGeneration,
+        })
+        const row: FileRow = { ...item.file, thumbnails: item.thumbnails }
+        const metadata = await openFileMetadataV1(row, fileKey)
+        return toPhoto(folderFor(undefined, row, album), toDriveFile(row, { fileKey, metadata }))
+      } catch {
+        return null
+      }
+    }),
+  )
+  return newestFirst(joinLivePhotos(photos.filter((p): p is Photo => Boolean(p))))
 }
 
 /** Seal each photo's current key under the album key and add them. */
@@ -292,7 +363,11 @@ export function useDeleteAlbum() {
 
 /** Leave an album shared with you; the photos you put in leave with you. */
 export function useLeaveAlbum() {
-  return useAlbumMutation(({ album }: { album: Album }) => api.delete(`/albums/${album.id}/membership`))
+  return useAlbumMutation(({ album }: { album: Album }) =>
+    album.folder.source === 'remote'
+      ? api.delete(`/drive/federation/shares/${album.folder.remoteShareId}`)
+      : api.delete(`/albums/${album.id}/membership`),
+  )
 }
 
 export function useRemoveAlbumAccess() {

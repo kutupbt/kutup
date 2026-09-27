@@ -47,7 +47,7 @@ function markerElement(label: string, count: number): { root: HTMLButtonElement;
 }
 
 function PanelTile({ photo, onOpen }: { photo: Photo; onOpen: (photo: Photo) => void }) {
-  const url = useThumbnail(photo.file)
+  const url = useThumbnail(photo.file, 'sm', photo.folder)
   return (
     <button
       type="button"

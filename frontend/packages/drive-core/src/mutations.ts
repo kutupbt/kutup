@@ -148,6 +148,8 @@ export interface ShareInput {
   canUpload: boolean
   canDelete: boolean
   uploadQuotaBytes: number | null
+  /** People on other servers only view it (an album: they cannot add photos from there). */
+  viewOnlyAcrossServers?: boolean
 }
 
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
@@ -220,7 +222,7 @@ export function useShareFolder() {
       recipientUsername: username,
       recipientServer: server,
       namedShareEnvelope,
-      ...permissions,
+      ...(input.viewOnlyAcrossServers ? { canUpload: false, canDelete: false, uploadQuotaBytes: null } : permissions),
     })
     return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
   })
@@ -235,18 +237,22 @@ export class RecipientNotFound extends Error {
 const SERVER_NAME = /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,256}$/
 
+export type InviteKind = 'folder' | 'file' | 'album'
+
 /**
  * Parse a federated invite link (`https://…/invite#server=…&capability=…`,
- * with `&kind=file` for one file); null if it is not one.
+ * with `&kind=file` for one file, `&kind=album` for a Photos album); null
+ * if it is not one.
  */
-export function parseInvite(value: string): { server: string; capability: string; kind: 'folder' | 'file' } | null {
+export function parseInvite(value: string): { server: string; capability: string; kind: InviteKind } | null {
   try {
     const url = new URL(value.trim())
     if (url.pathname.replace(/\/+$/, '') !== '/invite') return null
     const params = new URLSearchParams(url.hash.slice(1))
     const server = params.get('server') ?? ''
     const capability = params.get('capability') ?? ''
-    const kind = params.get('kind') === 'file' ? 'file' : 'folder'
+    const given = params.get('kind')
+    const kind: InviteKind = given === 'file' || given === 'album' ? given : 'folder'
     return SERVER_NAME.test(server) && CAPABILITY.test(capability) ? { server, capability, kind } : null
   } catch {
     return null
@@ -254,11 +260,17 @@ export function parseInvite(value: string): { server: string; capability: string
 }
 
 export function useAcceptInvite() {
-  return useDriveMutation(async (invite: { server: string; capability: string; kind: 'folder' | 'file' }) => {
-    await api.post(invite.kind === 'file' ? '/drive/federation/file-shares' : '/drive/federation/shares', {
+  return useDriveMutation(async (invite: { server: string; capability: string; kind: InviteKind }): Promise<{ kind: InviteKind; id: string }> => {
+    if (invite.kind === 'file') {
+      const { data } = await api.post<{ id: string }>('/drive/federation/file-shares', { server: invite.server, capability: invite.capability })
+      return { kind: 'file', id: data.id }
+    }
+    // Folders and albums share one route; the owner's server says which it is.
+    const { data } = await api.post<{ id: string; remoteCollectionId: string; collectionKind: 'folder' | 'album' }>('/drive/federation/shares', {
       server: invite.server,
       capability: invite.capability,
     })
+    return { kind: data.collectionKind, id: data.collectionKind === 'album' ? data.remoteCollectionId : data.id }
   })
 }
 

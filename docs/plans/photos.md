@@ -1,7 +1,7 @@
 # Photos
 
-**Status:** slices 1 to 4 implemented 2026-09-26 and 2026-09-27 (details
-below, under "Slice 1 done" to "Slice 4 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
+**Status:** slices 1 to 5 implemented 2026-09-26 and 2026-09-27 (details
+below, under "Slice 1 done" to "Slice 4 done" and "Slice 5 progress"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
 owner asked for it after Maps: "continue with photos". The roadmap's
 decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
 - photos are Drive files in folders you choose;
@@ -413,8 +413,24 @@ Drive not showing albums; the database guards directly.
   and re-keying, as folder links do. Checked in a browser: a stranger with
   no account saw the photos, opened and downloaded one; a link without its
   key was refused; after removal the link stopped working.
-- **Still to come in this slice:** albums shared with people on other
-  servers.
+- **Shared with people on other servers:** the share dialog takes
+  `user@server` too; the album key is sealed to that person as for a
+  folder, and the owner sends them the invite link it shows
+  (`…/invite#server=…&capability=…&kind=album`). They add it in Photos
+  (Albums, "Add from invite link"); Drive accepts one too and points to
+  Photos. Their server keeps the invite's kind, so Drive lists shared
+  folders and Photos shared albums. The owner's server lists the album's
+  items and serves their thumbnails and content to the capability; the
+  recipient's server relays them. View only: photos added from another
+  server would have to live there, which albums cannot hold yet. When the
+  owner moves the album to a new key, the recipient's server refreshes the
+  share on its next look (the new key sealed to them, the epoch chain
+  checked); when the owner removes them, the album says it is no longer
+  shared, and they take it off their list. Checked in a browser with two
+  servers (fa.localhost and fb.localhost): sharing, the invite, thumbnails
+  and an original through the relay, a re-key while shared, and removal.
+
+**Slice 5 done.**
 
 ## Open questions
 

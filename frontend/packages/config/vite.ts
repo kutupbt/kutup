@@ -62,10 +62,16 @@ export const DEV_PORTS: Record<KutupApp | 'office', number> = { account: 5173, d
  * The Vite config every Kutup web app shares. Each app runs on its own
  * origin (account. / drive. / chat.) and calls `/api` on that origin; in dev
  * Vite proxies it to kutup-server (KUTUP_API_TARGET, default :3000).
+ * KUTUP_DEV_DOMAIN and KUTUP_DEV_PORT_OFFSET move the apps for a second
+ * local server (docs/contributing.md).
  */
 export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfig {
   const requireFromCrypto = createRequire(path.join(FRONTEND, 'packages/crypto/package.json'))
   const apiTarget = process.env.KUTUP_API_TARGET ?? 'http://localhost:3000'
+  // A second local server (federation testing) runs its apps on
+  // <app>.<KUTUP_DEV_DOMAIN>, KUTUP_DEV_PORT_OFFSET ports up.
+  const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
+  const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
     plugins: [tailwindcss(), react(), kutupWasm(opts.wasm)],
     worker: { format: 'es' },
@@ -79,10 +85,10 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
     optimizeDeps: { include: ['libsodium-wrappers-sumo', 'buffer'] },
     build: { target: 'es2022', sourcemap: true },
     server: {
-      host: `${opts.app}.localhost`,
-      port: DEV_PORTS[opts.app],
+      host: `${opts.app}.${domain}`,
+      port,
       strictPort: true,
-      allowedHosts: [`${opts.app}.localhost`],
+      allowedHosts: [`${opts.app}.${domain}`],
       proxy: {
         '/api': { target: apiTarget, changeOrigin: false, ws: true, secure: false },
       },

@@ -15,6 +15,7 @@ describe('parseInvite', () => {
 
   it('tells a file invite from a folder one', () => {
     expect(parseInvite(`https://a.example/invite#server=a.example&capability=${capability}&kind=file`)?.kind).toBe('file')
+    expect(parseInvite(`https://a.example/invite#server=a.example&capability=${capability}&kind=album`)?.kind).toBe('album')
   })
 
   it('refuses anything that is not an invite', () => {

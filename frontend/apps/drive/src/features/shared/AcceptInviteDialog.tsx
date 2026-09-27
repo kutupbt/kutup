@@ -8,6 +8,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { parseInvite, useAcceptInvite } from '@kutup/drive-core/mutations'
+import { appUrl } from '@kutup/session/apps'
 
 /** Paste an invite link someone on another Kutup server sent you. */
 export function AcceptInviteDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -20,8 +21,13 @@ export function AcceptInviteDialog({ open, onClose }: { open: boolean; onClose: 
     event.preventDefault()
     if (!invite) return
     accept.mutate(invite, {
-      onSuccess: () => {
-        toast.success(t('shared.invite.added'))
+      onSuccess: (result) => {
+        // An album lives in Photos, not in Drive's folders.
+        if (result.kind === 'album') {
+          toast.success(t('shared.invite.albumAdded'), {
+            action: { label: t('shared.invite.openPhotos'), onClick: () => window.location.assign(appUrl('photos', `/albums/${result.id}`)) },
+          })
+        } else toast.success(t('shared.invite.added'))
         setValue('')
         onClose()
       },

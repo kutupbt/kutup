@@ -11,7 +11,7 @@ import { useLibraryContext } from '../library/libraryContext'
 import { PhotoGrid } from '../timeline/PhotoGrid'
 import { NameAlbumDialog } from './NameAlbumDialog'
 import { ShareAlbumDialog } from './ShareAlbumDialog'
-import { useAlbumItems, useAlbums, useDeleteAlbum, useLeaveAlbum, useRenameAlbum } from './albums'
+import { AlbumGone, useAlbumItems, useAlbums, useDeleteAlbum, useLeaveAlbum, useRenameAlbum } from './albums'
 
 /** One album: its photos newest first, as the timeline shows them. */
 export function AlbumPage() {
@@ -41,6 +41,37 @@ export function AlbumPage() {
             <Button asChild variant="outline">
               <Link to="/albums">{t('albums.all')}</Link>
             </Button>
+          }
+        />
+      </div>
+    )
+  }
+  if (items.isError) {
+    const gone = items.error instanceof AlbumGone
+    return (
+      <div className="px-4 py-6 md:px-8">
+        <EmptyState
+          title={gone ? t('albums.goneTitle', { name: album.name }) : t('albums.loadFailedTitle')}
+          description={gone ? t('albums.gone', { owner: album.ownerAccount }) : t('albums.loadFailed')}
+          action={
+            gone ? (
+              <Button
+                variant="outline"
+                loading={leave.isPending}
+                onClick={() =>
+                  leave.mutate(
+                    { album },
+                    { onSuccess: () => void navigate('/albums', { replace: true }), onError: () => toast.error(t('albums.failed')) },
+                  )
+                }
+              >
+                {t('albums.forget')}
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => void items.refetch()}>
+                {t('albums.retry')}
+              </Button>
+            )
           }
         />
       </div>
@@ -90,7 +121,7 @@ export function AlbumPage() {
         open={leaving}
         onOpenChange={setLeaving}
         title={t('albums.leaveTitle', { name: album.name })}
-        description={t('albums.leaveDescription')}
+        description={album.folder.source === 'remote' ? t('albums.leaveRemoteDescription') : t('albums.leaveDescription')}
         submit={t('albums.leave')}
         pending={leave.isPending}
         errorFallback={t('albums.failed')}

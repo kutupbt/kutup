@@ -208,6 +208,29 @@ pnpm dev
 
 Vite starts on `http://localhost:5173`. The `vite.config.ts` includes a proxy rule that forwards `/api` requests to the backend at `http://localhost:3000`, so you can develop against a running backend without CORS issues.
 
+### Two local servers (federation)
+
+Sharing across servers (Drive folders and files, Photos albums, Chat) can
+be tried natively with two servers. Federation discovery connects to
+`http://<server name>/.well-known/kutup/federation.json` on port 80, so a
+reverse proxy on port 80 routes by host name to each server's `PORT`:
+
+- **Servers:** for each, a database and bucket of its own, and
+  `PORT=3101` (then `3102`), `FEDERATION_SERVER_NAME` and
+  `CHAT_SERVER_NAME` set to the same name (`fa.localhost`, `fb.localhost`),
+  `SERVER_URL=http://fa.localhost`, a `FEDERATION_SIGNING_KEY` from
+  `openssl rand -base64 32`, `FEDERATION_TEST_ALLOW_PRIVATE=true` (only with
+  `APP_ENV=test`), and `KUTUP_<APP>_URL` for its apps (below).
+- **Proxy:** e.g. `docker run --network host` with an nginx `server` block
+  per name, `proxy_pass http://127.0.0.1:3101` and so on.
+- **Apps:** each server's apps run on their own origins:
+  `KUTUP_DEV_DOMAIN=fa.localhost KUTUP_DEV_PORT_OFFSET=200
+  KUTUP_API_TARGET=http://localhost:3101 pnpm -C apps/photos dev` serves
+  `http://photos.fa.localhost:5378`.
+- **Admission:** an admin of each server opens the feature to other servers
+  (Account → Admin → Federation, or `PUT /api/admin/federation` with
+  `{"globalEnabled": true, "feature": "drive", "mode": "open", "minimumTrust": "tofu"}`).
+
 ### Building for production
 
 ```sh

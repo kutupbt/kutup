@@ -1,4 +1,4 @@
-import { BookImage, Plus } from 'lucide-react'
+import { BookImage, Link2, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
@@ -8,11 +8,12 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { useLibraryContext } from '../library/libraryContext'
 import { useThumbnail } from '../timeline/useThumbnail'
 import type { Photo } from '../library/library'
+import { AcceptAlbumInviteDialog } from './AcceptAlbumInviteDialog'
 import { NameAlbumDialog } from './NameAlbumDialog'
-import { useAlbumItems, useAlbums, useCreateAlbum, type Album } from './albums'
+import { AlbumGone, useAlbumItems, useAlbums, useCreateAlbum, type Album } from './albums'
 
 function Cover({ photo }: { photo: Photo }) {
-  const url = useThumbnail(photo.file)
+  const url = useThumbnail(photo.file, 'sm', photo.folder)
   return url ? <img src={url} alt="" className="size-full object-cover transition-transform group-hover:scale-[1.03]" draggable={false} /> : null
 }
 
@@ -32,7 +33,9 @@ function AlbumCard({ album }: { album: Album }) {
       <p className="mt-2 truncate text-sm font-medium">{album.name}</p>
       {album.ownerAccount ? <p className="truncate text-xs text-muted-foreground">{t('albums.sharedBy', { owner: album.ownerAccount })}</p> : null}
       {/* What it shows: a live photo is one, though it is two files. */}
-      <p className="text-xs text-muted-foreground">{t('albums.itemCount', { count: items.data?.length ?? album.itemCount })}</p>
+      <p className="text-xs text-muted-foreground">
+        {items.error instanceof AlbumGone ? t('albums.goneShort') : t('albums.itemCount', { count: items.data?.length ?? album.itemCount })}
+      </p>
     </Link>
   )
 }
@@ -43,6 +46,7 @@ export function AlbumsPage() {
   const albums = useAlbums()
   const create = useCreateAlbum()
   const [naming, setNaming] = useState(false)
+  const [inviting, setInviting] = useState(false)
   if (albums.isPending) return <LoadingPanel label={t('albums.loading')} />
   return (
     <PageBody>
@@ -50,9 +54,14 @@ export function AlbumsPage() {
         title={t('albums.title')}
         description={t('albums.description')}
         actions={
-          <Button onClick={() => setNaming(true)}>
-            <Plus /> {t('albums.new')}
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setInviting(true)}>
+              <Link2 /> {t('albums.invite.open')}
+            </Button>
+            <Button onClick={() => setNaming(true)}>
+              <Plus /> {t('albums.new')}
+            </Button>
+          </>
         }
       />
       {(albums.data ?? []).length === 0 ? (
@@ -64,6 +73,7 @@ export function AlbumsPage() {
           ))}
         </div>
       )}
+      <AcceptAlbumInviteDialog open={inviting} onClose={() => setInviting(false)} />
       <NameAlbumDialog
         open={naming}
         title={t('albums.new')}
