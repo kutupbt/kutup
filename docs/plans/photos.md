@@ -401,8 +401,20 @@ Drive not showing albums; the database guards directly.
   storage) and take out only those; the owner takes out any. Leaving takes
   your photos with you. Checked in a browser with two accounts, including a
   removal that re-keyed the album (epoch 2, every item re-sealed).
-- **Still to come in this slice:** public album links and albums shared
-  with people on other servers.
+- **Public links:** the owner makes a link in the share dialog
+  (`photos.<domain>/s/<token>#key=<link key>`), copies it again later
+  (the owner keeps a copy of the link key under their master key), and
+  removes it, which re-keys the album. The link page needs no account: it
+  opens the album key with the link key, the album's name, and each photo's
+  key sealed under the album key, and shows a grid, a viewer (the original,
+  HEIC and RAW converted as in the app) and a download. The server serves
+  the album's items and their thumbnails to the token only; files that are
+  album items count as reached by the link. Links survive removing a person
+  and re-keying, as folder links do. Checked in a browser: a stranger with
+  no account saw the photos, opened and downloaded one; a link without its
+  key was refused; after removal the link stopped working.
+- **Still to come in this slice:** albums shared with people on other
+  servers.
 
 ## Open questions
 

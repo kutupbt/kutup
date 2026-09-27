@@ -942,6 +942,11 @@ fn build_router(state: AppState) -> Router {
             get(shares::list_public_share_files),
         )
         .route("/api/share/:token/epochs", get(shares::public_share_epochs))
+        .route("/api/share/:token/album", get(shares::public_album_items))
+        .route(
+            "/api/share/:token/thumbnails/:fileId/:variant",
+            get(shares::public_thumbnail),
+        )
         .route(
             "/api/share/:token/state/:fileId",
             get(shares::public_share_state),

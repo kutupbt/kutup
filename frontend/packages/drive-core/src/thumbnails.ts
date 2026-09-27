@@ -61,7 +61,12 @@ function remember(key: string, value: Promise<string | null>): void {
 }
 
 /** The file's thumbnail as a displayable URL, or null (none, or unreadable). */
-export function thumbnailUrl(file: DriveFile, variant: ThumbnailVariant): Promise<string | null> {
+export function thumbnailUrl(
+  file: DriveFile,
+  variant: ThumbnailVariant,
+  /** Where the sealed thumbnail is read, under the API base (a public link's route). */
+  path = `/files/${file.id}/thumbnails/${variant}`,
+): Promise<string | null> {
   const stamp = file.thumbnails[variant]
   if (!stamp || !file.fileKey) return Promise.resolve(null)
   const key = `${file.id}:${variant}:${stamp}`
@@ -79,7 +84,7 @@ export function thumbnailUrl(file: DriveFile, variant: ThumbnailVariant): Promis
     try {
       const fileKey = await fileKeyAt(file, generation)
       const { data } = await api.get<ArrayBuffer>(
-        `/files/${file.id}/thumbnails/${variant}?${new URLSearchParams({ v: stamp }).toString()}`,
+        `${path}?${new URLSearchParams({ v: stamp }).toString()}`,
         { responseType: 'arraybuffer' },
       )
       const opened = await openThumbnailV1(new Uint8Array(data), fileKey, {

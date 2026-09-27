@@ -87,6 +87,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::albums::remove_items,
         crate::albums::keys,
         crate::albums::leave,
+        crate::handlers::shares::public_album_items,
+        crate::handlers::shares::public_thumbnail,
         crate::photos::put_library,
         crate::maps::proxy,
         crate::maps::admin_get,

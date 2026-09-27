@@ -241,6 +241,19 @@ pub async fn download(
     {
         return Err(AppError::forbidden("forbidden"));
     }
+    serve(&state, fid, variant).await
+}
+
+/// A thumbnail's sealed bytes, for whoever may see the file (checked by the caller).
+pub(crate) async fn serve_thumbnail(
+    state: &AppState,
+    fid: Uuid,
+    variant: &str,
+) -> AppResult<Response> {
+    serve(state, fid, parse_variant(variant)?).await
+}
+
+async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppResult<Response> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM file_thumbnails WHERE file_id = $1 AND variant = $2)",
     )

@@ -269,6 +269,29 @@
     "removed": "{{account}} no longer has access",
     "shared": "Shared with {{account}}",
     "notHere": "No account on this server has that email.",
-    "failed": "This could not be done. Try again."
+    "failed": "This could not be done. Try again.",
+    "links": "Public links",
+    "linksHint": "Anyone with a link sees the album's photos, without an account. The key is in the link, never on the server.",
+    "createLink": "Create link",
+    "copyLink": "Copy link",
+    "linkCopied": "Link copied",
+    "removeLink": "Remove link",
+    "linkRemoved": "Link removed",
+    "noLinks": "No links.",
+    "newLink": "New link",
+    "linkMade": "Link made {{date}}"
+  },
+  "public": {
+    "loading": "Opening the album…",
+    "failedTitle": "This album cannot be opened",
+    "note": "Shared with a link. The photos are end-to-end encrypted; this page opened them in your browser.",
+    "failure": {
+      "missingKey": "The link is incomplete: its key is missing. Ask for the whole link.",
+      "notFound": "The link does not exist, or the album was deleted or the link removed.",
+      "expired": "The link has expired.",
+      "badKey": "The link's key does not open this album. Ask for the whole link.",
+      "notAlbum": "This link is not to an album.",
+      "other": "Something went wrong. Try again."
+    }
   }
 }

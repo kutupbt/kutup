@@ -108,8 +108,8 @@ export function useLeaveRemoteShare() {
 }
 
 /** A public link's address: the token for the server, the key in the fragment. */
-export function publicLinkUrl(token: string, linkKey: Uint8Array): string {
-  return appUrl('drive', `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
+export function publicLinkUrl(token: string, linkKey: Uint8Array, app: 'drive' | 'photos' = 'drive'): string {
+  return appUrl(app, `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
 }
 
 /**
@@ -118,7 +118,7 @@ export function publicLinkUrl(token: string, linkKey: Uint8Array): string {
  * the owner, under their master key), and travels only in the URL fragment.
  * Every call makes a new link; old ones keep working.
  */
-export function useCreatePublicLink() {
+export function useCreatePublicLink(app: 'drive' | 'photos' = 'drive') {
   return useDriveMutation(async (folder: Folder, me) => {
     if (!folder.key) throw new Error('folder is not open')
     const linkKey = await generateKey()
@@ -138,7 +138,7 @@ export function useCreatePublicLink() {
       collectionKeyEnvelope,
       ownerLinkKeyEnvelope,
     })
-    return publicLinkUrl(data.token, linkKey)
+    return publicLinkUrl(data.token, linkKey, app)
   })
 }
 

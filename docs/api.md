@@ -1397,11 +1397,52 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
   "ownerUserId": "<uuid>",
-  "expiresAt": "2026-04-01T00:00:00Z"
+  "expiresAt": "2026-04-01T00:00:00Z",
+  "collectionKind": "album",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "nameRevision": 1
 }
 ```
 
 `expiresAt` is `null` when the share has no expiry. Returns `410 Gone` if the share has expired.
+`collectionKind`, `nameEnvelope` and `nameRevision` are present for collection shares; the name
+opens under the collection key (album links show the album's name).
+
+---
+
+### GET /api/share/:token/album
+
+The items of an album reached by a public link: each photo's file record, its
+thumbnails, and its file key sealed under the album key (Drive envelope
+purpose 12, `AlbumFileKey`).
+
+**Auth:** None (the token is the capability)
+
+**Response:**
+```json
+[
+  {
+    "file": { "id": "<uuid>", "collectionId": "<uuid>", "metadataEnvelope": "…", "fileKeyEnvelope": "…", "keyEpoch": 1, "keyGeneration": 1, "metadataRevision": 1, "encryptedSizeBytes": 4096, "createdAt": "…", "originalKeyGeneration": 1, "contentKeyGeneration": 1 },
+    "thumbnails": [{ "variant": "sm", "keyGeneration": 1, "…": "…" }],
+    "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
+    "keyGeneration": 1,
+    "albumEpoch": 1
+  }
+]
+```
+
+Returns `404` for an unknown token or a link that is not to an album, `410` if it has expired.
+Trashed photos are left out.
+
+---
+
+### GET /api/share/:token/thumbnails/:fileId/:variant
+
+A thumbnail (`sm` or `lg`) of a file the link reaches (for an album, one of
+its items). Streams the encrypted thumbnail; the client opens it with the
+file key. `404` when the file is not reached or has no such thumbnail.
+
+**Auth:** None
 
 ---
 
@@ -1442,7 +1483,7 @@ Download a file from a public share. Streams the encrypted blob (`application/oc
 
 **Response:** the raw encrypted bytes.
 
-Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target.
+Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target. For an album link, the album's items count as belonging to it.
 
 ---
 

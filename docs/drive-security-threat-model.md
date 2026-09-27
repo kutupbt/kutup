@@ -112,6 +112,14 @@ if they obtained it some other way, never through Kutup. A member who leaves
 takes the photos they put in with them; leaving does not rotate the album
 (its owner removes someone to do that).
 
+A public album link carries its link key in the URL fragment, which the
+server never receives; the server holds the album key sealed under it. The
+token alone lets anyone fetch the album's ciphertext: its items, their
+thumbnails and content, and how many there are and their sizes. Whoever has
+the whole link sees every photo in the album, including ones added later,
+until the owner removes the link, which re-keys the album; the same caveat
+about photos' own keys applies to a copy made while the link worked.
+
 ## Metadata not hidden in V1
 
 Servers see accounts, collection/file relationships, ciphertext lengths,

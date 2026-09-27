@@ -216,6 +216,15 @@ struct PublicShareResponse {
     /// at generation `collectionKeyEpoch`).
     #[serde(skip_serializing_if = "Option::is_none")]
     file: Option<PublicFileRow>,
+    /// A link to a collection: `folder`, or `album` (docs/plans/photos.md),
+    /// whose photos are listed by `GET /api/share/{token}/album`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collection_kind: Option<String>,
+    /// A collection's name, sealed under its key (the link page shows it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name_envelope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name_revision: Option<i64>,
 }
 
 /// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
@@ -270,6 +279,20 @@ pub async fn get_public_share(
     } else {
         None
     };
+    let (collection_kind, name_envelope, name_revision) = if share_type == "collection" {
+        let row: Option<(String, String, i64)> = sqlx::query_as(
+            "SELECT kind, name_envelope, name_revision FROM collections WHERE id = $1",
+        )
+        .bind(target_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        match row {
+            Some((kind, name, revision)) => (Some(kind), Some(name), Some(revision)),
+            None => (None, None, None),
+        }
+    } else {
+        (None, None, None)
+    };
     Ok(Json(PublicShareResponse {
         id,
         share_type,
@@ -280,6 +303,9 @@ pub async fn get_public_share(
         owner_authority_public_key: authority,
         expires_at,
         file,
+        collection_kind,
+        name_envelope,
+        name_revision,
     })
     .into_response())
 }
@@ -479,12 +505,22 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
         return Err(AppError::not_found("not found"));
     };
 
-    // A folder link reaches its folder's files; a file link its one file.
-    let reaches = match share_type.as_str() {
-        "collection" => coll_id == target_id,
-        "file" => fid == target_id,
-        _ => false,
-    };
+    // A folder link reaches its folder's files; an album link the photos in
+    // the album; a file link its one file.
+    let reaches =
+        match share_type.as_str() {
+            "collection" => coll_id == target_id
+                || sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM album_items WHERE album_id = $1 AND file_id = $2)",
+                )
+                .bind(target_id)
+                .bind(fid)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap_or(false),
+            "file" => fid == target_id,
+            _ => false,
+        };
     if !reaches {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -577,4 +613,123 @@ pub async fn download_public_share_file(
         .await
         .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(body, size, &[]))
+}
+
+/// A photo in an album, as its public link shows it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicAlbumItem {
+    file: PublicFileRow,
+    thumbnails: crate::models::FileThumbnails,
+    /// The file key of `keyGeneration`, under the album key of `albumEpoch`.
+    file_key_envelope: String,
+    key_generation: i32,
+    album_epoch: i32,
+}
+
+/// `GET /api/share/{token}/album` — an album link's photos (docs/plans/photos.md).
+/// Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/album",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "The album's photos", body = Vec<PublicAlbumItem>))
+)]
+pub async fn public_album_items(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> AppResult<Response> {
+    let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
+        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+    )
+    .bind(&token)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((album_id, share_type, expires_at)) = meta else {
+        return Err(AppError::not_found("not found"));
+    };
+    if expires_at.is_some_and(|exp| OffsetDateTime::now_utc() > exp) {
+        return Err(AppError::new(StatusCode::GONE, "link expired"));
+    }
+    let is_album: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
+    )
+    .bind(album_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if share_type != "collection" || !is_album {
+        return Err(AppError::not_found("not found"));
+    }
+    let files = public_files(
+        &state,
+        "f.id IN (SELECT file_id FROM album_items WHERE album_id = $1)",
+        album_id,
+    )
+    .await?;
+    #[derive(sqlx::FromRow)]
+    struct Item {
+        file_id: Uuid,
+        file_key_envelope: String,
+        key_generation: i32,
+        album_epoch: i32,
+        thumb_sm: Option<OffsetDateTime>,
+        thumb_lg: Option<OffsetDateTime>,
+        thumb_sm_generation: Option<i32>,
+        thumb_lg_generation: Option<i32>,
+    }
+    let items: Vec<Item> = sqlx::query_as(
+        "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+                sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
+         FROM album_items i
+         LEFT JOIN file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
+         LEFT JOIN file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
+         WHERE i.album_id = $1",
+    )
+    .bind(album_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut by_file: std::collections::HashMap<Uuid, Item> =
+        items.into_iter().map(|i| (i.file_id, i)).collect();
+    let out: Vec<PublicAlbumItem> = files
+        .into_iter()
+        .filter_map(|file| {
+            let item = by_file.remove(&file.id)?;
+            Some(PublicAlbumItem {
+                file,
+                thumbnails: crate::models::FileThumbnails {
+                    sm: item.thumb_sm,
+                    lg: item.thumb_lg,
+                    sm_key_generation: item.thumb_sm_generation,
+                    lg_key_generation: item.thumb_lg_generation,
+                },
+                file_key_envelope: item.file_key_envelope,
+                key_generation: item.key_generation,
+                album_epoch: item.album_epoch,
+            })
+        })
+        .collect();
+    Ok(Json(out).into_response())
+}
+
+/// `GET /api/share/{token}/thumbnails/{fileId}/{variant}` — a thumbnail of a
+/// file the link reaches (sealed; the link's page opens it). Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/thumbnails/{fileId}/{variant}",
+    tag = "shares",
+    params(
+        ("token" = String, Path, description = "Share token (the capability)"),
+        ("fileId" = String, Path, description = "File id"),
+        ("variant" = String, Path, description = "sm or lg")
+    ),
+    responses((status = 200, description = "The sealed thumbnail (application/octet-stream)"))
+)]
+pub async fn public_thumbnail(
+    State(state): State<AppState>,
+    Path((token, file_id, variant)): Path<(String, String, String)>,
+) -> AppResult<Response> {
+    let fid = link_reaches(&state, &token, &file_id).await?;
+    crate::handlers::file_thumbnails::serve_thumbnail(&state, fid, &variant).await
 }

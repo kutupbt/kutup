@@ -15,6 +15,7 @@ import { AlbumsPage } from './features/albums/AlbumsPage'
 import { LibraryProvider } from './features/library/LibraryProvider'
 import { ArchivePage, FavouritesPage, HiddenPage } from './features/library/MarkedPages'
 import { PlacesPage } from './features/places/PlacesPage'
+import { PublicAlbumPage } from './features/public/PublicAlbumPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { TimelinePage } from './features/timeline/TimelinePage'
@@ -43,31 +44,42 @@ function DriveUpkeep() {
   return null
 }
 
+/** Everything behind the session: the library and its pages. */
+function SignedIn() {
+  return (
+    <Boot>
+      <UnauthenticatedHandler />
+      <DriveUpkeep />
+      <LibraryProvider>
+        <Routes>
+          <Route element={<PhotosShell primaryAction={<UploadButton />} />}>
+            <Route index element={<TimelinePage />} />
+            <Route path="/places" element={<PlacesPage />} />
+            <Route path="/albums" element={<AlbumsPage />} />
+            <Route path="/albums/:id" element={<AlbumPage />} />
+            <Route path="/favourites" element={<FavouritesPage />} />
+            <Route path="/archive" element={<ArchivePage />} />
+            <Route path="/hidden" element={<HiddenPage />} />
+            <Route path="/trash" element={<TrashPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </LibraryProvider>
+      <UploadPanel />
+    </Boot>
+  )
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <TooltipProvider delayDuration={300}>
-        <Boot>
-          <UnauthenticatedHandler />
-          <DriveUpkeep />
-          <LibraryProvider>
-            <Routes>
-              <Route element={<PhotosShell primaryAction={<UploadButton />} />}>
-                <Route index element={<TimelinePage />} />
-                <Route path="/places" element={<PlacesPage />} />
-                <Route path="/albums" element={<AlbumsPage />} />
-                <Route path="/albums/:id" element={<AlbumPage />} />
-                <Route path="/favourites" element={<FavouritesPage />} />
-                <Route path="/archive" element={<ArchivePage />} />
-                <Route path="/hidden" element={<HiddenPage />} />
-                <Route path="/trash" element={<TrashPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-              </Route>
-              <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </LibraryProvider>
-          <UploadPanel />
-        </Boot>
+        <Routes>
+          {/* A public album link needs no account: it bypasses the session boot. */}
+          <Route path="/s/:token" element={<PublicAlbumPage />} />
+          <Route path="*" element={<SignedIn />} />
+        </Routes>
         <Toaster />
       </TooltipProvider>
     </BrowserRouter>
