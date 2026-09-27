@@ -59,7 +59,7 @@ frontend/public/onlyoffice/
 └── FILES.sha512                ← whole-tree integrity manifest
 ```
 
-**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<CryptPad version>.<n>`: currently `kutup-v9.2.0.119+5.1` and `kutup-v7.3+1.1`, byte-identical in content to CryptPad's `v9.2.0.119+5` and `v7.3+1` (docs/plans/onlyoffice-default-bundling.md).
+**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<CryptPad version>.<n>`: currently `kutup-v9.3.0.140+2.1` (editor) and `kutup-v9.3.0+0.1` (x2t), both ONLYOFFICE 9.3.0.140 and byte-identical in content to CryptPad's `v9.3.0.140+2` and `v9.3.0+0` (docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
 

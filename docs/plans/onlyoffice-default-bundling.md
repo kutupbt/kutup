@@ -313,6 +313,26 @@ the browser) containing the text; a spreadsheet and a presentation opened.
 Kutup's own changes to OnlyOffice go on the forks' `kutup` branches, each
 fork's `KUTUP.md` says how to build, release and update from upstream.
 
+## ONLYOFFICE 9.3.0.140 (2026-09-27)
+
+The forks' `kutup` branches merged CryptPad's `v9.3.0.140+2` (editor) and
+`v9.3.0+0` (x2t), both ONLYOFFICE 9.3.0.140, at
+`b8672fe6307411a4c1ae9ef036031a01a23ae6c5` and
+`b4f41da18db79e0df7c367187264c3de0ebe9317`. The editor build keeps its tools
+pinned (now pnpm 11.1.2 and Node 20, as that release was built) and installs
+`make` and `bzip2`; x2t keeps boost from its tarball. Both reproduce
+CryptPad's releases byte for byte (16,770 editor files; `x2t.wasm`,
+`x2t.js` and their Brotli copies). Released as `kutup-v9.3.0.140+2.1` and
+`kutup-v9.3.0+0.1`; office-assets bundle `2026.09.27-kutup-v9.3`, OCI index
+digest `sha256:1a4b23cc2f763b7e22cf8d12c497b2aac294236bedd44981ae28bf0cd7fafbd3`. x2t moved from core 7.3 to 9.3. Checked in a browser: a
+document, a spreadsheet and a presentation each opened, took typing, saved,
+and downloaded with the text in the exported file.
+
+Not taken: CryptPad's `v9.3.2+` editor, which is built on Euro-Office (an
+AGPL fork of OnlyOffice since early 2026 that no longer merges ONLYOFFICE
+and drops ONLYOFFICE's Section 7(b) logo clause from its headers). Kutup
+follows ONLYOFFICE; the next step is ONLYOFFICE 9.4.
+
 ## Primary upstream references
 
 - <https://github.com/cryptpad/onlyoffice-editor/tree/v9.2.0.119%2B5>

@@ -24,12 +24,12 @@ LICENSE_DEST="$ASSET_ROOT/LICENSES"
 
 # Pinned versions. Bumping these means re-testing the OnlyOffice integration;
 # private API signatures (asc_nativeGetFile, asc_setRestriction, …) can drift.
-OO_VERSION="kutup-v9.2.0.119+5.1"
-OO_SOURCE_COMMIT="f32516e64b1ac04cbad6036ab394278c04ec8930"
-OO_SHA512="9fb2fa83146e689ed33393cad8fcedc2268b3443a6c0bd392a5ad23f6db1da75aaf97ad0a53796a83dbb4e72a793b93e50cd467340308e9da263dfed40f6b626"
-X2T_VERSION="kutup-v7.3+1.1"
-X2T_SOURCE_COMMIT="13c7f37c6efac8fb552b6266355a99136a3fb062"
-X2T_SHA512="1497bc72f2d6a00ceeea719496f29f2d7c02fb651b28a243557a566fe58a8df7ca4baa278857e5bf7be3990bc235040e61fc2b6e08ab610a71a7ebcfc389f918"
+OO_VERSION="kutup-v9.3.0.140+2.1"
+OO_SOURCE_COMMIT="b8672fe6307411a4c1ae9ef036031a01a23ae6c5"
+OO_SHA512="c38ff7e9ebaab4c6578da70e6843eaf87bd3ca16c4a78620f17bcd9516a2b0c24aad26c9934a935600ce9787d30a7990464ec849c650feddfae66c1cd290e3e4"
+X2T_VERSION="kutup-v9.3.0+0.1"
+X2T_SOURCE_COMMIT="b4f41da18db79e0df7c367187264c3de0ebe9317"
+X2T_SHA512="0316fa324cc7551f7b902cbf8afde1669a787a179be4d61ab78e12e32b0e9a1308b56d3b6c33af364d090e2b91ca649a37c0645ff401b79db457463271277f2e"
 
 # CryptPad source tree commit that hosts the three "empty document" templates
 # (oodoc_base.js / oocell_base.js / ooslide_base.js). These template JS files
@@ -323,7 +323,7 @@ install_source_metadata() (
     trap 'rm -f -- "$candidate"' EXIT
     cat >"$candidate" <<EOF
 {
-  "bundle_version": "2026.09.27-kutup-v9",
+  "bundle_version": "2026.09.27-kutup-v9.3",
   "packaging_repository": "https://github.com/kutupbt/kutup-office-assets",
   "editor": {
     "version": "$OO_VERSION",
