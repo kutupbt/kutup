@@ -28,7 +28,9 @@ const BY_EXTENSION: Record<string, FileKind> = {
   excalidraw: 'whiteboard',
   kutupmap: 'map',
   pdf: 'pdf',
-  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', avif: 'image', svg: 'image', heic: 'image', bmp: 'image',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', avif: 'image', svg: 'image', heic: 'image', heif: 'image', bmp: 'image', tif: 'image', tiff: 'image',
+  // Camera RAW: previews come from the JPEG they embed (docs/plans/photos.md).
+  dng: 'image', cr2: 'image', cr3: 'image', nef: 'image', nrw: 'image', arw: 'image', orf: 'image', rw2: 'image', pef: 'image', srw: 'image', raf: 'image',
   mp4: 'video', webm: 'video', mov: 'video', mkv: 'video', m4v: 'video',
   mp3: 'audio', wav: 'audio', ogg: 'audio', oga: 'audio', m4a: 'audio', flac: 'audio', opus: 'audio',
   zip: 'archive', tar: 'archive', gz: 'archive', tgz: 'archive', '7z': 'archive', rar: 'archive', xz: 'archive', zst: 'archive',

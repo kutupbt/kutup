@@ -36,6 +36,18 @@ export const DRIVE_PREVIEW_GENERATION_LIMITS_V1: PreviewGenerationLimitsV1 = Obj
   timeoutMs: 15_000,
 })
 
+/**
+ * Photos (docs/plans/photos.md): today's phones take 24 to 50 megapixel
+ * pictures, beyond Drive's general budget. Decoding one takes up to 256 MB
+ * for a moment, in the worker.
+ */
+export const PHOTO_PREVIEW_GENERATION_LIMITS_V1: PreviewGenerationLimitsV1 = Object.freeze({
+  maxImageInputBytes: 128 * 1024 * 1024,
+  maxImageInputPixels: 64_000_000,
+  maxAudioInputBytes: 64 * 1024 * 1024,
+  timeoutMs: 45_000,
+})
+
 export type GeneratedPreviewPayloadV1 =
   | {
       kind: 'image'
@@ -200,6 +212,8 @@ export interface RasterBudgetV1 {
   maxEdge: number
   maxOutputBytes: number
   outputTypes: RasterOutputType[]
+  /** An EXIF orientation to apply (a RAW file's, to its embedded preview). */
+  orientation?: number
 }
 
 export interface RasterResultV1 {
@@ -246,6 +260,7 @@ export async function rasterizeImageFileV1(
             maxEdge: budget.maxEdge,
             maxOutputBytes: budget.maxOutputBytes,
             outputTypes: budget.outputTypes,
+            ...(budget.orientation ? { orientation: budget.orientation } : {}),
           },
           deadlineSignal,
           dependencies.rasterWorkerFactory,
@@ -281,6 +296,7 @@ export async function renderTextPageV1(
             maxEdge: budget.maxEdge,
             maxOutputBytes: budget.maxOutputBytes,
             outputTypes: budget.outputTypes,
+            ...(budget.orientation ? { orientation: budget.orientation } : {}),
           },
           deadlineSignal,
           dependencies.rasterWorkerFactory,

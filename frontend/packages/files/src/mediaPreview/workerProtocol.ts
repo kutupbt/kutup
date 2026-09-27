@@ -11,6 +11,11 @@ export interface RasterPreviewWorkerRequestV1 {
   maxOutputBytes: number
   /** Defaults to WebP only (Chat's wire format requires it). */
   outputTypes?: RasterOutputType[]
+  /**
+   * An EXIF orientation (1–8) to apply: a RAW file's embedded preview has
+   * none of its own, so the RAW's is passed.
+   */
+  orientation?: number
 }
 
 /**

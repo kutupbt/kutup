@@ -77,6 +77,13 @@ describe('photos', () => {
     expect(facts.camera).toBe('Apple iPhone 15')
   })
 
+  it("reads a HEIC's own tags", async () => {
+    const facts = await readImageFacts(await fixture('small.heic', 'image/heic'))
+    expect(facts.taken).toEqual({ takenAt: Date.UTC(2024, 6, 1, 16, 45, 10), takenOffset: 180 })
+    expect(facts.lat).toBeCloseTo(41.02563, 4)
+    expect([facts.width, facts.height]).toEqual([128, 64])
+  })
+
   it('gives nothing for an image without tags', async () => {
     const facts = await readImageFacts(await fixture('plain.png', 'image/png'))
     expect(facts.taken).toBeUndefined()

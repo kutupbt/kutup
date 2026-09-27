@@ -1,4 +1,4 @@
-import { Check, Heart, ImageOff, Play } from 'lucide-react'
+import { Aperture, Check, Heart, ImageOff, Play } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { useThumbnail } from './useThumbnail'
 import { useTranslation } from 'react-i18next'
@@ -62,6 +62,12 @@ export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected
       </button>
       {favourite ? (
         <Heart className="pointer-events-none absolute bottom-1.5 left-1.5 size-4 fill-white text-white drop-shadow" aria-label={t('timeline.favourite')} />
+      ) : null}
+      {photo.live ? (
+        <span className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+          <Aperture className="size-3" aria-hidden />
+          {t('timeline.live')}
+        </span>
       ) : null}
       {photo.kind === 'video' ? (
         <span className="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">

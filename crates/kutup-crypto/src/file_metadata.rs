@@ -80,6 +80,9 @@ pub struct MediaMetadataV1 {
     pub hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// A live photo's video names its still (a file id): shown as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_of: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -157,6 +160,10 @@ impl MediaMetadataV1 {
             if caption.is_empty() || chars(caption) > MAX_CAPTION_CHARS {
                 return Err(invalid("caption"));
             }
+        }
+        if let Some(still) = &self.live_of {
+            crate::drive_object::parse_canonical_uuid(still, "live photo still")
+                .map_err(|_| invalid("liveOf"))?;
         }
         if let Some(hash) = &self.hash {
             let bytes = STANDARD.decode(hash).map_err(|_| invalid("hash"))?;

@@ -33,7 +33,8 @@
     "select": "{{name}} öğesini seç",
     "selectDay": "{{day}} gününün tümünü seç",
     "jump": "Bir aya git",
-    "favourite": "Favori"
+    "favourite": "Favori",
+    "live": "Canlı"
   },
   "upload": {
     "button": "Yükle",
@@ -97,7 +98,12 @@
     "previous": "Önceki",
     "next": "Sonraki",
     "favourite": "Favorilere ekle",
-    "unfavourite": "Favorilerden çıkar"
+    "unfavourite": "Favorilerden çıkar",
+    "converting": "Tam resim hazırlanıyor…",
+    "cannotPlay": "Bu tarayıcı bu videoyu oynatamıyor. İzlemek için indirin.",
+    "live": "Canlı",
+    "liveLoading": "Yükleniyor…",
+    "livePlaying": "Canlı fotoğraf oynatılıyor"
   },
   "info": {
     "taken": "Çekildiği zaman",
@@ -114,7 +120,8 @@
     "myFiles": "Dosyalarım",
     "mapsOff": "Haritalar kapalı. Yerleri haritada görmek için açın.",
     "edit": "Düzenle",
-    "caption": "Açıklama"
+    "caption": "Açıklama",
+    "live": "Canlı fotoğraf videosu"
   },
   "settings": {
     "title": "Ayarlar",

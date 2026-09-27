@@ -43,26 +43,41 @@ self.onmessage = async (event: MessageEvent<PreviewWorkerRequestV1>) => {
     if (safety.classification !== 'previewable' || !safety.detectedMimeType?.startsWith('image/')) {
       throw new Error('image failed preview safety classification')
     }
-    const dimensions = inspectRasterDimensions(bytes, safety.detectedMimeType)
-    if (!dimensions || dimensions.width * dimensions.height > request.maxInputPixels) {
-      throw new Error('image dimensions exceed preview budget')
+    const heif = safety.detectedMimeType === 'image/heic' || safety.detectedMimeType === 'image/heif'
+    const orientation = checkOrientation(request.orientation)
+    let bitmap: ImageBitmap
+    let dimensions: { width: number; height: number } | null
+    if (heif) {
+      // No browser but Safari decodes HEIC: libheif, in this worker, with the
+      // pixel budget checked before any pixels are made.
+      bitmap = await decodeHeif(bytes, request.maxInputPixels)
+      dimensions = { width: bitmap.width, height: bitmap.height }
+    } else {
+      dimensions = inspectRasterDimensions(bytes, safety.detectedMimeType)
+      if (!dimensions || dimensions.width * dimensions.height > request.maxInputPixels) {
+        throw new Error('image dimensions exceed preview budget')
+      }
+      bitmap = await createImageBitmap(new Blob([bytes], { type: safety.detectedMimeType }), {
+        imageOrientation: 'from-image',
+      })
     }
-    const bitmap = await createImageBitmap(new Blob([bytes], { type: safety.detectedMimeType }), {
-      imageOrientation: 'from-image',
-    })
     try {
       if (bitmap.width !== dimensions.width || bitmap.height !== dimensions.height ||
           bitmap.width * bitmap.height > request.maxInputPixels) {
         throw new Error('decoded image dimensions differ from bounded header')
       }
-      const initialScale = Math.min(1, request.maxEdge / Math.max(bitmap.width, bitmap.height))
-      let width = Math.max(1, Math.round(bitmap.width * initialScale))
-      let height = Math.max(1, Math.round(bitmap.height * initialScale))
+      // A quarter turn swaps the sides.
+      const turned = orientation >= 5
+      const shownWidth = turned ? bitmap.height : bitmap.width
+      const shownHeight = turned ? bitmap.width : bitmap.height
+      const initialScale = Math.min(1, request.maxEdge / Math.max(shownWidth, shownHeight))
+      let width = Math.max(1, Math.round(shownWidth * initialScale))
+      let height = Math.max(1, Math.round(shownHeight * initialScale))
       for (;;) {
         const canvas = new OffscreenCanvas(width, height)
         const context = canvas.getContext('2d', { alpha: false })
         if (!context) throw new Error('preview canvas is unavailable')
-        context.drawImage(bitmap, 0, 0, width, height)
+        drawOriented(context, bitmap, width, height, orientation)
         const encoded = await encode(canvas, request.maxOutputBytes, outputTypes)
         if (encoded) {
           post({
@@ -86,6 +101,68 @@ self.onmessage = async (event: MessageEvent<PreviewWorkerRequestV1>) => {
     }
   } catch (error) {
     post({ type: 'error', message: error instanceof Error ? error.message : 'preview generation failed' })
+  }
+}
+
+function checkOrientation(value: number | undefined): number {
+  if (value === undefined) return 1
+  if (!Number.isInteger(value) || value < 1 || value > 8) throw new Error('invalid orientation')
+  return value
+}
+
+/**
+ * Draw `bitmap` into a `width` × `height` canvas as EXIF orientation says it
+ * is shown (1: as stored; 3: half turn; 6 and 8: quarter turns; 2, 4, 5, 7:
+ * the same, mirrored).
+ */
+function drawOriented(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, width: number, height: number, orientation: number): void {
+  const turned = orientation >= 5
+  const w = turned ? height : width
+  const h = turned ? width : height
+  switch (orientation) {
+    case 2: context.setTransform(-1, 0, 0, 1, width, 0); break
+    case 3: context.setTransform(-1, 0, 0, -1, width, height); break
+    case 4: context.setTransform(1, 0, 0, -1, 0, height); break
+    case 5: context.setTransform(0, 1, 1, 0, 0, 0); break
+    case 6: context.setTransform(0, 1, -1, 0, width, 0); break
+    case 7: context.setTransform(0, -1, -1, 0, width, height); break
+    case 8: context.setTransform(0, -1, 1, 0, 0, height); break
+    default: context.setTransform(1, 0, 0, 1, 0, 0)
+  }
+  context.drawImage(bitmap, 0, 0, w, h)
+  context.setTransform(1, 0, 0, 1, 0, 0)
+}
+
+interface HeifImage {
+  get_width(): number
+  get_height(): number
+  is_primary?: () => boolean
+  display(target: { data: Uint8ClampedArray; width: number; height: number }, done: (result: { data: Uint8ClampedArray } | null) => void): void
+  free?: () => void
+}
+
+/** The primary image of a HEIC/HEIF file, decoded by libheif (LGPL-3.0, WASM). */
+async function decodeHeif(bytes: Uint8Array, maxPixels: number): Promise<ImageBitmap> {
+  const { default: factory } = await import('libheif-js/libheif-wasm/libheif-bundle.mjs')
+  const libheif = factory() as { HeifDecoder: new () => { decode(data: Uint8Array): HeifImage[] } }
+  const decoded = new libheif.HeifDecoder().decode(bytes)
+  try {
+    const image = decoded.find((i) => i.is_primary?.()) ?? decoded[0]
+    if (!image) throw new Error('HEIF file has no image')
+    const width = image.get_width()
+    const height = image.get_height()
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width * height > maxPixels) {
+      throw new Error('image dimensions exceed preview budget')
+    }
+    const pixels = await new Promise<Uint8ClampedArray>((resolve, reject) => {
+      image.display({ data: new Uint8ClampedArray(width * height * 4), width, height }, (result) => {
+        if (result) resolve(result.data)
+        else reject(new Error('HEIF could not be decoded'))
+      })
+    })
+    return await createImageBitmap(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, width, height))
+  } finally {
+    for (const image of decoded) image.free?.()
   }
 }
 

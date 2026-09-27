@@ -9,6 +9,7 @@ import { readImageFacts, type ImageFacts } from './exif'
 import { readVideoFacts, type VideoFacts } from './mp4'
 
 export { dateFromFileName, parseCameraDate } from './dates'
+export { looksLive, pairLivePhotos } from './livePhotos'
 
 const IMAGE_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'jpe', 'jfif', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif', 'tiff', 'bmp',
@@ -63,6 +64,7 @@ function clean(media: MediaMetadataV1): MediaMetadataV1 | undefined {
   if (media.camera?.trim()) out.camera = [...media.camera.trim()].slice(0, 100).join('')
   if (media.hash) out.hash = media.hash
   if (media.caption) out.caption = [...media.caption].slice(0, 2000).join('')
+  if (media.liveOf && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(media.liveOf)) out.liveOf = media.liveOf
   return Object.keys(out).length ? out : undefined
 }
 

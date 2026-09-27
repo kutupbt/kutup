@@ -206,6 +206,10 @@
       {
         "input": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"durationMs\":61500,\"width\":1920,\"height\":1080,\"caption\":\"Doğum günü\"}}",
         "output": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"width\":1920,\"height\":1080,\"durationMs\":61500,\"caption\":\"Doğum günü\"}}"
+      },
+      {
+        "input": "{\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"media\":{\"liveOf\":\"22222222-2222-4222-8222-222222222222\",\"durationMs\":2900,\"takenFrom\":\"video\",\"takenAt\":1719835200000}}",
+        "output": "{\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"media\":{\"takenAt\":1719835200000,\"takenFrom\":\"video\",\"durationMs\":2900,\"liveOf\":\"22222222-2222-4222-8222-222222222222\"}}"
       }
     ],
     "invalid": [
@@ -216,7 +220,8 @@
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"lat\":0,\"lon\":0}}",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"takenAt\":1}}",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"width\":10}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"AAAA\"}}"
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"AAAA\"}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"liveOf\":\"not-a-uuid\"}}"
     ],
     "contentHash": {
       "chunks": [

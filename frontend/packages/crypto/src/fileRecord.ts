@@ -39,6 +39,8 @@ export interface MediaMetadataV1 {
   /** SHA-256 of the content, base64. */
   hash?: string
   caption?: string
+  /** A live photo's video: the file id of its still. */
+  liveOf?: string
 }
 
 export interface FileMetadataV1 {

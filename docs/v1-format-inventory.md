@@ -71,7 +71,8 @@ size, media? }`, decoded strictly (unknown fields and out-of-range values
 refused) by the browser (WASM) and the CLI alike. `media` holds a photo's or
 video's details (docs/plans/photos.md): when it was taken (UTC ms, the time
 zone in minutes, and where the date came from), place, size on screen,
-length, camera, a SHA-256 content hash and a caption.
+length, camera, a SHA-256 content hash, a caption and, for a live photo's
+video, `liveOf` (its still's file id).
 
 The Photos library record (`kutup-crypto` `photos_library`, vector
 `photosLibrary`) is one account-private XChaCha20-Poly1305 envelope under an

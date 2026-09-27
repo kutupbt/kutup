@@ -109,6 +109,12 @@ export function InfoPanel({ photo, onClose, onEdit }: { photo: Photo; onClose: (
           </Row>
         ) : null}
         {photo.kind === 'video' && media?.durationMs !== undefined ? <Row label={t('info.length')}>{formatDuration(media.durationMs)}</Row> : null}
+        {photo.live ? (
+          <Row label={t('info.live')}>
+            {photo.live.file.name}
+            {photo.live.media?.durationMs !== undefined ? <span className="block text-muted-foreground">{formatDuration(photo.live.media.durationMs)}</span> : null}
+          </Row>
+        ) : null}
         <Row label={t('info.file')}>
           {file.name}
           <span className="block text-muted-foreground">{formatBytes(file.size, i18n.language)}</span>

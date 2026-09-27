@@ -48,7 +48,7 @@ const DANGEROUS_MIME_TYPES = new Set([
 
 const ACTIVE_WEB_EXTENSIONS = new Set(['html', 'htm', 'xhtml'])
 const DOWNLOAD_ONLY_EXTENSIONS = new Set([
-  '7z', 'bz2', 'docm', 'gz', 'heic', 'heif', 'iso', 'ods', 'odt', 'pptm',
+  '7z', 'bz2', 'docm', 'gz', 'iso', 'ods', 'odt', 'pptm',
   'rar', 'rtf', 'svg', 'tar', 'tgz', 'txt', 'xlsm', 'xml', 'xz', 'yaml',
   'yml', 'zip',
 ])
@@ -60,6 +60,9 @@ const PREVIEW_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   flac: 'audio/flac',
   gif: 'image/gif',
+  // iPhone photos: decoded in the preview worker with libheif (docs/plans/photos.md).
+  heic: 'image/heic',
+  heif: 'image/heif',
   jpeg: 'image/jpeg',
   jpg: 'image/jpeg',
   m4a: 'audio/mp4',
@@ -270,6 +273,14 @@ export function detectFileSignature(bytes: Uint8Array): DetectedSignature | unde
   if (bytes.length >= 12 && matchesAscii(bytes, 'ftyp', 4)) {
     const brand = ascii(bytes.subarray(8, 12))
     if (brand === 'avif' || brand === 'avis') return detected('image/avif')
+    if (HEIC_BRANDS.has(brand)) return detected('image/heic')
+    if (brand === 'mif1' || brand === 'msf1') {
+      // A generic HEIF brand: the compatible brands say which.
+      const compatible = ftypCompatibleBrands(bytes)
+      if (compatible.some((b) => b === 'avif' || b === 'avis')) return detected('image/avif')
+      if (compatible.some((b) => HEIC_BRANDS.has(b))) return detected('image/heic')
+      return detected('image/heif')
+    }
     if (brand === 'M4A ' || brand === 'M4B ') return detected('audio/mp4')
     return detected('video/mp4')
   }
@@ -277,6 +288,18 @@ export function detectFileSignature(bytes: Uint8Array): DetectedSignature | unde
     return { mimeType: 'image/svg+xml', previewable: false }
   }
   return undefined
+}
+
+/** HEVC-coded HEIF (what iPhones write). */
+const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs'])
+
+/** The ftyp box's compatible brands, within its size and the bytes at hand. */
+function ftypCompatibleBrands(bytes: Uint8Array): string[] {
+  const size = ((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>> 0
+  const end = Math.min(bytes.length, size, 256)
+  const brands: string[] = []
+  for (let at = 16; at + 4 <= end; at += 4) brands.push(ascii(bytes.subarray(at, at + 4)))
+  return brands
 }
 
 function detected(mimeType: string): DetectedSignature {
@@ -289,6 +312,8 @@ function signaturesAgree(expected: string, actual: string, extension: string): b
     return ['docx', 'pptx', 'xlsx'].includes(extension)
   }
   if (expected === 'video/ogg' && actual === 'audio/ogg') return true
+  // .heic and .heif are used for either.
+  if ((expected === 'image/heic' || expected === 'image/heif') && (actual === 'image/heic' || actual === 'image/heif')) return true
   if (extension === 'webm' && expected === 'audio/webm' && actual === 'video/webm') return true
   return false
 }
@@ -296,6 +321,9 @@ function signaturesAgree(expected: string, actual: string, extension: string): b
 function mimeTypesAgree(expected: string, actual: string, extension: string): boolean {
   if (expected === actual) return true
   if (extension === 'jpg' || extension === 'jpeg') return actual === 'image/jpg'
+  if (extension === 'heic' || extension === 'heif') {
+    return ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'].includes(actual)
+  }
   if (extension === 'mp3') return actual === 'audio/mp3'
   if (extension === 'ogg' || extension === 'oga' || extension === 'ogv') {
     return actual === 'application/ogg' || actual === 'audio/ogg' || actual === 'video/ogg'

@@ -1,7 +1,7 @@
 # Photos
 
-**Status:** slices 1 and 2 implemented 2026-09-26 and 2026-09-27 (details
-below, under "Slice 1 done" and "Slice 2 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
+**Status:** slices 1 to 3 implemented 2026-09-26 and 2026-09-27 (details
+below, under "Slice 1 done", "Slice 2 done" and "Slice 3 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
 owner asked for it after Maps: "continue with photos". The roadmap's
 decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
 - photos are Drive files in folders you choose;
@@ -343,6 +343,34 @@ own plan.
   trash listing now carries thumbnail stamps, and a trashed file's owner may
   read them); restore and delete forever. Drive's trash module moved to
   `drive-core`.
+
+## Slice 3 done (2026-09-27)
+
+- **HEIC/HEIF:** recognized by its `ftyp` brands (compatible brands too)
+  and decoded in the preview worker with libheif-js 1.23 (LGPL-3.0, WASM,
+  loaded only for such files); Safari draws the original, other browsers
+  get it converted on the device (up to 4096 px) in the viewer. Its size
+  comes from its `ispe` box, its tags from ExifReader.
+- **RAW** (DNG, CR2, CR3, NEF, NRW, ARW, ORF, RW2, PEF, SRW, RAF): the
+  largest embedded baseline or progressive JPEG (TIFF directories, RAF's
+  header, a bounded scan for CR3; lossless sensor data skipped), turned by
+  the RAW's orientation; thumbnails and the viewer use it. Drive treats
+  these names as images too.
+- **Photo budget:** thumbnails of photos (in Drive as in Photos) allow up to
+  64 MP and 128 MiB; HEIC and RAW always get the large thumbnail.
+- **Live photos:** `media.liveOf` (the still's file id) in the format and
+  its vector. Uploading a still and a short video with one name (Ente's
+  rules: one of each, `_3`/`_HEVC` ignored, at most 6 s, taken within a day)
+  uploads the still first and the video naming it. The library shows one
+  tile with a Live badge; the viewer plays the video over the still; trash
+  and ZIP downloads take both. Pairs uploaded elsewhere are not paired
+  after the fact yet.
+- **Video:** a video the browser cannot play (HEVC outside Safari) says so
+  and offers the download. Seeking while streaming still needs a seekable
+  file suite (see above).
+
+Checked in Chromium: HEIC thumbnails and the converted HEIC in the viewer,
+a RAW's preview turned upright, a live photo as one tile that plays.
 
 ## Open questions
 

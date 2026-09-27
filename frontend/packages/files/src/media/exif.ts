@@ -4,6 +4,7 @@
 
 import type ExifReaderType from 'exifreader'
 import { parseCameraDate, type TakenDate } from './dates'
+import { heifSize } from './heif'
 
 export interface ImageFacts {
   taken?: TakenDate
@@ -107,7 +108,7 @@ export async function readImageFacts(file: Blob): Promise<ImageFacts> {
     facts.lat = lat
     facts.lon = lon
   }
-  const size = dimensions(tags)
+  const size = dimensions(tags) ?? (/\.(heic|heif)$/i.test((file as File).name ?? '') || file.type === 'image/heic' || file.type === 'image/heif' ? await heifSize(file) : undefined)
   if (size) Object.assign(facts, size)
   const name = camera(tags)
   if (name) facts.camera = name

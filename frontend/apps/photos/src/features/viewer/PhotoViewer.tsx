@@ -1,9 +1,11 @@
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, Eye, EyeOff, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
+import { Aperture, Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, Eye, EyeOff, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useTrashFile } from '@kutup/drive-core/mutations'
 import { readOriginal } from '@kutup/drive-core/original'
+import { isRawName } from '@kutup/files/media/raw'
+import { displayableImage } from '@kutup/files/thumbnails'
 import { useRequiredSession } from '@kutup/session/store'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import {
@@ -18,7 +20,7 @@ import { Spinner } from '@kutup/ui/components/states'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatTaken } from '../library/format'
 import { mayWrite } from '../library/catchUp'
-import type { Photo } from '../library/library'
+import { filesOf, type Photo } from '../library/library'
 import { useLibraryContext } from '../library/libraryContext'
 import type { MarkKind } from '../library/marks'
 import { mayTrash } from '../timeline/mayTrash'
@@ -133,17 +135,93 @@ function useOriginal(photo: Photo): Original {
   return original
 }
 
+/**
+ * A live photo's motion: played once over the still when its button is
+ * pressed (again to stop). Downloaded on first use.
+ */
+function LivePlayer({ video }: { video: Photo }) {
+  const { t } = useTranslation()
+  const [playing, setPlaying] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+  const held = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    if (!playing || url) return
+    let alive = true
+    const { url: loading, release } = acquireOriginal(video, () => {})
+    held.current = release
+    loading.then(
+      (u) => alive && setUrl(u),
+      () => alive && setPlaying(false),
+    )
+    return () => {
+      alive = false
+    }
+  }, [playing, url, video])
+  useEffect(() => () => held.current?.(), [])
+  return (
+    <>
+      {playing && url ? (
+        <video
+          src={url}
+          autoPlay
+          muted
+          playsInline
+          onEnded={() => setPlaying(false)}
+          // Over the still, the same size as it.
+          className="absolute inset-0 z-[1] size-full bg-black object-contain"
+          aria-label={t('viewer.livePlaying')}
+        />
+      ) : null}
+      <button
+        type="button"
+        aria-pressed={playing}
+        onClick={() => setPlaying((v) => !v)}
+        className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+      >
+        <Aperture className="size-3.5" aria-hidden />
+        {playing && !url ? t('viewer.liveLoading') : t('viewer.live')}
+      </button>
+    </>
+  )
+}
+
 function Picture({ photo }: { photo: Photo }) {
   const { t } = useTranslation()
   const small = useThumbnail(photo.file, 'sm')
   const large = useThumbnail(photo.file, 'lg')
   const original = useOriginal(photo)
-  const [undrawable, setUndrawable] = useState(false)
-  useEffect(() => setUndrawable(false), [photo.id])
+  const raw = isRawName(photo.file.name ?? '')
+  // RAW never draws; HEIC draws in Safari only. Either is converted here.
+  const [undrawable, setUndrawable] = useState(raw)
+  const [converted, setConverted] = useState<string | null>(null)
+  const [unplayable, setUnplayable] = useState(false)
+  useEffect(() => {
+    setUndrawable(raw)
+    setConverted(null)
+    setUnplayable(false)
+  }, [photo.id, raw])
+  useEffect(() => {
+    if (photo.kind !== 'image' || !undrawable || original.state !== 'ready') return
+    let alive = true
+    let made: string | null = null
+    void fetch(original.url)
+      .then((r) => r.blob())
+      .then((blob) => displayableImage(new File([blob], photo.file.name ?? 'photo', { type: photo.file.mimeType })))
+      .then((jpeg) => {
+        if (!jpeg || !alive) return
+        made = URL.createObjectURL(jpeg)
+        setConverted(made)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      if (made) URL.revokeObjectURL(made)
+    }
+  }, [photo.id, photo.kind, photo.file.name, photo.file.mimeType, undrawable, original])
   const preview = large ?? small
 
   if (photo.kind === 'video') {
-    if (original.state === 'ready') {
+    if (original.state === 'ready' && !unplayable) {
       return (
         <video
           key={photo.id}
@@ -151,6 +229,7 @@ function Picture({ photo }: { photo: Photo }) {
           controls
           autoPlay
           playsInline
+          onError={() => setUnplayable(true)}
           className="max-h-full max-w-full"
           aria-label={photo.file.name ?? ''}
         />
@@ -167,6 +246,8 @@ function Picture({ photo }: { photo: Photo }) {
             </>
           ) : original.state === 'unavailable' ? (
             <span>{t('viewer.videoTooLarge')}</span>
+          ) : unplayable ? (
+            <span>{t('viewer.cannotPlay')}</span>
           ) : (
             <span>{t('viewer.failed')}</span>
           )}
@@ -176,23 +257,29 @@ function Picture({ photo }: { photo: Photo }) {
   }
 
   const showOriginal = original.state === 'ready' && !undrawable
+  const shown = converted ?? (showOriginal ? original.url : null)
+  const converting = undrawable && original.state === 'ready' && !converted
   return (
     <div className="relative flex size-full items-center justify-center">
-      {!showOriginal && preview ? (
-        <img src={preview} alt="" className="max-h-full max-w-full object-contain" draggable={false} />
-      ) : null}
-      {original.state === 'ready' && !undrawable ? (
+      {photo.live ? <LivePlayer video={photo.live} /> : null}
+      {!shown && preview ? <img src={preview} alt="" className="max-h-full max-w-full object-contain" draggable={false} /> : null}
+      {shown ? (
         <img
-          key={photo.id}
-          src={original.url}
+          key={`${photo.id}:${converted ? 'converted' : 'original'}`}
+          src={shown}
           alt={photo.file.name ?? ''}
           draggable={false}
-          onError={() => setUndrawable(true)}
+          onError={() => (converted ? setConverted(null) : setUndrawable(true))}
           className="max-h-full max-w-full object-contain"
         />
       ) : null}
-      {original.state === 'loading' && !preview ? <Spinner label={t('viewer.loading')} className="text-white" /> : null}
-      {undrawable || original.state === 'unavailable' || original.state === 'failed' ? (
+      {(original.state === 'loading' && !preview) || converting ? (
+        <span className="absolute bottom-4 flex items-center gap-2 rounded-md bg-black/60 px-3 py-1.5 text-xs text-white/85">
+          <Spinner label={converting ? t('viewer.converting') : t('viewer.loading')} className="text-white" />
+          {converting ? t('viewer.converting') : null}
+        </span>
+      ) : null}
+      {!converted && !converting && (undrawable || original.state === 'unavailable' || original.state === 'failed') ? (
         <p className="absolute bottom-4 rounded-md bg-black/60 px-3 py-1.5 text-xs text-white/85">
           {undrawable ? t('viewer.cannotDraw') : original.state === 'failed' ? t('viewer.failed') : t('viewer.showingPreview')}
         </p>
@@ -409,15 +496,16 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
         pending={trash.isPending}
         errorFallback={t('selection.trashFailed', { count: 1 })}
         onConfirm={() => {
-          trash.mutate(
-            { folder: photo.folder, file: photo.file },
-            {
-              onSuccess: () => {
-                setTrashing(false)
-                leave()
-                toast.success(t('selection.trashed', { count: 1 }))
-              },
+          // A live photo's video goes with its still.
+          void (async () => {
+            for (const part of filesOf(photo)) await trash.mutateAsync({ folder: part.folder, file: part.file })
+          })().then(
+            () => {
+              setTrashing(false)
+              leave()
+              toast.success(t('selection.trashed', { count: 1 }))
             },
+            () => toast.error(t('selection.trashFailed', { count: 1 })),
           )
         }}
       />

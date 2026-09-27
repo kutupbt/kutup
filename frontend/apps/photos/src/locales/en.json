@@ -33,7 +33,8 @@
     "select": "Select {{name}}",
     "selectDay": "Select all of {{day}}",
     "jump": "Jump to a month",
-    "favourite": "Favourite"
+    "favourite": "Favourite",
+    "live": "Live"
   },
   "upload": {
     "button": "Upload",
@@ -89,7 +90,7 @@
     "loadingVideo": "Downloading the video…",
     "videoTooLarge": "This video is too large to play here. Download it to watch it.",
     "failed": "This could not be opened. Try again, or download it.",
-    "cannotDraw": "This browser cannot show this format. Showing its preview.",
+    "cannotDraw": "This browser cannot show this format. Showing its preview; download the original.",
     "showingPreview": "Showing a preview: the original is too large to open here.",
     "dateUnknown": "Date taken unknown",
     "download": "Download",
@@ -97,7 +98,12 @@
     "previous": "Previous",
     "next": "Next",
     "favourite": "Add to favourites",
-    "unfavourite": "Remove from favourites"
+    "unfavourite": "Remove from favourites",
+    "converting": "Preparing the full picture…",
+    "cannotPlay": "This browser cannot play this video. Download it to watch it.",
+    "live": "Live",
+    "liveLoading": "Loading…",
+    "livePlaying": "Live photo playing"
   },
   "info": {
     "taken": "Taken",
@@ -114,7 +120,8 @@
     "myFiles": "My files",
     "mapsOff": "Maps are off. Turn them on to see places on a map.",
     "edit": "Edit",
-    "caption": "Caption"
+    "caption": "Caption",
+    "live": "Live photo video"
   },
   "settings": {
     "title": "Settings",

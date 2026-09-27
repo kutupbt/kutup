@@ -17,7 +17,7 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { useLibraryContext } from '../library/libraryContext'
 import type { MarkKind } from '../library/marks'
-import type { Photo } from '../library/library'
+import { filesOf, type Photo } from '../library/library'
 import { downloadPhoto, downloadPhotosZip, FsaRequiredError } from './downloads'
 import { mayTrash } from './mayTrash'
 
@@ -29,7 +29,9 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
   const [confirming, setConfirming] = useState(false)
   const [sharing, setSharing] = useState<FileShareTarget | null>(null)
   const [downloading, setDownloading] = useState(false)
-  const trashable = photos.filter((p) => mayTrash(p, session.userId))
+  const trashablePhotos = photos.filter((p) => mayTrash(p, session.userId))
+  // A live photo's video goes with its still.
+  const trashable = trashablePhotos.flatMap(filesOf)
   const only = photos.length === 1 ? photos[0] : null
   const role = only ? shareRole(only.folder, only.file) : null
   const { marks } = useLibraryContext()
@@ -58,7 +60,7 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
       else {
         const id = toast.loading(t('selection.zipping', { done: 0, count: photos.length }))
         try {
-          await downloadPhotosZip(photos, t('selection.archiveName'), (done, total) =>
+          await downloadPhotosZip(photos.flatMap(filesOf), t('selection.archiveName'), (done, total) =>
             toast.loading(t('selection.zipping', { done, count: total }), { id }),
           )
           toast.dismiss(id)
@@ -87,7 +89,7 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
     setConfirming(false)
     onClear()
     if (failed > 0) toast.error(t('selection.trashFailed', { count: failed }))
-    else toast.success(t('selection.trashed', { count: trashable.length }))
+    else toast.success(t('selection.trashed', { count: trashablePhotos.length }))
   }
 
   return (
@@ -128,7 +130,7 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
             {allHidden ? <Eye /> : <EyeOff />}
             {allHidden ? t('selection.unhide') : t('selection.hide')}
           </DropdownMenuItem>
-          {trashable.length > 0 ? (
+          {trashablePhotos.length > 0 ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setConfirming(true)}>
@@ -142,13 +144,13 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
       <ConfirmDestructive
         open={confirming}
         onOpenChange={setConfirming}
-        title={t('selection.trashTitle', { count: trashable.length })}
-        description={t('selection.trashDescription', { count: trashable.length })}
-        warning={trashable.length < photos.length ? t('selection.trashSome', { count: photos.length - trashable.length }) : undefined}
+        title={t('selection.trashTitle', { count: trashablePhotos.length })}
+        description={t('selection.trashDescription', { count: trashablePhotos.length })}
+        warning={photos.some((p) => !mayTrash(p, session.userId)) ? t('selection.trashSome', { count: photos.filter((p) => !mayTrash(p, session.userId)).length }) : undefined}
         warningVariant="warn"
         submit={t('selection.trash')}
         pending={trash.isPending}
-        errorFallback={t('selection.trashFailed', { count: trashable.length })}
+        errorFallback={t('selection.trashFailed', { count: trashablePhotos.length })}
         onConfirm={() => void moveToTrash()}
       />
       <FileShareDialog target={sharing} onClose={() => setSharing(null)} />

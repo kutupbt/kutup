@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import type { MediaMetadataV1 } from '@kutup/crypto'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
@@ -9,7 +10,7 @@ import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
 import { uploads } from '@kutup/drive-ui/uploadStore'
-import { mediaKindOf, readMedia } from '@kutup/files/media'
+import { looksLive, mediaKindOf, pairLivePhotos, readMedia } from '@kutup/files/media'
 import { thumbnailsOfImage, thumbnailsOfVideo } from '@kutup/files/thumbnails'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
 import api, { freshAccessToken } from '@kutup/session/client'
@@ -17,11 +18,31 @@ import { updateSession } from '@kutup/session/store'
 import { duplicateKey, duplicateKeys, type Photo } from '../library/library'
 import { ensureUploadFolder, useSavePreferences, type PhotosPreferences } from '../library/preferences'
 
+/** A still in the library now: its file id and details (for its live video). */
+interface Still {
+  id: string
+  media: MediaMetadataV1 | undefined
+}
+
+/**
+ * What a still's upload came to. The queue runs one job at a time in order
+ * and a still is queued before its video, so when the video runs the still
+ * has finished — or was cancelled, never ran, and left this empty.
+ */
+class StillOutcome {
+  value: Still | null = null
+  settle(value: Still | null) {
+    this.value = value
+  }
+}
+
 /**
  * Upload photos and videos into the upload folder (docs/plans/photos.md):
  * each one's details are read first and sealed with it; one the library
- * already has (same name, same content) is skipped, as Ente does. Anything
- * that is not a photo or a video is left out, and the person is told.
+ * already has (same name, same content) is skipped, as Ente does. A still and
+ * a short video with one name become a live photo: the still goes first and
+ * the video names it. Anything that is not a photo or a video is left out,
+ * and the person is told.
  */
 export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPreferences | undefined) {
   const { t } = useTranslation()
@@ -33,7 +54,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
   const libraryKeys = useMemo(() => duplicateKeys(photos), [photos])
   const library = useRef(libraryKeys)
   library.current = libraryKeys
-  const added = useRef(new Set<string>())
+  const added = useRef(new Map<string, string>())
 
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
@@ -58,15 +79,29 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
     return folder
   }, [identity.data, preferences, queryClient, save])
 
+  /**
+   * One file. `still` is the upload its live photo video waits for; `done`
+   * reports this file's id (a still's, for its video).
+   */
   const uploadOne = useCallback(
-    async (folder: Folder, file: File, signal: AbortSignal, progress: (sent: number, total: number) => void) => {
+    async (
+      folder: Folder,
+      file: File,
+      signal: AbortSignal,
+      progress: (sent: number, total: number) => void,
+      still: StillOutcome | undefined,
+      done: (still: Still | null) => void,
+    ): Promise<'skipped' | undefined> => {
       if (!folder.key) throw new Error('folder is not open')
-      const media = await readMedia(file, signal)
+      let media = await readMedia(file, signal)
       const key = media?.hash ? duplicateKey(file.name, media.hash) : null
-      if (key) {
-        if (library.current.has(key) || added.current.has(key)) return 'skipped' as const
-        added.current.add(key)
+      const existing = key ? (library.current.get(key) ?? added.current.get(key)) : undefined
+      if (existing) {
+        done({ id: existing, media })
+        return 'skipped'
       }
+      const paired = still?.value
+      if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
       try {
         uploaded = await streamUpload({
@@ -78,10 +113,11 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
           media,
         })
       } catch (error) {
-        // Not uploaded after all: trying again is not a duplicate.
-        if (key) added.current.delete(key)
+        done(null)
         throw error
       }
+      if (key) added.current.set(key, uploaded.fileId)
+      done({ id: uploaded.fileId, media })
       // Its thumbnails, from the plaintext still in hand, in the background.
       enqueueThumbnail(uploaded.fileId, async () => {
         const made = mediaKindOf(file.name, file.type) === 'video' ? await thumbnailsOfVideo(file) : await thumbnailsOfImage(file)
@@ -109,26 +145,47 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
         toast.error(t('upload.noFolder'))
         return
       }
+      // Live photos: each still before its video, which waits for it.
+      const pairs = pairLivePhotos(media)
+      const stillOf = new Map<File, File>(pairs)
+      const outcomes = new Map<File, StillOutcome>()
+      for (const still of pairs.values()) outcomes.set(still, new StillOutcome())
+      const ordered = [...media].sort((a, b) => Number(stillOf.has(a)) - Number(stillOf.has(b)))
       const folderName = folder.name ?? ''
       uploads.add(
-        media.map((file) => ({
-          name: file.name,
-          folderName,
-          total: file.size,
-          run: async (signal, progress) => {
-            try {
-              return await uploadOne(folder, file, signal, progress)
-            } catch (error) {
-              // Its owner re-keyed it meanwhile: once more, under the new key.
-              if (!isFolderKeyChanged(error)) throw error
-              await queryClient.invalidateQueries({ queryKey: foldersKey })
-              const fresh = cachedFolderIndex(queryClient)?.byId.get(folder.id)
-              if (!fresh?.key) throw error
-              folder = fresh
-              return uploadOne(fresh, file, signal, progress)
-            }
-          },
-        })),
+        ordered.map((file) => {
+          const own = outcomes.get(file)
+          const pairedStill = stillOf.get(file)
+          const still = pairedStill ? outcomes.get(pairedStill) : undefined
+          const done = (value: Still | null) => own?.settle(value)
+          return {
+            name: file.name,
+            folderName,
+            total: file.size,
+            run: async (signal: AbortSignal, progress: (sent: number, total: number) => void) => {
+              try {
+                return await uploadOne(folder, file, signal, progress, still, done)
+              } catch (error) {
+                // Its owner re-keyed it meanwhile: once more, under the new key.
+                if (!isFolderKeyChanged(error)) {
+                  done(null)
+                  throw error
+                }
+                await queryClient.invalidateQueries({ queryKey: foldersKey })
+                const fresh = cachedFolderIndex(queryClient)?.byId.get(folder.id)
+                if (!fresh?.key) {
+                  done(null)
+                  throw error
+                }
+                folder = fresh
+                return uploadOne(fresh, file, signal, progress, still, done).catch((again: unknown) => {
+                  done(null)
+                  throw again
+                })
+              }
+            },
+          }
+        }),
         settled,
         classifyUploadError,
       )

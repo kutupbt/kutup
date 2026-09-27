@@ -440,8 +440,8 @@ reference are in `kutup-references/` (`ente`, `comaps`).
 
 An end-to-end encrypted photo and video library on `photos.<domain>`.
 Plan: docs/plans/photos.md (2026-09-26); slices 1 (the app, the timeline,
-the viewer, details read on the device) and 2 (favourites, archive, hidden,
-Places, editing, trash) are done.
+the viewer, details read on the device), 2 (favourites, archive, hidden,
+Places, editing, trash) and 3 (HEIC, RAW, live photos) are done.
 Reference mostly Ente (`kutup-references/ente`: on-device face grouping,
 the Places map, the timeline); Proton's Photos section in its Drive web app
 (`kutup-references/WebClients/applications/drive/src/app/photos`, with

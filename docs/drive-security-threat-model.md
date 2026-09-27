@@ -54,7 +54,12 @@ Previews are made by clients and sealed under the file key
   bounded preview worker; PDFs through pinned PDF.js in its worker with no
   scripting, no XFA and no external fetches (64 MiB cap, 16 MP images);
   videos through the browser's own decoder, one frame under a deadline.
-  This is the same exposure as opening the file, done without the click.
+  HEIC/HEIF is decoded by libheif (WASM, loaded only for such files) in the
+  same worker, its pixel count checked before any pixels are made; a RAW
+  file is never decoded, only a bounded directory walk that cuts out its
+  embedded JPEG, which then takes the image path. Photos may be up to
+  64 MP and 128 MiB. This is the same exposure as opening the file, done
+  without the click.
 
 ## Write rights and accounting
 
