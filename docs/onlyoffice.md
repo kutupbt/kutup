@@ -59,7 +59,7 @@ frontend/public/onlyoffice/
 └── FILES.sha512                ← whole-tree integrity manifest
 ```
 
-**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. `v9` corresponds to a specific OO upstream commit pinned in CryptPad's `install-onlyoffice.sh`.
+**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<CryptPad version>.<n>`: currently `kutup-v9.2.0.119+5.1` and `kutup-v7.3+1.1`, byte-identical in content to CryptPad's `v9.2.0.119+5` and `v7.3+1` (docs/plans/onlyoffice-default-bundling.md).
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
 
@@ -82,25 +82,32 @@ Compose prerequisite.
 
 ---
 
-## The cost: we ride CryptPad's cadence
+## Our forks, and CryptPad upstream
 
-We do not get OnlyOffice upgrades automatically. Specifically:
+Kutup holds the OnlyOffice source it ships: the forks carry OnlyOffice's
+`sdkjs`, `web-apps` and `core` (as git subtrees) with CryptPad's changes, and
+Kutup's own changes go on their `kutup` branches. So Kutup can:
 
-- **No PDF editor** — OnlyOffice 8.x ships a dedicated `pdfeditor` web-app. CryptPad's `v9` does not include it (the `sdkjs/pdf/` runtime is bundled but the UI app is not). Until CryptPad pulls pdfeditor into a future bundle, kutup PDFs stay in the read-only `PdfViewer.tsx` (pdf.js).
-- **New OO features lag.** A feature shipped upstream in OO 8.3 lands in kutup whenever CryptPad next bumps. Their cadence is "every few months" historically.
-- **Security patches** in OO that don't touch the patches CryptPad maintains can be hand-cherry-picked, but in practice we wait for the next CryptPad bundle.
+- fix or change the editor or converter itself, without waiting for CryptPad;
+- take CryptPad's new bundles by merging their tags into `kutup`; and
+- take OnlyOffice upstream directly (`git subtree pull`, as each fork's
+  README says), for example the PDF editor, which CryptPad's `v9` does not
+  include, or a security fix.
 
-This tradeoff is intentional. The alternative — maintaining a parallel patch set against upstream OO — would mean a permanent staffed maintenance cost. For a project of kutup's scale, riding CryptPad's cadence is right.
+What it costs: every change is ours to build, test and carry across
+updates. Each fork's `KUTUP.md` says how to build and release.
 
 ---
 
-## When CryptPad ships a new bundle
+## Updating the editor or converter
 
-The maintainer procedure is:
-
-1. CryptPad publishes and identifies the replacement editor and x2t sources.
-2. Update `assets.lock.json` in `kutupbt/kutup-office-assets` with immutable
-   commits, artifact sizes, hashes, license inputs, and the new package version.
+1. Change the fork's `kutup` branch (a CryptPad tag merged in, an OnlyOffice
+   subtree pull, or a Kutup change), build it (`make build`; x2t with
+   `docker build`, see `KUTUP.md`) and release it as `kutup-<version>.<n>`
+   with the source commit in the notes.
+2. Update `assets.lock.json` in `kutupbt/kutup-office-assets` with the
+   release's commit, artifact size and hashes, license inputs, and the new
+   package version; update `install-onlyoffice.sh` to match.
 3. Build and run the independent verifier locally; inspect that the visible
    OnlyOffice logo and attribution remain present.
 4. Update `inner.html` if the bridge contract shifted and update its editor path
@@ -109,8 +116,6 @@ The maintainer procedure is:
    refresh, and logo visibility.
 6. Publish an AMD64/ARM64 OCI index, then update Kutup's Dockerfile to its exact
    digest and repeat the clean-clone Compose test.
-
-We do **not** maintain forks of CryptPad's patches. If kutup ever needs a behavior CryptPad doesn't expose (e.g. PDF editing, custom export filters), the right move is to upstream a feature request to CryptPad rather than fork.
 
 ---
 

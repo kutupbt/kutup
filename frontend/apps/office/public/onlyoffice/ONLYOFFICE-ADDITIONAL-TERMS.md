@@ -15,11 +15,11 @@ repository-level AGPL text. Those notices state that:
 
 The exact notices can be reviewed in the pinned corresponding source:
 
-- `cryptpad/onlyoffice-editor` commit
-  `4fcd833d00b3ba9852165874533925c7db2c4c56`, for example
+- `kutupbt/onlyoffice-editor` commit
+  `f32516e64b1ac04cbad6036ab394278c04ec8930`, for example
   `sdkjs/common/Local/license.js`; and
-- `cryptpad/onlyoffice-x2t-wasm` commit
-  `a9b92bc026dea7c2160fb31839ef74d58d9c3652`, for example
+- `kutupbt/onlyoffice-x2t-wasm` commit
+  `13c7f37c6efac8fb552b6266355a99136a3fb062`, for example
   `core/X2tConverter/src/main.cpp`.
 
 ONLYOFFICE is a trademark of its respective owner. Kutup does not grant

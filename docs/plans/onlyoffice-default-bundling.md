@@ -280,6 +280,39 @@ Completed locally on 2026-08-16 without a hosted CI run:
   the default stack reached full health, and a real XLSX edit/save browser
   smoke test passed with zero retries.
 
+## Built from Kutup's forks (2026-09-27)
+
+The product owner asked for OnlyOffice as source Kutup holds and can change,
+not a download of someone else's build. CryptPad's two build repositories
+(which carry OnlyOffice's `sdkjs`, `web-apps` and `core` as git subtrees
+with CryptPad's changes) were forked:
+
+- [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor):
+  branch `kutup` at `f32516e64b1ac04cbad6036ab394278c04ec8930` (CryptPad's
+  `v9.2.0.119+5` plus a fork notice and a build fix: pnpm 10.28.2 and Node
+  24 pinned, since the unpinned installer now brings pnpm 11); release
+  `kutup-v9.2.0.119+5.1`, SHA-512
+  `9fb2fa83146e689ed33393cad8fcedc2268b3443a6c0bd392a5ad23f6db1da75aaf97ad0a53796a83dbb4e72a793b93e50cd467340308e9da263dfed40f6b626`;
+- [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm):
+  branch `kutup` at `13c7f37c6efac8fb552b6266355a99136a3fb062` (CryptPad's
+  `v7.3+1` plus a fork notice and a build fix: boost 1.84.0 from its release
+  tarball, checked by SHA-256, instead of cloning ~150 submodules); release
+  `kutup-v7.3+1.1`, SHA-512
+  `1497bc72f2d6a00ceeea719496f29f2d7c02fb651b28a243557a566fe58a8df7ca4baa278857e5bf7be3990bc235040e61fc2b6e08ab610a71a7ebcfc389f918`.
+
+Both builds reproduce CryptPad's releases exactly: the editor's 16,602 files
+and x2t's `x2t.wasm` and `x2t.js` are byte-identical; only the zip archives
+differ (timestamps). The template files still come from `cryptpad/cryptpad`.
+`kutup-office-assets` bundle `2026.09.27-kutup-v9` pins the forks' releases
+(its lock records CryptPad's releases as each component's upstream), and
+`install-onlyoffice.sh` downloads the same. The bundle is published as
+`ghcr.io/kutupbt/kutup-office-assets:2026.09.27-kutup-v9`, OCI index digest
+`sha256:bec3e1204a3cb1b712317915d3cb3b61b83303964d85655990cf41a122a3e38b`, which Kutup's `frontend/Dockerfile` pins. Checked in a browser on the dev
+stack: a new document took typing, saved, and downloaded as a `.docx` (x2t in
+the browser) containing the text; a spreadsheet and a presentation opened.
+Kutup's own changes to OnlyOffice go on the forks' `kutup` branches, each
+fork's `KUTUP.md` says how to build, release and update from upstream.
+
 ## Primary upstream references
 
 - <https://github.com/cryptpad/onlyoffice-editor/tree/v9.2.0.119%2B5>

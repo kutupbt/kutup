@@ -5,8 +5,9 @@
 # This fallback downloads the same pinned third-party assets and applicable
 # license texts into frontend/apps/office/public/onlyoffice/ (gitignored).
 #
-# Bundle sources: cryptpad's pinned forks of OnlyOffice and x2t-wasm.
-# We mirror a CryptPad approach but pin v9 only — older versions are
+# Bundle sources: Kutup's forks of CryptPad's OnlyOffice builds
+# (kutupbt/onlyoffice-editor, kutupbt/onlyoffice-x2t-wasm), whose releases
+# are built from their `kutup` branches. We pin v9 only — older versions are
 # omitted to save ~80% of disk; we'll backfill if a real legacy doc breaks.
 #
 # Usage:  ./install-onlyoffice.sh
@@ -23,16 +24,16 @@ LICENSE_DEST="$ASSET_ROOT/LICENSES"
 
 # Pinned versions. Bumping these means re-testing the OnlyOffice integration;
 # private API signatures (asc_nativeGetFile, asc_setRestriction, …) can drift.
-OO_VERSION="v9.2.0.119+5"
-OO_SOURCE_COMMIT="4fcd833d00b3ba9852165874533925c7db2c4c56"
-OO_SHA512="1f1184fb04cf72a7eb2a49a9740074b5419486c79e1fd713e1f8c09b8594a826050ae941fed6ac6a96807ba73cc751d7c807bd7e6b73de9e4f8e74cd5ed04cfa"
-X2T_VERSION="v7.3+1"
-X2T_SOURCE_COMMIT="a9b92bc026dea7c2160fb31839ef74d58d9c3652"
-X2T_SHA512="ab0c05b0e4c81071acea83f0c6a8e75f5870c360ec4abc4af09105dd9b52264af9711ec0b7020e87095193ac9b6e20305e446f2321a541f743626a598e5318c1"
+OO_VERSION="kutup-v9.2.0.119+5.1"
+OO_SOURCE_COMMIT="f32516e64b1ac04cbad6036ab394278c04ec8930"
+OO_SHA512="9fb2fa83146e689ed33393cad8fcedc2268b3443a6c0bd392a5ad23f6db1da75aaf97ad0a53796a83dbb4e72a793b93e50cd467340308e9da263dfed40f6b626"
+X2T_VERSION="kutup-v7.3+1.1"
+X2T_SOURCE_COMMIT="13c7f37c6efac8fb552b6266355a99136a3fb062"
+X2T_SHA512="1497bc72f2d6a00ceeea719496f29f2d7c02fb651b28a243557a566fe58a8df7ca4baa278857e5bf7be3990bc235040e61fc2b6e08ab610a71a7ebcfc389f918"
 
 # CryptPad source tree commit that hosts the three "empty document" templates
 # (oodoc_base.js / oocell_base.js / ooslide_base.js). These template JS files
-# are NOT in the cryptpad/onlyoffice-editor release tarball — they live in
+# are NOT in the onlyoffice-editor release tarball — they live in
 # cryptpad/cryptpad. Pinning by commit so reinstalls are reproducible.
 CRYPTPAD_TEMPLATES_VERSION="2025.6.0"
 CRYPTPAD_TEMPLATES_COMMIT="ae5da10f8dad9d07a90751b8069f7ea101409a7c"
@@ -133,8 +134,8 @@ denying trademark rights, and applying CC BY-SA 4.0 to identified GUI/content
 material. Kutup preserves the visible original Product logo and attribution.
 
 Source:
-  - OnlyOffice editor (cryptpad-pinned fork)
-  - x2t WASM converter
+  - OnlyOffice editor (kutupbt/onlyoffice-editor, a fork of CryptPad's build)
+  - x2t WASM converter (kutupbt/onlyoffice-x2t-wasm, likewise)
 
 EOF
     read -rp "Continue? [y/N] " ans
@@ -167,7 +168,7 @@ install_oo() (
     archive="$stage/onlyoffice-editor.zip"
     trap 'rm -rf -- "$stage"' EXIT
     download_verified "OnlyOffice editor" \
-        "https://github.com/cryptpad/onlyoffice-editor/releases/download/$OO_VERSION/onlyoffice-editor.zip" \
+        "https://github.com/kutupbt/onlyoffice-editor/releases/download/$OO_VERSION/onlyoffice-editor.zip" \
         "$OO_SHA512" "$archive"
     validate_zip_paths "$archive"
     unzip -q "$archive" -d "$stage/content"
@@ -217,7 +218,7 @@ install_x2t() (
     archive="$stage/x2t.zip"
     trap 'rm -rf -- "$stage"' EXIT
     download_verified "x2t WASM" \
-        "https://github.com/cryptpad/onlyoffice-x2t-wasm/releases/download/$X2T_VERSION/x2t.zip" \
+        "https://github.com/kutupbt/onlyoffice-x2t-wasm/releases/download/$X2T_VERSION/x2t.zip" \
         "$X2T_SHA512" "$archive"
     validate_zip_paths "$archive"
     unzip -q "$archive" -d "$stage/content"
@@ -276,11 +277,11 @@ install_licenses() (
     fi
 
     local specs=(
-        "editor-wrapper-AGPL-3.0-or-later.txt|https://raw.githubusercontent.com/cryptpad/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/AGPL-3.0-or-later.txt|3edf11dc2de2f03f707fb3efb40092ddbf17cb17ec48951dd71cafb87f5857438b7d2ff3f89497a2921f018c3371fc760e7cbc2b7cb9b52ba7ebcbb36f8f04e2"
-        "editor-wrapper-CC0-1.0.txt|https://raw.githubusercontent.com/cryptpad/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/CC0-1.0.txt|1eb4436f8d58766cbe99db97e5e8c0db8a706376afd291c337de1ba7a6b066d3791dc85ad034bdd54ea336bed6e6e8e7a037d8b04b2773c9c7517b9d9921d1fa"
-        "editor-sdkjs-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/onlyoffice-editor/$OO_SOURCE_COMMIT/sdkjs/LICENSE.txt|6e90d46be391aa645bcf4dfaa67f452cb15a73749f1895633789c7763b43cc0b65d391e5e95652c9a9a2063c956e0e8099a4e1ce4b70b0636629f9eac39c1080"
-        "editor-web-apps-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/onlyoffice-editor/$OO_SOURCE_COMMIT/web-apps/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
-        "x2t-core-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/core/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
+        "editor-wrapper-AGPL-3.0-or-later.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/AGPL-3.0-or-later.txt|3edf11dc2de2f03f707fb3efb40092ddbf17cb17ec48951dd71cafb87f5857438b7d2ff3f89497a2921f018c3371fc760e7cbc2b7cb9b52ba7ebcbb36f8f04e2"
+        "editor-wrapper-CC0-1.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/CC0-1.0.txt|1eb4436f8d58766cbe99db97e5e8c0db8a706376afd291c337de1ba7a6b066d3791dc85ad034bdd54ea336bed6e6e8e7a037d8b04b2773c9c7517b9d9921d1fa"
+        "editor-sdkjs-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/sdkjs/LICENSE.txt|6e90d46be391aa645bcf4dfaa67f452cb15a73749f1895633789c7763b43cc0b65d391e5e95652c9a9a2063c956e0e8099a4e1ce4b70b0636629f9eac39c1080"
+        "editor-web-apps-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/web-apps/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
+        "x2t-core-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/core/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
         "cryptpad-templates-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/cryptpad/$CRYPTPAD_TEMPLATES_COMMIT/LICENSE|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
         "CC-BY-SA-4.0.txt|https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt|a0ddd81c4f9af3702ae874d8c04aac4d23f17267ae23ef187e92b119d17c3527ad9a8615dd213c5d2d0f19c69739fe98145c14072a562babaa25286937988984"
     )
@@ -322,18 +323,18 @@ install_source_metadata() (
     trap 'rm -f -- "$candidate"' EXIT
     cat >"$candidate" <<EOF
 {
-  "bundle_version": "2026.08.16-cryptpad-v9",
+  "bundle_version": "2026.09.27-kutup-v9",
   "packaging_repository": "https://github.com/kutupbt/kutup-office-assets",
   "editor": {
     "version": "$OO_VERSION",
     "source_commit": "$OO_SOURCE_COMMIT",
-    "source_url": "https://github.com/cryptpad/onlyoffice-editor/tree/$OO_SOURCE_COMMIT",
+    "source_url": "https://github.com/kutupbt/onlyoffice-editor/tree/$OO_SOURCE_COMMIT",
     "artifact_sha512": "$OO_SHA512"
   },
   "x2t": {
     "version": "$X2T_VERSION",
     "source_commit": "$X2T_SOURCE_COMMIT",
-    "source_url": "https://github.com/cryptpad/onlyoffice-x2t-wasm/tree/$X2T_SOURCE_COMMIT",
+    "source_url": "https://github.com/kutupbt/onlyoffice-x2t-wasm/tree/$X2T_SOURCE_COMMIT",
     "artifact_sha512": "$X2T_SHA512"
   },
   "templates": {

@@ -3,7 +3,7 @@
 Kutup is licensed under **AGPL-3.0-only** (see top-level
 [LICENSE](../../../LICENSE)). This subdirectory plus
 `frontend/src/components/editors/office/` form the integration with the
-[OnlyOffice client editor](https://github.com/cryptpad/onlyoffice-editor).
+[OnlyOffice client editor](https://github.com/kutupbt/onlyoffice-editor).
 Kutup-authored integration files carry `AGPL-3.0-or-later` SPDX headers where
 they link to the editor.
 
@@ -12,9 +12,12 @@ office-assets image. For non-Docker development, `./install-onlyoffice.sh`
 downloads the same pinned inputs:
 
 - `dist/v9/web-apps/...` — the CryptPad wrapper plus OnlyOffice-derived client
-  code ([cryptpad/onlyoffice-editor](https://github.com/cryptpad/onlyoffice-editor));
-- `dist/x2t/...` — the OnlyOffice-derived x2t WASM converter
-  ([cryptpad/onlyoffice-x2t-wasm](https://github.com/cryptpad/onlyoffice-x2t-wasm));
+  code, built from Kutup's fork
+  ([kutupbt/onlyoffice-editor](https://github.com/kutupbt/onlyoffice-editor) of
+  [cryptpad/onlyoffice-editor](https://github.com/cryptpad/onlyoffice-editor));
+- `dist/x2t/...` — the OnlyOffice-derived x2t WASM converter, built from Kutup's fork
+  ([kutupbt/onlyoffice-x2t-wasm](https://github.com/kutupbt/onlyoffice-x2t-wasm) of
+  [cryptpad/onlyoffice-x2t-wasm](https://github.com/cryptpad/onlyoffice-x2t-wasm));
 - `templates/oo*_base.js` — empty document templates (AGPL-3.0-or-later, from [cryptpad/cryptpad](https://github.com/cryptpad/cryptpad))
 
 Pinned OnlyOffice-derived source headers carry AGPLv3 Section 7 terms requiring

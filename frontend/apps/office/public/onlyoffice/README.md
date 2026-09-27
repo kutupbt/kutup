@@ -3,8 +3,9 @@
 This directory holds the OnlyOffice client JS and x2t WASM
 converter that power the `.docx` / `.xlsx` / `.pptx` collaborative
 editor. The actual JS/WASM blobs use their applicable AGPL and file-level
-Section 7 terms (sourced from
-[cryptpad/onlyoffice-editor][] and [cryptpad/onlyoffice-x2t-wasm][]); they
+Section 7 terms (built from Kutup's forks
+[kutupbt/onlyoffice-editor][] and [kutupbt/onlyoffice-x2t-wasm][] of
+CryptPad's builds); they
 are **not** committed to this repository.
 
 For local frontend development without the normal Docker asset image, run from
@@ -33,6 +34,6 @@ static assets land here. They are served from the office sandbox origin
 (`office.<domain>`, `pnpm -C frontend dev:office` in development), which
 holds no session or keys; Drive embeds `inner.html` from there.
 
-[cryptpad/onlyoffice-editor]: https://github.com/cryptpad/onlyoffice-editor
-[cryptpad/onlyoffice-x2t-wasm]: https://github.com/cryptpad/onlyoffice-x2t-wasm
+[kutupbt/onlyoffice-editor]: https://github.com/kutupbt/onlyoffice-editor
+[kutupbt/onlyoffice-x2t-wasm]: https://github.com/kutupbt/onlyoffice-x2t-wasm
 [kutup-office-assets]: https://github.com/kutupbt/kutup-office-assets
