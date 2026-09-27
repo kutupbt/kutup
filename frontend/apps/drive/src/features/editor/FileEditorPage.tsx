@@ -29,6 +29,7 @@ import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
+import { EditorNotice } from './office/EditorNotice'
 import { listVersions, patchVersion } from '@kutup/collab/api'
 import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
@@ -437,6 +438,7 @@ function Workspace({
               onRestored={onRestored}
             />
           ) : null}
+          {opened.kind === 'office' ? <EditorNotice /> : null}
           <Button
             variant="ghost"
             size="icon"

@@ -427,7 +427,19 @@
     "office": {
       "loading": "Loading the document editor…",
       "unsupported": "This kind of office file can't be edited here.",
-      "unavailable": "The document editor could not be loaded. Try again, or download the file."
+      "unavailable": "The document editor could not be loaded. Try again, or download the file.",
+      "about": {
+        "open": "About this editor",
+        "title": "About this editor",
+        "developer": "Documents, spreadsheets and presentations are edited with ONLYOFFICE, originally developed by Ascensio System SIA.",
+        "modified": "This is a modified version: CryptPad adapted ONLYOFFICE to run entirely in the browser, and Kutup maintains its own changes on top.",
+        "licence": "It is free software under the GNU AGPL v3 with ONLYOFFICE's additional terms. Its source code, with the changes and their dates, is public.",
+        "licenceLink": "Licence and notices",
+        "termsLink": "ONLYOFFICE additional terms",
+        "editorSource": "Source code of the editor",
+        "converterSource": "Source code of the file converter (x2t)",
+        "trademark": "ONLYOFFICE is a trademark of Ascensio System SIA. Kutup is not affiliated with or endorsed by ONLYOFFICE."
+      }
     },
     "viewOnly": "View only"
   },

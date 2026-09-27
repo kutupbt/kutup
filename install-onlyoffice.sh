@@ -24,12 +24,12 @@ LICENSE_DEST="$ASSET_ROOT/LICENSES"
 
 # Pinned versions. Bumping these means re-testing the OnlyOffice integration;
 # private API signatures (asc_nativeGetFile, asc_setRestriction, …) can drift.
-OO_VERSION="kutup-v9.3.0.140+2.1"
-OO_SOURCE_COMMIT="b8672fe6307411a4c1ae9ef036031a01a23ae6c5"
-OO_SHA512="c38ff7e9ebaab4c6578da70e6843eaf87bd3ca16c4a78620f17bcd9516a2b0c24aad26c9934a935600ce9787d30a7990464ec849c650feddfae66c1cd290e3e4"
-X2T_VERSION="kutup-v9.3.0+0.1"
-X2T_SOURCE_COMMIT="b4f41da18db79e0df7c367187264c3de0ebe9317"
-X2T_SHA512="0316fa324cc7551f7b902cbf8afde1669a787a179be4d61ab78e12e32b0e9a1308b56d3b6c33af364d090e2b91ca649a37c0645ff401b79db457463271277f2e"
+OO_VERSION="kutup-v9.4.0.131.1"
+OO_SOURCE_COMMIT="22a54c8113842a0bc4030434cace95299e3c3623"
+OO_SHA512="b54dd515809ab104d6e8791a05ab38ccab77b237a22d566064960233883fc3afa6f0f18946099dea735039c02ce6380868fc6eb226e22d1f80ecd666fe7a13df"
+X2T_VERSION="kutup-v9.4.0.131.1"
+X2T_SOURCE_COMMIT="7546e7970a212486057529aa2e969984fde0fdf2"
+X2T_SHA512="6786b179d46ce2c81f8d61d1a4ade16449278f83ca72a3332a1be511b23b661944cff9910552b61a4e1b5735cc8f6c67668483e584c5d94bc86132115e1b35f8"
 
 # CryptPad source tree commit that hosts the three "empty document" templates
 # (oodoc_base.js / oocell_base.js / ooslide_base.js). These template JS files
@@ -126,12 +126,14 @@ agree_to_agpl() {
     if [ "$ASSUME_YES" = 1 ] || [ "$CHECK" = 1 ]; then return 0; fi
     cat <<'EOF'
 
-This installer downloads the pinned CryptPad/OnlyOffice client assets into
+This installer downloads the pinned ONLYOFFICE client assets (modified
+versions of ONLYOFFICE by Ascensio System SIA, changed by CryptPad and Kutup)
+into
   frontend/apps/office/public/onlyoffice/
-which is gitignored. OnlyOffice-derived source headers carry AGPLv3 Section 7
-terms requiring Appropriate Legal Notices and the original Product logo,
-denying trademark rights, and applying CC BY-SA 4.0 to identified GUI/content
-material. Kutup preserves the visible original Product logo and attribution.
+which is gitignored. They are licensed under the GNU AGPL v3 with ONLYOFFICE's
+additional terms (keep notices, mark modifications with dates, show
+Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0
+for non-code content); see ONLYOFFICE-ADDITIONAL-TERMS.md.
 
 Source:
   - OnlyOffice editor (kutupbt/onlyoffice-editor, a fork of CryptPad's build)
@@ -279,10 +281,12 @@ install_licenses() (
     local specs=(
         "editor-wrapper-AGPL-3.0-or-later.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/AGPL-3.0-or-later.txt|3edf11dc2de2f03f707fb3efb40092ddbf17cb17ec48951dd71cafb87f5857438b7d2ff3f89497a2921f018c3371fc760e7cbc2b7cb9b52ba7ebcbb36f8f04e2"
         "editor-wrapper-CC0-1.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/LICENSES/CC0-1.0.txt|1eb4436f8d58766cbe99db97e5e8c0db8a706376afd291c337de1ba7a6b066d3791dc85ad034bdd54ea336bed6e6e8e7a037d8b04b2773c9c7517b9d9921d1fa"
-        "editor-sdkjs-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/sdkjs/LICENSE.txt|6e90d46be391aa645bcf4dfaa67f452cb15a73749f1895633789c7763b43cc0b65d391e5e95652c9a9a2063c956e0e8099a4e1ce4b70b0636629f9eac39c1080"
-        "editor-web-apps-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/web-apps/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
-        "x2t-core-AGPL-3.0.txt|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/core/LICENSE.txt|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
+        "editor-sdkjs-LICENSE|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/sdkjs/LICENSE|e3ddb5bc42529c6130350f38f51bcf250c5b91511ce59223b65a7100de0c8ccc0f5ff83901e8d9eda098df18f0640ec3523cad933c62aaedc14229cc0835d4ae"
+        "editor-web-apps-LICENSE|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/web-apps/LICENSE|e3ddb5bc42529c6130350f38f51bcf250c5b91511ce59223b65a7100de0c8ccc0f5ff83901e8d9eda098df18f0640ec3523cad933c62aaedc14229cc0835d4ae"
+        "x2t-core-LICENSE|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/core/LICENSE|e3ddb5bc42529c6130350f38f51bcf250c5b91511ce59223b65a7100de0c8ccc0f5ff83901e8d9eda098df18f0640ec3523cad933c62aaedc14229cc0835d4ae"
         "cryptpad-templates-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/cryptpad/$CRYPTPAD_TEMPLATES_COMMIT/LICENSE|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
+        "editor-MODIFICATIONS.md|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/MODIFICATIONS.md|9251ea89502963f6e6e7c9b649aa4ff59c71ece3b76e1eabd288bc641cc9c8230ebf69dcf5c8b3cd0a6e43bfde7d2c28abdd9d7bf58449a541b761eebfa4d963"
+        "x2t-MODIFICATIONS.md|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/MODIFICATIONS.md|00870df45f64ab84bf0a511de8809dda0709bcf4fcc55dbd6eebebb0f0b5d1c2090859c563c752004a31a7f883620a64292dcbb22d128cd4aa6033052689eae0"
         "CC-BY-SA-4.0.txt|https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt|a0ddd81c4f9af3702ae874d8c04aac4d23f17267ae23ef187e92b119d17c3527ad9a8615dd213c5d2d0f19c69739fe98145c14072a562babaa25286937988984"
     )
 
@@ -323,7 +327,7 @@ install_source_metadata() (
     trap 'rm -f -- "$candidate"' EXIT
     cat >"$candidate" <<EOF
 {
-  "bundle_version": "2026.09.27-kutup-v9.3",
+  "bundle_version": "2026.09.27-kutup-v9.4",
   "packaging_repository": "https://github.com/kutupbt/kutup-office-assets",
   "editor": {
     "version": "$OO_VERSION",

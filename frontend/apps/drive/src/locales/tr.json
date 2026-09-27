@@ -427,7 +427,19 @@
     "office": {
       "loading": "Belge düzenleyici yükleniyor…",
       "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
-      "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir."
+      "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir.",
+      "about": {
+        "open": "Bu düzenleyici hakkında",
+        "title": "Bu düzenleyici hakkında",
+        "developer": "Belgeler, tablolar ve sunular, özgün geliştiricisi Ascensio System SIA olan ONLYOFFICE ile düzenlenir.",
+        "modified": "Bu, değiştirilmiş bir sürümdür: CryptPad, ONLYOFFICE'i tamamen tarayıcıda çalışacak şekilde uyarladı; Kutup bunun üzerinde kendi değişikliklerini sürdürür.",
+        "licence": "ONLYOFFICE'in ek koşullarıyla birlikte GNU AGPL v3 altında özgür bir yazılımdır. Değişiklikler ve tarihleriyle birlikte kaynak kodu herkese açıktır.",
+        "licenceLink": "Lisans ve bildirimler",
+        "termsLink": "ONLYOFFICE ek koşulları",
+        "editorSource": "Düzenleyicinin kaynak kodu",
+        "converterSource": "Dosya dönüştürücünün (x2t) kaynak kodu",
+        "trademark": "ONLYOFFICE, Ascensio System SIA'nın ticari markasıdır. Kutup, ONLYOFFICE ile bağlantılı değildir ve onun tarafından onaylanmamıştır."
+      }
     },
     "viewOnly": "Yalnızca görüntüleme"
   },

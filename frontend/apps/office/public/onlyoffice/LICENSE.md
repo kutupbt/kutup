@@ -20,11 +20,14 @@ downloads the same pinned inputs:
   [cryptpad/onlyoffice-x2t-wasm](https://github.com/cryptpad/onlyoffice-x2t-wasm));
 - `templates/oo*_base.js` — empty document templates (AGPL-3.0-or-later, from [cryptpad/cryptpad](https://github.com/cryptpad/cryptpad))
 
-Pinned OnlyOffice-derived source headers carry AGPLv3 Section 7 terms requiring
-Appropriate Legal Notices and the original Product logo to remain present,
-denying trademark rights, and identifying GUI/content material as CC BY-SA
-4.0. See [ONLYOFFICE-ADDITIONAL-TERMS.md](ONLYOFFICE-ADDITIONAL-TERMS.md).
-Kutup preserves the visible OnlyOffice logo and attribution.
+These are modified versions of ONLYOFFICE (originally developed by Ascensio
+System SIA), changed by CryptPad and by Kutup; each fork's `MODIFICATIONS.md`
+lists the changes and their dates. ONLYOFFICE's licences add terms under
+AGPLv3 Section 7 (notices kept, modifications marked, Appropriate Legal
+Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code
+content). See [ONLYOFFICE-ADDITIONAL-TERMS.md](ONLYOFFICE-ADDITIONAL-TERMS.md)
+for how Kutup meets them, including the editor's "About this editor"
+notice.
 
 Generated third-party assets remain outside Kutup Git. Exact license copies
 are installed under `LICENSES/`, and exact versions, commits, and hashes are

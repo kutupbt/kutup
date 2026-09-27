@@ -333,6 +333,48 @@ AGPL fork of OnlyOffice since early 2026 that no longer merges ONLYOFFICE
 and drops ONLYOFFICE's Section 7(b) logo clause from its headers). Kutup
 follows ONLYOFFICE; the next step is ONLYOFFICE 9.4.
 
+## ONLYOFFICE 9.4.0 (2026-09-28)
+
+Pulled from ONLYOFFICE directly: `sdkjs`, `web-apps` and `core` at
+`v9.4.0.131` (the content of DocumentServer 9.4.0), with `git subtree pull`
+over the 9.3.0.140 branches. Carried across:
+
+- **editor:** five `sdkjs` conflicts (CryptPad's image upload and user-colour
+  hooks kept; 9.4 moved the colour's number conversion into
+  `getUserColorById`); `web-apps` merged cleanly. A check that every line
+  CryptPad added to 9.3 is still present passed for all 100 `sdkjs` and 42
+  `web-apps` files. 9.4 builds `sdkjs` with `build/build.py` (plain
+  concatenation) instead of Grunt and Closure, so the Makefile calls it.
+  Concatenated code runs in strict mode, where CryptPad's duplicate-ID
+  `Proxy` (`common/TableId.js`) threw on every document open because its
+  `set` trap returned nothing; it now returns `Reflect.set`'s result.
+- **x2t:** four `core` conflicts (CryptPad's header-only `BinaryReader` and
+  emscripten linker settings kept); all 30 CryptPad-changed files checked;
+  built with ONLYOFFICE `build_tools` `v9.4.0.131`.
+
+Released as `kutup-v9.4.0.131.1` from `22a54c8113842a0bc4030434cace95299e3c3623`
+(editor) and `7546e7970a212486057529aa2e969984fde0fdf2` (x2t); office-assets
+bundle `2026.09.27-kutup-v9.4`, OCI index digest `sha256:01f0cea36b51ca13ded126816f4cf60945ff10e0cef2522393972b0cd4fecfd5`.
+
+**Licence terms changed in 9.4.** The additional terms moved from each
+file's header into each component's `LICENSE` (renamed from `LICENSE.txt`):
+the old "retain the original Product logo" clause became (1) keep notices
+and attribution, (2) mark modified versions, with dates, as based on
+ONLYOFFICE by Ascensio System SIA, (3) show Appropriate Legal Notices in the
+interface that identify ONLYOFFICE, say the version may be modified and give
+access to the licence, (4) no trademark licence, (5) CC BY-SA 4.0 for
+non-code content. Kutup meets them with `MODIFICATIONS.md` in both forks
+(shipped under `LICENSES/`), the package's `LICENSE.md` and
+`ONLYOFFICE-ADDITIONAL-TERMS.md`, and an **About this editor** dialog in the
+office editor's header (`EditorNotice.tsx`, en/tr) linking the licence, the
+terms and both forks' source.
+
+Checked in a browser on the dev stack with the released build: a document, a
+spreadsheet and a presentation each opened, took typing, saved and
+downloaded with the text; a saved document reopened after a reload and took
+more; a second tab received the first tab's typing and saved it; the About
+dialog's four links open; no page errors.
+
 ## Primary upstream references
 
 - <https://github.com/cryptpad/onlyoffice-editor/tree/v9.2.0.119%2B5>
