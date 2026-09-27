@@ -107,6 +107,8 @@ export async function rotateFolder(
   me: DriveIdentity,
   access: FolderAccess,
   removed: Removal,
+  /** More of the request sealed under the new key (an album's photos). */
+  sealMore?: (key: Uint8Array, epoch: number) => Promise<Record<string, unknown>>,
 ): Promise<void> {
   if (!folder.key || !folder.name || !folder.canManage) throw new Error('folder is not open')
   if (access.keyEpoch !== folder.keyEpoch || access.epochStatementHash !== folder.epochStatementHash) {
@@ -185,8 +187,10 @@ export async function rotateFolder(
       }),
   )
 
+  const more = sealMore ? await sealMore(key, next) : {}
   try {
     await api.post(`/collections/${folder.id}/rotate`, {
+      ...more,
       fromEpoch: folder.keyEpoch,
       epochStatement,
       ownerKeyEnvelope,

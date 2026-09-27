@@ -30,6 +30,7 @@ function AlbumCard({ album }: { album: Album }) {
         {cover ? <Cover photo={cover} /> : <BookImage className="size-10 text-muted-foreground/60" aria-hidden />}
       </div>
       <p className="mt-2 truncate text-sm font-medium">{album.name}</p>
+      {album.ownerAccount ? <p className="truncate text-xs text-muted-foreground">{t('albums.sharedBy', { owner: album.ownerAccount })}</p> : null}
       {/* What it shows: a live photo is one, though it is two files. */}
       <p className="text-xs text-muted-foreground">{t('albums.itemCount', { count: items.data?.length ?? album.itemCount })}</p>
     </Link>

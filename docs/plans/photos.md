@@ -392,6 +392,18 @@ Checked in a browser: a new album from a selection, a live photo added
 whole, opening and removing photos, rename, delete with the photos kept,
 Drive not showing albums; the database guards directly.
 
+## Slice 5 progress (2026-09-27)
+
+- **Shared with people on this server:** albums are shared, listed,
+  re-keyed and left as folders are (drive-core's opener and rotation; the
+  rotation request carries every item re-sealed). Members see and open the
+  photos; "Can add photos" lets them put in their own (they stay in their
+  storage) and take out only those; the owner takes out any. Leaving takes
+  your photos with you. Checked in a browser with two accounts, including a
+  removal that re-keyed the album (epoch 2, every item re-sealed).
+- **Still to come in this slice:** public album links and albums shared
+  with people on other servers.
+
 ## Open questions
 
 Each has a proposed answer, used unless the product owner decides otherwise:

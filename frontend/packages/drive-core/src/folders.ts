@@ -7,7 +7,7 @@ import { ROOT_NAME, type Folder } from './model'
 
 export const foldersKey = ['folders'] as const
 
-interface CollectionRowWithTimes extends CollectionRow {
+export interface CollectionRowWithTimes extends CollectionRow {
   createdAt: string
   updatedAt: string
 }
@@ -49,7 +49,8 @@ function openOnce(cacheKey: string, open: () => Promise<{ collectionKey: Uint8Ar
   return pending
 }
 
-async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): Promise<Folder> {
+/** A collection as this account opens it: its own, or one shared with it. */
+export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): Promise<Folder> {
   const owned = row.ownerUserId === me.userId
   const result = owned
     ? await openOnce(`o:${row.ownerKeyEnvelope}:${row.nameEnvelope}`, () =>

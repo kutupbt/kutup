@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createOwnedCollectionV1, openFileMetadataV1, openOwnedCollectionV1, renameOwnedCollectionV1 } from '@kutup/crypto'
+import { createOwnedCollectionV1, openFileMetadataV1, renameOwnedCollectionV1 } from '@kutup/crypto'
 import { openAlbumFileKeyV1, sealAlbumFileKeyV1 } from '@kutup/crypto/album'
+import { rotateFolder, type FolderAccess, type Removal } from '@kutup/drive-core/access'
 import { toDriveFile } from '@kutup/drive-core/files'
-import type { FolderIndex } from '@kutup/drive-core/folders'
+import { openRow, type CollectionRowWithTimes, type FolderIndex } from '@kutup/drive-core/folders'
 import { useDriveIdentity, type DriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
 import type { FileRow } from '@kutup/session/api-types'
@@ -12,30 +13,24 @@ import { newestFirst } from '../library/timeline'
 
 // Albums (docs/plans/photos.md): collections of kind `album` that hold
 // references to photos. Each item is a file and its key sealed under the
-// album key; the photo stays one file wherever it is, counted once.
-
-interface AlbumWire {
-  id: string
-  ownerUserId: string
-  nameEnvelope: string
-  ownerKeyEnvelope: string
-  keyEpoch: number
-  nameRevision: number
-  epochStatement: string
-  epochStatementHash: string
-  itemCount: number
-  createdAt: string
-  updatedAt: string
-}
+// album key; the photo stays one file wherever it is, counted once. An album
+// is opened, shared and re-keyed as a Drive folder is (it is one to
+// drive-core), so its owner shares it with people who may view it or add
+// their own photos to it.
 
 export interface Album {
+  /** The album as a collection: its key, epoch, owner and this account's rights. */
+  folder: Folder
   id: string
   name: string
   key: Uint8Array
-  keyEpoch: number
-  nameRevision: number
-  ownerUserId: string
   itemCount: number
+  /** This account made it. */
+  owned: boolean
+  /** This account may put its own photos in. */
+  canAdd: boolean
+  /** `user@server` of whoever shared it (not for your own). */
+  ownerAccount: string | null
   updatedAt: string
 }
 
@@ -48,8 +43,30 @@ interface AlbumItemWire {
   addedAt: string
 }
 
+interface AlbumKeyWire {
+  fileId: string
+  fileKeyEnvelope: string
+  keyGeneration: number
+  albumEpoch: number
+}
+
 export const albumsKey = ['albums'] as const
 export const albumItemsKey = (id: string) => ['album-items', id] as const
+
+function toAlbum(folder: Folder, itemCount: number): Album | null {
+  if (!folder.key || !folder.name) return null
+  return {
+    folder,
+    id: folder.id,
+    name: folder.name,
+    key: folder.key,
+    itemCount,
+    owned: folder.canManage,
+    canAdd: folder.canUpload,
+    ownerAccount: folder.ownerAccount,
+    updatedAt: folder.updatedAt,
+  }
+}
 
 export function useAlbums() {
   const identity = useDriveIdentity()
@@ -58,50 +75,36 @@ export function useAlbums() {
     enabled: identity.isSuccess,
     queryFn: async (): Promise<Album[]> => {
       const me = identity.data!
-      const { data } = await api.get<AlbumWire[]>('/albums')
-      const opened = await Promise.all(
-        data.map(async (row): Promise<Album | null> => {
-          try {
-            const { collectionKey, name } = await openOwnedCollectionV1(row, me.masterKey)
-            return {
-              id: row.id,
-              name,
-              key: collectionKey,
-              keyEpoch: row.keyEpoch,
-              nameRevision: row.nameRevision,
-              ownerUserId: row.ownerUserId,
-              itemCount: row.itemCount,
-              updatedAt: row.updatedAt,
-            }
-          } catch {
-            return null
-          }
-        }),
-      )
+      const { data } = await api.get<(CollectionRowWithTimes & { itemCount: number })[]>('/albums')
+      const opened = await Promise.all(data.map(async (row) => toAlbum(await openRow(row, me), row.itemCount)))
       return opened.filter((a): a is Album => Boolean(a)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
   })
 }
 
-/** Where an album's photo is: its folder when this account has it, else a stand-in for the album. */
+/**
+ * Where an album's photo is: its folder when this account has it, else a
+ * stand-in that grants nothing (someone else's photo, seen through the
+ * album: it can be viewed and downloaded, not changed, moved or shared).
+ */
 function folderFor(index: FolderIndex | undefined, row: FileRow, album: Album): Folder {
   const known = index?.byId.get(row.collectionId)
   if (known) return known
   return {
-    source: 'owned',
+    source: 'shared',
     id: row.collectionId,
     parentId: null,
-    name: album.name,
+    name: null,
     key: null,
     keyEpoch: row.keyEpoch,
-    ownerUserId: album.ownerUserId,
+    ownerUserId: '',
     ownerAuthorityPublicKey: '',
     epochStatementHash: '',
     nameRevision: 1,
     color: null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    ownerAccount: null,
+    ownerAccount: album.ownerAccount,
     canUpload: false,
     canDelete: false,
     canManage: false,
@@ -109,11 +112,11 @@ function folderFor(index: FolderIndex | undefined, row: FileRow, album: Album): 
   }
 }
 
-/** An album's photos, opened with its key. Items sealed at an older file key are re-sealed (their owner may). */
+/** An album's photos, opened with its key. Items sealed at an older file key are re-sealed by whoever has the current one. */
 export function useAlbumItems(album: Album | undefined, index: FolderIndex | undefined, library: readonly Photo[]) {
   const queryClient = useQueryClient()
   return useQuery({
-    queryKey: [...albumItemsKey(album?.id ?? ''), album?.keyEpoch],
+    queryKey: [...albumItemsKey(album?.id ?? ''), album?.folder.keyEpoch],
     enabled: Boolean(album),
     queryFn: async (): Promise<Photo[]> => {
       const a = album!
@@ -123,11 +126,11 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
         data.map(async (item): Promise<Photo | null> => {
           const current = item.keyGeneration === item.file.keyGeneration
           if (!current) {
-            // The photo moved to a new key since it was added: re-seal it
-            // from the library's copy, which has the current key.
+            // The photo moved to a new key since it was added: its owner
+            // re-seals it from the library's copy, which has the current key.
             const mine = library.find((p) => p.id === item.file.id)
-            if (mine) stale.push(mine)
-            return mine ?? null
+            if (mine && a.canAdd) stale.push(mine)
+            return mine ? { ...mine, addedBy: item.addedBy } : null
           }
           try {
             const fileKey = await openAlbumFileKeyV1(item.fileKeyEnvelope, a.key, {
@@ -137,7 +140,8 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
               generation: item.keyGeneration,
             })
             const metadata = await openFileMetadataV1(item.file, fileKey)
-            return toPhoto(folderFor(index, item.file, a), toDriveFile(item.file, { fileKey, metadata }))
+            const photo = toPhoto(folderFor(index, item.file, a), toDriveFile(item.file, { fileKey, metadata }))
+            return photo ? { ...photo, addedBy: item.addedBy } : null
           } catch {
             return null
           }
@@ -162,7 +166,7 @@ export async function addToAlbum(album: Album, photos: readonly Photo[]): Promis
               sealAlbumFileKeyV1(p.file.fileKey, album.key, {
                 fileId: p.id,
                 albumId: album.id,
-                albumEpoch: album.keyEpoch,
+                albumEpoch: album.folder.keyEpoch,
                 generation: p.file.keyGeneration,
               }).then((fileKeyEnvelope) => ({ fileId: p.id, fileKeyEnvelope, keyGeneration: p.file.keyGeneration })),
             ]
@@ -173,20 +177,66 @@ export async function addToAlbum(album: Album, photos: readonly Photo[]): Promis
   }
 }
 
-/** A new album, empty; the album as it now is. */
+/**
+ * Take people or links away from an album: a rotation, as for a folder, with
+ * every photo's key re-sealed under the new album key in the same request.
+ */
+export async function rotateAlbum(album: Album, me: DriveIdentity, access: FolderAccess, removed: Removal): Promise<void> {
+  const { data: keys } = await api.get<AlbumKeyWire[]>(`/albums/${album.id}/keys`)
+  const fileKeys = await Promise.all(
+    keys.map(async (k) => ({
+      k,
+      fileKey: await openAlbumFileKeyV1(k.fileKeyEnvelope, album.key, {
+        fileId: k.fileId,
+        albumId: album.id,
+        albumEpoch: k.albumEpoch,
+        generation: k.keyGeneration,
+      }),
+    })),
+  )
+  await rotateFolder(album.folder, me, access, removed, async (key, epoch) => ({
+    albumItems: await Promise.all(
+      fileKeys.map(async ({ k, fileKey }) => ({
+        fileId: k.fileId,
+        fileKeyEnvelope: await sealAlbumFileKeyV1(fileKey, key, {
+          fileId: k.fileId,
+          albumId: album.id,
+          albumEpoch: epoch,
+          generation: k.keyGeneration,
+        }),
+      })),
+    ),
+  }))
+}
+
+/** A new album, empty. */
 export async function createAlbum(me: DriveIdentity, name: string): Promise<Album> {
   const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), null)
   await api.post('/albums', created.payload)
-  return {
-    id: created.payload.id,
-    name: name.trim(),
-    key: created.collectionKey,
-    keyEpoch: 1,
-    nameRevision: 1,
-    ownerUserId: me.userId,
-    itemCount: 0,
-    updatedAt: new Date().toISOString(),
-  }
+  const now = new Date().toISOString()
+  return toAlbum(
+    {
+      source: 'owned',
+      id: created.payload.id,
+      parentId: null,
+      name: name.trim(),
+      key: created.collectionKey,
+      keyEpoch: 1,
+      ownerUserId: me.userId,
+      ownerAuthorityPublicKey: me.authorityPublicKey,
+      epochStatementHash: created.epochStatementHash,
+      nameRevision: 1,
+      color: null,
+      createdAt: now,
+      updatedAt: now,
+      ownerAccount: null,
+      canUpload: true,
+      canDelete: true,
+      canManage: true,
+      isRoot: false,
+    },
+    0,
+  )!
 }
 
 function useAlbumMutation<T>(fn: (input: T, me: DriveIdentity) => Promise<unknown>) {
@@ -201,6 +251,7 @@ function useAlbumMutation<T>(fn: (input: T, me: DriveIdentity) => Promise<unknow
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: albumsKey }),
         queryClient.invalidateQueries({ queryKey: ['album-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['folder-access'] }),
       ])
     },
   })
@@ -227,7 +278,7 @@ export function useRemoveFromAlbum() {
 export function useRenameAlbum() {
   return useAlbumMutation(async ({ album, name }: { album: Album; name: string }) => {
     const next = await renameOwnedCollectionV1(
-      { id: album.id, ownerUserId: album.ownerUserId, keyEpoch: album.keyEpoch, nameRevision: album.nameRevision },
+      { id: album.id, ownerUserId: album.folder.ownerUserId, keyEpoch: album.folder.keyEpoch, nameRevision: album.folder.nameRevision },
       album.key,
       name.trim(),
     )
@@ -237,4 +288,17 @@ export function useRenameAlbum() {
 
 export function useDeleteAlbum() {
   return useAlbumMutation(({ album }: { album: Album }) => api.delete(`/albums/${album.id}`))
+}
+
+/** Leave an album shared with you; the photos you put in leave with you. */
+export function useLeaveAlbum() {
+  return useAlbumMutation(({ album }: { album: Album }) => api.delete(`/albums/${album.id}/membership`))
+}
+
+export function useRemoveAlbumAccess() {
+  return useAlbumMutation(async ({ album, removed }: { album: Album; removed: Removal }, me) => {
+    // Built from access as it is now: anyone added since stays.
+    const { data: access } = await api.get<FolderAccess>(`/collections/${album.id}/access`)
+    await rotateAlbum(album, me, access, removed)
+  })
 }

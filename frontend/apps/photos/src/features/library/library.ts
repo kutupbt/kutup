@@ -22,6 +22,8 @@ export interface Photo extends Dated {
   dated: boolean
   /** A live photo's video, shown with its still rather than on its own. */
   live?: Photo
+  /** In an album: who put it in (a member may take out only their own). */
+  addedBy?: string
 }
 
 /**

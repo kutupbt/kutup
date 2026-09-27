@@ -1,4 +1,4 @@
-import { MoreVertical, Pencil, Trash2 } from 'lucide-react'
+import { LogOut, MoreVertical, Pencil, Share2, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -10,7 +10,8 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { useLibraryContext } from '../library/libraryContext'
 import { PhotoGrid } from '../timeline/PhotoGrid'
 import { NameAlbumDialog } from './NameAlbumDialog'
-import { useAlbumItems, useAlbums, useDeleteAlbum, useRenameAlbum } from './albums'
+import { ShareAlbumDialog } from './ShareAlbumDialog'
+import { useAlbumItems, useAlbums, useDeleteAlbum, useLeaveAlbum, useRenameAlbum } from './albums'
 
 /** One album: its photos newest first, as the timeline shows them. */
 export function AlbumPage() {
@@ -23,8 +24,11 @@ export function AlbumPage() {
   const items = useAlbumItems(album, index, library)
   const rename = useRenameAlbum()
   const remove = useDeleteAlbum()
+  const leave = useLeaveAlbum()
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const [leaving, setLeaving] = useState(false)
 
   if (albums.isPending || (album && items.isPending)) return <LoadingPanel label={t('albums.loading')} />
   if (!album) {
@@ -48,7 +52,7 @@ export function AlbumPage() {
     <>
       <PhotoGrid
         photos={shown}
-        title={album.name}
+        title={album.ownerAccount ? t('albums.sharedTitle', { name: album.name, owner: album.ownerAccount }) : album.name}
         album={album}
         dropToUpload={false}
         empty={{ title: t('albums.emptyAlbumTitle'), description: t('albums.emptyAlbum') }}
@@ -60,14 +64,46 @@ export function AlbumPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => setRenaming(true)}>
-                <Pencil /> {t('albums.rename')}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setDeleting(true)}>
-                <Trash2 /> {t('albums.delete')}
-              </DropdownMenuItem>
+              {album.owned ? (
+                <>
+                  <DropdownMenuItem onSelect={() => setSharing(true)}>
+                    <Share2 /> {t('albums.share')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setRenaming(true)}>
+                    <Pencil /> {t('albums.rename')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setDeleting(true)}>
+                    <Trash2 /> {t('albums.delete')}
+                  </DropdownMenuItem>
+                </>
+              ) : (
+                <DropdownMenuItem onSelect={() => setLeaving(true)}>
+                  <LogOut /> {t('albums.leave')}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
+        }
+      />
+      {album.owned ? <ShareAlbumDialog album={album} open={sharing} onClose={() => setSharing(false)} /> : null}
+      <ConfirmDestructive
+        open={leaving}
+        onOpenChange={setLeaving}
+        title={t('albums.leaveTitle', { name: album.name })}
+        description={t('albums.leaveDescription')}
+        submit={t('albums.leave')}
+        pending={leave.isPending}
+        errorFallback={t('albums.failed')}
+        onConfirm={() =>
+          leave.mutate(
+            { album },
+            {
+              onSuccess: () => {
+                setLeaving(false)
+                void navigate('/albums', { replace: true })
+              },
+            },
+          )
         }
       />
       <NameAlbumDialog

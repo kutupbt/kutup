@@ -99,6 +99,19 @@ member close within 15 s.
 Not covered: forward secrecy for content a removed party could already read,
 and re-encryption of old content (lazy rotation, as in KBFS).
 
+## Shared albums
+
+An album member can read the photos in it (content, versions, thumbnails),
+nothing more; only the owner of a photo changes, moves or shares it.
+Removing a member moves the album to a new key and re-seals every item
+under it in the same transaction, and the server stops serving that member
+the album's photos. The photos' own keys are not changed: they belong to
+their owners (in a collaborative album, other members), so the removed
+member keeps the file keys they had and could open those photos' ciphertext
+if they obtained it some other way, never through Kutup. A member who leaves
+takes the photos they put in with them; leaving does not rotate the album
+(its owner removes someone to do that).
+
 ## Metadata not hidden in V1
 
 Servers see accounts, collection/file relationships, ciphertext lengths,

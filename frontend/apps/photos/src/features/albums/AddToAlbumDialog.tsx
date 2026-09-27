@@ -13,7 +13,9 @@ import { useAddToAlbum, useAlbums, useCreateAlbum } from './albums'
 /** Put photos in one of your albums, or in a new one. */
 export function AddToAlbumDialog({ photos, open, onClose, onAdded }: { photos: Photo[]; open: boolean; onClose: () => void; onAdded: () => void }) {
   const { t } = useTranslation()
-  const albums = useAlbums()
+  const all = useAlbums()
+  // Albums this account may put photos in: its own, and shared ones that allow it.
+  const albums = { data: all.data?.filter((a) => a.canAdd) }
   const add = useAddToAlbum()
   const create = useCreateAlbum()
   // An album's id, or 'new'.

@@ -119,15 +119,18 @@ export function InfoPanel({ photo, onClose, onEdit }: { photo: Photo; onClose: (
           {file.name}
           <span className="block text-muted-foreground">{formatBytes(file.size, i18n.language)}</span>
         </Row>
-        <Row label={t('info.folder')}>
-          <a
-            href={driveFolderUrl(folder)}
-            className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-          >
-            {folder.isRoot ? t('info.myFiles') : (folder.name ?? '')}
-            <ExternalLink className="size-3.5" aria-hidden />
-          </a>
-        </Row>
+        {/* Someone else's photo, seen through an album, has no folder here. */}
+        {folder.key ? (
+          <Row label={t('info.folder')}>
+            <a
+              href={driveFolderUrl(folder)}
+              className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+            >
+              {folder.isRoot ? t('info.myFiles') : (folder.name ?? '')}
+              <ExternalLink className="size-3.5" aria-hidden />
+            </a>
+          </Row>
+        ) : null}
       </dl>
     </aside>
   )

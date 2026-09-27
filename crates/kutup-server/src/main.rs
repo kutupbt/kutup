@@ -583,6 +583,8 @@ fn build_router(state: AppState) -> Router {
             get(albums::items).post(albums::add_items),
         )
         .route("/api/albums/:id/items/remove", post(albums::remove_items))
+        .route("/api/albums/:id/keys", get(albums::keys))
+        .route("/api/albums/:id/membership", delete(albums::leave))
         .route(
             "/api/photos/library",
             get(photos::get_library)

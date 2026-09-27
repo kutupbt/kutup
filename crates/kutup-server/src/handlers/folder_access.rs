@@ -390,6 +390,17 @@ pub struct RotateRequest {
     pub federated_shares: Vec<KeptFederated>,
     #[serde(default)]
     pub removed: Removed,
+    /// An album's photos, each file key re-sealed under the new album key
+    /// (docs/plans/photos.md): all of them, or nothing changes.
+    #[serde(default)]
+    pub album_items: Vec<KeptAlbumItem>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KeptAlbumItem {
+    pub file_id: Uuid,
+    pub file_key_envelope: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -412,6 +423,67 @@ pub(crate) fn same_membership(current: &[Uuid], kept: &[Uuid], removed: &[Uuid])
             .cloned()
             .collect::<BTreeSet<_>>()
             == current
+}
+
+/// An album's items follow its key: every one re-sealed at the new epoch
+/// (a folder has none, and must name none).
+async fn rotate_album_items(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    collection_id: Uuid,
+    next: i32,
+    items: &[KeptAlbumItem],
+) -> AppResult<()> {
+    let kind: String = sqlx::query_scalar("SELECT kind FROM collections WHERE id = $1")
+        .bind(collection_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    if kind != "album" {
+        return if items.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::bad_request("a folder has no album items"))
+        };
+    }
+    let current: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT file_id, key_generation FROM album_items WHERE album_id = $1 FOR UPDATE",
+    )
+    .bind(collection_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let generations: BTreeMap<Uuid, i32> = current.into_iter().collect();
+    let named: std::collections::BTreeSet<Uuid> = items.iter().map(|i| i.file_id).collect();
+    if named.len() != items.len()
+        || named.len() != generations.len()
+        || !named.iter().all(|id| generations.contains_key(id))
+    {
+        return Err(AppError::conflict("album photos changed; reload"));
+    }
+    let album = collection_id.to_string();
+    let epoch = u32::try_from(next).map_err(|_| AppError::conflict("invalid epoch"))?;
+    for item in items {
+        let generation = u32::try_from(generations[&item.file_id])
+            .map_err(|_| AppError::internal("key generation"))?;
+        crate::handlers::collections::validate_drive_envelope(
+            &item.file_key_envelope,
+            kutup_crypto::drive_envelope::DriveEnvelopeContextV1::album_file_key(
+                &item.file_id.to_string(),
+                &album,
+                epoch,
+                generation,
+            )
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        )?;
+        sqlx::query(
+            "UPDATE album_items SET file_key_envelope = $3, album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
+        )
+        .bind(collection_id)
+        .bind(item.file_id)
+        .bind(&item.file_key_envelope)
+        .bind(next)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 /// `POST /api/collections/{id}/rotate` — move the folder to a new key, keep
@@ -715,6 +787,7 @@ pub async fn rotate(
         .bind(&req.removed.federated_shares)
         .execute(&mut *tx)
         .await?;
+    rotate_album_items(&mut tx, collection_id, next, &req.album_items).await?;
     tx.commit().await?;
 
     Ok(Json(RotateResult {

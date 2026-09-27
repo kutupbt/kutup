@@ -232,7 +232,7 @@
     "failed": "This could not be done. Try again.",
     "addTitle_one": "Add {{count}} photo to an album",
     "addTitle_other": "Add {{count}} photos to an album",
-    "addDescription": "Only your own photos go in your albums.",
+    "addDescription": "Only your own photos go in albums; they stay in your storage.",
     "adding": "Adding…",
     "add": "Add",
     "added_one": "Added to {{album}}",
@@ -246,6 +246,29 @@
     "rename": "Rename album",
     "delete": "Delete album",
     "deleteTitle": "Delete {{name}}?",
-    "deleteDescription": "The album goes. Its photos stay in your library and in Drive."
+    "deleteDescription": "The album goes. Its photos stay in your library and in Drive.",
+    "share": "Share album",
+    "leave": "Leave album",
+    "leaveTitle": "Leave {{name}}?",
+    "leaveDescription": "You will no longer see it. The photos you put in leave with you.",
+    "sharedTitle": "{{name}} · shared by {{owner}}",
+    "sharedBy": "Shared by {{owner}}"
+  },
+  "share": {
+    "title": "Share {{name}}",
+    "description": "People on this server see the album's photos. With Can add photos, they put in their own, which stay in their storage.",
+    "email": "Email of someone on this server",
+    "canAdd": "Can add photos",
+    "submit": "Share",
+    "people": "People with access",
+    "loading": "Loading…",
+    "nobody": "Only you, for now.",
+    "canAddShort": "Can add photos",
+    "viewOnly": "Can view",
+    "remove": "Remove {{account}}",
+    "removed": "{{account}} no longer has access",
+    "shared": "Shared with {{account}}",
+    "notHere": "No account on this server has that email.",
+    "failed": "This could not be done. Try again."
   }
 }

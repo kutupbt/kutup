@@ -33,8 +33,10 @@ export function SelectionBar({ photos, album, onClear }: { photos: Photo[]; albu
   const [downloading, setDownloading] = useState(false)
   const [adding, setAdding] = useState(false)
   const removeFromAlbum = useRemoveFromAlbum()
-  // Only your own photos go in your albums (others' are theirs to share).
+  // Only your own photos go in albums (others' are theirs to share).
   const own = photos.filter((p) => p.folder.source === 'owned')
+  // In an album: its owner takes out any photo, a member those they put in.
+  const removable = album ? photos.filter((p) => album.owned || p.addedBy === session.userId) : []
   const trashablePhotos = photos.filter((p) => mayTrash(p, session.userId))
   // A live photo's video goes with its still.
   const trashable = trashablePhotos.flatMap(filesOf)
@@ -134,14 +136,14 @@ export function SelectionBar({ photos, album, onClear }: { photos: Photo[]; albu
               {t('albums.addTo')}
             </DropdownMenuItem>
           ) : null}
-          {album ? (
+          {album && removable.length > 0 ? (
             <DropdownMenuItem
               onSelect={() =>
                 removeFromAlbum.mutate(
-                  { album, photos },
+                  { album, photos: removable },
                   {
                     onSuccess: () => {
-                      toast.success(t('albums.removed', { count: photos.length }))
+                      toast.success(t('albums.removed', { count: removable.length }))
                       onClear()
                     },
                     onError: () => toast.error(t('albums.failed')),

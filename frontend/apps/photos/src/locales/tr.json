@@ -232,7 +232,7 @@
     "failed": "Bu yapılamadı. Yeniden deneyin.",
     "addTitle_one": "{{count}} fotoğrafı albüme ekle",
     "addTitle_other": "{{count}} fotoğrafı albüme ekle",
-    "addDescription": "Albümlerinize yalnızca kendi fotoğraflarınız girer.",
+    "addDescription": "Albümlere yalnızca kendi fotoğraflarınız girer; depolama alanınızda kalırlar.",
     "adding": "Ekleniyor…",
     "add": "Ekle",
     "added_one": "{{album}} albümüne eklendi",
@@ -246,6 +246,29 @@
     "rename": "Albümü yeniden adlandır",
     "delete": "Albümü sil",
     "deleteTitle": "{{name}} silinsin mi?",
-    "deleteDescription": "Albüm gider. Fotoğrafları kitaplığınızda ve Drive'da kalır."
+    "deleteDescription": "Albüm gider. Fotoğrafları kitaplığınızda ve Drive'da kalır.",
+    "share": "Albümü paylaş",
+    "leave": "Albümden ayrıl",
+    "leaveTitle": "{{name}} albümünden ayrılınsın mı?",
+    "leaveDescription": "Artık görmezsiniz. Koyduğunuz fotoğraflar sizinle birlikte çıkar.",
+    "sharedTitle": "{{name}} · paylaşan {{owner}}",
+    "sharedBy": "Paylaşan {{owner}}"
+  },
+  "share": {
+    "title": "{{name}} albümünü paylaş",
+    "description": "Bu sunucudaki kişiler albümün fotoğraflarını görür. Fotoğraf ekleyebilir iznini verirseniz kendi fotoğraflarını koyarlar; bunlar onların depolama alanında kalır.",
+    "email": "Bu sunucudaki birinin e-postası",
+    "canAdd": "Fotoğraf ekleyebilir",
+    "submit": "Paylaş",
+    "people": "Erişimi olan kişiler",
+    "loading": "Yükleniyor…",
+    "nobody": "Şimdilik yalnızca siz.",
+    "canAddShort": "Fotoğraf ekleyebilir",
+    "viewOnly": "Görüntüleyebilir",
+    "remove": "{{account}} kişisini çıkar",
+    "removed": "{{account}} artık erişemiyor",
+    "shared": "{{account}} ile paylaşıldı",
+    "notHere": "Bu sunucuda bu e-postaya sahip bir hesap yok.",
+    "failed": "Bu yapılamadı. Yeniden deneyin."
   }
 }

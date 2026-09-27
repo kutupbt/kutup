@@ -85,6 +85,14 @@ pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid)
                          WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
                   OR EXISTS(SELECT 1 FROM file_shares fs
                             WHERE fs.file_id = f.id AND fs.recipient_user_id = $2)
+                  -- A photo in an album its owner or a member can open
+                  -- (docs/plans/photos.md): reading only.
+                  OR EXISTS(SELECT 1 FROM album_items ai
+                            JOIN collections a ON a.id = ai.album_id AND a.deleted_at IS NULL
+                            WHERE ai.file_id = f.id
+                              AND (a.owner_user_id = $2 OR EXISTS(
+                                  SELECT 1 FROM collection_shares acs
+                                  WHERE acs.collection_id = a.id AND acs.recipient_user_id = $2)))
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )

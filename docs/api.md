@@ -906,7 +906,19 @@ parent = album, epoch = album epoch, revision = file key generation).
   changed). Adding again re-seals.
 - `POST /api/albums/:id/items/remove`: `{ fileIds }`.
 
-Only an album's owner uses these for now; shared albums come next.
+- `GET /api/albums/:id/keys` (owner): every item's sealed key, those in
+  the trash too, for a rotation.
+- `DELETE /api/albums/:id/membership` (member): leave; the photos you put in
+  leave with you.
+
+Albums are shared as folders are (`POST /api/collections/:id/share`, with
+`canUpload` meaning "can add photos"; `GET /api/collections/:id/access`).
+`GET /api/albums` lists albums shared with you too. Members read the items
+and open the photos (their content, versions and thumbnails); members who may
+add put in their own photos and take out only those. Removing someone is a
+rotation (`POST /api/collections/:id/rotate`) whose body also carries
+`albumItems: [{ fileId, fileKeyEnvelope }]`: every item re-sealed under the
+new album key at the new epoch, or nothing changes (`409`).
 
 ### Live-location streams
 

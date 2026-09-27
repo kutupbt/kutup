@@ -96,7 +96,17 @@ pub async fn list_collections(
     user: AuthUser,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    // Albums are the Photos app's (GET /api/albums), never Drive folders.
+    Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
+}
 
+/// The collections of `kind` this account owns or has been given, as the
+/// listing returns them.
+pub(crate) async fn collection_rows(
+    state: &AppState,
+    user_id: Uuid,
+    kind: &str,
+) -> AppResult<Vec<CollectionRow>> {
     type OwnRow = (
         Uuid,
         Uuid,
@@ -121,11 +131,11 @@ pub async fn list_collections(
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
            FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
-             -- Albums are the Photos app's (GET /api/albums), never Drive folders.
-             AND c.kind = 'folder'
+             AND c.kind = $2
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
+    .bind(kind)
     .fetch_all(&state.pool)
     .await?;
 
@@ -189,10 +199,11 @@ pub async fn list_collections(
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
            JOIN users owner ON owner.id = c.owner_user_id
-           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL AND c.kind = 'folder'
+           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL AND c.kind = $2
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
+    .bind(kind)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -246,7 +257,7 @@ pub async fn list_collections(
         });
     }
 
-    Ok(Json(out).into_response())
+    Ok(out)
 }
 
 /// `POST /api/collections` — mirrors `CreateCollection`.
