@@ -13,7 +13,12 @@
   },
   "nav": {
     "photos": "Fotoğraflar",
-    "settings": "Ayarlar"
+    "settings": "Ayarlar",
+    "places": "Yerler",
+    "favourites": "Favoriler",
+    "archive": "Arşiv",
+    "hidden": "Gizli",
+    "trash": "Çöp"
   },
   "timeline": {
     "title": "Fotoğraflar",
@@ -27,7 +32,8 @@
     "chooseFolders": "Klasör seçin",
     "select": "{{name}} öğesini seç",
     "selectDay": "{{day}} gününün tümünü seç",
-    "jump": "Bir aya git"
+    "jump": "Bir aya git",
+    "favourite": "Favori"
   },
   "upload": {
     "button": "Yükle",
@@ -56,7 +62,27 @@
     "trashed_one": "{{count}} öğe çöpe taşındı",
     "trashed_other": "{{count}} öğe çöpe taşındı",
     "trashFailed_one": "{{count}} öğe çöpe taşınamadı",
-    "trashFailed_other": "{{count}} öğe çöpe taşınamadı"
+    "trashFailed_other": "{{count}} öğe çöpe taşınamadı",
+    "favourite": "Favori",
+    "unfavourite": "Favorilerden çıkar",
+    "favourited_one": "Favorilere eklendi",
+    "favourited_other": "{{count}} öğe favorilere eklendi",
+    "unfavourited_one": "Favorilerden çıkarıldı",
+    "unfavourited_other": "{{count}} öğe favorilerden çıkarıldı",
+    "archive": "Arşivle",
+    "unarchive": "Arşivden çıkar",
+    "archived_one": "Arşivlendi",
+    "archived_other": "{{count}} öğe arşivlendi",
+    "unarchived_one": "Zaman çizelgesine geri döndü",
+    "unarchived_other": "{{count}} öğe zaman çizelgesine geri döndü",
+    "hide": "Gizle",
+    "unhide": "Göster",
+    "hiddenDone_one": "Gizlendi",
+    "hiddenDone_other": "{{count}} öğe gizlendi",
+    "unhidden_one": "Artık gizli değil",
+    "unhidden_other": "{{count}} öğe artık gizli değil",
+    "more": "Diğer işlemler",
+    "markFailed": "Kaydedilemedi. Yeniden deneyin."
   },
   "viewer": {
     "loading": "Açılıyor…",
@@ -69,7 +95,9 @@
     "download": "İndir",
     "info": "Ayrıntılar",
     "previous": "Önceki",
-    "next": "Sonraki"
+    "next": "Sonraki",
+    "favourite": "Favorilere ekle",
+    "unfavourite": "Favorilerden çıkar"
   },
   "info": {
     "taken": "Çekildiği zaman",
@@ -84,7 +112,9 @@
     "file": "Dosya",
     "folder": "Drive'daki klasörü",
     "myFiles": "Dosyalarım",
-    "mapsOff": "Haritalar kapalı. Yerleri haritada görmek için açın."
+    "mapsOff": "Haritalar kapalı. Yerleri haritada görmek için açın.",
+    "edit": "Düzenle",
+    "caption": "Açıklama"
   },
   "settings": {
     "title": "Ayarlar",
@@ -105,5 +135,76 @@
     "sharedBy": "{{folder}}, paylaşan {{owner}}",
     "subfoldersTitle": "Alt klasörler de sayılır",
     "subfolders": "Bir klasörün alt klasörleri de ona dahildir. Bir klasörü kitaplıktan çıkarmak fotoğraflarını Drive'da bırakır."
+  },
+  "favourites": {
+    "title": "Favoriler",
+    "emptyTitle": "Henüz favori yok",
+    "emptyDescription": "Burada bulmak için fotoğrafları kalple işaretleyin. Favoriler yalnızca sizindir; sizinle paylaşılan fotoğraflar için de."
+  },
+  "archive": {
+    "title": "Arşiv",
+    "emptyTitle": "Arşivlenen bir şey yok",
+    "emptyDescription": "Arşivlenen fotoğraflar kitaplığınızda ve Drive'da kalır; zaman çizelgesinde ve Yerler'de görünmez."
+  },
+  "hidden": {
+    "title": "Gizli",
+    "emptyTitle": "Gizlenen bir şey yok",
+    "emptyDescription": "Gizlenen fotoğraflar yalnızca burada görünür: zaman çizelgesinde, Favoriler'de, Arşiv'de ya da Yerler'de görünmez. Drive'da kalırlar."
+  },
+  "edit": {
+    "title": "Ayrıntıları düzenle",
+    "description": "Ne zaman ve nerede çekildiği ve bir açıklama. Fotoğrafla birlikte şifreli kaydedilir: onu görebilen herkes bunları da görür.",
+    "when": "Çekildiği tarih ve saat",
+    "zone": "Saat dilimi",
+    "latitude": "Enlem",
+    "longitude": "Boylam",
+    "pickOnMap": "Nerede çekildiğini seçmek için haritaya tıklayın",
+    "pickHint": "Yeri belirlemek için haritaya tıklayın ya da koordinatlarını yazın.",
+    "mapsOff": "Haritalar kapalı: koordinatları yazın.",
+    "removePlace": "Yeri kaldır",
+    "caption": "Açıklama",
+    "invalid": "Tarihi ve koordinatları kontrol edin.",
+    "saving": "Kaydediliyor…",
+    "saved": "Ayrıntılar kaydedildi",
+    "failed": "Ayrıntılar kaydedilemedi. Yeniden deneyin."
+  },
+  "places": {
+    "group_one": "Burada {{count}} fotoğraf",
+    "group_other": "Burada {{count}} fotoğraf",
+    "mapsOffTitle": "Haritalar kapalı",
+    "mapsOff": "Fotoğraflarınızın nerede çekildiğini görmek için haritaları açın. Yerler fotoğraflarınızın şifreli ayrıntılarından gelir ve haritaya bu cihazda yerleştirilir.",
+    "turnOn": "Haritaları aç",
+    "mapLabel": "Fotoğraflarınızın çekildiği yerler",
+    "none": "Fotoğraflarınızın henüz hiçbirinde yer bilgisi yok. Konum açıkken çekilen fotoğraflar burada görünür.",
+    "inView": "Görünen fotoğraflar",
+    "count_one": "Görünümde {{count}} fotoğraf",
+    "count_other": "Görünümde {{count}} fotoğraf",
+    "moveMap": "Burada fotoğraf görmek için haritayı kaydırın ya da yakınlaştırın.",
+    "noneShort": "Henüz yer bilgisi olan fotoğraf yok."
+  },
+  "trash": {
+    "select": "{{name}} öğesini seç, {{when}} çöpe taşındı",
+    "loading": "Çöp açılıyor…",
+    "title": "Çöp",
+    "description": "Klasörlerinizin çöpüne taşınan fotoğraf ve videolar. Çöp Drive'ınkidir: geri yüklemek onları bulundukları yere koyar.",
+    "failed": "Çöp yüklenemedi",
+    "restore": "Geri yükle",
+    "deleteForever": "Kalıcı olarak sil",
+    "emptyTitle": "Çöpte fotoğraf yok",
+    "emptyDescription": "Çöpteki diğer dosyalar ve bütün klasörler Drive'dadır.",
+    "openDrive": "Drive'ın çöpünü aç",
+    "deleteTitle_one": "{{count}} öğe kalıcı olarak silinsin mi?",
+    "deleteTitle_other": "{{count}} öğe kalıcı olarak silinsin mi?",
+    "deleteDescription_one": "Sürümleri ve küçük resimleriyle silinir ve kapladığı alanı boşaltır.",
+    "deleteDescription_other": "Sürümleri ve küçük resimleriyle silinirler ve kapladıkları alanı boşaltırlar.",
+    "deleteWarning": "Bu geri alınamaz.",
+    "restored_one": "Geri yüklendi",
+    "restored_other": "{{count}} öğe geri yüklendi",
+    "restoreFailed_one": "{{count}} öğe geri yüklenemedi",
+    "restoreFailed_other": "{{count}} öğe geri yüklenemedi",
+    "deleted_one": "Kalıcı olarak silindi",
+    "deleted_other": "{{count}} öğe kalıcı olarak silindi",
+    "deleteFailed_one": "{{count}} öğe silinemedi",
+    "deleteFailed_other": "{{count}} öğe silinemedi"
   }
 }

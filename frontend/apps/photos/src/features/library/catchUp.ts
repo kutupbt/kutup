@@ -31,13 +31,13 @@ export function mayWrite(folder: Folder, file: DriveFile, userId: string): boole
   return folder.canManage || file.uploaderUserId === userId
 }
 
-/** Seal the details as a new metadata revision, name and all unchanged. */
-export async function writeMedia(file: DriveFile, media: MediaMetadataV1): Promise<void> {
+/** Seal the details (none: null) as a new metadata revision, name and all unchanged. */
+export async function writeMedia(file: DriveFile, media: MediaMetadataV1 | null): Promise<void> {
   if (!file.fileKey) throw new Error('file is not open')
   const next = await renameFileRecordV1(
     { id: file.id, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
     file.fileKey,
-    fileMetadataOf(file, { media }),
+    fileMetadataOf(file, { media: media ?? undefined }),
   )
   await api.put(`/files/${file.id}`, next)
 }

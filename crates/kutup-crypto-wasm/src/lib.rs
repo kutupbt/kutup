@@ -1617,3 +1617,119 @@ impl Default for ContentHasherJs {
         Self::new()
     }
 }
+
+/// The Photos library record's key (docs/plans/photos.md), from the master key.
+#[wasm_bindgen(js_name = photosLibraryKey)]
+pub fn photos_library_key(master_key_base64: &str) -> Result<String, JsValue> {
+    let master = decode_canonical_base64(master_key_base64, "master key")?;
+    kutup_crypto::photos_library::derive_photos_library_key(&master)
+        .map(|key| STANDARD.encode(key.as_slice()))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+fn photos_library_context(
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<kutup_crypto::photos_library::PhotosLibraryContextV1, JsValue> {
+    kutup_crypto::photos_library::PhotosLibraryContextV1::new(
+        account_incarnation_id,
+        whole_number(revision, "revision")?,
+        previous_digest.as_deref(),
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+struct SealedPhotosLibrary {
+    envelope: String,
+    digest: String,
+}
+
+/// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
+/// order here) as `revision`, after the record whose digest is given (none
+/// for revision 1). Returns `{ envelope, digest }`.
+#[wasm_bindgen(js_name = sealPhotosLibrary)]
+pub fn seal_photos_library(
+    library_json: &str,
+    key_base64: &str,
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::photos_library;
+    let library: photos_library::PhotosLibraryV1 =
+        serde_json::from_str(library_json).map_err(|_| js_error("Photos library is not valid"))?;
+    let library = library
+        .canonicalize()
+        .map_err(|error| js_error(&error.to_string()))?;
+    let plaintext =
+        photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
+    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
+    let envelope = photos_library::seal(&plaintext, &key, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let digest =
+        photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&SealedPhotosLibrary {
+        envelope: STANDARD.encode(envelope),
+        digest,
+    })
+    .map_err(|_| js_error("encode sealed library"))
+}
+
+/// Open a library record as exactly the revision expected; its JSON text.
+#[wasm_bindgen(js_name = openPhotosLibrary)]
+pub fn open_photos_library(
+    envelope_base64: &str,
+    key_base64: &str,
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<String, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
+    let plaintext = photos_library::open(&envelope, &key, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let library =
+        photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
+    serde_json::to_string(&library).map_err(|_| js_error("encode library"))
+}
+
+/// A record's digest (its successor's predecessor), lowercase hex.
+#[wasm_bindgen(js_name = photosLibraryDigest)]
+pub fn photos_library_digest(envelope_base64: &str) -> Result<String, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryHeaderJson {
+    account_incarnation_id: String,
+    revision: f64,
+    /// Absent for revision 1.
+    previous_digest: Option<String>,
+}
+
+/// A library record's public header: whose, which revision, after which one.
+#[wasm_bindgen(js_name = inspectPhotosLibrary)]
+pub fn inspect_photos_library(envelope_base64: &str) -> Result<JsValue, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let header =
+        photos_library::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&PhotosLibraryHeaderJson {
+        account_incarnation_id: hex::encode(header.account_incarnation_id),
+        revision: header.revision as f64,
+        previous_digest: (header.revision > 1)
+            .then(|| hex::encode(header.previous_envelope_digest)),
+    })
+    .map_err(|_| js_error("encode header"))
+}

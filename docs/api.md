@@ -867,6 +867,21 @@ Folders deleted, or no longer shared with you, are left out.
 your own folders, not in the trash; each library folder one you can open,
 at most 200 (`400` otherwise). Returns what was saved.
 
+### GET /api/photos/library · PUT /api/photos/library
+
+Your own marks on photos (favourites, archived, hidden) as one
+account-private envelope (`kutup-crypto` `photos_library`), sealed under a
+subkey of the master key; the server never reads it.
+
+- **GET** (Bearer JWT): `{ envelope, revision, envelopeDigest }`, `404`
+  before the first.
+- **PUT** (Bearer JWT): `{ envelope }`, the next revision: its header must
+  name this account's incarnation, the stored revision plus one and the
+  stored envelope's SHA-256 (revision 1 when there is none, or when the
+  stored one is from before the account was reset). `200` with the stored
+  record; `409` with the current record otherwise, which the client merges
+  into and seals again. Up to 6 MiB.
+
 ### Live-location streams
 
 A live location's stream on the sharer's server (docs/chat-protocol.md
@@ -1245,13 +1260,17 @@ can be verified even when the collection is absent from the live listing.
       "collectionKeyEpoch": 1,
       "collectionEpochStatement": "<CollectionEpochStatementV1 base64>",
       "collectionEpochStatementHash": "<lowercase SHA-256 hex>",
-      "deletedAt": "2026-06-11T11:22:33Z"
+      "deletedAt": "2026-06-11T11:22:33Z",
+      "thumbnails": { "sm": "2026-06-11T11:20:00Z", "smKeyGeneration": 1 }
     }
   ]
 }
 ```
 
 `items` is the number of files trashed together with the folder (its subtree).
+A file row's `thumbnails` are as in a folder listing: while a file is in its
+owner's trash on its own, its owner may still read them
+(`GET /api/files/:id/thumbnails/:variant`), as Photos' trash shows them.
 
 ### POST /api/trash/:id/restore
 

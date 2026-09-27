@@ -1,4 +1,4 @@
-import { ExternalLink, MapPin, X } from 'lucide-react'
+import { ExternalLink, MapPin, Pencil, X } from 'lucide-react'
 import { lazy, Suspense, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Folder } from '@kutup/drive-core/model'
@@ -31,7 +31,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  * small map, drawn on this device from the photo's encrypted details), the
  * camera, its size, and the Drive folder it is in.
  */
-export function InfoPanel({ photo, onClose }: { photo: Photo; onClose: () => void }) {
+export function InfoPanel({ photo, onClose, onEdit }: { photo: Photo; onClose: () => void; onEdit?: () => void }) {
   const { t, i18n } = useTranslation()
   const { file, folder, media } = photo
   const taken = formatTaken(photo, i18n.language)
@@ -54,11 +54,19 @@ export function InfoPanel({ photo, onClose }: { photo: Photo; onClose: () => voi
     >
       <div className="flex items-center justify-between px-4 pb-2 pt-3">
         <h2 className="font-display text-base font-semibold">{t('viewer.info')}</h2>
-        <Button variant="ghost" size="icon" aria-label={t('common.close')} onClick={onClose}>
-          <X />
-        </Button>
+        <div className="flex items-center gap-1">
+          {onEdit ? (
+            <Button variant="outline" size="sm" onClick={onEdit}>
+              <Pencil /> {t('info.edit')}
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="icon" aria-label={t('common.close')} onClick={onClose}>
+            <X />
+          </Button>
+        </div>
       </div>
       <dl className="space-y-4 px-4 pb-6">
+        {media?.caption ? <Row label={t('info.caption')}><span className="whitespace-pre-wrap">{media.caption}</span></Row> : null}
         <Row label={t('info.taken')}>
           {photo.dated ? (
             <>

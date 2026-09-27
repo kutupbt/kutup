@@ -575,6 +575,12 @@ fn build_router(state: AppState) -> Router {
             "/api/photos/preferences",
             get(photos::get_preferences).put(photos::put_preferences),
         )
+        .route(
+            "/api/photos/library",
+            get(photos::get_library)
+                .put(photos::put_library)
+                .route_layer(DefaultBodyLimit::max(photos::LIBRARY_BODY_LIMIT)),
+        )
         // --- Live-location streams (docs/plans/maps.md). ---
         .route(
             "/api/live-locations",

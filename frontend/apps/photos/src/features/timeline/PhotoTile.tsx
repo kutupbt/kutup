@@ -1,4 +1,4 @@
-import { Check, ImageOff, Play } from 'lucide-react'
+import { Check, Heart, ImageOff, Play } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { useThumbnail } from './useThumbnail'
 import { useTranslation } from 'react-i18next'
@@ -12,6 +12,7 @@ interface TileProps {
   userId: string
   size: number
   selected: boolean
+  favourite: boolean
   /** Something is selected: a click selects rather than opens. */
   selecting: boolean
   onOpen: (photo: Photo) => void
@@ -23,9 +24,9 @@ interface TileProps {
  * and a check to select it. On screen and missing its details or picture, it
  * moves to the front of the background catch-up.
  */
-export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected, selecting, onOpen, onToggle }: TileProps) {
+export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected, favourite, selecting, onOpen, onToggle }: TileProps) {
   const { t, i18n } = useTranslation()
-  const url = useThumbnail(photo)
+  const url = useThumbnail(photo.file)
   const [broken, setBroken] = useState(false)
   const needs = !photo.media || !photo.file.thumbnails.sm
 
@@ -59,6 +60,9 @@ export const PhotoTile = memo(function PhotoTile({ photo, userId, size, selected
           </span>
         )}
       </button>
+      {favourite ? (
+        <Heart className="pointer-events-none absolute bottom-1.5 left-1.5 size-4 fill-white text-white drop-shadow" aria-label={t('timeline.favourite')} />
+      ) : null}
       {photo.kind === 'video' ? (
         <span className="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
           <Play className="size-3 fill-current" aria-hidden />

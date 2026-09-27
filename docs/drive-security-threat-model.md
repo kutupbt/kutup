@@ -99,7 +99,9 @@ and re-encryption of old content (lazy rotation, as in KBFS).
 Servers see accounts, collection/file relationships, ciphertext lengths,
 access timing, storage size, federation domains and share membership, and
 for thumbnails whether one exists, its padded size bucket and when it
-changed. V1 does
+changed. For Photos: which folders a person's library shows (folder ids),
+and that their library record exists, its size and when it changes, never
+which photos are favourites, archived or hidden. V1 does
 not claim traffic-shape protection, ORAM, anonymous Drive sharing or
 subscriber privacy from a user's own homeserver. The advanced fixed-cell
 transport profile remains post-V1 work.

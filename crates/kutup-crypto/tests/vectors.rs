@@ -46,6 +46,8 @@ struct CryptoVectors {
     live_location: LiveLocationVec,
     #[serde(rename = "fileMetadata")]
     file_metadata: FileMetadataVec,
+    #[serde(rename = "photosLibrary")]
+    photos_library: PhotosLibraryVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
     #[serde(rename = "localState")]
@@ -58,6 +60,29 @@ struct FileMetadataVec {
     canonical: Vec<FileMetadataCase>,
     invalid: Vec<String>,
     content_hash: ContentHashVec,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryVec {
+    master_key: String,
+    library_key: String,
+    account_incarnation_id: String,
+    first: PhotosLibraryRecordVec,
+    second: PhotosLibraryRecordVec,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryRecordVec {
+    revision: u64,
+    #[serde(default)]
+    previous_digest: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+    plaintext: String,
+    nonce: String,
+    envelope: String,
 }
 
 #[derive(Deserialize)]
@@ -788,4 +813,37 @@ fn file_metadata_matches_canonical_vector() {
         hasher.update(&b64(chunk));
     }
     assert_eq!(hasher.finish(), v.content_hash.hash);
+}
+
+#[test]
+fn photos_library_matches_canonical_vector() {
+    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    let v = load_crypto().photos_library;
+    let key = photos_library::derive_photos_library_key(&b64(&v.master_key)).unwrap();
+    assert_eq!(key.to_vec(), b64(&v.library_key));
+    for record in [&v.first, &v.second] {
+        let context = PhotosLibraryContextV1::new(
+            &v.account_incarnation_id,
+            record.revision,
+            record.previous_digest.as_deref(),
+        )
+        .unwrap();
+        let sealed = photos_library::seal_with_nonce(
+            record.plaintext.as_bytes(),
+            key.as_slice(),
+            context,
+            &b64(&record.nonce),
+        )
+        .unwrap();
+        assert_eq!(sealed, b64(&record.envelope));
+        assert_eq!(photos_library::inspect(&sealed).unwrap(), context);
+        let opened = photos_library::open(&sealed, key.as_slice(), context).unwrap();
+        assert_eq!(opened, record.plaintext.as_bytes());
+        photos_library::decode_library(&opened).unwrap();
+    }
+    assert_eq!(
+        photos_library::envelope_digest(&b64(&v.first.envelope)).unwrap(),
+        v.first.digest.clone().unwrap()
+    );
+    assert_eq!(v.second.previous_digest, v.first.digest);
 }

@@ -11,6 +11,9 @@ import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
 import { PhotosShell } from './app/PhotosShell'
 import { LibraryProvider } from './features/library/LibraryProvider'
+import { ArchivePage, FavouritesPage, HiddenPage } from './features/library/MarkedPages'
+import { PlacesPage } from './features/places/PlacesPage'
+import { TrashPage } from './features/trash/TrashPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { TimelinePage } from './features/timeline/TimelinePage'
 import { UploadButton } from './features/upload/UploadButton'
@@ -49,6 +52,11 @@ export function App() {
             <Routes>
               <Route element={<PhotosShell primaryAction={<UploadButton />} />}>
                 <Route index element={<TimelinePage />} />
+                <Route path="/places" element={<PlacesPage />} />
+                <Route path="/favourites" element={<FavouritesPage />} />
+                <Route path="/archive" element={<ArchivePage />} />
+                <Route path="/hidden" element={<HiddenPage />} />
+                <Route path="/trash" element={<TrashPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />

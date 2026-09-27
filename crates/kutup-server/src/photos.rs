@@ -4,6 +4,7 @@
 
 use axum::extract::State;
 use axum::Json;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -148,4 +149,163 @@ pub async fn put_preferences(
     .await?;
     tx.commit().await?;
     Ok(Json(preferences_of(&state, user_id).await?))
+}
+
+/// The library record as stored: sealed, with its place in the chain.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotosLibraryRecord {
+    /// Canonical base64 of the envelope.
+    pub envelope: String,
+    pub revision: u64,
+    /// SHA-256 of the envelope, lowercase hex: the next revision names it.
+    pub envelope_digest: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PutPhotosLibrary {
+    /// The next revision, sealed by the client (canonical base64).
+    pub envelope: String,
+}
+
+/// The largest body: the envelope's 4 MiB of marks, base64.
+pub const LIBRARY_BODY_LIMIT: usize = 6 * 1024 * 1024;
+
+async fn stored_library(
+    state: &AppState,
+    user_id: Uuid,
+) -> AppResult<Option<(i64, String, Vec<u8>)>> {
+    Ok(sqlx::query_as(
+        "SELECT revision, envelope_digest, envelope FROM photos_library WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?)
+}
+
+fn record_of(
+    (revision, digest, envelope): (i64, String, Vec<u8>),
+) -> AppResult<PhotosLibraryRecord> {
+    Ok(PhotosLibraryRecord {
+        envelope: base64::engine::general_purpose::STANDARD.encode(envelope),
+        revision: u64::try_from(revision)
+            .map_err(|_| AppError::internal("stored library revision"))?,
+        envelope_digest: digest,
+    })
+}
+
+/// `GET /api/photos/library` — your marks on photos, sealed; `404` before the first.
+#[utoipa::path(
+    get,
+    path = "/api/photos/library",
+    tag = "photos",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "The latest library record", body = PhotosLibraryRecord),
+        (status = 404, description = "None yet")
+    )
+)]
+pub async fn get_library(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<PhotosLibraryRecord>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let stored = stored_library(&state, user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no photos library yet"))?;
+    Ok(Json(record_of(stored)?))
+}
+
+/// `PUT /api/photos/library` — the next revision of your marks. Accepted only
+/// as the successor of what is stored (its revision plus one, naming its
+/// digest), else `409` with the current record, which the client merges into.
+#[utoipa::path(
+    put,
+    path = "/api/photos/library",
+    tag = "photos",
+    security(("BearerAuth" = [])),
+    request_body = PutPhotosLibrary,
+    responses(
+        (status = 200, description = "Stored", body = PhotosLibraryRecord),
+        (status = 409, description = "Not the successor of the stored record", body = PhotosLibraryRecord)
+    )
+)]
+pub async fn put_library(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(request): Json<PutPhotosLibrary>,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    use kutup_crypto::photos_library;
+    let user_id = trusted_uuid(&user.user_id)?;
+    let envelope = photos_library::decode_canonical_b64(&request.envelope)
+        .map_err(|_| AppError::bad_request("envelope must be canonical base64"))?;
+    let header = photos_library::inspect(&envelope)
+        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
+    let digest = photos_library::envelope_digest(&envelope)
+        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
+    let revision = i64::try_from(header.revision)
+        .map_err(|_| AppError::bad_request("library revision is too large"))?;
+    let incarnation: String =
+        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if hex::encode(header.account_incarnation_id) != incarnation {
+        return Err(AppError::bad_request(
+            "library of another account incarnation",
+        ));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    let current: Option<(i64, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT revision, envelope_digest, envelope FROM photos_library WHERE user_id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    // A record from before the account was reset cannot be opened with the
+    // new master key: a new chain starts over it.
+    let stale_incarnation = current.as_ref().is_some_and(|(_, _, stored)| {
+        photos_library::inspect(stored)
+            .map(|h| hex::encode(h.account_incarnation_id) != incarnation)
+            .unwrap_or(true)
+    });
+    let successor = match &current {
+        None => revision == 1,
+        Some(_) if stale_incarnation => revision == 1,
+        Some((stored_revision, stored_digest, _)) => {
+            revision == stored_revision + 1
+                && hex::encode(header.previous_envelope_digest) == *stored_digest
+        }
+    };
+    if !successor {
+        drop(tx);
+        return Ok(match current {
+            Some(stored) if !stale_incarnation => {
+                (axum::http::StatusCode::CONFLICT, Json(record_of(stored)?)).into_response()
+            }
+            _ => AppError::conflict("library revision does not follow").into_response(),
+        });
+    }
+    sqlx::query(
+        "INSERT INTO photos_library (user_id, revision, envelope_digest, envelope) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET
+             revision = EXCLUDED.revision, envelope_digest = EXCLUDED.envelope_digest,
+             envelope = EXCLUDED.envelope, updated_at = now()",
+    )
+    .bind(user_id)
+    .bind(revision)
+    .bind(&digest)
+    .bind(&envelope)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(PhotosLibraryRecord {
+        envelope: request.envelope,
+        revision: header.revision,
+        envelope_digest: digest,
+    })
+    .into_response())
 }

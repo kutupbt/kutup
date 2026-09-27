@@ -1,7 +1,7 @@
 # Photos
 
-**Status:** slice 1 implemented 2026-09-26 (details below, under "Slice 1
-done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
+**Status:** slices 1 and 2 implemented 2026-09-26 and 2026-09-27 (details
+below, under "Slice 1 done" and "Slice 2 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
 owner asked for it after Maps: "continue with photos". The roadmap's
 decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
 - photos are Drive files in folders you choose;
@@ -318,6 +318,31 @@ own plan.
 - **Not yet:** folders shared from other servers in the library (their ids
   are not local folders); a thumbnail for a HEIC photo in browsers that
   cannot decode it (slice 3).
+
+## Slice 2 done (2026-09-27)
+
+- **The library record:** `photos_library` in `kutup-crypto` (vector
+  `photosLibrary`, WASM), `GET`/`PUT /api/photos/library` with
+  compare-and-swap (migration 067). Every change is a function of the
+  marks, replayed on the newer record after a `409`: two browsers marking
+  photos at the same moment keep both changes (checked in a browser).
+- **Favourites, Archive, Hidden:** pages of their own; a heart on favourite
+  tiles; the selection and the viewer mark and unmark. Archived and hidden
+  photos leave the timeline and Places.
+- **Places:** Ente's design, as studied. The map package gains
+  `useKutupMap` (the provider and relay setup `MapView` now uses too) and a
+  screen-space clusterer ported from Ente's Rust one (`cluster.ts`, with
+  tests, the date line included). Markers show the newest photo of each
+  group with a count; opening a group zooms to it, a photo opens the viewer;
+  the panel lists what is in view by day. It opens on the group of your ten
+  newest located photos.
+- **Editing:** date and time with the time zone it was taken in, place (on a
+  map or as coordinates, or removed) and caption, for photos this account
+  may write; a new metadata revision. The details show the caption.
+- **Trash:** Drive's trash, photos and videos only, with their pictures (the
+  trash listing now carries thumbnail stamps, and a trashed file's owner may
+  read them); restore and delete forever. Drive's trash module moved to
+  `drive-core`.
 
 ## Open questions
 

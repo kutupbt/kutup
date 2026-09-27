@@ -22,6 +22,7 @@
 //! - [`drive_object`] — the Drive suite registry and typed, file-bound file-blob framing.
 //! - [`file_metadata`] — a Drive file's metadata (name, type, size, photo details), canonical JSON.
 //! - [`file_keyring`] — a file's key generations, each sealing the one before.
+//! - [`photos_library`] — an account's own marks on photos (favourites, archived, hidden).
 //! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
 //! - [`stream`] — XChaCha20-Poly1305 secretstream (file content, 5 MiB chunks).
 //! - [`asset`] — whiteboard asset envelopes under the file key.
@@ -49,6 +50,7 @@ pub mod local_state;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod photos_library;
 pub mod profile_key_share;
 pub mod stream;
 pub mod thumbnail;

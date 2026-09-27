@@ -13,7 +13,12 @@
   },
   "nav": {
     "photos": "Photos",
-    "settings": "Settings"
+    "settings": "Settings",
+    "places": "Places",
+    "favourites": "Favourites",
+    "archive": "Archive",
+    "hidden": "Hidden",
+    "trash": "Trash"
   },
   "timeline": {
     "title": "Photos",
@@ -27,7 +32,8 @@
     "chooseFolders": "Choose folders",
     "select": "Select {{name}}",
     "selectDay": "Select all of {{day}}",
-    "jump": "Jump to a month"
+    "jump": "Jump to a month",
+    "favourite": "Favourite"
   },
   "upload": {
     "button": "Upload",
@@ -56,7 +62,27 @@
     "trashed_one": "Moved {{count}} item to trash",
     "trashed_other": "Moved {{count}} items to trash",
     "trashFailed_one": "{{count}} item could not be moved to trash",
-    "trashFailed_other": "{{count}} items could not be moved to trash"
+    "trashFailed_other": "{{count}} items could not be moved to trash",
+    "favourite": "Favourite",
+    "unfavourite": "Remove from favourites",
+    "favourited_one": "Added to favourites",
+    "favourited_other": "Added {{count}} to favourites",
+    "unfavourited_one": "Removed from favourites",
+    "unfavourited_other": "Removed {{count}} from favourites",
+    "archive": "Archive",
+    "unarchive": "Unarchive",
+    "archived_one": "Archived",
+    "archived_other": "Archived {{count}}",
+    "unarchived_one": "Back in the timeline",
+    "unarchived_other": "{{count}} back in the timeline",
+    "hide": "Hide",
+    "unhide": "Unhide",
+    "hiddenDone_one": "Hidden",
+    "hiddenDone_other": "Hid {{count}}",
+    "unhidden_one": "No longer hidden",
+    "unhidden_other": "{{count}} no longer hidden",
+    "more": "More actions",
+    "markFailed": "This could not be saved. Try again."
   },
   "viewer": {
     "loading": "Opening…",
@@ -69,7 +95,9 @@
     "download": "Download",
     "info": "Details",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "favourite": "Add to favourites",
+    "unfavourite": "Remove from favourites"
   },
   "info": {
     "taken": "Taken",
@@ -84,7 +112,9 @@
     "file": "File",
     "folder": "Folder in Drive",
     "myFiles": "My files",
-    "mapsOff": "Maps are off. Turn them on to see places on a map."
+    "mapsOff": "Maps are off. Turn them on to see places on a map.",
+    "edit": "Edit",
+    "caption": "Caption"
   },
   "settings": {
     "title": "Settings",
@@ -105,5 +135,76 @@
     "sharedBy": "{{folder}}, shared by {{owner}}",
     "subfoldersTitle": "Subfolders count too",
     "subfolders": "A folder's subfolders are part of it. Removing a folder from the library leaves its photos in Drive."
+  },
+  "favourites": {
+    "title": "Favourites",
+    "emptyTitle": "No favourites yet",
+    "emptyDescription": "Mark photos with the heart to find them here. Favourites are yours alone, even for photos shared with you."
+  },
+  "archive": {
+    "title": "Archive",
+    "emptyTitle": "Nothing archived",
+    "emptyDescription": "Archived photos stay in your library and in Drive, out of the timeline and Places."
+  },
+  "hidden": {
+    "title": "Hidden",
+    "emptyTitle": "Nothing hidden",
+    "emptyDescription": "Hidden photos show only here: not in the timeline, Favourites, Archive or Places. They stay in Drive."
+  },
+  "edit": {
+    "title": "Edit details",
+    "description": "When and where it was taken, and a caption. Saved encrypted with the photo: anyone who can see it sees them.",
+    "when": "Date and time taken",
+    "zone": "Time zone",
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    "pickOnMap": "Click the map to choose where it was taken",
+    "pickHint": "Click the map to set the place, or type its coordinates.",
+    "mapsOff": "Maps are off: type the coordinates.",
+    "removePlace": "Remove place",
+    "caption": "Caption",
+    "invalid": "Check the date and the coordinates.",
+    "saving": "Saving…",
+    "saved": "Details saved",
+    "failed": "The details could not be saved. Try again."
+  },
+  "places": {
+    "group_one": "{{count}} photo here",
+    "group_other": "{{count}} photos here",
+    "mapsOffTitle": "Maps are off",
+    "mapsOff": "Turn maps on to see where your photos were taken. Places come from your photos' encrypted details and are put on the map on this device.",
+    "turnOn": "Turn on maps",
+    "mapLabel": "Where your photos were taken",
+    "none": "None of your photos has a place yet. Photos taken with location on show up here.",
+    "inView": "Photos in view",
+    "count_one": "{{count}} photo in view",
+    "count_other": "{{count}} photos in view",
+    "moveMap": "Move or zoom the map to see photos here.",
+    "noneShort": "No photos with a place yet."
+  },
+  "trash": {
+    "select": "Select {{name}}, moved to trash {{when}}",
+    "loading": "Opening the trash…",
+    "title": "Trash",
+    "description": "Photos and videos moved to the trash of your folders. The trash is Drive's: restoring puts them back where they were.",
+    "failed": "The trash could not be loaded",
+    "restore": "Restore",
+    "deleteForever": "Delete forever",
+    "emptyTitle": "No photos in the trash",
+    "emptyDescription": "Other files and whole folders in the trash are in Drive.",
+    "openDrive": "Open Drive's trash",
+    "deleteTitle_one": "Delete {{count}} item forever?",
+    "deleteTitle_other": "Delete {{count}} items forever?",
+    "deleteDescription_one": "It is deleted with its versions and thumbnails, and frees its space.",
+    "deleteDescription_other": "They are deleted with their versions and thumbnails, and free their space.",
+    "deleteWarning": "This cannot be undone.",
+    "restored_one": "Restored",
+    "restored_other": "Restored {{count}}",
+    "restoreFailed_one": "{{count}} item could not be restored",
+    "restoreFailed_other": "{{count}} items could not be restored",
+    "deleted_one": "Deleted forever",
+    "deleted_other": "Deleted {{count}} forever",
+    "deleteFailed_one": "{{count}} item could not be deleted",
+    "deleteFailed_other": "{{count}} items could not be deleted"
   }
 }

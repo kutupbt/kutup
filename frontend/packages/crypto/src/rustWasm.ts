@@ -337,6 +337,23 @@ export interface CryptoWasmModule {
     atMs: number,
   ): string
   canonicalFileMetadata(json: string): string
+  photosLibraryKey(masterKeyBase64: string): string
+  sealPhotosLibrary(
+    libraryJson: string,
+    keyBase64: string,
+    accountIncarnationId: string,
+    revision: number,
+    previousDigest: string | undefined,
+  ): { envelope: string; digest: string }
+  openPhotosLibrary(
+    envelopeBase64: string,
+    keyBase64: string,
+    accountIncarnationId: string,
+    revision: number,
+    previousDigest: string | undefined,
+  ): string
+  photosLibraryDigest(envelopeBase64: string): string
+  inspectPhotosLibrary(envelopeBase64: string): { accountIncarnationId: string; revision: number; previousDigest?: string }
   ContentHasher: new () => { update(chunk: Uint8Array): void; finish(): string; free(): void }
   liveLocationOpen(keyBase64: string, streamIdHex: string, envelopeBase64: string): LiveLocationUpdate
   sealProfileKeyEnvelope(

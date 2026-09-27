@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { openFileRecordV1, openOwnedCollectionKeyV1, openOwnedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
-import { fileKind, type ItemKind } from '@kutup/drive-core/kinds'
-import { foldersKey } from '@kutup/drive-core/folders'
-import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { folderKeyAt } from '@kutup/drive-core/keyring'
+import { toDriveFile } from './files'
+import { foldersKey } from './folders'
+import { useDriveIdentity } from './identity'
+import { fileKind, type ItemKind } from './kinds'
+import { folderKeyAt } from './keyring'
+import type { DriveFile } from './model'
 
 interface TrashFolderRow {
   id: string
@@ -35,6 +37,7 @@ interface TrashFileRow {
   collectionEpochStatement: string
   collectionEpochStatementHash: string
   deletedAt: string
+  thumbnails: { sm?: string; lg?: string; smKeyGeneration?: number; lgKeyGeneration?: number }
 }
 
 export interface TrashEntry {
@@ -46,6 +49,8 @@ export interface TrashEntry {
   deletedAt: string
   /** Folders: how many files went to trash with it. */
   files?: number
+  /** Files: the file as opened (its key and thumbnails), for pictures of it. */
+  file?: DriveFile
 }
 
 export const trashKey = ['trash'] as const
@@ -68,7 +73,7 @@ export function useTrash() {
       )
       const files = await Promise.all(
         data.files.map(async (row): Promise<TrashEntry> => {
-          const metadata = await openOwnedCollectionKeyV1(
+          const opened = await openOwnedCollectionKeyV1(
             {
               id: row.collectionId,
               ownerUserId: row.collectionOwnerUserId,
@@ -97,7 +102,8 @@ export function useTrash() {
                   ),
             )
             .then((key) => openFileRecordV1(row, key))
-            .then((r) => r.metadata, () => null)
+            .catch(() => null)
+          const metadata = opened?.metadata ?? null
           return {
             type: 'file',
             id: row.id,
@@ -105,6 +111,18 @@ export function useTrash() {
             kind: metadata ? fileKind(metadata.name, metadata.mimeType) : 'other',
             size: metadata?.size ?? null,
             deletedAt: row.deletedAt,
+            file: toDriveFile(
+              {
+                ...row,
+                // What a listing would say of it: its content as sealed now.
+                originalKeyGeneration: row.keyGeneration,
+                contentKeyGeneration: row.keyGeneration,
+                keyHistory: [],
+                createdAt: row.deletedAt,
+                encryptedSizeBytes: 0,
+              },
+              opened,
+            ),
           }
         }),
       )

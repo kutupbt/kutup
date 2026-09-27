@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     "./*": "./src/*.ts",
-    "./MapView": "./src/MapView.tsx"
+    "./MapView": "./src/MapView.tsx",
+    "./useKutupMap": "./src/useKutupMap.ts"
   },
   "dependencies": {
     "@kutup/session": "workspace:*",

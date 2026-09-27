@@ -1,15 +1,30 @@
-import { ChevronLeft, ChevronRight, Download, Info, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, Eye, EyeOff, Heart, Info, MoreVertical, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useTrashFile } from '@kutup/drive-core/mutations'
 import { readOriginal } from '@kutup/drive-core/original'
+import { useRequiredSession } from '@kutup/session/store'
+import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@kutup/ui/components/dropdown-menu'
 import { Button } from '@kutup/ui/components/button'
 import { Spinner } from '@kutup/ui/components/states'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatTaken } from '../library/format'
+import { mayWrite } from '../library/catchUp'
 import type { Photo } from '../library/library'
+import { useLibraryContext } from '../library/libraryContext'
+import type { MarkKind } from '../library/marks'
+import { mayTrash } from '../timeline/mayTrash'
 import { useThumbnail } from '../timeline/useThumbnail'
 import { downloadPhoto } from '../timeline/downloads'
+import { EditDetailsDialog } from './EditDetailsDialog'
 import { InfoPanel } from './InfoPanel'
 
 /** Originals up to this size open in the viewer; larger ones show their large thumbnail. */
@@ -120,8 +135,8 @@ function useOriginal(photo: Photo): Original {
 
 function Picture({ photo }: { photo: Photo }) {
   const { t } = useTranslation()
-  const small = useThumbnail(photo, 'sm')
-  const large = useThumbnail(photo, 'lg')
+  const small = useThumbnail(photo.file, 'sm')
+  const large = useThumbnail(photo.file, 'lg')
   const original = useOriginal(photo)
   const [undrawable, setUndrawable] = useState(false)
   useEffect(() => setUndrawable(false), [photo.id])
@@ -203,6 +218,29 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
   const prev = index > 0 ? photos[index - 1] : undefined
   const next = index < photos.length - 1 ? photos[index + 1] : undefined
 
+  const session = useRequiredSession()
+  const { marks } = useLibraryContext()
+  const trash = useTrashFile()
+  const [editing, setEditing] = useState(false)
+  const [trashing, setTrashing] = useState(false)
+  const favourite = marks.favourites.has(photo.id)
+  const archived = marks.archived.has(photo.id)
+  const hidden = marks.hidden.has(photo.id)
+  /** The photo leaves this list: show the next one, or the one before, or close. */
+  const leave = useCallback(() => {
+    if (next) onNavigate(next)
+    else if (prev) onNavigate(prev)
+    else onClose()
+  }, [next, prev, onNavigate, onClose])
+  const markAndLeave = (kind: MarkKind, on: boolean) => {
+    marks.set(kind, [photo.id], on).then(
+      () => toast.success(t(kind === 'archived' ? (on ? 'selection.archived' : 'selection.unarchived') : on ? 'selection.hiddenDone' : 'selection.unhidden', { count: 1 })),
+      () => toast.error(t('selection.markFailed')),
+    )
+    // Archiving or hiding takes it out of what is shown here.
+    leave()
+  }
+
   const toggleInfo = useCallback(() => {
     setInfo((v) => {
       try {
@@ -276,6 +314,16 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
             variant="ghost"
             size="icon"
             className="text-white hover:bg-white/15 hover:text-white"
+            aria-label={favourite ? t('viewer.unfavourite') : t('viewer.favourite')}
+            aria-pressed={favourite}
+            onClick={() => void marks.set('favourites', [photo.id], !favourite).catch(() => toast.error(t('selection.markFailed')))}
+          >
+            <Heart className={favourite ? 'fill-current' : undefined} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white hover:bg-white/15 hover:text-white"
             aria-label={t('viewer.download')}
             onClick={() =>
               void downloadPhoto(photo).catch((error: unknown) => {
@@ -295,6 +343,32 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
           >
             <Info />
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" aria-label={t('selection.more')}>
+                <MoreVertical />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => markAndLeave('archived', !archived)}>
+                {archived ? <ArchiveRestore /> : <Archive />}
+                {archived ? t('selection.unarchive') : t('selection.archive')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => markAndLeave('hidden', !hidden)}>
+                {hidden ? <Eye /> : <EyeOff />}
+                {hidden ? t('selection.unhide') : t('selection.hide')}
+              </DropdownMenuItem>
+              {mayTrash(photo, session.userId) ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setTrashing(true)}>
+                    <Trash2 />
+                    {t('selection.trash')}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <div className="flex size-full items-center justify-center px-2 pb-4 pt-16 sm:px-16">
@@ -322,7 +396,31 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
           </button>
         ) : null}
       </div>
-      {info ? <InfoPanel photo={photo} onClose={toggleInfo} /> : null}
+      {info ? (
+        <InfoPanel photo={photo} onClose={toggleInfo} onEdit={mayWrite(photo.folder, photo.file, session.userId) ? () => setEditing(true) : undefined} />
+      ) : null}
+      <EditDetailsDialog photo={photo} open={editing} onClose={() => setEditing(false)} />
+      <ConfirmDestructive
+        open={trashing}
+        onOpenChange={setTrashing}
+        title={t('selection.trashTitle', { count: 1 })}
+        description={t('selection.trashDescription', { count: 1 })}
+        submit={t('selection.trash')}
+        pending={trash.isPending}
+        errorFallback={t('selection.trashFailed', { count: 1 })}
+        onConfirm={() => {
+          trash.mutate(
+            { folder: photo.folder, file: photo.file },
+            {
+              onSuccess: () => {
+                setTrashing(false)
+                leave()
+                toast.success(t('selection.trashed', { count: 1 }))
+              },
+            },
+          )
+        }}
+      />
     </div>
   )
 }

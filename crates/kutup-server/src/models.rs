@@ -361,6 +361,8 @@ pub struct TrashFileRow {
     pub collection_epoch_statement_hash: String,
     #[serde(with = "time::serde::rfc3339")]
     pub deleted_at: OffsetDateTime,
+    /// Its thumbnails, which its owner may still read while it is in the trash.
+    pub thumbnails: FileThumbnails,
 }
 
 /// `GET /api/trash` body — the caller's trash roots, newest first.

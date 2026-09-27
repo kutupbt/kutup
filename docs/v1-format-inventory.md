@@ -73,6 +73,15 @@ video's details (docs/plans/photos.md): when it was taken (UTC ms, the time
 zone in minutes, and where the date came from), place, size on screen,
 length, camera, a SHA-256 content hash and a caption.
 
+The Photos library record (`kutup-crypto` `photos_library`, vector
+`photosLibrary`) is one account-private XChaCha20-Poly1305 envelope under an
+HKDF subkey of the master key (as the Chat attachment ledger's). A 112-byte
+header (magic `KUTPPL1`, suite, purpose, account incarnation, revision, the
+previous envelope's SHA-256, nonce, length) is the AAD and the per-envelope
+key's input; the server checks it for compare-and-swap. The plaintext is
+canonical JSON `{ favourites, archived, hidden }`, each a sorted set of file
+UUIDs, at most 100,000 in all.
+
 `CollectionEpochStatementV1` is a fixed-width account-authority-signed record
 over suite, collection UUID, owner UUID, non-zero epoch, exact previous-record
 hash, collection-key commitment and authority-key ID. Epoch 1 has an all-zero

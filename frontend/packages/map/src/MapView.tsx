@@ -1,9 +1,5 @@
-import maplibregl, { type StyleSpecification } from 'maplibre-gl'
-import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, type ReactNode } from 'react'
-import { freshAccessToken } from '@kutup/session/client'
-import { useEffectiveMap, type EffectiveMap } from './config'
-import { relayRequest } from './relay'
+import { maplibregl, useKutupMap } from './useKutupMap'
 
 export interface MapPoint {
   lat: number
@@ -50,23 +46,6 @@ export interface MapViewProps {
   ariaLabel: string
 }
 
-function styleOf(map: EffectiveMap): string | StyleSpecification {
-  if (map.provider.kind === 'vector') return map.url
-  return {
-    version: 8,
-    sources: {
-      base: {
-        type: 'raster',
-        tiles: [map.url],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: map.provider.attribution,
-      },
-    },
-    layers: [{ id: 'base', type: 'raster', source: 'base' }],
-  }
-}
-
 /**
  * A map, drawn with the provider this person chose (docs/plans/maps.md), or
  * `fallback` while maps are off. The places shown are drawn here in the
@@ -89,9 +68,7 @@ export function MapView({
   className,
   ariaLabel,
 }: MapViewProps) {
-  const effective = useEffectiveMap()
-  const container = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<maplibregl.Map | null>(null)
+  const { container, map, effective } = useKutupMap({ center, zoom, interactive })
   const markerRefs = useRef<maplibregl.Marker[]>([])
   const pick = useRef(onPick)
   pick.current = onPick
@@ -100,61 +77,31 @@ export function MapView({
   const markerClick = useRef(onMarkerClick)
   markerClick.current = onMarkerClick
   const fitted = useRef<string | null>(null)
-  const initial = useRef({ center, zoom })
-  const styleKey = effective ? `${effective.provider.id}:${effective.url}` : null
 
   useEffect(() => {
-    if (!effective || !container.current) return
-    const style = styleOf(effective)
-    const map = new maplibregl.Map({
-      container: container.current,
-      style,
-      center: [initial.current.center.lon, initial.current.center.lat],
-      zoom: initial.current.zoom,
-      interactive,
-      // A small map in a message credits its data in one line below
-      // instead (the licence requires the credit; the control would cover
-      // half of it).
-      attributionControl: interactive ? { compact: true } : false,
-      transformRequest: (url) => relayRequest(url),
-    })
-    if (interactive) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
-    map.on('click', (event) => pick.current?.({ lat: event.lngLat.lat, lon: event.lngLat.lng }))
-    map.on('contextmenu', (event) => {
+    if (!map) return
+    const onClick = (event: maplibregl.MapMouseEvent) => pick.current?.({ lat: event.lngLat.lat, lon: event.lngLat.lng })
+    const onMenu = (event: maplibregl.MapMouseEvent) => {
       if (!contextMenu.current) return
       event.originalEvent.preventDefault()
       contextMenu.current({ lat: event.lngLat.lat, lon: event.lngLat.lng, x: event.point.x, y: event.point.y })
-    })
-    mapRef.current = map
-
-    // An expired token fails relayed requests with 401: refresh it once and
-    // reload the style so the missing tiles are fetched again.
-    let refreshing = false
-    map.on('error', (event: { error?: { status?: number } }) => {
-      if (event.error?.status !== 401 || refreshing || !effective.viaProxy) return
-      refreshing = true
-      void freshAccessToken()
-        .then(() => map.setStyle(style))
-        .catch(() => undefined)
-        .finally(() => {
-          window.setTimeout(() => (refreshing = false), 30_000)
-        })
-    })
-    return () => {
-      markerRefs.current = []
-      mapRef.current = null
-      map.remove()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styleKey, interactive])
+    map.on('click', onClick)
+    map.on('contextmenu', onMenu)
+    return () => {
+      map.off('click', onClick)
+      map.off('contextmenu', onMenu)
+      markerRefs.current = []
+    }
+  }, [map])
 
   useEffect(() => {
-    mapRef.current?.jumpTo({ center: [center.lon, center.lat], zoom })
-  }, [center.lat, center.lon, zoom, styleKey])
+    map?.jumpTo({ center: [center.lon, center.lat], zoom })
+     
+  }, [center.lat, center.lon, zoom, map])
 
   const markerKey = markers.map((m) => `${m.id ?? ''}:${m.lat},${m.lon}:${m.label ?? ''}:${m.color ?? ''}`).join(';')
   useEffect(() => {
-    const map = mapRef.current
     if (!map) return
     for (const marker of markerRefs.current) marker.remove()
     markerRefs.current = markers.map((m) => {
@@ -198,12 +145,12 @@ export function MapView({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markerKey, selectedId, styleKey, fitKey])
+  }, [markerKey, selectedId, map, fitKey])
 
   useEffect(() => {
-    if (focus) mapRef.current?.flyTo({ center: [focus.lon, focus.lat], zoom: focus.zoom, duration: 600 })
+    if (focus) map?.flyTo({ center: [focus.lon, focus.lat], zoom: focus.zoom, duration: 600 })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus?.seq])
+  }, [focus?.seq, map])
 
   if (!effective) return <>{fallback}</>
   if (interactive) {

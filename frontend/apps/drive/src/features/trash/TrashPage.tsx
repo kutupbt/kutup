@@ -11,7 +11,7 @@ import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
-import { useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from './api'
+import { useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
 
 /**
  * Trash, as the same mixed list (sorted by when things were deleted unless

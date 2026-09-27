@@ -569,4 +569,24 @@ for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buff
 assert.equal(contentHasher.finish(), metadataVector.contentHash.hash)
 assert.throws(() => contentHasher.finish())
 
+const libraryVector = vectors.photosLibrary
+assert.equal(crypto.photosLibraryKey(libraryVector.masterKey), libraryVector.libraryKey)
+const firstLibrary = crypto.openPhotosLibrary(libraryVector.first.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined)
+assert.equal(firstLibrary, libraryVector.first.plaintext)
+assert.equal(crypto.photosLibraryDigest(libraryVector.first.envelope), libraryVector.first.digest)
+assert.equal(
+  crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 2, libraryVector.first.digest),
+  libraryVector.second.plaintext,
+)
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined))
+const resealed = crypto.sealPhotosLibrary(
+  JSON.stringify({ favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [] }),
+  libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
+)
+assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
+assert.equal(
+  crypto.openPhotosLibrary(resealed.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
+  '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
+)
+
 console.log('crypto WASM canonical vectors passed')

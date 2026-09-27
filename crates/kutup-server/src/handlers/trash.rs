@@ -59,27 +59,37 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     .fetch_all(&state.pool)
     .await?;
 
-    type FileTuple = (
-        Uuid,
-        Uuid,
-        String,
-        String,
-        i32,
-        i32,
-        i64,
-        Uuid,
-        String,
-        i32,
-        String,
-        String,
-        OffsetDateTime,
-    );
-    let files: Vec<FileTuple> = sqlx::query_as(
+    #[derive(sqlx::FromRow)]
+    struct TrashedFile {
+        id: Uuid,
+        collection_id: Uuid,
+        metadata_envelope: String,
+        file_key_envelope: String,
+        key_epoch: i32,
+        key_generation: i32,
+        metadata_revision: i64,
+        owner_user_id: Uuid,
+        owner_key_envelope: String,
+        collection_key_epoch: i32,
+        epoch_statement: String,
+        epoch_statement_hash: String,
+        deleted_at: OffsetDateTime,
+        thumb_sm: Option<OffsetDateTime>,
+        thumb_lg: Option<OffsetDateTime>,
+        thumb_sm_generation: Option<i32>,
+        thumb_lg_generation: Option<i32>,
+    }
+    let files: Vec<TrashedFile> = sqlx::query_as(
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision,
-                  c.owner_user_id, c.owner_key_envelope, c.key_epoch,
-                  c.epoch_statement, c.epoch_statement_hash, f.deleted_at
+                  c.owner_user_id, c.owner_key_envelope, c.key_epoch AS collection_key_epoch,
+                  c.epoch_statement, c.epoch_statement_hash, f.deleted_at,
+                  sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                  sm.key_generation AS thumb_sm_generation,
+                  lg.key_generation AS thumb_lg_generation
            FROM files f JOIN collections c ON c.id = f.collection_id
+           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
            WHERE c.owner_user_id = $1 AND f.trash_root_id = f.id
            ORDER BY f.deleted_at DESC"#,
     )
@@ -120,37 +130,28 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
             .collect(),
         files: files
             .into_iter()
-            .map(
-                |(
-                    id,
-                    cid,
-                    metadata,
-                    file_key,
-                    key_epoch,
-                    key_generation,
-                    metadata_revision,
-                    owner,
-                    owner_key,
-                    collection_epoch,
-                    statement,
-                    statement_hash,
-                    deleted_at,
-                )| TrashFileRow {
-                    id: id.to_string(),
-                    collection_id: cid.to_string(),
-                    metadata_envelope: metadata,
-                    file_key_envelope: file_key,
-                    key_epoch,
-                    key_generation,
-                    metadata_revision,
-                    collection_owner_user_id: owner.to_string(),
-                    collection_owner_key_envelope: owner_key,
-                    collection_key_epoch: collection_epoch,
-                    collection_epoch_statement: statement,
-                    collection_epoch_statement_hash: statement_hash,
-                    deleted_at,
+            .map(|f| TrashFileRow {
+                id: f.id.to_string(),
+                collection_id: f.collection_id.to_string(),
+                metadata_envelope: f.metadata_envelope,
+                file_key_envelope: f.file_key_envelope,
+                key_epoch: f.key_epoch,
+                key_generation: f.key_generation,
+                metadata_revision: f.metadata_revision,
+                collection_owner_user_id: f.owner_user_id.to_string(),
+                collection_owner_key_envelope: f.owner_key_envelope,
+                collection_key_epoch: f.collection_key_epoch,
+                collection_epoch_statement: f.epoch_statement,
+                collection_epoch_statement_hash: f.epoch_statement_hash,
+                deleted_at: f.deleted_at,
+                // Photos' trash shows the pictures (docs/plans/photos.md).
+                thumbnails: crate::models::FileThumbnails {
+                    sm: f.thumb_sm,
+                    lg: f.thumb_lg,
+                    sm_key_generation: f.thumb_sm_generation,
+                    lg_key_generation: f.thumb_lg_generation,
                 },
-            )
+            })
             .collect(),
     })
     .into_response())
