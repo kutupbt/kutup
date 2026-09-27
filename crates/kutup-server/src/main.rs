@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod albums;
 mod calls;
 mod chat_federation;
 mod chat_hub;
@@ -575,6 +576,13 @@ fn build_router(state: AppState) -> Router {
             "/api/photos/preferences",
             get(photos::get_preferences).put(photos::put_preferences),
         )
+        .route("/api/albums", get(albums::list).post(albums::create))
+        .route("/api/albums/:id", delete(albums::delete))
+        .route(
+            "/api/albums/:id/items",
+            get(albums::items).post(albums::add_items),
+        )
+        .route("/api/albums/:id/items/remove", post(albums::remove_items))
         .route(
             "/api/photos/library",
             get(photos::get_library)

@@ -59,7 +59,10 @@ fn canonical_uuid(value: &str) -> AppResult<Uuid> {
     Ok(parsed)
 }
 
-fn validate_drive_envelope(envelope: &str, expected: DriveEnvelopeContextV1) -> AppResult<()> {
+pub(crate) fn validate_drive_envelope(
+    envelope: &str,
+    expected: DriveEnvelopeContextV1,
+) -> AppResult<()> {
     let bytes = STANDARD
         .decode(envelope)
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
@@ -118,6 +121,8 @@ pub async fn list_collections(
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
            FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
+             -- Albums are the Photos app's (GET /api/albums), never Drive folders.
+             AND c.kind = 'folder'
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
@@ -184,7 +189,7 @@ pub async fn list_collections(
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
            JOIN users owner ON owner.id = c.owner_user_id
-           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL
+           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL AND c.kind = 'folder'
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
@@ -259,6 +264,17 @@ pub async fn create_collection(
     Json(req): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    create_owned_collection(&state, user_id, req, "folder").await
+}
+
+/// A new collection of `kind` (`folder`, or `album` for the Photos app):
+/// its envelopes and first epoch checked, then stored with its history.
+pub(crate) async fn create_owned_collection(
+    state: &AppState,
+    user_id: Uuid,
+    req: CreateCollectionRequest,
+    kind: &str,
+) -> AppResult<Response> {
     let id = canonical_uuid(&req.id)?;
     let parent = req
         .parent_collection_id
@@ -267,6 +283,9 @@ pub async fn create_collection(
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| AppError::bad_request("invalid request"))?;
+    if kind == "album" && parent.is_some() {
+        return Err(AppError::bad_request("an album is not inside a folder"));
+    }
 
     let authority_public_key: String =
         sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
@@ -309,7 +328,7 @@ pub async fn create_collection(
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL AND c.kind = 'folder')",
         )
         .bind(parent_id)
         .bind(user_id)
@@ -322,8 +341,8 @@ pub async fn create_collection(
     sqlx::query(
         r#"INSERT INTO collections
               (id, owner_user_id, name_envelope, owner_key_envelope, key_epoch,
-               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7)"#,
+               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind)
+           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -332,6 +351,7 @@ pub async fn create_collection(
     .bind(&req.epoch_statement)
     .bind(&statement_hash)
     .bind(parent)
+    .bind(kind)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -642,7 +662,8 @@ pub async fn delete_collection(
     let subtree: Vec<Uuid> = sqlx::query_scalar(
         r#"WITH RECURSIVE subtree AS (
              SELECT id FROM collections
-             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+             -- An album is deleted with DELETE /api/albums/{id}, not trashed.
+             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL AND kind = 'folder'
              UNION ALL
              SELECT c.id FROM collections c
              JOIN subtree s ON c.parent_collection_id = s.id

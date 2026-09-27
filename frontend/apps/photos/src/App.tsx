@@ -10,6 +10,8 @@ import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
 import { PhotosShell } from './app/PhotosShell'
+import { AlbumPage } from './features/albums/AlbumPage'
+import { AlbumsPage } from './features/albums/AlbumsPage'
 import { LibraryProvider } from './features/library/LibraryProvider'
 import { ArchivePage, FavouritesPage, HiddenPage } from './features/library/MarkedPages'
 import { PlacesPage } from './features/places/PlacesPage'
@@ -53,6 +55,8 @@ export function App() {
               <Route element={<PhotosShell primaryAction={<UploadButton />} />}>
                 <Route index element={<TimelinePage />} />
                 <Route path="/places" element={<PlacesPage />} />
+                <Route path="/albums" element={<AlbumsPage />} />
+                <Route path="/albums/:id" element={<AlbumPage />} />
                 <Route path="/favourites" element={<FavouritesPage />} />
                 <Route path="/archive" element={<ArchivePage />} />
                 <Route path="/hidden" element={<HiddenPage />} />

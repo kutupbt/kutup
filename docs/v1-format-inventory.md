@@ -74,6 +74,10 @@ zone in minutes, and where the date came from), place, size on screen,
 length, camera, a SHA-256 content hash, a caption and, for a live photo's
 video, `liveOf` (its still's file id).
 
+An album item is a photo's file key sealed under the album key as Drive
+envelope purpose 12 (`AlbumFileKey`): object = file, parent = album, epoch =
+the album's key epoch, revision = the file key's generation.
+
 The Photos library record (`kutup-crypto` `photos_library`, vector
 `photosLibrary`) is one account-private XChaCha20-Poly1305 envelope under an
 HKDF subkey of the master key (as the Chat attachment ledger's). A 112-byte

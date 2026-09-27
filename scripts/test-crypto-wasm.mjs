@@ -121,6 +121,18 @@ assert.throws(
   assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 5, 3, 1n, file, owner), /authentication failed/)
 }
 
+// A photo in an album: purpose 12, epoch = the album's epoch, revision = the generation.
+{
+  const fileKey = Buffer.alloc(32, 0x55).toString('base64')
+  const albumKey = Buffer.alloc(32, 0x77).toString('base64')
+  const file = '11111111-1111-4111-8111-111111111111'
+  const album = '22222222-2222-4222-8222-222222222222'
+  const wrapped = crypto.sealDriveEnvelope(fileKey, albumKey, 12, 2, 3n, file, album)
+  assert.equal(crypto.openDriveEnvelope(wrapped, albumKey, 12, 2, 3n, file, album), fileKey)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 12, 1, 3n, file, album), /authentication failed/)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 3, 2, 3n, file, album), /authentication failed/)
+}
+
 // File blobs are bound to the file and the file key's generation, not a folder.
 const blobVector = vectors.driveFileBlob
 const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)

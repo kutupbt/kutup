@@ -18,7 +18,8 @@
     "favourites": "Favoriler",
     "archive": "Arşiv",
     "hidden": "Gizli",
-    "trash": "Çöp"
+    "trash": "Çöp",
+    "albums": "Albümler"
   },
   "timeline": {
     "title": "Fotoğraflar",
@@ -213,5 +214,38 @@
     "deleted_other": "{{count}} öğe kalıcı olarak silindi",
     "deleteFailed_one": "{{count}} öğe silinemedi",
     "deleteFailed_other": "{{count}} öğe silinemedi"
+  },
+  "albums": {
+    "title": "Albümler",
+    "description": "Albümler kitaplığınızın her yerinden fotoğrafları bir araya getirir. Fotoğraf Drive'da olduğu yerde kalır; albüme koymak hiçbir şeyi kopyalamaz.",
+    "loading": "Albümleriniz açılıyor…",
+    "new": "Yeni albüm",
+    "name": "Albüm adı",
+    "emptyTitle": "Henüz albüm yok",
+    "emptyDescription": "Burada bir tane oluşturun ya da Fotoğraflar'da fotoğraf seçip Albüme ekle'yi seçin.",
+    "itemCount_one": "{{count}} fotoğraf",
+    "itemCount_other": "{{count}} fotoğraf",
+    "addTo": "Albüme ekle",
+    "removeFrom": "Albümden çıkar",
+    "removed_one": "Albümden çıkarıldı",
+    "removed_other": "{{count}} öğe albümden çıkarıldı",
+    "failed": "Bu yapılamadı. Yeniden deneyin.",
+    "addTitle_one": "{{count}} fotoğrafı albüme ekle",
+    "addTitle_other": "{{count}} fotoğrafı albüme ekle",
+    "addDescription": "Albümlerinize yalnızca kendi fotoğraflarınız girer.",
+    "adding": "Ekleniyor…",
+    "add": "Ekle",
+    "added_one": "{{album}} albümüne eklendi",
+    "added_other": "{{count}} öğe {{album}} albümüne eklendi",
+    "notFoundTitle": "Albüm bulunamadı",
+    "notFound": "Silinmiş olabilir.",
+    "all": "Tüm albümler",
+    "emptyAlbumTitle": "Bu albüm boş",
+    "emptyAlbum": "Fotoğraflar'da fotoğraf seçip Albüme ekle'yi seçin.",
+    "menu": "Albüm işlemleri",
+    "rename": "Albümü yeniden adlandır",
+    "delete": "Albümü sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteDescription": "Albüm gider. Fotoğrafları kitaplığınızda ve Drive'da kalır."
   }
 }

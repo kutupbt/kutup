@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Download, Eye, EyeOff, Heart, MoreHorizontal, Share2, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, BookImage, Download, Eye, EyeOff, Heart, ImageMinus, MoreHorizontal, Share2, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -15,6 +15,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
+import { AddToAlbumDialog } from '../albums/AddToAlbumDialog'
+import { useRemoveFromAlbum, type Album } from '../albums/albums'
 import { useLibraryContext } from '../library/libraryContext'
 import type { MarkKind } from '../library/marks'
 import { filesOf, type Photo } from '../library/library'
@@ -22,13 +24,17 @@ import { downloadPhoto, downloadPhotosZip, FsaRequiredError } from './downloads'
 import { mayTrash } from './mayTrash'
 
 /** What to do with the selected photos: download, share one, move to trash. */
-export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: () => void }) {
+export function SelectionBar({ photos, album, onClear }: { photos: Photo[]; album?: Album; onClear: () => void }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const trash = useTrashFile()
   const [confirming, setConfirming] = useState(false)
   const [sharing, setSharing] = useState<FileShareTarget | null>(null)
   const [downloading, setDownloading] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const removeFromAlbum = useRemoveFromAlbum()
+  // Only your own photos go in your albums (others' are theirs to share).
+  const own = photos.filter((p) => p.folder.source === 'owned')
   const trashablePhotos = photos.filter((p) => mayTrash(p, session.userId))
   // A live photo's video goes with its still.
   const trashable = trashablePhotos.flatMap(filesOf)
@@ -122,6 +128,32 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {own.length > 0 ? (
+            <DropdownMenuItem onSelect={() => setAdding(true)}>
+              <BookImage />
+              {t('albums.addTo')}
+            </DropdownMenuItem>
+          ) : null}
+          {album ? (
+            <DropdownMenuItem
+              onSelect={() =>
+                removeFromAlbum.mutate(
+                  { album, photos },
+                  {
+                    onSuccess: () => {
+                      toast.success(t('albums.removed', { count: photos.length }))
+                      onClear()
+                    },
+                    onError: () => toast.error(t('albums.failed')),
+                  },
+                )
+              }
+            >
+              <ImageMinus />
+              {t('albums.removeFrom')}
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => mark('archived', !allArchived, allArchived ? 'selection.unarchived' : 'selection.archived')}>
             {allArchived ? <ArchiveRestore /> : <Archive />}
             {allArchived ? t('selection.unarchive') : t('selection.archive')}
@@ -154,6 +186,7 @@ export function SelectionBar({ photos, onClear }: { photos: Photo[]; onClear: ()
         onConfirm={() => void moveToTrash()}
       />
       <FileShareDialog target={sharing} onClose={() => setSharing(null)} />
+      <AddToAlbumDialog photos={own} open={adding} onClose={() => setAdding(false)} onAdded={onClear} />
     </div>
   )
 }

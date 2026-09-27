@@ -18,7 +18,8 @@
     "favourites": "Favourites",
     "archive": "Archive",
     "hidden": "Hidden",
-    "trash": "Trash"
+    "trash": "Trash",
+    "albums": "Albums"
   },
   "timeline": {
     "title": "Photos",
@@ -213,5 +214,38 @@
     "deleted_other": "Deleted {{count}} forever",
     "deleteFailed_one": "{{count}} item could not be deleted",
     "deleteFailed_other": "{{count}} items could not be deleted"
+  },
+  "albums": {
+    "title": "Albums",
+    "description": "Albums gather photos from anywhere in your library. A photo stays where it is in Drive; putting it in albums copies nothing.",
+    "loading": "Opening your albums…",
+    "new": "New album",
+    "name": "Album name",
+    "emptyTitle": "No albums yet",
+    "emptyDescription": "Make one here, or select photos in Photos and choose Add to album.",
+    "itemCount_one": "{{count}} photo",
+    "itemCount_other": "{{count}} photos",
+    "addTo": "Add to album",
+    "removeFrom": "Remove from album",
+    "removed_one": "Removed from the album",
+    "removed_other": "Removed {{count}} from the album",
+    "failed": "This could not be done. Try again.",
+    "addTitle_one": "Add {{count}} photo to an album",
+    "addTitle_other": "Add {{count}} photos to an album",
+    "addDescription": "Only your own photos go in your albums.",
+    "adding": "Adding…",
+    "add": "Add",
+    "added_one": "Added to {{album}}",
+    "added_other": "Added {{count}} to {{album}}",
+    "notFoundTitle": "Album not found",
+    "notFound": "It may have been deleted.",
+    "all": "All albums",
+    "emptyAlbumTitle": "This album is empty",
+    "emptyAlbum": "Select photos in Photos and choose Add to album.",
+    "menu": "Album actions",
+    "rename": "Rename album",
+    "delete": "Delete album",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteDescription": "The album goes. Its photos stay in your library and in Drive."
   }
 }

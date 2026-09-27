@@ -66,6 +66,10 @@ pub enum DriveEnvelopePurpose {
     /// (docs/plans/drive-file-sharing.md, slice 3); a new generation needs a
     /// new wrap.
     PublicLinkFileKey = 11,
+    /// A photo's file key, sealed under an album's key (docs/plans/photos.md):
+    /// object = file, parent = album, epoch = the album's key epoch, revision
+    /// = the file key's generation. An album holds references, not files.
+    AlbumFileKey = 12,
 }
 
 impl DriveEnvelopePurpose {
@@ -81,7 +85,8 @@ impl DriveEnvelopePurpose {
             | Self::PreviousCollectionKey
             | Self::PublicLinkKey
             | Self::PreviousFileKey
-            | Self::PublicLinkFileKey => len == KEY_LEN,
+            | Self::PublicLinkFileKey
+            | Self::AlbumFileKey => len == KEY_LEN,
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
@@ -114,6 +119,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             9 => Ok(Self::PublicLinkKey),
             10 => Ok(Self::PreviousFileKey),
             11 => Ok(Self::PublicLinkFileKey),
+            12 => Ok(Self::AlbumFileKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -207,6 +213,23 @@ impl DriveEnvelopeContextV1 {
             1,
             file_id,
             owner_id,
+        )
+    }
+
+    /// A photo's file key of `generation`, under an album's key at
+    /// `album_epoch`: bound to the file, the album, the epoch and generation.
+    pub fn album_file_key(
+        file_id: &str,
+        album_id: &str,
+        album_epoch: u32,
+        generation: u32,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::AlbumFileKey,
+            album_epoch,
+            u64::from(generation),
+            file_id,
+            album_id,
         )
     }
 
@@ -568,5 +591,28 @@ mod tests {
         }
         // Only a key fits.
         assert!(seal_b64(b"short", &link_key, scope).is_err());
+    }
+
+    #[test]
+    fn an_album_opens_a_photo_only_as_itself() {
+        let file = "11111111-1111-4111-8111-111111111111";
+        let album = "22222222-2222-4222-8222-222222222222";
+        let other = "33333333-3333-4333-8333-333333333333";
+        let (file_key, album_key) = ([0x55; 32], [0x77; 32]);
+        let scope = DriveEnvelopeContextV1::album_file_key(file, album, 2, 3).unwrap();
+        assert_eq!(scope.purpose, DriveEnvelopePurpose::AlbumFileKey);
+        let sealed = seal_b64(&file_key, &album_key, scope).unwrap();
+        assert_eq!(open_b64(&sealed, &album_key, scope).unwrap(), file_key);
+        for wrong in [
+            DriveEnvelopeContextV1::album_file_key(file, album, 1, 3).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(file, album, 2, 4).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(other, album, 2, 3).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(file, other, 2, 3).unwrap(),
+            // A folder's wrap of a file key is a different thing.
+            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::FileKey, 2, 3, file, album).unwrap(),
+        ] {
+            assert!(open_b64(&sealed, &album_key, wrong).is_err());
+        }
+        assert!(seal_b64(b"short", &album_key, scope).is_err());
     }
 }

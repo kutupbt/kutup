@@ -1,7 +1,7 @@
 # Photos
 
-**Status:** slices 1 to 3 implemented 2026-09-26 and 2026-09-27 (details
-below, under "Slice 1 done", "Slice 2 done" and "Slice 3 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
+**Status:** slices 1 to 4 implemented 2026-09-26 and 2026-09-27 (details
+below, under "Slice 1 done" to "Slice 4 done"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
 owner asked for it after Maps: "continue with photos". The roadmap's
 decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
 - photos are Drive files in folders you choose;
@@ -371,6 +371,26 @@ own plan.
 
 Checked in Chromium: HEIC thumbnails and the converted HEIC in the viewer,
 a RAW's preview turned upright, a live photo as one tile that plays.
+
+## Slice 4 done (2026-09-27)
+
+- **Format:** Drive envelope purpose 12, `AlbumFileKey` (Rust with tests,
+  WASM, TS `@kutup/crypto/album`).
+- **Server:** `collections.kind` (`folder`/`album`, migration 068); albums
+  sit at the top level and database triggers keep files and folders out of
+  them whatever path writes; `album_items`; `/api/albums` (list, create,
+  delete, items, add, remove). Albums stay out of Drive's folder listing
+  and trash; deleting one leaves its photos.
+- **Photos:** an Albums page (cards with the newest photo as cover), an
+  album page on the shared grid (select, open, remove from the album,
+  rename, delete), "Add to album" in the selection (an album, or a new one).
+  Only your own photos go in (others' are theirs to share). A live photo goes
+  in whole. Items left at an older file key (the photo was re-keyed) are
+  re-sealed when the album opens.
+
+Checked in a browser: a new album from a selection, a live photo added
+whole, opening and removing photos, rename, delete with the photos kept,
+Drive not showing albums; the database guards directly.
 
 ## Open questions
 

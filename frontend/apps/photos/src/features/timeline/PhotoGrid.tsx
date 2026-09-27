@@ -12,6 +12,7 @@ import type { Photo } from '../library/library'
 import { useLibraryContext } from '../library/libraryContext'
 import { columnsFor, daysOf, timelineRows, type TimelineRow } from '../library/timeline'
 import { PhotoViewer } from '../viewer/PhotoViewer'
+import type { Album } from '../albums/albums'
 import { PhotoTile } from './PhotoTile'
 import { Scrubber } from './Scrubber'
 import { SelectionBar } from './SelectionBar'
@@ -92,6 +93,10 @@ export interface PhotoGridProps {
   empty: { title: string; description: string; action?: ReactNode }
   /** Files dropped on the page upload into the library (not on Hidden). */
   dropToUpload?: boolean
+  /** Beside the title (an album's menu). */
+  actions?: ReactNode
+  /** The album shown: the selection can take photos out of it. */
+  album?: Album
 }
 
 /**
@@ -99,7 +104,7 @@ export interface PhotoGridProps {
  * month scrubber, selection, the viewer, and dropping files to upload. The
  * timeline, Favourites, Archive and Hidden are each one of these.
  */
-export function PhotoGrid({ photos, title, empty: emptyState, dropToUpload = true }: PhotoGridProps) {
+export function PhotoGrid({ photos, title, empty: emptyState, dropToUpload = true, actions, album }: PhotoGridProps) {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
   const { loading, error, upload, preferences, marks } = useLibraryContext()
@@ -218,13 +223,16 @@ export function PhotoGrid({ photos, title, empty: emptyState, dropToUpload = tru
   return (
     <div className="relative min-h-[calc(100svh-3.5rem)]">
       {selection.length > 0 ? (
-        <SelectionBar photos={selection} onClear={() => setSelected(new Set())} />
+        <SelectionBar photos={selection} album={album} onClear={() => setSelected(new Set())} />
       ) : (
         <div className="flex items-baseline justify-between gap-4 px-4 pb-2 pt-5 md:px-8">
-          <h1 className="font-display text-2xl font-semibold tracking-tight">{title}</h1>
-          {photos.length > 0 ? (
-            <p className="text-sm text-muted-foreground">{t('timeline.count', { count: photos.length })}</p>
-          ) : null}
+          <h1 className="min-w-0 truncate font-display text-2xl font-semibold tracking-tight">{title}</h1>
+          <div className="flex shrink-0 items-center gap-2">
+            {photos.length > 0 ? (
+              <p className="text-sm text-muted-foreground">{t('timeline.count', { count: photos.length })}</p>
+            ) : null}
+            {actions}
+          </div>
         </div>
       )}
 

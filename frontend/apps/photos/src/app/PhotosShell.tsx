@@ -1,4 +1,4 @@
-import { Archive, EyeOff, HardDrive, Heart, Images, Map as MapIcon, MapPinned, MessagesSquare, Settings, Trash2, UserRound } from 'lucide-react'
+import { Archive, BookImage, EyeOff, HardDrive, Heart, Images, Map as MapIcon, MapPinned, MessagesSquare, Settings, Trash2, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -35,6 +35,7 @@ export function PhotosShell({ primaryAction }: { primaryAction?: ReactNode }) {
         <>
           <SidebarNavLink to="/" end icon={<Images />} label={t('nav.photos')} />
           <SidebarNavLink to="/places" icon={<MapPinned />} label={t('nav.places')} />
+          <SidebarNavLink to="/albums" icon={<BookImage />} label={t('nav.albums')} />
           <SidebarNavLink to="/favourites" icon={<Heart />} label={t('nav.favourites')} />
           <SidebarNavLink to="/archive" icon={<Archive />} label={t('nav.archive')} />
           <SidebarNavLink to="/hidden" icon={<EyeOff />} label={t('nav.hidden')} />

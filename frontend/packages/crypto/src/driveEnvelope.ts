@@ -18,6 +18,8 @@ export const DRIVE_ENVELOPE_PURPOSE = {
   publicLinkKey: 9,
   /** A file's key of one generation, under a link to that file (object = file, parent = owner). */
   publicLinkFileKey: 11,
+  /** A photo's file key under an album's key (object = file, parent = album, epoch = album epoch, revision = generation). */
+  albumFileKey: 12,
 } as const
 
 export type DriveEnvelopePurpose =

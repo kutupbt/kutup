@@ -882,6 +882,32 @@ subkey of the master key; the server never reads it.
   record; `409` with the current record otherwise, which the client merges
   into and seals again. Up to 6 MiB.
 
+### Albums
+
+Albums (docs/plans/photos.md) are collections of kind `album`: keys and
+epochs as a folder's, but they hold references to photos, never files or
+folders (the database refuses both), sit at the top level, and are left out
+of `GET /api/collections` and the trash. Each item is a file and its key
+sealed under the album key (Drive envelope purpose 12: object = file,
+parent = album, epoch = album epoch, revision = file key generation).
+
+- `GET /api/albums`: your albums (`{ id, ownerUserId, nameEnvelope,
+  ownerKeyEnvelope, keyEpoch, nameRevision, epochStatement,
+  epochStatementHash, itemCount, createdAt, updatedAt }`).
+- `POST /api/albums`: a new album, with the body of `POST /api/collections`
+  and no parent. Rename it with `PUT /api/collections/:id`.
+- `DELETE /api/albums/:id`: the album goes; its photos stay.
+- `GET /api/albums/:id/items`: `[{ file, fileKeyEnvelope, keyGeneration,
+  albumEpoch, addedBy, addedAt }]`, `file` as in a folder listing; photos in
+  the trash are left out.
+- `POST /api/albums/:id/items`: `{ items: [{ fileId, fileKeyEnvelope,
+  keyGeneration }] }`, up to 500; each one of your own files, sealed at its
+  current generation and the album's current epoch (`409` when a key
+  changed). Adding again re-seals.
+- `POST /api/albums/:id/items/remove`: `{ fileIds }`.
+
+Only an album's owner uses these for now; shared albums come next.
+
 ### Live-location streams
 
 A live location's stream on the sharer's server (docs/chat-protocol.md
