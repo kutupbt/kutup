@@ -269,10 +269,14 @@ on the device; the people you name, merge or ignore are an account-private
 encrypted record, like the favourites. Search (by person, by what is in a
 photo, by text) runs on the device over these tags, next to search by
 date, place, name, caption and camera. Face grouping is opt in (biometric
-data). Still to decide: where the models run (the browser, the native
-apps, or both; Ente runs them only in its desktop and mobile apps), which
-models (their size and licences), and where they are downloaded from. The
-design comes in its own plan.
+data).
+
+**Decided 2026-09-27:** the models run in both the browser and the native
+apps (Ente runs them only in its desktop and mobile apps); whichever device
+tags a photo first uploads the tags and the others reuse them. The slice is
+deferred until after the native iOS and Android apps. Still to decide then:
+which models (their size and licences) and where they are downloaded from.
+The design comes in its own plan.
 
 ## Slices
 

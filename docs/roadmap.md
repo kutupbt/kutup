@@ -472,7 +472,9 @@ albums) is the second reference.
 - **Tagging on the device:** faces and people, objects and text found by ML
   models that run in the client (Ente's approach), since the server holds
   only ciphertext; the tags are sealed under each photo's file key and
-  synced, and search runs over them on the device.
+  synced, and search runs over them on the device. Models run in the
+  browser and in the native apps; deferred until after the native iOS and
+  Android apps (decided 2026-09-27).
 - **Uploads:** from the web; automatic backup from the native apps (with
   mobile, see "Native iOS and Android apps"), into your upload folder.
 - **Places:** a map of where your photos were taken, like Ente's, inside the
