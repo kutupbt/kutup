@@ -445,7 +445,7 @@ Places, editing, trash), 3 (HEIC, RAW, live photos), 4 (private albums) and
 5 (albums shared with people here, who may add photos; with people on other
 servers, who view them; and public album links) are done. Open: people on
 other servers adding their own photos to an album (their photos would live
-on their server), and slice 6, search on the device.
+on their server), and slice 6, tagging on the device.
 Reference mostly Ente (`kutup-references/ente`: on-device face grouping,
 the Places map, the timeline); Proton's Photos section in its Drive web app
 (`kutup-references/WebClients/applications/drive/src/app/photos`, with
@@ -469,9 +469,10 @@ albums) is the second reference.
   (docs/plans/drive-file-sharing.md); albums shared with people here and on
   other servers, collaborative albums, and public album links with the key
   in the URL fragment.
-- **Search on the device:** faces, objects and text found by ML models that
-  run in the client (Ente's approach), so the server never sees the photos
-  or the index.
+- **Tagging on the device:** faces and people, objects and text found by ML
+  models that run in the client (Ente's approach), since the server holds
+  only ciphertext; the tags are sealed under each photo's file key and
+  synced, and search runs over them on the device.
 - **Uploads:** from the web; automatic backup from the native apps (with
   mobile, see "Native iOS and Android apps"), into your upload folder.
 - **Places:** a map of where your photos were taken, like Ente's, inside the

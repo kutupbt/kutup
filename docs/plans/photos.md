@@ -27,8 +27,8 @@ References: Ente (`kutup-references/ente`: `web/`, the mobile app's map in
 - **Places:** a map of where photos were taken.
 - **Library tools:** favourites, archive, hidden, trash; upload by drag and
   drop, with duplicates skipped.
-- **Later slices:** albums, then shared and public albums, then search on the
-  device.
+- **Later slices:** albums, then shared and public albums, then tagging on
+  the device (faces, objects, text), which search uses.
 
 ## How it is built
 
@@ -256,11 +256,23 @@ A lock on Hidden (asking again for the password) is a later choice.
 - **"Save to my library"** copies a photo from someone else's album into your
   upload folder.
 
-### Search on the device (slice 6)
+### Tagging on the device (slice 6)
 
-Faces, objects and text, found by models running in the browser (Ente's
-approach). The index stays on the device, encrypted. The design comes in its
-own plan.
+The server holds only ciphertext, so it cannot find faces, objects or text
+in photos: the client does, as Ente does. The client decrypts each photo
+and runs ML models on it (face detection and face embeddings, a CLIP image
+embedding, later OCR). What it finds (face boxes, embeddings, text) is
+sealed under the photo's file key, like its thumbnails, and uploaded, so
+any device that can open the photo, and anyone it is shared with, reuses
+the tags instead of running the models again. Faces are grouped into people
+on the device; the people you name, merge or ignore are an account-private
+encrypted record, like the favourites. Search (by person, by what is in a
+photo, by text) runs on the device over these tags, next to search by
+date, place, name, caption and camera. Face grouping is opt in (biometric
+data). Still to decide: where the models run (the browser, the native
+apps, or both; Ente runs them only in its desktop and mobile apps), which
+models (their size and licences), and where they are downloaded from. The
+design comes in its own plan.
 
 ## Slices
 
@@ -282,7 +294,8 @@ own plan.
 4. **Private albums.**
 5. **Shared albums:** people here and on other servers, collaborative albums,
    public album links.
-6. **Search on the device.**
+6. **Tagging on the device:** faces and people, objects and scenes, text in
+   photos; the tags synced encrypted, and search built on them.
 
 ## Slice 1 done (2026-09-26)
 
