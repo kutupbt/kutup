@@ -15,22 +15,35 @@ export interface SnapshotTarget {
   context: FileBlobContextV1
 }
 
+/**
+ * Where a live editor is in the collaboration log: every edit up to `seq`
+ * is in what it saves, under the document key `docKeyId`.
+ */
+export interface LogPosition {
+  seq: number
+  docKeyId: number
+}
+
 export async function saveSnapshot(
   target: SnapshotTarget,
   bytes: Uint8Array,
-  opts: { label?: string; keepForever?: boolean } = {},
-): Promise<string> {
+  opts: { label?: string; keepForever?: boolean; position?: LogPosition | null } = {},
+): Promise<{ id: string; seqAtSnapshot: number }> {
   const sealed = await encryptFileBlobV1(bytes, target.fileKey, target.context)
   // The whole file, sealed like the upload: downloads serve it as the file.
   const version = await createVersion(target.context.fileId, sealed, {
     kind: 'file',
-    // Whole-file editors have no update log to resume from.
-    seqAtSnapshot: 0,
-    docKeyId: 1,
+    // The office editor's edits up to here are in these bytes: the server
+    // trims its log to this point, and whoever opens this version resumes
+    // after it (a PDF's edits name its objects, so replaying ones it already
+    // holds would change it again). Whiteboards keep no log: 0.
+    seqAtSnapshot: opts.position?.seq ?? 0,
+    docKeyId: opts.position?.docKeyId ?? 1,
     label: opts.label ?? null,
     keepForever: Boolean(opts.keepForever),
   })
-  return version.id
+  // The position as the server recorded it (never past its log's head).
+  return { id: version.id, seqAtSnapshot: version.seqAtSnapshot }
 }
 
 /** A version's plaintext. */

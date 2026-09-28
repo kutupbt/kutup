@@ -459,7 +459,13 @@ pub(crate) async fn store_version(
     // stale or made-up position must not wipe edits the version lacks).
     // The trimmed stretch is in this version; the floor keeps positions
     // counting from its end.
-    if seq_at_snapshot > 0 {
+    //
+    // Whole-file versions (office documents) record their position but trim
+    // nothing: ONLYOFFICE's edits name objects created during the editing
+    // session, so a tab joining a live session must load the version that
+    // session started from and replay every edit since. The log is trimmed
+    // when a new session starts (`collab::claim_base`).
+    if seq_at_snapshot > 0 && kind == "yjs" {
         sqlx::query(
             "DELETE FROM file_update_log l USING files f
              WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",

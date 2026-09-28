@@ -393,8 +393,9 @@ pub(crate) async fn broadcast_peers(hub: &Hub, file_id: &str) {
     }
 }
 
-/// Handles JSON control messages — v1 supports only `{"type":"resume","lastSeenSeq":N}`.
-/// Mirrors `handleControl`.
+/// Handles JSON control messages: `{"type":"resume","lastSeenSeq":N}` and,
+/// from office editors, `{"type":"base","versionId":…|null,"seq":N,"reset":bool}`
+/// (docs/onlyoffice.md, "Collaboration sessions"). Mirrors `handleControl`.
 async fn handle_control(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, data: &[u8]) {
     #[derive(Deserialize)]
     struct Ctl {
@@ -402,14 +403,122 @@ async fn handle_control(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, dat
         kind: String,
         #[serde(rename = "lastSeenSeq", default)]
         last_seen_seq: i64,
+        #[serde(rename = "versionId", default)]
+        version_id: Option<String>,
+        #[serde(default)]
+        seq: i64,
+        #[serde(default)]
+        reset: bool,
     }
     let Ok(m) = serde_json::from_slice::<Ctl>(data) else {
         return;
     };
-    if m.kind != "resume" {
-        return;
+    match m.kind.as_str() {
+        "resume" => replay_log(state, peer, file_uuid, m.last_seen_seq).await,
+        "base" => claim_base(state, peer, file_uuid, m.version_id, m.seq, m.reset).await,
+        _ => {}
     }
-    replay_log(state, peer, file_uuid, m.last_seen_seq).await;
+}
+
+/// An office editor says which version it loaded. The first tab in the room
+/// sets the session's base (and, starting a session, trims the log up to
+/// it: nobody is editing past it); a tab joining a live session learns the
+/// base and, when it loaded something else, reopens from it; a restore
+/// resets the base and the other tabs reopen.
+async fn claim_base(
+    state: &AppState,
+    peer: &hub::Peer,
+    file_uuid: Uuid,
+    version_id: Option<String>,
+    seq: i64,
+    reset: bool,
+) {
+    // Only a real version of this file, at its recorded position, may be a
+    // base (a made-up one must not trim edits); the original upload is 0.
+    let version = match &version_id {
+        None if seq == 0 => None,
+        None => return,
+        Some(v) => {
+            let Ok(vid) = Uuid::parse_str(v) else { return };
+            let row: Option<i64> = sqlx::query_scalar(
+                "SELECT doc_key_id FROM file_versions
+                 WHERE id = $1 AND file_id = $2 AND kind = 'file' AND seq_at_snapshot = $3",
+            )
+            .bind(vid)
+            .bind(file_uuid)
+            .bind(seq)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+            match row {
+                Some(doc_key_id) => Some((vid, doc_key_id)),
+                None => return,
+            }
+        }
+    };
+    let file_id = file_uuid.to_string();
+    let claim = hub::SessionBase { version_id, seq };
+    let Some(outcome) = state.hub.claim_base(&file_id, peer.conn_id, claim, reset) else {
+        return;
+    };
+    if outcome.new_session {
+        if let Some((_, doc_key_id)) = version {
+            if seq > 0 {
+                let _ = trim_log(&state.pool, file_uuid, seq, doc_key_id).await;
+            }
+        }
+    }
+    let base_json = |yours: bool, reset: bool| {
+        serde_json::json!({
+            "type": "base",
+            "versionId": outcome.base.version_id,
+            "seq": outcome.base.seq,
+            "yours": yours,
+            "reset": reset,
+        })
+        .to_string()
+    };
+    let _ = peer
+        .write(WsOut::Text(base_json(outcome.yours, false)))
+        .await;
+    for other in &outcome.others {
+        let _ = other.write(WsOut::Text(base_json(false, true))).await;
+    }
+}
+
+/// Drops the log up to `seq` (under the relay's per-file lock, only for the
+/// document key the log is under) and raises the floor to it.
+async fn trim_log(
+    pool: &sqlx::PgPool,
+    file_uuid: Uuid,
+    seq: i64,
+    doc_key_id: i64,
+) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(log_lock_key(file_uuid))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "DELETE FROM file_update_log l USING files f
+         WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
+    )
+    .bind(file_uuid)
+    .bind(seq)
+    .bind(doc_key_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
+         WHERE id = $1 AND current_doc_key_id = $3",
+    )
+    .bind(file_uuid)
+    .bind(seq)
+    .bind(doc_key_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
 }
 
 /// Validates + persists a binary collab frame, then broadcasts it — mirrors `handleFrame`.

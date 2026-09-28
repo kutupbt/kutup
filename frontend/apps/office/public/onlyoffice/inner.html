@@ -174,7 +174,15 @@
           docx: { template: 'oodoc_base.js',   documentType: 'word',  fileType: 'docx' },
           xlsx: { template: 'oocell_base.js',  documentType: 'cell',  fileType: 'xlsx' },
           pptx: { template: 'ooslide_base.js', documentType: 'slide', fileType: 'pptx' },
+          // A PDF opens as itself in ONLYOFFICE's PDF editor (no x2t on the
+          // way in); saving hands its compiled changes to x2t, which applies
+          // them to the original bytes.
+          pdf:  { documentType: 'pdf', fileType: 'pdf', native: true },
         }
+
+        // The PDF as it was opened: the PDF editor's changes are relative to
+        // it, so every save applies them to these bytes.
+        var basePdf = null
 
         var setStatus = function (text) {
           var el = document.getElementById('status')
@@ -221,6 +229,7 @@
               // PDF output: OnlyOffice's print buffer beside the document,
               // and the font files the layout used.
               if (extra && extra.pdfBuffer) msg.pdfBuffer = extra.pdfBuffer
+              if (extra && extra.pdfChanges) msg.pdfChanges = extra.pdfChanges
               if (extra && extra.fonts) msg.fonts = extra.fonts
               iframe.contentWindow.postMessage(msg, SELF_ORIGIN)
             })
@@ -322,6 +331,13 @@
           if (!docEditor) return
           docEditor.sendMessageToOO(obj)
         }
+
+        // Edits replayed before the editor has authenticated (a tab joining a
+        // live session gets the session's edits at once, while OnlyOffice is
+        // still loading): held here and handed over with auth as the
+        // document's initial changes, as DocumentServer does for a joiner.
+        var editorAuthed = false
+        var editsBeforeAuth = []
 
         var nextRandomId = function (prefix) {
           return prefix + Math.random().toString(36).slice(2, 10)
@@ -495,7 +511,7 @@
               // array yields keys "0","1",... that never match the
               // requested block, and OO silently refuses input on the new
               // block. That's the user's "type a, Enter, can't type" bug.
-              if (docType === 'xlsx' || docType === 'pptx') {
+              if (docType === 'xlsx' || docType === 'pptx' || docType === 'pdf') {
                 var requestedBlock = (obj.block && obj.block[0]) || null
                 var lockUid = 'lk-' + Math.random().toString(36).slice(2, 10)
                 selfLocks[lockUid] = {
@@ -660,9 +676,12 @@
                 setStatus('editor: auth')
               },
               getInitialChanges: function () {
-                // Phase 5b returns queued ops since last checkpoint. For 2c
-                // there are no ops yet — empty array is correct.
-                return []
+                editorAuthed = true
+                var changes = []
+                editsBeforeAuth.forEach(function (edit) { changes = changes.concat(edit.changes) })
+                editsBeforeAuth = []
+                console.log('[kutup-bridge] initial changes from the session: ' + changes.length)
+                return changes
               },
               getImageURL: function (_name) {
                 // OnlyOffice calls .then() on the return value, so it MUST
@@ -724,7 +743,14 @@
           var useExisting = isOoxml(initialBytes)
 
           var docPromise
-          if (useExisting) {
+          if (t.native) {
+            if (!initialBytes || initialBytes.length < 5 || String.fromCharCode.apply(null, initialBytes.subarray(0, 5)) !== '%PDF-') {
+              setStatus('not a PDF')
+              return
+            }
+            basePdf = initialBytes
+            docPromise = Promise.resolve(new Blob([initialBytes], { type: 'application/pdf' }))
+          } else if (useExisting) {
             // Existing OOXML file: convert to OnlyOffice's .bin via x2t.
             setStatus('converting ' + payload.type + ' via x2t…')
             docPromise = x2tConvert(initialBytes, 'input.' + t.fileType, 'bin')
@@ -767,6 +793,10 @@
                     width: '100%',
                     height: '100%',
                     document: {
+                      // A PDF goes straight to the PDF editor: left undefined,
+                      // api.js routes it to a page that asks DocumentServer
+                      // whether it is a form.
+                      isForm: t.native ? false : undefined,
                       fileType: t.fileType,
                       key: 'fresh',  // hardcoded per CryptPad — we manage doc identity ourselves
                       title: payload.filename || ('Untitled.' + t.fileType),
@@ -949,8 +979,13 @@
                 var payload = JSON.parse(msg.payload)
                 var changesLen = payload && payload.changes ? payload.changes.length : 0
                 if (changesLen === 0) return  // ignore heartbeat-shaped echoes
-                console.log('[kutup-bridge] applying remote op changes=' + changesLen + ' cpIndex=' + cpIndex)
-                sendToOO(payload)
+                if (!editorAuthed) {
+                  editsBeforeAuth.push(payload)
+                  console.log('[kutup-bridge] holding remote op until the editor opens changes=' + changesLen)
+                } else {
+                  console.log('[kutup-bridge] applying remote op changes=' + changesLen + ' cpIndex=' + cpIndex)
+                  sendToOO(payload)
+                }
                 cpIndex++
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
@@ -1195,6 +1230,13 @@
             replyTo.postMessage(message, PARENT_ORIGIN)
           }
           var inner = getInnerEditor()
+          if (docType === 'pdf') {
+            // A PDF is its own picture: page one of the document as edited.
+            currentPdf(inner)
+              .then(function (bytes) { reply({ bytes: bytes }) })
+              .catch(function (err) { reply({ error: (err && err.message) || String(err) }) })
+            return
+          }
           if (!docEditor || !inner || typeof inner.asc_Print !== 'function' ||
               typeof inner.asc_nativeGetFile !== 'function') {
             reply({ error: 'print is not available' })
@@ -1271,12 +1313,46 @@
           }
         }
 
+        // The PDF as edited: the PDF editor writes its changes (annotations,
+        // form fields, text and page edits) as one "compiled changes" binary
+        // relative to the PDF it opened; x2t applies it to those bytes. No
+        // changes: the PDF is unchanged.
+        var currentPdf = function (inner) {
+          var renderer = inner && (inner.DocumentRenderer ||
+            (inner.WordControl && inner.WordControl.m_oDrawingDocument && inner.WordControl.m_oDrawingDocument.m_oDocumentRenderer))
+          if (!renderer || typeof renderer.Save !== 'function' || !basePdf) {
+            return Promise.reject(new Error('the PDF editor is not ready'))
+          }
+          var changes
+          try {
+            changes = renderer.Save()
+          } catch (err) {
+            return Promise.reject(new Error('could not read the PDF changes: ' + ((err && err.message) || err)))
+          }
+          if (!changes) return Promise.resolve(new Uint8Array(basePdf))
+          return collectFonts(inner)
+            .then(function (fonts) {
+              return x2tConvert(basePdf, 'input.pdf', 'pdf', { pdfChanges: changes, fonts: fonts })
+            })
+            .then(function (res) { return res.output })
+        }
+
         var handleSaveRequest = function (replyTo, requestId) {
           if (!docEditor || !docType) {
             replyTo.postMessage({
               type: 'save-result', requestId: requestId,
               error: 'editor not ready',
             }, PARENT_ORIGIN)
+            return
+          }
+          if (docType === 'pdf') {
+            currentPdf(getInnerEditor())
+              .then(function (bytes) {
+                replyTo.postMessage({ type: 'save-result', requestId: requestId, bytes: bytes, format: 'pdf' }, PARENT_ORIGIN)
+              })
+              .catch(function (err) {
+                replyTo.postMessage({ type: 'save-result', requestId: requestId, error: (err && err.message) || String(err) }, PARENT_ORIGIN)
+              })
             return
           }
           try {

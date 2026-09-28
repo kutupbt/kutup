@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, X } from 'lucide-react'
+import { ArrowLeft, BookmarkPlus, Check, Download, Eye, FilePenLine, History, Save, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
@@ -24,14 +24,14 @@ import { useRenameFile } from '@kutup/drive-core/mutations'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { folderPath, mapsListUrl } from '../drive/paths'
 import { isListName } from '@kutup/map/list'
-import { currentContent } from './content'
+import { contentAt, currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
-import type { OfficeEditorHandle } from './office/OfficeEditor'
+import type { OfficeEditorHandle, SessionBase } from './office/OfficeEditor'
 import { EditorNotice } from './office/EditorNotice'
 import { listVersions, patchVersion } from '@kutup/collab/api'
-import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
+import { loadVersionBytes, saveSnapshot, type LogPosition, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
 import { exportScene, thumbnailsOfDrawing, thumbnailsOfPicture } from '../thumbnails/make'
@@ -51,7 +51,9 @@ const MAX_OPEN_BYTES = 100 * 1024 * 1024
 
 type Opened =
   | { kind: 'text'; initialText: string }
-  | { kind: 'office' | 'whiteboard'; bytes: Uint8Array }
+  /** `base`: the version the bytes came from and its log position (the office
+   *  session's base); `resetBase`: claim it anew (after a restore). */
+  | { kind: 'office' | 'whiteboard'; bytes: Uint8Array; base?: SessionBase; resetBase?: boolean }
   | { kind: 'viewer'; blobUrl: string; mimeType: string }
   /** Nothing in the browser opens it: offer the download. */
   | { kind: 'none' }
@@ -104,6 +106,13 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   const [failure, setFailure] = useState<Failure | null>(null)
   // Bumped to remount a whole-file editor on restored content.
   const [generation, setGeneration] = useState(0)
+  // A PDF opens in the viewer; Edit reopens it in ONLYOFFICE's PDF editor.
+  const [editingPdf, setEditingPdf] = useState(false)
+  // Bumped to reopen the file from its latest version (another tab saved
+  // past the point this one opened at).
+  const [reopen, setReopen] = useState(0)
+  // A live office session started from this version: open it, not the latest.
+  const [openAt, setOpenAt] = useState<SessionBase | null>(null)
 
   const listsLoaded = cid === null ? files.isSuccess : folders.isSuccess && (!folder?.key || files.isSuccess)
   const refetching = folders.isFetching || files.isFetching
@@ -141,9 +150,9 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // On another server, notes are edited live through this one
       // (docs/plans/collab-federation.md); office documents and whiteboards
       // are not yet.
-      const kind = editorKindFor(name)
-      const editor = remote && kind !== 'text' ? null : kind
       const viewer = chooseViewer(name)
+      const kind = editorKindFor(name) ?? (editingPdf && viewer?.kind === 'pdf' ? 'office' : null)
+      const editor = remote && kind !== 'text' ? null : kind
       // An editor writes only under the folder's current key: a file the
       // folder rotated past moves to it first (docs/plans/drive-share-revocation.md).
       if (editor && !remote && container.canUpload && f.keyEpoch < container.keyEpoch) {
@@ -167,10 +176,14 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       }
       try {
         let bytes: Uint8Array
+        let base: SessionBase = { versionId: null, seq: 0 }
         // Each stored thing opens with the key generation it was sealed under.
-        if (editor === 'office' || editor === 'whiteboard') {
-          // Reopen what was last saved, not the upload.
-          const content = await currentContent(container, f)
+        if (editor === 'office' || editor === 'whiteboard' || viewer?.kind === 'pdf') {
+          // Reopen what was last saved, not the upload (a PDF edited in
+          // ONLYOFFICE is saved as versions, and the viewer shows the latest).
+          const content =
+            editor === 'office' && openAt ? await contentAt(f, openAt.versionId) : await currentContent(container, f)
+          if (content.kind === 'version') base = { versionId: content.versionId, seq: content.seqAtSnapshot }
           bytes =
             content.kind === 'version'
               ? await loadVersionBytes(await sealedAt(f, content.keyGeneration), content.path)
@@ -185,7 +198,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         if (editor === 'text') {
           setOpened({ kind: 'text', initialText: new TextDecoder().decode(bytes) })
         } else if (editor) {
-          setOpened({ kind: editor, bytes })
+          setOpened({ kind: editor, bytes, base })
         } else if (viewer) {
           blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: viewer.mimeType }))
           setOpened({ kind: 'viewer', blobUrl, mimeType: viewer.mimeType })
@@ -198,7 +211,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [picked, queryClient])
+  }, [picked, queryClient, editingPdf, reopen, openAt])
 
   // Live: the current name and permissions (a rename shows at once).
   const liveFolder = folder ?? picked?.folder
@@ -234,17 +247,33 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // As the file opened: an editor stays one for the session (the server
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload}
+      // Offered where the PDF editor could save: this server, write access.
+      onEditPdf={
+        opened.kind === 'viewer' && opened.mimeType === 'application/pdf' && !editingPdf &&
+        (picked?.folder ?? liveFolder).canUpload && fileLocation(picked?.folder ?? liveFolder).kind === 'local'
+          ? () => {
+              setOpened(null)
+              setEditingPdf(true)
+            }
+          : undefined
+      }
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
       mayRename={
         liveFolder.source === 'file'
           ? liveFolder.canUpload
           : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
       }
-      onRestored={(bytes) => {
+      onRestored={(bytes, base) => {
         if (opened.kind === 'office' || opened.kind === 'whiteboard') {
-          setOpened({ kind: opened.kind, bytes })
+          setOpenAt(null)
+          setOpened({ kind: opened.kind, bytes, base, resetBase: true })
           setGeneration((g) => g + 1)
         }
+      }}
+      onOutdated={(base) => {
+        setOpenAt(base ?? null)
+        setOpened(null)
+        setReopen((n) => n + 1)
       }}
     />
   )
@@ -310,18 +339,24 @@ function Workspace({
   notice,
   mayRename,
   onRestored,
+  onOutdated,
+  onEditPdf,
 }: {
   folder: Folder
   file: DriveFile
   name: string
   opened: Opened
+  /** A PDF in the viewer that may be edited: reopens it in the PDF editor. */
+  onEditPdf?: () => void
   keys: Keys
   /** A view-only share: editors open read-only, nothing is saved. */
   readOnly: boolean
   /** Why an editor opened read-only when that is not its share. */
   notice: string | null
   mayRename: boolean
-  onRestored: (bytes: Uint8Array) => void
+  onRestored: (bytes: Uint8Array, base: SessionBase) => void
+  /** The office session's base is another version: reopen from it. */
+  onOutdated: (base?: SessionBase) => void
 }) {
   const { t } = useTranslation()
   const download = useDownload(folder, file)
@@ -361,6 +396,9 @@ function Workspace({
             ref={officeRef}
             {...common}
             initialBytes={opened.bytes}
+            base={opened.base}
+            resetBase={opened.resetBase}
+            onOutdated={onOutdated}
             onSaveShortcut={() => saveShortcut.current?.()}
             readOnly={readOnly}
           />
@@ -435,8 +473,14 @@ function Workspace({
                   : undefined
               }
               isSpreadsheet={extensionOf(name) === 'xlsx'}
+              logPosition={wholeFile === 'office' ? () => officeRef.current?.logPosition() ?? null : undefined}
               onRestored={onRestored}
             />
+          ) : null}
+          {onEditPdf ? (
+            <Button variant="outline" size="sm" onClick={onEditPdf} title={t('file.editPdfHint')}>
+              <FilePenLine /> {t('file.editPdf')}
+            </Button>
           ) : null}
           {opened.kind === 'office' ? <EditorNotice /> : null}
           <Button
@@ -497,6 +541,7 @@ function WholeFileActions({
   getBytes,
   officePdf,
   isSpreadsheet = false,
+  logPosition,
   onRestored,
 }: {
   /** A stored version's plaintext. */
@@ -509,7 +554,9 @@ function WholeFileActions({
   officePdf?: () => Promise<Uint8Array>
   /** Its thumbnail is cropped to the used cells. */
   isSpreadsheet?: boolean
-  onRestored: (bytes: Uint8Array) => void
+  /** Office only: where the editor is in the collaboration log. */
+  logPosition?: () => LogPosition | null
+  onRestored: (bytes: Uint8Array, base: SessionBase) => void
 }) {
   const { t } = useTranslation()
   const [saving, setSaving] = useState(false)
@@ -528,6 +575,9 @@ function WholeFileActions({
       savingRef.current = true
       setSaving(true)
       try {
+        // Read before the bytes: every edit up to here is in them (one that
+        // lands in between is in them too, and replays harmlessly on top).
+        const position = logPosition?.() ?? null
         const bytes = await getBytes()
         const digest = await sha256(bytes)
         const previous = lastSaved.current
@@ -544,7 +594,7 @@ function WholeFileActions({
           }
           return true
         }
-        const versionId = await saveSnapshot(keys.target, bytes, opts)
+        const { id: versionId } = await saveSnapshot(keys.target, bytes, { ...opts, position })
         lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
@@ -561,7 +611,7 @@ function WholeFileActions({
         setSaving(false)
       }
     },
-    [getBytes, keys.target, kind, officePdf, isSpreadsheet, t],
+    [getBytes, keys.target, kind, officePdf, isSpreadsheet, logPosition, t],
   )
 
   // Ctrl/Cmd+S anywhere on the page. OnlyOffice runs in a frame and forwards
@@ -593,10 +643,12 @@ function WholeFileActions({
       if (choice === 'save-and-restore') {
         await save({ label: t('editor.preRestoreLabel', { time }), quiet: true })
       }
-      // Restoring appends: the old content becomes the newest version.
-      await saveSnapshot(keys.target, old, { label: t('editor.restoredLabel', { time }) })
+      // Restoring appends: the old content becomes the newest version, and
+      // the log so far (edits to what it replaces) is behind it.
+      const position = logPosition?.() ?? null
+      const restored = await saveSnapshot(keys.target, old, { label: t('editor.restoredLabel', { time }), position })
       toast.success(t('editor.restored'), { id })
-      onRestored(old)
+      onRestored(old, { versionId: restored.id, seq: restored.seqAtSnapshot })
     } catch (error) {
       toast.error(error instanceof QuotaExceededError ? t('editor.quotaSave') : t('editor.restoreFailed'), { id })
     }

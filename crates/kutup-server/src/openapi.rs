@@ -112,6 +112,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::files::list_files,
         crate::handlers::files::upload,
         crate::handlers::files::download,
+        crate::handlers::files::download_original,
         crate::handlers::files::update_metadata,
         crate::handlers::files::delete,
         crate::handlers::files::claim_seed,

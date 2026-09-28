@@ -24,7 +24,8 @@ import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { appUrl, getAppDirectory } from '@kutup/session/apps'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
-import { CollabTransport, type HelloMsg } from '@kutup/collab/transport'
+import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
+import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
 import {
@@ -34,12 +35,14 @@ import { randomSenderSeqPrefix } from '@kutup/collab/identity'
 import { registerDevice } from '@kutup/collab/api'
 
 export interface OfficeEditorHandle {
-  /** Asks inner.html to extract the doc binary, run x2t to OOXML, and
-   *  return the bytes. Resolves with the converted bytes + format
-   *  ('docx'|'xlsx'|'pptx') so callers know what extension to encode. */
-  save: () => Promise<{ bytes: Uint8Array; format: 'docx' | 'xlsx' | 'pptx' }>
+  /** Asks inner.html for the document as a file: OOXML through x2t, or
+   *  for a PDF its edits applied to it by x2t. Resolves with the bytes and
+   *  their format so callers know what extension to encode. */
+  save: () => Promise<{ bytes: Uint8Array; format: DocType }>
   /** The document as OnlyOffice lays it out, as a PDF (for its thumbnail). */
   thumbnailPdf: () => Promise<Uint8Array>
+  /** Where this editor is in the collaboration log (read before `save`). */
+  logPosition: () => LogPosition
 }
 
 interface Props {
@@ -54,9 +57,23 @@ interface Props {
   onSaveShortcut?: () => void
   /** View-only access: OnlyOffice opens in its viewer; nothing is sent. */
   readOnly?: boolean
+  /** The version `initialBytes` came from (null: the original upload) and
+   *  its log position: claimed as the session's base, replayed after. */
+  base?: SessionBase
+  /** Claim `base` as the room's new base once (after a restore). */
+  resetBase?: boolean
+  /** The room's session base is another version (or a restore replaced it):
+   *  the document must reopen from `base` (latest when omitted). */
+  onOutdated?: (base?: SessionBase) => void
 }
 
-type DocType = 'docx' | 'xlsx' | 'pptx'
+/** Where an office editing session started (docs/onlyoffice.md). */
+export interface SessionBase {
+  versionId: string | null
+  seq: number
+}
+
+export type DocType = 'docx' | 'xlsx' | 'pptx' | 'pdf'
 
 /**
  * OnlyOffice runs on its own origin (office.<domain>), which holds no
@@ -76,6 +93,7 @@ function detectType(filename: string): DocType | null {
   if (ext === 'docx') return 'docx'
   if (ext === 'xlsx') return 'xlsx'
   if (ext === 'pptx') return 'pptx'
+  if (ext === 'pdf') return 'pdf'
   return null
 }
 
@@ -138,6 +156,9 @@ function OfficeEditorBase(
     keyGeneration,
     onSaveShortcut,
     readOnly = false,
+    base,
+    resetBase = false,
+    onOutdated,
   }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
@@ -145,6 +166,8 @@ function OfficeEditorBase(
   // the parent's callback identity churns.
   const onSaveShortcutRef = useRef(onSaveShortcut)
   onSaveShortcutRef.current = onSaveShortcut
+  const onOutdatedRef = useRef(onOutdated)
+  onOutdatedRef.current = onOutdated
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -165,7 +188,11 @@ function OfficeEditorBase(
   const deviceIdRef = useRef<number | null>(null)
   const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
   const docKeyIdRef = useRef<number>(1)
-  const lastSeenSeqRef = useRef<number>(0)
+  // The collaboration log up to here is in the document (the version it
+  // opened from, then every frame applied since, the editor's own included).
+  const lastSeenSeqRef = useRef<number>(base?.seq ?? 0)
+  const baseRef = useRef<SessionBase>(base ?? { versionId: null, seq: 0 })
+  const resetBaseRef = useRef(resetBase)
   // Per-tab sender_seq partition — see randomSenderSeqPrefix doc in
   // @/collab/identity. Two tabs of the same user share a sender_device
   // row; without a high random tabPrefix in the upper 32 bits, both
@@ -209,6 +236,7 @@ function OfficeEditorBase(
         pendingThumbnailsRef.current.set(requestId, { resolve, reject })
         target.postMessage({ type: 'thumbnail-request', requestId } satisfies ToBridge, officeOrigin())
       }),
+    logPosition: () => ({ seq: lastSeenSeqRef.current, docKeyId: docKeyIdRef.current }),
   }), [docType])
 
   // ---- bridge handshake (init / init-ack / save-result / oo-local-op) ----
@@ -433,9 +461,31 @@ function OfficeEditorBase(
       const transport = new CollabTransport({
         url: wsUrl,
         lastSeenSeq: () => lastSeenSeqRef.current,
+        // Every connect claims the session base this document loaded.
+        openMessages: () => {
+          const reset = resetBaseRef.current
+          resetBaseRef.current = false
+          return [{ type: 'base', versionId: baseRef.current.versionId, seq: baseRef.current.seq, reset }]
+        },
+        onBase: (message: BaseMsg) => {
+          // Joined a live session that started elsewhere, or a restore
+          // replaced it: reopen from the room's base.
+          if (message.reset || !message.yours) {
+            onOutdatedRef.current?.(message.reset ? undefined : { versionId: message.versionId, seq: message.seq })
+          }
+        },
+        onPosition: (message: PositionMsg) => {
+          if (message.type === 'stored') {
+            lastSeenSeqRef.current = Math.max(lastSeenSeqRef.current, message.seq)
+          } else {
+            // Frames before `floor` were trimmed into a version newer than
+            // this document: it lacks them, so it reopens from that version.
+            if (message.floor > message.since) onOutdatedRef.current?.()
+            lastSeenSeqRef.current = Math.max(lastSeenSeqRef.current, message.throughSeq)
+          }
+        },
         onHello: (h: HelloMsg) => {
           docKeyIdRef.current = h.currentDocKeyId
-          lastSeenSeqRef.current = h.headSeq
           if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
             const high = BigInt(h.mySenderSeqHigh)
             if (outboundSeqRef.current <= high) {

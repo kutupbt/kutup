@@ -32,6 +32,20 @@ export interface PeersMsg {
   ts: number
 }
 
+/**
+ * An office editing session's base (docs/onlyoffice.md, "Collaboration
+ * sessions"): the version every tab in the room started from (null: the
+ * original upload) and its log position. `yours`: the claim matched (or set)
+ * it; `reset`: a restore replaced it, so this tab must reopen.
+ */
+export interface BaseMsg {
+  type: 'base'
+  versionId: string | null
+  seq: number
+  yours: boolean
+  reset: boolean
+}
+
 export interface CollabTransportOpts {
   /**
    * The ws URL (with ?token=…&deviceId=…), or a function producing a current
@@ -47,6 +61,11 @@ export interface CollabTransportOpts {
   /** Optional — fires when the server pushes an updated peer-list. */
   onPeers?: (p: PeersMsg) => void
   lastSeenSeq?: () => number                        // for resume on reconnect
+  /** Control messages sent on every connect, before `resume` (an office
+   *  editor's session-base claim). */
+  openMessages?: () => object[]
+  /** The room's session base, in answer to a claim or after a restore. */
+  onBase?: (message: BaseMsg) => void
   /**
    * Log positions: `stored` after each kept frame (to everyone in the room,
    * the sender too) and `replayed` after the replay on connect. Messages are
@@ -128,6 +147,7 @@ export class CollabTransport {
       // Resume from last-seen seq on the server.
       const last = this.opts.lastSeenSeq?.() ?? 0
       this.resumedFrom = last
+      for (const m of this.opts.openMessages?.() ?? []) ws.send(JSON.stringify(m))
       ws.send(JSON.stringify({ type: 'resume', lastSeenSeq: last }))
       // Drain queued outbound.
       for (const p of this.pending) ws.send(p)
@@ -147,6 +167,7 @@ export class CollabTransport {
             }
             if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
             else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
+            else if (obj.type === 'base') this.opts.onBase?.(obj as BaseMsg)
             else if (obj.type === 'stored' && typeof obj.seq === 'number') {
               await this.opts.onPosition?.({ type: 'stored', seq: obj.seq })
             } else if (obj.type === 'replayed' && typeof obj.throughSeq === 'number') {

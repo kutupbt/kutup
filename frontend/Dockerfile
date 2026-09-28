@@ -1,7 +1,7 @@
 # The Kutup web apps: account, drive, chat and the OnlyOffice sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
-ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:0f730ad42440b9fbaea8f2189a3c6e9d21278e9ba4cdae1c11ab242c4e004c5f
+ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:0a88835f0f7cd245a82bfd5477fb889cb239dff6030e9dcd857fe399958804d8
 
 FROM ${KUTUP_OFFICE_ASSETS_IMAGE} AS office-assets
 
@@ -43,7 +43,7 @@ RUN o=apps/office/public/onlyoffice \
     && test -s $o/dist/x2t/x2t.wasm \
     && test -s $o/templates/oodoc_base.js \
     && test -s $o/LICENSES/ONLYOFFICE-ADDITIONAL-TERMS.md \
-    && grep -Fx 'kutup-v9.4.0.131.1' $o/dist/v9/.version \
+    && grep -Fx 'kutup-v9.4.0.131.2' $o/dist/v9/.version \
     && grep -Fx 'kutup-v9.4.0.131.1' $o/dist/x2t/.version \
     && grep -Fx '2025.6.0' $o/templates/.version
 RUN pnpm run build \

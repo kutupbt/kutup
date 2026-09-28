@@ -5,7 +5,7 @@ import { sealedAt } from '@kutup/drive-core/keyring'
 import { fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { fromBase64 } from '@kutup/crypto'
 import { isListName, stateToListJson } from '@kutup/map/list'
-import { editorKindFor } from './editorKind'
+import { editorKindFor, extensionOf } from './editorKind'
 
 /**
  * What a file holds now. Editors never rewrite the upload: each save is a
@@ -15,24 +15,41 @@ import { editorKindFor } from './editorKind'
  */
 export type FileContent =
   | { kind: 'original' }
-  /** The latest version's encrypted blob, under the API base, sealed under `keyGeneration`. */
-  | { kind: 'version'; path: string; versionId: string; keyGeneration: number }
+  /** The latest version's encrypted blob, under the API base, sealed under `keyGeneration`;
+   *  the collaboration log up to `seqAtSnapshot` is in it. */
+  | { kind: 'version'; path: string; versionId: string | null; keyGeneration: number; seqAtSnapshot: number }
   /** A note's current text, from the version `versionId`. */
   | { kind: 'plain'; bytes: Uint8Array; versionId: string }
+
+/**
+ * An office document at a given session base (docs/onlyoffice.md,
+ * "Collaboration sessions"): a tab joining a live session loads the version
+ * the session started from, not the latest save. `versionId` null: the
+ * original upload.
+ */
+export async function contentAt(file: DriveFile, versionId: string | null): Promise<FileContent> {
+  if (versionId === null) {
+    return { kind: 'version', path: `/files/${file.id}/original`, versionId: null, keyGeneration: file.originalKeyGeneration, seqAtSnapshot: 0 }
+  }
+  const version = (await listVersions(file.id)).find((v) => v.id === versionId)
+  if (!version) throw new Error('the session base version is gone')
+  return { kind: 'version', path: `/files/${file.id}/versions/${version.id}/download`, versionId: version.id, keyGeneration: version.keyGeneration, seqAtSnapshot: version.seqAtSnapshot }
+}
 
 export async function currentContent(folder: Folder, file: DriveFile): Promise<FileContent> {
   const location = fileLocation(folder)
   if (location.kind !== 'local') return remoteContent(location, file)
   // A place list keeps its places as Yjs state, like a note its text.
   if (isListName(file.name)) return listContent(file)
-  const kind = file.name ? editorKindFor(file.name) : null
+  // A PDF edited in ONLYOFFICE saves whole-file versions like an office document.
+  const kind = file.name ? (editorKindFor(file.name) ?? (extensionOf(file.name) === 'pdf' ? 'office' : null)) : null
   if (!kind || !file.fileKey) return { kind: 'original' }
   const versions = await listVersions(file.id)
   // Newest first.
   const latest = versions[0]
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const path = `/files/${file.id}/versions/${latest.id}/download`
-  if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyGeneration: latest.keyGeneration }
+  if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyGeneration: latest.keyGeneration, seqAtSnapshot: latest.seqAtSnapshot }
 
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
   const sealed = await sealedAt(file, latest.keyGeneration)

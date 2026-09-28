@@ -2,6 +2,7 @@
 // OnlyOffice bridge are each large and only one is ever needed per page.
 // Which one a file gets is editorKindFor()'s decision (./editorKind).
 import { lazy, type ForwardRefExoticComponent, type RefAttributes } from 'react'
+import type { SessionBase } from './office/OfficeEditor'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
 import type { WhiteboardEditorHandle } from './whiteboard/WhiteboardEditor'
 
@@ -22,12 +23,18 @@ export interface OfficeEditorProps {
   keyGeneration: number
   /** The file key of an older generation. */
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
-  /** Decrypted file bytes (the OOXML blob). */
+  /** Decrypted file bytes (the OOXML blob, or the PDF). */
   initialBytes?: Uint8Array
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe. */
   onSaveShortcut?: () => void
   /** View-only access. */
   readOnly?: boolean
+  /** The version `initialBytes` came from and its log position. */
+  base?: SessionBase
+  /** Claim `base` as the room's new base once (after a restore). */
+  resetBase?: boolean
+  /** The session's base is elsewhere: reopen from it (latest when omitted). */
+  onOutdated?: (base?: SessionBase) => void
 }
 
 export interface WhiteboardEditorProps {

@@ -48,7 +48,7 @@ function backfill(folder: Folder, file: DriveFile, userId: string): void {
     return storeThumbnails(
       { fileId: file.id, fileKey, keyGeneration: file.keyGeneration },
       made,
-      content.kind === 'original' ? 'original' : content.versionId,
+      content.kind === 'original' ? 'original' : (content.versionId ?? 'original'),
     )
   })
 }

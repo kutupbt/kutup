@@ -37,6 +37,16 @@ pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Optio
             version: Some(id),
         }));
     }
+    original_content(pool, file_id).await
+}
+
+/// The original upload, while it is kept (retention prunes it once versions
+/// cover it). An office editing session that began before the first save
+/// loads it as its base (docs/onlyoffice.md, "Collaboration sessions").
+pub async fn original_content(
+    pool: &PgPool,
+    file_id: Uuid,
+) -> sqlx::Result<Option<CurrentContent>> {
     let original: Option<(String, i64)> = sqlx::query_as(
         "SELECT storage_path, encrypted_size_bytes FROM files
          WHERE id = $1 AND deleted_at IS NULL AND NOT original_pruned",

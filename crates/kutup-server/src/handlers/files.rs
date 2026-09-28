@@ -372,6 +372,41 @@ pub async fn download(
     Ok(octet_stream_response(body, size, &[]))
 }
 
+/// `GET /api/files/{id}/original` — the original upload, while it is kept:
+/// the base of an office editing session that began before the file's first
+/// saved version.
+#[utoipa::path(
+    get,
+    path = "/api/files/{id}/original",
+    tag = "files",
+    operation_id = "downloadFileOriginal",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses(
+        (status = 200, description = "The encrypted original upload (application/octet-stream)"),
+        (status = 404, description = "No such file, or its original was pruned")
+    )
+)]
+pub async fn download_original(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+        return Err(AppError::not_found("not found"));
+    }
+    let content = crate::file_content::original_content(&state.pool, file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (body, size) = content
+        .open(&state.storage)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
+    Ok(octet_stream_response(body, size, &[]))
+}
+
 /// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
 #[utoipa::path(
     put,

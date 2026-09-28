@@ -894,6 +894,7 @@ fn build_router(state: AppState) -> Router {
             post(files::upload).route_layer(DefaultBodyLimit::max(DRIVE_UPLOAD_LIMIT_BYTES)),
         )
         .route("/api/files/:id/download", get(files::download))
+        .route("/api/files/:id/original", get(files::download_original))
         .route(
             "/api/files/:id",
             put(files::update_metadata).delete(files::delete),

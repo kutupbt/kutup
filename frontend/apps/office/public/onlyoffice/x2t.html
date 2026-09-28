@@ -8,7 +8,7 @@
   inner.html. Communicates via postMessage:
 
     parent → us:  { type: 'convert', requestId, input, fileName, outputFormat,
-                    fonts?, mediasSources?, mediasData? }
+                    fonts?, mediasSources?, mediasData?, pdfBuffer?, pdfChanges? }
     us → parent:  { type: 'x2t-ready' }                     (once on boot)
                   { type: 'convert-result', requestId, output, images }
                   { type: 'convert-error',  requestId, error }
@@ -99,17 +99,32 @@
           // Write input.
           Mod.FS.writeFile('/working/' + fileName, msg.input)
 
-          // PDF from OnlyOffice's print output (CryptPad's x2t.js): the
-          // print buffer at a fixed name, and the fonts the layout used.
-          var pdfParams = ''
-          if (outputFormat === 'pdf') {
-            if (!msg.pdfBuffer) throw new Error('pdf output needs the print buffer')
-            Mod.FS.writeFile('/working/pdf.bin', msg.pdfBuffer)
+          var writeFonts = function (fonts) {
             try { Mod.FS.mkdir('/working/fonts') } catch (e) { /* exists */ }
-            ;(msg.fonts || []).forEach(function (font) {
+            ;(fonts || []).forEach(function (font) {
               if (!font || typeof font.name !== 'string') return
               Mod.FS.writeFile('/working/fonts/' + safeName(font.name), font.data)
             })
+          }
+
+          // A PDF edited in ONLYOFFICE's PDF editor: the original PDF is the
+          // input, the editor's compiled changes the first file of changes/
+          // beside it, and x2t (m_bFromChanges) writes the PDF with them.
+          var pdfParams = ''
+          if (outputFormat === 'pdf' && msg.pdfChanges) {
+            try { Mod.FS.mkdir('/working/changes') } catch (e) { /* exists */ }
+            Mod.FS.readdir('/working/changes').forEach(function (f) {
+              if (f !== '.' && f !== '..') Mod.FS.unlink('/working/changes/' + f)
+            })
+            Mod.FS.writeFile('/working/changes/changes0.bin', msg.pdfChanges)
+            writeFonts(msg.fonts)
+            pdfParams = '<m_sFontDir>/working/fonts/</m_sFontDir><m_bFromChanges>true</m_bFromChanges>'
+          // PDF from OnlyOffice's print output (CryptPad's x2t.js): the
+          // print buffer at a fixed name, and the fonts the layout used.
+          } else if (outputFormat === 'pdf') {
+            if (!msg.pdfBuffer) throw new Error('pdf output needs the print buffer')
+            Mod.FS.writeFile('/working/pdf.bin', msg.pdfBuffer)
+            writeFonts(msg.fonts)
             pdfParams = '<m_sFontDir>/working/fonts/</m_sFontDir>'
           }
 

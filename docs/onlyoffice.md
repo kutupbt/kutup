@@ -45,10 +45,11 @@ frontend/public/onlyoffice/
 │   │   ├── web-apps/apps/
 │   │   │   ├── documenteditor/         (.docx)
 │   │   │   ├── presentationeditor/     (.pptx)
-│   │   │   └── spreadsheeteditor/      (.xlsx)
+│   │   │   ├── spreadsheeteditor/      (.xlsx)
+│   │   │   └── pdfeditor/              (.pdf)
 │   │   ├── sdkjs/
-│   │   │   ├── word/   slide/   cell/
-│   │   │   └── pdf/    visio/   ← runtime SDKs only; no editor UI app
+│   │   │   ├── word/   slide/   cell/   ← word's also runs the PDF editor
+│   │   │   └── pdf/    visio/   ← PDF engine (drawingfile WASM), Visio runtime
 │   │   ├── fonts/
 │   │   └── dictionaries/
 │   └── x2t/                    ← OOXML ↔ internal-binary converter (WASM)
@@ -60,11 +61,57 @@ frontend/public/onlyoffice/
 └── FILES.sha512                ← whole-tree integrity manifest
 ```
 
-**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.1` for both, **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
+**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.2` (editor, with the PDF editor) and `kutup-v9.4.0.131.1` (x2t), **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
 
 **Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. The editor's own ONLYOFFICE logo is hidden (not required from 9.4; decided 2026-09-28). Keep both notices in place when changing the editor (`frontend/apps/office/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
+
+## PDFs
+
+A PDF opens in Drive's viewer; with write access (on this server) the header
+offers **Edit**, which reopens it in ONLYOFFICE's PDF editor: annotate, fill
+in forms, change text and pages. The PDF editor opens the raw PDF (no x2t on
+the way in: its `drawingfile` WASM engine reads it) and routes straight to
+`pdfeditor` (`document.isForm: false`; left undefined, `api.js` would ask
+DocumentServer whether it is a form). Saving asks the editor for its
+"compiled changes" (`DocumentRenderer.Save()`, a binary relative to the PDF
+it opened) and x2t applies them to those bytes (`m_bFromChanges`, the
+changes as `changes/changes0.bin` beside the original; `x2t.html`), writing
+the edited PDF as a new version. PDF locks are object-shaped, like
+spreadsheets'. CryptPad never shipped the PDF editor: its client-only
+patches (no server-version or licence checks, no support links) are applied
+to it in the editor fork.
+
+## Collaboration sessions
+
+ONLYOFFICE's edits name objects created during an editing session, so a tab
+can only apply a peer's edits if it holds the same objects: the version the
+session started from, plus every edit since. Kutup follows ONLYOFFICE's own
+model (DocumentServer never hands a newcomer a newer save mid-session):
+
+- The first tab to open a document (nobody editing it) claims the version it
+  loaded as the session's **base** on the collaboration relay
+  (`{"type":"base","versionId","seq"}`) and the log is trimmed up to it.
+- A tab joining a live session is told the base; if it loaded a newer save
+  it reopens from the base (`GET /api/files/:id/original` when the session
+  began before the first save) and replays the log after it. Edits that
+  arrive before its editor has authenticated are handed over as the
+  document's initial changes (`getInitialChanges`), as DocumentServer does.
+- Saving during a session creates a version (history, downloads,
+  thumbnails) recording its log position, but trims nothing and does not
+  move the base: nobody's editor reloads on save.
+- Restoring an old version replaces the document for everyone: the
+  restoring tab resets the base (`reset: true`) and the other open tabs
+  reopen from it.
+- The base lives with the relay's room and ends when the last tab leaves.
+
+Before this, a tab replayed the whole log onto the latest save, and a tab
+joining after a save could not apply edits made in an older session (checked
+in a browser for .docx and PDF: save, keep editing, a second tab joins; and
+restore while another tab is open). One unexplained failure was seen once in
+about sixteen runs of the PDF two-tab test (the editing tab kept its edit
+locally without sending it) and not reproduced since; watch for it.
 
 ## How the bundle is delivered
 

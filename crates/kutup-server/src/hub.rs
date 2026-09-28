@@ -65,6 +65,31 @@ impl Peer {
 #[derive(Default)]
 struct Room {
     peers: HashMap<u64, Arc<Peer>>,
+    /// The office editing session's base: the version (None: the original
+    /// upload) every tab in the room started from, and its log position.
+    /// Set by the first tab, reset by a restore; gone with the room.
+    base: Option<SessionBase>,
+}
+
+/// Where an office editing session started (docs/onlyoffice.md,
+/// "Collaboration sessions"). ONLYOFFICE's edits name objects created during
+/// the session, so every tab must load this and replay the log after `seq`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionBase {
+    pub version_id: Option<String>,
+    pub seq: i64,
+}
+
+/// What a claim on a room's session base came to.
+pub struct BaseClaim {
+    /// The room's base now.
+    pub base: SessionBase,
+    /// The claimant's base is the room's (it set it, or it matched).
+    pub yours: bool,
+    /// The claim started the session: nobody else was in the room.
+    pub new_session: bool,
+    /// On a reset, the other peers, to be told to reopen.
+    pub others: Vec<Arc<Peer>>,
 }
 
 /// The in-memory registry of per-file collab rooms — mirrors `Hub`.
@@ -105,6 +130,47 @@ impl Hub {
                 rooms.remove(file_id);
             }
         }
+    }
+
+    /// Claims the room's session base for `conn_id`: the first claim (or a
+    /// `reset`, after a restore) sets it; later ones learn it.
+    pub fn claim_base(
+        &self,
+        file_id: &str,
+        conn_id: u64,
+        claim: SessionBase,
+        reset: bool,
+    ) -> Option<BaseClaim> {
+        let mut rooms = self.rooms.lock().unwrap();
+        let room = rooms.get_mut(file_id)?;
+        let alone = room.peers.len() == 1 && room.peers.contains_key(&conn_id);
+        // A room keeps a base only while someone who set it is there: a
+        // claimant alone in the room starts a new session.
+        if reset || alone || room.base.is_none() {
+            room.base = Some(claim.clone());
+            let others = if reset {
+                room.peers
+                    .values()
+                    .filter(|p| p.conn_id != conn_id)
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            return Some(BaseClaim {
+                base: claim,
+                yours: true,
+                new_session: alone && !reset,
+                others,
+            });
+        }
+        let base = room.base.clone().unwrap_or(claim.clone());
+        Some(BaseClaim {
+            yours: base == claim,
+            base,
+            new_session: false,
+            others: Vec::new(),
+        })
     }
 
     /// Snapshot of the connections currently in a file's room — mirrors `Peers`.
@@ -259,5 +325,79 @@ mod tests {
         // close_device only signals; the conns' read loops call leave. Smoke check: it
         // doesn't panic or mutate other rooms.
         assert_eq!(h.peers("f2").len(), 1);
+    }
+
+    fn base(version: Option<&str>, seq: i64) -> SessionBase {
+        SessionBase {
+            version_id: version.map(String::from),
+            seq,
+        }
+    }
+
+    #[test]
+    fn session_base_first_claim_sets_joiners_learn_it() {
+        let h = Hub::new();
+        let (a, _ra) = peer(&h, 1);
+        let (b, _rb) = peer(&h, 2);
+        h.join("f", a.clone());
+        // Alone: the claim starts a session and sets the base.
+        let first = h
+            .claim_base("f", a.conn_id, base(Some("v1"), 10), false)
+            .unwrap();
+        assert!(first.yours && first.new_session);
+        assert_eq!(first.base, base(Some("v1"), 10));
+        // A joiner that loaded a newer save is told the session's base.
+        h.join("f", b.clone());
+        let joiner = h
+            .claim_base("f", b.conn_id, base(Some("v2"), 20), false)
+            .unwrap();
+        assert!(!joiner.yours && !joiner.new_session);
+        assert_eq!(joiner.base, base(Some("v1"), 10));
+        // One that loaded the base matches it.
+        let same = h
+            .claim_base("f", b.conn_id, base(Some("v1"), 10), false)
+            .unwrap();
+        assert!(same.yours && !same.new_session);
+    }
+
+    #[test]
+    fn session_base_reset_replaces_it_and_names_the_others() {
+        let h = Hub::new();
+        let (a, _ra) = peer(&h, 1);
+        let (b, _rb) = peer(&h, 2);
+        h.join("f", a.clone());
+        h.join("f", b.clone());
+        h.claim_base("f", a.conn_id, base(None, 0), false).unwrap();
+        let reset = h
+            .claim_base("f", a.conn_id, base(Some("restored"), 30), true)
+            .unwrap();
+        assert!(reset.yours && !reset.new_session);
+        assert_eq!(reset.others.len(), 1);
+        assert_eq!(reset.others[0].conn_id, b.conn_id);
+        let joiner = h
+            .claim_base("f", b.conn_id, base(Some("restored"), 30), false)
+            .unwrap();
+        assert!(joiner.yours);
+    }
+
+    #[test]
+    fn session_base_ends_with_the_room() {
+        let h = Hub::new();
+        let (a, _ra) = peer(&h, 1);
+        h.join("f", a.clone());
+        h.claim_base("f", a.conn_id, base(Some("v1"), 10), false)
+            .unwrap();
+        h.leave("f", a.conn_id);
+        // Nobody left: the next tab starts a new session from what it loaded.
+        let (b, _rb) = peer(&h, 2);
+        h.join("f", b.clone());
+        let next = h
+            .claim_base("f", b.conn_id, base(Some("v3"), 40), false)
+            .unwrap();
+        assert!(next.yours && next.new_session);
+        // A claim outside any room is ignored.
+        assert!(h
+            .claim_base("nowhere", b.conn_id, base(None, 0), false)
+            .is_none());
     }
 }
