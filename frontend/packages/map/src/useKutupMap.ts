@@ -3,11 +3,11 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
 import { freshAccessToken } from '@kutup/session/client'
 import { useEffectiveMap, type EffectiveMap } from './config'
-import { relayRequest } from './relay'
+import { absoluteStyle, relayRequest } from './relay'
 
 export { maplibregl }
 
-function styleOf(map: EffectiveMap): string | StyleSpecification {
+export function styleOf(map: EffectiveMap): string | StyleSpecification {
   if (map.provider.kind === 'vector') return map.url
   return {
     version: 8,
@@ -59,7 +59,6 @@ export function useKutupMap({
     const style = styleOf(effective)
     const built = new maplibregl.Map({
       container: element,
-      style,
       center: [initial.current.center.lon, initial.current.center.lat],
       zoom: initial.current.zoom,
       interactive,
@@ -69,6 +68,8 @@ export function useKutupMap({
       attributionControl: interactive ? { compact: true } : false,
       transformRequest: (url) => relayRequest(url),
     })
+    const load = () => built.setStyle(style, { transformStyle: (_previous, next) => absoluteStyle(next) })
+    load()
     if (interactive) built.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
 
     // An expired token fails relayed requests with 401: refresh it once and
@@ -78,7 +79,7 @@ export function useKutupMap({
       if (event.error?.status !== 401 || refreshing || !effective.viaProxy) return
       refreshing = true
       void freshAccessToken()
-        .then(() => built.setStyle(style))
+        .then(load)
         .catch(() => undefined)
         .finally(() => {
           window.setTimeout(() => (refreshing = false), 30_000)

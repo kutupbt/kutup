@@ -47,8 +47,8 @@ federated shares, previews on public links (both listed under "Later").
 | Small | `sm` | 512 px | 64 KiB | grid cards, search results |
 | Large | `lg` | 1920 px | 1 MiB | Quick Look for kinds without a viewer (office, whiteboard) and for images too large to open whole |
 
-`lg` is made only where it pays: whiteboards, office documents, PDFs, and
-images larger than 20 MiB. Everything else gets `sm` only.
+`lg` is made only where it pays: whiteboards, office documents, PDFs, place
+lists, and images larger than 20 MiB. Everything else gets `sm` only.
 
 ## Format (kutup-crypto)
 
@@ -162,6 +162,7 @@ falls back to JPEG where the browser cannot encode WebP; quality steps down
 | Video | a `<video>` frame at 10% (max 5 s in) | upload |
 | PDF | first page via PDF.js, loaded only when needed | upload (phase C) |
 | Office | first page rendered by OnlyOffice's own canvas on save, inside the sandbox, returned over the bridge | editor save (phase D) |
+| Place list (`.kutupmap`) | a hidden 960×720 map in the Maps app, fitted to the list's places, with its pins (in the list's colour) and the map data's credit drawn on (`@kutup/map/preview`) | Maps: each saved version, at most once a minute; opening a list with no or a stale picture |
 
 Uploads already hold the plaintext `File`, so thumbnails cost no extra
 download there. Copies go through the upload path and get them for free.
@@ -176,6 +177,14 @@ saved, by the browser that saved it, from the content it already holds:
   thumbnail is redrawn at most once a minute, and always on Save / Save
   version and when the editor closes with a newer snapshot than the last
   thumbnail.
+- Place lists save live like notes; Maps redraws their picture from the
+  places as of each saved version, at most once a minute (and when the list
+  closes with a newer one pending). A list opened in Maps without an
+  up-to-date picture gets one, by someone who may manage it. The picture
+  loads tiles exactly as the open list does (the person's provider, through
+  the relay when that is on), so drawing it reveals nothing opening the list
+  did not; Drive never draws one itself (it has no map, and a backfill would
+  fetch tiles for lists nobody opened). With maps off, no picture is drawn.
 - Restoring a version saves a version, so it redraws too.
 - With several people editing, whoever saves redraws; they hold the same
   content.
@@ -198,7 +207,8 @@ charge their quota for the owner's files).
 ## Showing them
 
 - **Grid:** the preview area shows the `sm` thumbnail (`object-cover`,
-  top-aligned for documents so the start of the page shows); the kind icon
+  top-aligned for documents so the start of the page shows; photos and maps
+  fill the frame); the kind icon
   stays as the header icon and as the fallback. Thumbnails are fetched only
   when the card scrolls into view (`IntersectionObserver`), decrypted with
   WASM, and turned into `blob:` URLs that are revoked when the card leaves the

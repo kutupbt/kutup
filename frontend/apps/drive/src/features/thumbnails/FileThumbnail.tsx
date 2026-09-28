@@ -94,9 +94,9 @@ export function FileThumbnail({ folder, file }: { folder: Folder; file: DriveFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, file.id, stamp, file.thumbnailStale])
 
-  // Photos fill the frame; pages show from the top; drawings show whole.
+  // Photos and maps fill the frame; pages show from the top; drawings show whole.
   const fit =
-    file.kind === 'image' || file.kind === 'video'
+    file.kind === 'image' || file.kind === 'video' || file.kind === 'map'
       ? 'object-cover'
       : file.kind === 'whiteboard'
         ? 'bg-white object-contain p-1'

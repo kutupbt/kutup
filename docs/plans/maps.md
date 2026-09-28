@@ -262,6 +262,11 @@ goes beyond Signal parity.
    - Drive: New → Map; a list opens in Maps, from the folder, search, Shared
      with me, or an old `/file/…` link; a list has its own file kind; a
      download gives the current places.
+   - Drive previews (2026-09-28): a list's grid card shows its places on the
+     map, drawn in Maps from each saved version and when a list without an
+     up-to-date picture is opened (`docs/plans/drive-thumbnails.md`). Relayed
+     styles' sprite and glyph paths are made absolute as a style loads, which
+     MapLibre 5 requires (`absoluteStyle`).
    Checked in the browser:
    - a map made in Maps, with places added all three ways;
    - two browsers editing live;

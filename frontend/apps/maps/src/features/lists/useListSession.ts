@@ -10,6 +10,8 @@ import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/dr
 import { fillDoc, placesMap, placesOf, replacePlaces, type Place } from '@kutup/map/list'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { useRequiredSession } from '@kutup/session/store'
+import { listVersions } from '@kutup/collab/api'
+import { drawListThumbnail, listThumbnailScheduler, type ListLook } from './listThumbnail'
 import { savedPlacesKey, uploadedPlaces } from './savedPlaces'
 
 export type ListStatus = 'connecting' | 'ready' | 'error'
@@ -29,8 +31,11 @@ export interface ListSession {
  * file's key and relayed like a note's (docs/plans/maps.md, step 4). Saved
  * as a version after a pause, as notes are. `file` must be the file as it
  * opened (a new key would reopen the session).
+ *
+ * Its saves redraw the list's picture in Drive with `look` (read when drawn),
+ * and a list opened without an up-to-date picture gets one.
  */
-export function useListSession(file: DriveFile | null, readOnly: boolean, folder?: Folder): ListSession {
+export function useListSession(file: DriveFile | null, readOnly: boolean, folder: Folder | undefined, look: ListLook): ListSession {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const account = useRequiredSession()
@@ -40,6 +45,8 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
   const [live, setLive] = useState<{ doc: Y.Doc; session: CollabSession } | null>(null)
   // Read once: a colour or device change must not tear the session down.
   const identity = useRef({ username: account.username, deviceId: account.currentDeviceId, color: account.color ?? getCursorColor() })
+  const lookRef = useRef(look)
+  lookRef.current = look
 
   useEffect(() => {
     if (!file?.fileKey) return
@@ -50,11 +57,40 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     // Changed here since the last save: saved on leaving, so the home map
     // (which shows saved places) is right at once.
     let dirty = false
+    // Pictures are drawn by editors of lists on this server, sealed under
+    // the folder's current key only (as Drive's are).
+    const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
+    const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration }
+    const pictures =
+      !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
+        ? listThumbnailScheduler(pictureTarget, () => lookRef.current)
+        : null
+    // No picture yet, or one from an older version: drawn once the list is
+    // up, by someone who may manage it (readers of a shared folder do not
+    // spend its owner's quota), as Drive's backfill does.
+    const needsPicture =
+      pictures !== null &&
+      (!file.thumbnails.sm || file.thumbnailStale) &&
+      (!folder || folder.canManage || file.uploaderUserId === account.userId)
+    let pictured = false
+    let ready = false
+    // Once the session is up and has replayed (in either order).
+    const picture = () => {
+      if (!needsPicture || pictured || !ready || !session) return
+      pictured = true
+      const doc = session.doc
+      void listVersions(file.id)
+        .then((versions) => {
+          if (!controller.signal.aborted) {
+            drawListThumbnail(pictureTarget, versions[0]?.id ?? 'original', placesOf(doc), lookRef.current)
+          }
+        })
+        .catch(() => undefined)
+    }
     setStatus('connecting')
     void (async () => {
       try {
         const initial = await uploadedPlaces(file, folder)
-        const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
         if (controller.signal.aborted) return
         session = await openCollabSession({
           fileId: file.id,
@@ -76,10 +112,19 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
             preRestore: () => t('list.preRestoreLabel', { time: new Date().toLocaleString() }),
             restored: () => t('list.restoredLabel', { time: new Date().toLocaleString() }),
           },
+          onSnapshot: (versionId, explicit) => {
+            if (session) pictures?.saved(versionId, explicit, placesOf(session.doc))
+          },
           onSaveError: (error) => {
             if (error instanceof QuotaExceededError) toast.error(t('list.quota'))
           },
-          onStatus: setStatus,
+          onStatus: (next) => {
+            setStatus(next)
+            if (next === 'ready') {
+              ready = true
+              picture()
+            }
+          },
           onCollaborators: setCollaborators,
           signal: controller.signal,
         })
@@ -98,12 +143,14 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
         }
         refresh()
         setLive({ doc, session })
+        picture()
       } catch {
         if (!controller.signal.aborted) setStatus('error')
       }
     })()
     return () => {
       controller.abort()
+      pictures?.flush()
       unobserve?.()
       setLive(null)
       const leaving = session

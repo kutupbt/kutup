@@ -156,8 +156,9 @@ function Workspace({
   const stage = useStage()
   const atlas = useAtlas()
   // Here or on another server (through this one): the same live session.
-  const list = useListSession(opened, readOnly, folder)
   const effectiveMap = useEffectiveMap()
+  // Its saves also redraw its picture in Drive: this map, the list's colour.
+  const list = useListSession(opened, readOnly, folder, { map: effectiveMap, color: atlas.colorOf(file.id) })
   const rename = useRenameFile()
   const trash = useTrashFile()
   const writable = useWritableLists()
