@@ -2,7 +2,7 @@
 // Maps file extensions to CodeMirror 6 language extensions.
 // Extensions not listed return null (plain-text mode).
 import { type Extension } from '@codemirror/state'
-import { StreamLanguage } from '@codemirror/language'
+import { Language, LanguageSupport, StreamLanguage } from '@codemirror/language'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
@@ -30,7 +30,8 @@ export function langForExtension(ext: string): Extension | null {
   switch (ext.toLowerCase()) {
     case 'md':
     case 'markdown':
-      return markdown()
+      // Fenced code blocks are highlighted in their language as you type.
+      return markdown({ codeLanguages: languageForFence })
     case 'js':
     case 'mjs':
     case 'cjs':
@@ -106,4 +107,46 @@ export function langForExtension(ext: string): Extension | null {
     default:
       return null
   }
+}
+
+/** Names a fence may give a language by, beyond the file extensions above. */
+const FENCE_NAMES: Record<string, string> = {
+  javascript: 'js',
+  node: 'js',
+  typescript: 'ts',
+  python: 'py',
+  python3: 'py',
+  rust: 'rs',
+  golang: 'go',
+  jsonc: 'json',
+  json5: 'json',
+  shell: 'sh',
+  console: 'sh',
+  shellscript: 'sh',
+  ruby: 'rb',
+  docker: 'dockerfile',
+  powershell: 'ps1',
+  perl: 'pl',
+  html5: 'html',
+  postgres: 'sql',
+  postgresql: 'sql',
+  mysql: 'sql',
+  sqlite: 'sql',
+}
+
+const fenceCache = new Map<string, Language | null>()
+
+/**
+ * The language of a fenced code block (```` ```python ````), by its info
+ * string's first word, or null (plain). Markdown inside Markdown stays plain.
+ */
+export function languageForFence(info: string): Language | null {
+  const word = info.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+  const cached = fenceCache.get(word)
+  if (cached !== undefined) return cached
+  const ext = FENCE_NAMES[word] ?? word
+  const support = ext === 'md' || ext === 'markdown' ? null : langForExtension(ext)
+  const language = support instanceof LanguageSupport ? support.language : support instanceof Language ? support : null
+  fenceCache.set(word, language)
+  return language
 }

@@ -23,3 +23,94 @@
   --tw-prose-th-borders: var(--color-border);
   --tw-prose-td-borders: var(--color-border);
 }
+
+/* Code blocks in the preview, highlighted by highlight.js (rehype-highlight):
+   GitHub's light colours, and One Dark's in dark mode (as the editor). */
+.prose pre code.hljs {
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-title: #8250df;
+  --hl-type: #953800;
+  --hl-attr: #0550ae;
+  --hl-tag: #116329;
+  --hl-meta: #6e7781;
+  --hl-deletion-bg: #ffebe9;
+  --hl-addition-bg: #dafbe1;
+}
+.dark .prose pre code.hljs {
+  --hl-comment: #7f848e;
+  --hl-keyword: #c678dd;
+  --hl-string: #98c379;
+  --hl-number: #d19a66;
+  --hl-title: #61afef;
+  --hl-type: #e5c07b;
+  --hl-attr: #d19a66;
+  --hl-tag: #e06c75;
+  --hl-meta: #7f848e;
+  --hl-deletion-bg: rgb(224 108 117 / 0.2);
+  --hl-addition-bg: rgb(152 195 121 / 0.2);
+}
+.prose pre code.hljs .hljs-comment,
+.prose pre code.hljs .hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.prose pre code.hljs .hljs-keyword,
+.prose pre code.hljs .hljs-selector-tag,
+.prose pre code.hljs .hljs-literal,
+.prose pre code.hljs .hljs-doctag {
+  color: var(--hl-keyword);
+}
+.prose pre code.hljs .hljs-string,
+.prose pre code.hljs .hljs-regexp,
+.prose pre code.hljs .hljs-char.escape_ {
+  color: var(--hl-string);
+}
+.prose pre code.hljs .hljs-number,
+.prose pre code.hljs .hljs-variable,
+.prose pre code.hljs .hljs-template-variable,
+.prose pre code.hljs .hljs-symbol,
+.prose pre code.hljs .hljs-bullet,
+.prose pre code.hljs .hljs-link {
+  color: var(--hl-number);
+}
+.prose pre code.hljs .hljs-title,
+.prose pre code.hljs .hljs-title.function_,
+.prose pre code.hljs .hljs-section {
+  color: var(--hl-title);
+}
+.prose pre code.hljs .hljs-type,
+.prose pre code.hljs .hljs-built_in,
+.prose pre code.hljs .hljs-title.class_,
+.prose pre code.hljs .hljs-params {
+  color: var(--hl-type);
+}
+.prose pre code.hljs .hljs-attr,
+.prose pre code.hljs .hljs-attribute,
+.prose pre code.hljs .hljs-property,
+.prose pre code.hljs .hljs-selector-id,
+.prose pre code.hljs .hljs-selector-class {
+  color: var(--hl-attr);
+}
+.prose pre code.hljs .hljs-name,
+.prose pre code.hljs .hljs-tag,
+.prose pre code.hljs .hljs-selector-pseudo {
+  color: var(--hl-tag);
+}
+.prose pre code.hljs .hljs-meta {
+  color: var(--hl-meta);
+}
+.prose pre code.hljs .hljs-deletion {
+  background: var(--hl-deletion-bg);
+}
+.prose pre code.hljs .hljs-addition {
+  background: var(--hl-addition-bg);
+}
+.prose pre code.hljs .hljs-emphasis {
+  font-style: italic;
+}
+.prose pre code.hljs .hljs-strong {
+  font-weight: 600;
+}

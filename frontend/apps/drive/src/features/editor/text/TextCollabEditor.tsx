@@ -11,7 +11,7 @@ import {
   rectangularSelection, crosshairCursor,
 } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { bracketMatching } from '@codemirror/language'
+import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { closeBrackets } from '@codemirror/autocomplete'
 import { search, searchKeymap } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -69,6 +69,11 @@ interface Props {
 /** The first content of a note no one has edited yet (see deterministicSeed). */
 function seedUpdate(fileId: string, text: string): Uint8Array {
   return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
+}
+
+/** The editor's look and code colours for Drive's theme. */
+function editorTheme(theme: 'dark' | 'light'): Extension {
+  return theme === 'dark' ? oneDark : syntaxHighlighting(defaultHighlightStyle)
 }
 
 export default function TextCollabEditor({
@@ -286,10 +291,11 @@ export default function TextCollabEditor({
         rectangularSelection(),
         crosshairCursor(),
         EditorState.allowMultipleSelections.of(true),
-        // Theme: dark mode picks oneDark; light mode uses CM6 defaults.
+        // Theme: dark mode picks oneDark (its own code colours); light mode
+        // CodeMirror's default look with its default code colours.
         // Wrapped in a Compartment so the useEffect below can reconfigure
         // on theme change without rebuilding the EditorView.
-        themeCompartment.of(theme === 'dark' ? oneDark : []),
+        themeCompartment.of(editorTheme(theme)),
         ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
         // Click-anywhere fallback. CodeMirror's own posAtCoords handles
         // clicks within .cm-content correctly (snapping past line-end to
@@ -439,7 +445,7 @@ export default function TextCollabEditor({
   // Compartment instead of rebuilding the view.
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: themeCompartment.reconfigure(theme === 'dark' ? oneDark : []),
+      effects: themeCompartment.reconfigure(editorTheme(theme)),
     })
   }, [theme, themeCompartment])
 
