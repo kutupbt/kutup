@@ -458,9 +458,7 @@
     "noPreview": "Download it to open it on your device.",
     "restoring": "Restoring…",
     "waitingForOwner": "This file moved to a new key, and its owner has not updated your access yet. It opens once they open Kutup Drive again.",
-    "editsWait": "View only until the owner updates access",
-    "editPdf": "Edit",
-    "editPdfHint": "Edit this PDF: annotate, fill in forms, change text and pages"
+    "editsWait": "View only until the owner updates access"
   },
   "search": {
     "label": "Search Drive",

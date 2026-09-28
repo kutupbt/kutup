@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookmarkPlus, Check, Download, Eye, FilePenLine, History, Save, X } from 'lucide-react'
+import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
@@ -106,8 +106,6 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   const [failure, setFailure] = useState<Failure | null>(null)
   // Bumped to remount a whole-file editor on restored content.
   const [generation, setGeneration] = useState(0)
-  // A PDF opens in the viewer; Edit reopens it in ONLYOFFICE's PDF editor.
-  const [editingPdf, setEditingPdf] = useState(false)
   // Bumped to reopen the file from its latest version (another tab saved
   // past the point this one opened at).
   const [reopen, setReopen] = useState(0)
@@ -151,7 +149,9 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // (docs/plans/collab-federation.md); office documents and whiteboards
       // are not yet.
       const viewer = chooseViewer(name)
-      const kind = editorKindFor(name) ?? (editingPdf && viewer?.kind === 'pdf' ? 'office' : null)
+      // A PDF you may change opens in ONLYOFFICE's PDF editor; one you may
+      // only read (or on another server) in the viewer.
+      const kind = editorKindFor(name) ?? (viewer?.kind === 'pdf' && container.canUpload && !remote ? 'office' : null)
       const editor = remote && kind !== 'text' ? null : kind
       // An editor writes only under the folder's current key: a file the
       // folder rotated past moves to it first (docs/plans/drive-share-revocation.md).
@@ -211,7 +211,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [picked, queryClient, editingPdf, reopen, openAt])
+  }, [picked, queryClient, reopen, openAt])
 
   // Live: the current name and permissions (a rename shows at once).
   const liveFolder = folder ?? picked?.folder
@@ -247,16 +247,6 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // As the file opened: an editor stays one for the session (the server
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload}
-      // Offered where the PDF editor could save: this server, write access.
-      onEditPdf={
-        opened.kind === 'viewer' && opened.mimeType === 'application/pdf' && !editingPdf &&
-        (picked?.folder ?? liveFolder).canUpload && fileLocation(picked?.folder ?? liveFolder).kind === 'local'
-          ? () => {
-              setOpened(null)
-              setEditingPdf(true)
-            }
-          : undefined
-      }
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
       mayRename={
         liveFolder.source === 'file'
@@ -340,14 +330,11 @@ function Workspace({
   mayRename,
   onRestored,
   onOutdated,
-  onEditPdf,
 }: {
   folder: Folder
   file: DriveFile
   name: string
   opened: Opened
-  /** A PDF in the viewer that may be edited: reopens it in the PDF editor. */
-  onEditPdf?: () => void
   keys: Keys
   /** A view-only share: editors open read-only, nothing is saved. */
   readOnly: boolean
@@ -476,11 +463,6 @@ function Workspace({
               logPosition={wholeFile === 'office' ? () => officeRef.current?.logPosition() ?? null : undefined}
               onRestored={onRestored}
             />
-          ) : null}
-          {onEditPdf ? (
-            <Button variant="outline" size="sm" onClick={onEditPdf} title={t('file.editPdfHint')}>
-              <FilePenLine /> {t('file.editPdf')}
-            </Button>
           ) : null}
           {opened.kind === 'office' ? <EditorNotice /> : null}
           <Button

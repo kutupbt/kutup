@@ -458,9 +458,7 @@
     "noPreview": "Cihazında açmak için indir.",
     "restoring": "Geri yükleniyor…",
     "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
-    "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
-    "editPdf": "Düzenle",
-    "editPdfHint": "Bu PDF'i düzenleyin: not ekleyin, formları doldurun, metni ve sayfaları değiştirin"
+    "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme"
   },
   "search": {
     "label": "Drive'da ara",

@@ -81,9 +81,9 @@ frontend/public/onlyoffice/
 
 ## PDFs
 
-A PDF opens in Drive's viewer; with write access (on this server) the header
-offers **Edit**, which reopens it in ONLYOFFICE's PDF editor: annotate, fill
-in forms, change text and pages. The PDF editor opens the raw PDF (no x2t on
+A PDF you may change (write access, on this server) opens straight in
+ONLYOFFICE's PDF editor: annotate, fill in forms, change text and pages. One
+you may only read, or on another server, opens in Drive's viewer. The PDF editor opens the raw PDF (no x2t on
 the way in: its `drawingfile` WASM engine reads it) and routes straight to
 `pdfeditor` (`document.isForm: false`; left undefined, `api.js` would ask
 DocumentServer whether it is a form). Saving asks the editor for its
