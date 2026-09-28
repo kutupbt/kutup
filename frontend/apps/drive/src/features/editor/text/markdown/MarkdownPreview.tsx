@@ -41,7 +41,7 @@
 import { useEffect, useId, useRef, useState, isValidElement } from 'react'
 import type { ComponentProps, MutableRefObject, ReactElement, ReactNode } from 'react'
 import { Checkbox } from '@kutup/ui/components/checkbox'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import remarkMath from 'remark-math'
@@ -52,6 +52,7 @@ import mermaid from 'mermaid'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { rehypeCodeLines, remarkCodeMeta, sanitizeSchema } from './codeBlocks'
+import { assetIdFromSrc } from '../noteImages'
 import 'katex/dist/katex.min.css'
 
 // Initialize mermaid once at module load. `securityLevel: 'strict'` is
@@ -71,6 +72,8 @@ interface Props {
   className?: string
   /** Set to the scrolling container (the outline scrolls it to a heading). */
   containerRef?: MutableRefObject<HTMLDivElement | null>
+  /** Opens the note's own images (`kutup:asset/…`) as blob: URLs; absent, they show as unavailable. */
+  resolveAsset?: (assetId: string) => Promise<string | null>
 }
 
 /** The text inside rendered children (a code block's source). */
@@ -79,6 +82,35 @@ function textOf(node: ReactNode): string {
   if (Array.isArray(node)) return node.map(textOf).join('')
   if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children)
   return ''
+}
+
+/** A note's own image: opened in the browser, shown once it is. */
+function NoteImage({ assetId, alt, resolve }: { assetId: string; alt: string; resolve?: (id: string) => Promise<string | null> }) {
+  const { t } = useTranslation()
+  const [url, setUrl] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    setUrl(undefined)
+    if (!resolve) {
+      setUrl(null)
+      return
+    }
+    void resolve(assetId).then((u) => alive && setUrl(u))
+    return () => {
+      alive = false
+    }
+  }, [assetId, resolve])
+  if (url === undefined) {
+    return <span className="note-image-pending" role="img" aria-label={alt || t('editor.image.loading')} />
+  }
+  if (url === null) {
+    return <span className="note-image-missing">{t('editor.image.unavailable')}</span>
+  }
+  return <img src={url} alt={alt} className="note-image" />
+}
+
+function keepKutupUrls(url: string): string {
+  return /^kutup:[a-z]+\/[\w-]+$/.test(url) ? url : defaultUrlTransform(url)
 }
 
 /** How long "Copied" shows. */
@@ -192,6 +224,7 @@ export default function MarkdownPreview({
   onToggleTaskList,
   className,
   containerRef,
+  resolveAsset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Suppress the next scroll-event echo when the parent drives our position
@@ -250,6 +283,9 @@ export default function MarkdownPreview({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkCodeMeta]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema], rehypeKatex, rehypeHighlight, rehypeCodeLines]}
+        // `kutup:` links (a note's own images, Kutup items) are resolved here;
+        // every other URL goes through react-markdown's safe-protocol filter.
+        urlTransform={keepKutupUrls}
 
         components={{
           input(props) {
@@ -264,6 +300,14 @@ export default function MarkdownPreview({
                 className="mr-1.5 align-middle"
               />
             )
+          },
+          img(props) {
+            // react-markdown's hast node is not a DOM attribute.
+            const rest: ComponentProps<'img'> & { node?: unknown } = { ...props }
+            delete rest.node
+            const assetId = assetIdFromSrc(typeof rest.src === 'string' ? rest.src : undefined)
+            if (assetId) return <NoteImage assetId={assetId} alt={rest.alt ?? ''} resolve={resolveAsset} />
+            return <img {...rest} />
           },
           // Detect ` ```mermaid ` fenced blocks and render via the mermaid
           // package. Other languages fall through to the default <pre>.

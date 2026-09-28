@@ -68,9 +68,18 @@ export function remarkCodeMeta() {
   }
 }
 
-/** The default (GitHub) schema, plus exactly the code-block options. */
+/**
+ * The default (GitHub) schema, plus exactly the code-block options and the
+ * `kutup:` scheme (a note's own images, `kutup:asset/…`, and links to Kutup
+ * items), which the preview resolves itself.
+ */
 export const sanitizeSchema: SanitizeSchema = {
   ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    src: [...(defaultSchema.protocols?.src ?? []), 'kutup'],
+    href: [...(defaultSchema.protocols?.href ?? []), 'kutup'],
+  },
   attributes: {
     ...defaultSchema.attributes,
     code: [...(defaultSchema.attributes?.code ?? []), 'dataTitle', 'dataLineNumbers', 'dataHighlight'],

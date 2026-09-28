@@ -21,6 +21,11 @@ import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
 import OutlinePanel from './outline/OutlinePanel'
+import {
+  imageMarkdown, MAX_NOTE_IMAGE_BYTES, NoteImageTooLargeError, NoteImageTypeError,
+  noteImageResolver, storeNoteImage,
+} from './noteImages'
+import { formatBytes } from '@kutup/ui/lib/format'
 import { currentHeading, headingsOf } from './outline/headings'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
@@ -95,7 +100,7 @@ export default function TextCollabEditor({
   fileKeyAt,
   base,
 }: Props) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
@@ -107,6 +112,16 @@ export default function TextCollabEditor({
   // One side panel at a time: history or the outline.
   const [outlineOpen, setOutlineOpen] = useState(false)
   const previewRef = useRef<HTMLDivElement | null>(null)
+  // The note's own images: stored and opened here (notes on this server).
+  const imageTarget = useMemo(
+    () => ({ fileId, fileKey, generation: keyGeneration, keyAt: fileKeyAt }),
+    // fileKeyAt's identity may churn; the key and generation decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileId, fileKey, keyGeneration],
+  )
+  const images = useMemo(() => (base ? null : noteImageResolver(imageTarget)), [base, imageTarget])
+  useEffect(() => () => images?.dispose(), [images])
+  const resolveAsset = useMemo(() => (images ? (assetId: string) => images.resolve(assetId) : undefined), [images])
   const [namingVersion, setNamingVersion] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string, choice: 'save-and-restore' | 'restore-only') => Promise<void>) | null>(null)
@@ -265,6 +280,51 @@ export default function TextCollabEditor({
         })
       }
 
+      // Pictures among pasted or dropped files: stored inside the note, then
+      // written in where they were put (a Yjs relative position, so others'
+      // edits meanwhile do not move it). Anything else pastes as usual.
+      const takeImages = (v: EditorView, files: File[], at: number, event: Event): boolean => {
+        const pictures = files.filter((f) => f.type.startsWith('image/'))
+        if (pictures.length === 0) return false
+        event.preventDefault()
+        if (base) {
+          toast.error(t('editor.image.remote'))
+          return true
+        }
+        const text = ytextRef.current
+        if (!text) return true
+        const anchor = Y.createRelativePositionFromTypeIndex(text, Math.min(at, text.length))
+        void (async () => {
+          const toastId = toast.loading(t('editor.image.adding', { count: pictures.length }))
+          const parts: string[] = []
+          let failure: string | null = null
+          for (const picture of pictures) {
+            try {
+              parts.push(imageMarkdown(picture.name, await storeNoteImage(imageTarget, picture)))
+            } catch (e) {
+              failure =
+                e instanceof NoteImageTooLargeError
+                  ? t('editor.image.tooLarge', { limit: formatBytes(MAX_NOTE_IMAGE_BYTES, i18n.language) })
+                  : e instanceof NoteImageTypeError
+                    ? t('editor.image.unsupported')
+                    : e instanceof QuotaExceededError
+                      ? t('editor.quotaSave')
+                      : t('editor.image.failed')
+            }
+          }
+          if (parts.length > 0 && text.doc) {
+            const index = Y.createAbsolutePositionFromRelativePosition(anchor, text.doc)?.index ?? text.length
+            const line = v.state.doc.lineAt(Math.min(index, v.state.doc.length))
+            // Each picture on a line of its own.
+            const insert = (index > line.from ? '\n' : '') + parts.join('\n') + (index < line.to ? '\n' : '')
+            v.dispatch({ changes: { from: index, insert }, selection: { anchor: index + insert.length }, userEvent: 'input.paste' })
+          }
+          if (failure) toast.error(failure, { id: toastId })
+          else toast.dismiss(toastId)
+        })()
+        return true
+      }
+
       // 7. Build the CodeMirror editor.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
       const langExt = langForExtension(ext)
@@ -324,6 +384,16 @@ export default function TextCollabEditor({
         // CSS makes .cm-content fill the height — but as a belt+braces
         // measure, if a click reports no position we move the caret to
         // end-of-document (matches Obsidian/VSCode behavior).
+        // Pasted or dropped pictures go into the note, stored inside it.
+        ...(markdownNote && !readOnly ? [EditorView.domEventHandlers({
+          paste(event, v) {
+            return takeImages(v, [...(event.clipboardData?.files ?? [])], v.state.selection.main.head, event)
+          },
+          drop(event, v) {
+            const at = v.posAtCoords({ x: event.clientX, y: event.clientY }) ?? v.state.selection.main.head
+            return takeImages(v, [...(event.dataTransfer?.files ?? [])], at, event)
+          },
+        })] : []),
         EditorView.domEventHandlers({
           mousedown(event, v) {
             const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -627,6 +697,7 @@ export default function TextCollabEditor({
             onToggleTaskList={readOnly ? undefined : handleToggleTaskList}
             className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
             containerRef={previewRef}
+            resolveAsset={resolveAsset}
           />
         )}
 

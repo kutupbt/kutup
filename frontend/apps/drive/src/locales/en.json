@@ -381,6 +381,16 @@
       "copied": "Copied"
     },
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "image": {
+      "adding_one": "Adding the image…",
+      "adding_other": "Adding {{count}} images…",
+      "loading": "Image loading",
+      "unavailable": "Image unavailable",
+      "tooLarge": "Images up to {{limit}} can be added.",
+      "unsupported": "This kind of image can’t be added: use PNG, JPEG, GIF, WebP or AVIF.",
+      "failed": "The image could not be added. Try again.",
+      "remote": "Images can be added only to notes on this server."
+    },
     "outline": {
       "title": "Outline",
       "hint": "The note’s headings; click one to go there",

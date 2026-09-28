@@ -553,6 +553,23 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · embedded images in copies, downloads and other servers
+
+Whiteboards and Markdown notes keep their pictures inside the file, as
+per-file encrypted assets (`/api/files/:id/assets/:assetId`, bound to the
+file id). Three gaps remain:
+
+- **Copies:** copying a whiteboard or a note re-uploads its content under a
+  new file id but not its assets, so the copy shows its pictures as
+  unavailable. A copy should re-seal each asset for the new file.
+- **Downloads:** a downloaded note keeps `kutup:asset/…` links, and a web
+  download of a whiteboard omits its images (the CLI hydrates whiteboards,
+  not notes). A download should bundle them (a `.zip` with the note and an
+  `assets/` folder, links rewritten), or inline them.
+- **Notes on other servers:** pictures cannot be pasted into a note in a
+  folder on another server (the editor says so), because assets are not
+  relayed across servers yet.
+
 ### Drive · office documents and whiteboards across servers
 
 Notes and place lists are edited together live across servers
