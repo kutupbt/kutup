@@ -80,8 +80,11 @@ export const sanitizeSchema: SanitizeSchema = {
     src: [...(defaultSchema.protocols?.src ?? []), 'kutup'],
     href: [...(defaultSchema.protocols?.href ?? []), 'kutup'],
   },
+  // Highlights (==text==) and callouts (callouts.ts).
+  tagNames: [...(defaultSchema.tagNames ?? []), 'mark'],
   attributes: {
     ...defaultSchema.attributes,
+    div: [...(defaultSchema.attributes?.div ?? []), ['className', /^callout(-[a-z]+)?$/], 'dataCallout'],
     code: [...(defaultSchema.attributes?.code ?? []), 'dataTitle', 'dataLineNumbers', 'dataHighlight'],
   },
 }

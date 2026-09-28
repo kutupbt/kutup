@@ -6,7 +6,7 @@ import type { StateCommand } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { startCompletion } from '@codemirror/autocomplete'
 import {
-  Bold, ClipboardPaste, ClipboardType, Code, Copy, ExternalLink, Heading1, Heading2, Heading3, Heading4,
+  Bold, ClipboardPaste, Highlighter, MessageSquareQuote, ClipboardType, Code, Copy, ExternalLink, Heading1, Heading2, Heading3, Heading4,
   Image as ImageIcon, Italic, Link, List, ListOrdered, ListTodo, Minus, Paintbrush, Pilcrow, Quote, Scissors,
   Sigma, SquareCode, SquareDashed, SquarePlus, Strikethrough, Table, Type,
 } from 'lucide-react'
@@ -119,6 +119,7 @@ export default function NoteContextMenu({
                 <ContextMenuItem onSelect={command(toggleWrap('**'))}><Bold /> {t('editor.shortcuts.bold')}<Shortcut keys={`${MOD}B`} /></ContextMenuItem>
                 <ContextMenuItem onSelect={command(toggleWrap('_'))}><Italic /> {t('editor.shortcuts.italic')}<Shortcut keys={`${MOD}I`} /></ContextMenuItem>
                 <ContextMenuItem onSelect={command(toggleWrap('~~'))}><Strikethrough /> {t('editor.menu.strikethrough')}</ContextMenuItem>
+                <ContextMenuItem onSelect={command(toggleWrap('=='))}><Highlighter /> {t('editor.menu.highlight')}</ContextMenuItem>
                 <ContextMenuItem onSelect={command(toggleWrap('`'))}><Code /> {t('editor.shortcuts.code')}<Shortcut keys={`${MOD}⇧C`} /></ContextMenuItem>
                 <ContextMenuItem onSelect={command(toggleWrap('$'))}><Sigma /> {t('editor.menu.math')}</ContextMenuItem>
               </ContextMenuSubContent>
@@ -142,6 +143,7 @@ export default function NoteContextMenu({
             <ContextMenuSub>
               <ContextMenuSubTrigger><SquarePlus /> {t('editor.menu.insert')}</ContextMenuSubTrigger>
               <ContextMenuSubContent className="min-w-52">
+                <ContextMenuItem onSelect={block(INSERTS.callout)}><MessageSquareQuote /> {t('editor.menu.callout')}</ContextMenuItem>
                 <ContextMenuItem onSelect={block(INSERTS.table)}><Table /> {t('editor.menu.table')}</ContextMenuItem>
                 <ContextMenuItem onSelect={block(INSERTS.codeBlock)}><SquareCode /> {t('editor.menu.codeBlock')}</ContextMenuItem>
                 <ContextMenuItem onSelect={block(INSERTS.mathBlock)}><Sigma /> {t('editor.menu.mathBlock')}</ContextMenuItem>

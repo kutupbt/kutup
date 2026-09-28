@@ -56,6 +56,7 @@ export function stripInline(text: string): string {
     .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '$2')
     .replace(/(\*|_)(?=\S)(.+?)(?<=\S)\1/g, '$2')
     .replace(/~~(.+?)~~/g, '$1')
+    .replace(/==(?=\S)(.+?)(?<=\S)==/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
 }
 
@@ -144,7 +145,9 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
     const quote = /^\s*>\s?(.*)$/.exec(content)
     if (quote) {
       quoteTop ??= y
-      place(stripInline(quote[1]!), { x: margin + indent, size: body, bold: false, muted: true })
+      // A callout's `[!type]` marker leaves its title (or nothing).
+      const quoted = quote[1]!.replace(/^\[![A-Za-z-]{1,24}\][+-]?\s*/, '')
+      place(stripInline(quoted), { x: margin + indent, size: body, bold: false, muted: true })
       continue
     }
     closeQuote()

@@ -250,3 +250,48 @@
   color: var(--color-muted-foreground);
   cursor: default;
 }
+
+/* Highlights and callouts in the notes preview (markdown/callouts.ts). */
+.prose mark {
+  padding: 0 0.15em;
+  border-radius: 0.2em;
+  background: color-mix(in oklab, #facc15 45%, transparent);
+  color: inherit;
+}
+.prose .callout {
+  --callout: #3b82f6;
+  margin: 1.25em 0;
+  padding: 0.75em 1em;
+  border-left: 3px solid var(--callout);
+  border-radius: 0.375rem;
+  background: color-mix(in oklab, var(--callout) 9%, transparent);
+}
+.prose .callout > :last-child {
+  margin-bottom: 0;
+}
+.prose .callout-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin: 0 0 0.35em;
+  color: var(--callout);
+  font-weight: 600;
+}
+.prose .callout-title:only-child {
+  margin: 0;
+}
+.prose .callout-icon {
+  width: 1.1em;
+  height: 1.1em;
+  flex-shrink: 0;
+}
+.prose .callout > p:nth-child(2) {
+  margin-top: 0;
+}
+.prose .callout-abstract, .prose .callout-tip { --callout: #14b8a6; }
+.prose .callout-info, .prose .callout-todo, .prose .callout-note { --callout: #3b82f6; }
+.prose .callout-success { --callout: #22c55e; }
+.prose .callout-question, .prose .callout-warning { --callout: #f59e0b; }
+.prose .callout-failure, .prose .callout-danger, .prose .callout-bug { --callout: #ef4444; }
+.prose .callout-example { --callout: #8b5cf6; }
+.prose .callout-quote { --callout: #9ca3af; }

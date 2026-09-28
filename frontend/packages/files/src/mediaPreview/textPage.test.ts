@@ -68,10 +68,15 @@ describe('text page layout', () => {
     expect(cells[2]!.y).toBeGreaterThan(cells[0]!.y)
   })
 
+  it('shows a callout by its title, without the marker', () => {
+    expect(layoutTextPage('> [!warning] Mind the gap', 'prose', 384, 512).lines[0]).toMatchObject({ text: 'Mind the gap', muted: true })
+  })
+
   it('leaves inline marks out', () => {
     expect(stripInline('**bold**, *it*, `code`, [link](https://x.y) and ![alt](p.png) ~~gone~~')).toBe('bold, it, code, link and alt gone')
     // A lone star is text.
     expect(stripInline('2 * 3')).toBe('2 * 3')
+    expect(stripInline('a ==bright== idea')).toBe('a bright idea')
   })
 
   it('keeps fences literal in code files', () => {

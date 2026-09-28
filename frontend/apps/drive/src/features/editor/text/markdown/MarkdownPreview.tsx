@@ -49,9 +49,13 @@ import rehypeSanitize from 'rehype-sanitize'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import mermaid from 'mermaid'
-import { Check, Copy } from 'lucide-react'
+import {
+  Bug, Check, CircleCheck, CircleHelp, ClipboardList, Copy, Flame, Info, List, Pencil, Quote, TriangleAlert, X, Zap,
+  type LucideIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { rehypeCodeLines, remarkCodeMeta, sanitizeSchema } from './codeBlocks'
+import { calloutKind, remarkCallouts, remarkHighlight, type CalloutKind } from './callouts'
 import { assetIdFromSrc } from '../noteImages'
 import { parseKutupHref } from '../links/kutupLinks'
 import 'katex/dist/katex.min.css'
@@ -116,6 +120,12 @@ function NoteImage({ assetId, alt, resolve }: { assetId: string; alt: string; re
 
 function keepKutupUrls(url: string): string {
   return /^kutup:[a-z]+\/[\w-]+$/.test(url) ? url : defaultUrlTransform(url)
+}
+
+/** Obsidian's icon for each callout kind. */
+const CALLOUT_ICONS: Record<CalloutKind, LucideIcon> = {
+  note: Pencil, abstract: ClipboardList, info: Info, todo: CircleCheck, tip: Flame, success: Check,
+  question: CircleHelp, warning: TriangleAlert, failure: X, danger: Zap, bug: Bug, example: List, quote: Quote,
 }
 
 /** How long "Copied" shows. */
@@ -234,6 +244,8 @@ export default function MarkdownPreview({
   renderKutupLink,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const { t } = useTranslation()
+  const calloutLabel = (kind: CalloutKind) => t(`editor.callout.${kind}`)
   // Suppress the next scroll-event echo when the parent drives our position
   // (otherwise we'd report-back and create a feedback loop).
   const ignoreNextScroll = useRef(false)
@@ -288,7 +300,7 @@ export default function MarkdownPreview({
       }
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkCodeMeta]}
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkCodeMeta, remarkHighlight, [remarkCallouts, { label: calloutLabel }]]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema], rehypeKatex, rehypeHighlight, rehypeCodeLines]}
         // `kutup:` links (a note's own images, Kutup items) are resolved here;
         // every other URL goes through react-markdown's safe-protocol filter.
@@ -318,6 +330,21 @@ export default function MarkdownPreview({
             const linked = parseKutupHref(src)
             if (linked?.type === 'file') return <NoteImage assetId={linked.id} alt={rest.alt ?? ''} resolve={resolveFileImage} />
             return <img {...rest} />
+          },
+          div(props) {
+            const rest: ComponentProps<'div'> & { node?: unknown; 'data-callout'?: string } = { ...props }
+            delete rest.node
+            const cls = typeof rest.className === 'string' ? rest.className : ''
+            if (cls.split(' ').includes('callout-title')) {
+              const Icon = CALLOUT_ICONS[calloutKind(rest['data-callout'] ?? 'note')]
+              return (
+                <div {...rest}>
+                  <Icon className="callout-icon" aria-hidden />
+                  <span>{rest.children}</span>
+                </div>
+              )
+            }
+            return <div {...rest} />
           },
           a(props) {
             const rest: ComponentProps<'a'> & { node?: unknown } = { ...props }

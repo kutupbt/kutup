@@ -135,6 +135,8 @@ export const INSERTS = {
   table: { block: '| Column 1 | Column 2 |\n| --- | --- |\n|  |  |', cursorAt: 2 },
   codeBlock: { block: '```\n\n```', cursorAt: 3 },
   rule: { block: '---\n', cursorAt: 4 },
+  // The cursor lands on the callout's body line.
+  callout: { block: '> [!note]\n> ', cursorAt: 12 },
   mathBlock: { block: '$$\n\n$$', cursorAt: 3 },
 } as const
 
