@@ -1,5 +1,6 @@
 import { classifyFileForKutup } from './fileSafety'
 import { inspectRasterDimensions } from './imageDimensions'
+import type { TokenKind } from './codeTokens'
 import { layoutTextPage, type PageLine } from './textPage'
 import type {
   PreviewWorkerRequestV1,
@@ -203,6 +204,16 @@ const RULE = '#e5e7eb'
 const CODE_BG = '#f3f4f6'
 const ACCENT = '#0369a1'
 
+/** Code colours: GitHub's light ones, as the notes preview uses. */
+const TOKEN_COLOURS: Record<TokenKind, string> = {
+  plain: INK,
+  comment: '#6e7781',
+  string: '#0a3069',
+  number: '#0550ae',
+  keyword: '#cf222e',
+  function: '#8250df',
+}
+
 const SANS = 'system-ui, sans-serif'
 const MONO = 'ui-monospace, monospace'
 
@@ -241,8 +252,18 @@ async function drawTextPage(
     }
     const font = line.mono ? MONO : SANS
     if (line.marker && line.markerX !== undefined) drawMarker(context, line.marker, line.markerX, line.y, line.size, font)
-    context.fillStyle = line.muted ? MUTED : INK
     context.font = `${line.bold ? '600 ' : ''}${line.size}px ${font}`
+    if (line.tokens) {
+      // Coloured runs, one after another.
+      let x = line.x
+      for (const token of line.tokens) {
+        context.fillStyle = TOKEN_COLOURS[token.kind]
+        context.fillText(token.text, x, line.y)
+        x += context.measureText(token.text).width
+      }
+      continue
+    }
+    context.fillStyle = line.muted ? MUTED : INK
     context.fillText(line.text, line.x, line.y)
   }
   const encoded = await encode(canvas, maxOutputBytes, outputTypes)

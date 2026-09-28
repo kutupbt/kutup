@@ -77,4 +77,11 @@ describe('text page layout', () => {
   it('keeps fences literal in code files', () => {
     expect(layoutTextPage('```js', 'code', 384, 512).lines[0]).toMatchObject({ text: '```js', mono: true })
   })
+
+  it('colours fenced code by the fence language', () => {
+    const page = layoutTextPage('```python\nprint("x")  # hi\n```', 'prose', 384, 512)
+    const line = page.lines[0]!
+    expect(line.tokens?.map((t) => t.kind)).toEqual(['function', 'plain', 'string', 'plain', 'comment'])
+    expect(line.tokens?.map((t) => t.text).join('')).toBe(line.text)
+  })
 })

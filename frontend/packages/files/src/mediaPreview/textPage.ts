@@ -4,8 +4,10 @@
 //
 // Notes (`prose`) are laid out as their Markdown reads: headings, fenced
 // code in a shaded box, lists, task checkboxes, quotes, tables and rules,
-// with inline marks (`**`, backticks, link targets) left out. Code files
-// show as written.
+// with inline marks (`**`, backticks, link targets) left out; fenced code
+// is coloured by its language (codeTokens.ts). Code files show as written.
+
+import { cutTokens, tokenizeLine, type Token, type TokenState } from './codeTokens'
 
 export interface PageLine {
   text: string
@@ -23,6 +25,8 @@ export interface PageLine {
   /** Drawn before the text, at `markerX`: a bullet, a number, or a task box. */
   marker?: { kind: 'bullet' } | { kind: 'number'; text: string } | { kind: 'task'; checked: boolean }
   markerX?: number
+  /** Coloured runs of the text (fenced code in notes). */
+  tokens?: Token[]
 }
 
 /** A shaded rectangle behind fenced code, or a quote's bar. */
@@ -76,7 +80,13 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
     pieces.forEach((piece, i) => {
       if (y >= bottom) return
       // The marker goes with the first piece only.
-      lines.push({ ...line, ...(i > 0 ? { marker: undefined, markerX: undefined } : {}), text: piece, y })
+      lines.push({
+        ...line,
+        ...(i > 0 ? { marker: undefined, markerX: undefined } : {}),
+        ...(line.tokens ? { tokens: cutTokens(line.tokens, piece.length) } : {}),
+        text: piece,
+        y,
+      })
       y += lineHeight(line.size, mono)
     })
   }
@@ -94,7 +104,7 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
 
   const codeSize = Math.round(body * 0.88)
   const pad = Math.round(body * 0.5)
-  let fence: { marker: string; top: number } | null = null
+  let fence: { marker: string; top: number; language: string | undefined; state: TokenState } | null = null
   let quoteTop: number | null = null
   const closeQuote = () => {
     if (quoteTop === null) return
@@ -107,7 +117,7 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
     const content = raw.replace(/\t/g, '  ')
 
     // Fenced code: a shaded box, monospace, the fences themselves unseen.
-    const fenceMark = /^\s*(`{3,}|~{3,})/.exec(content)
+    const fenceMark = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)/.exec(content)
     if (fence) {
       if (fenceMark && fenceMark[1]![0] === fence.marker[0] && fenceMark[1]!.length >= fence.marker.length) {
         y += pad
@@ -115,13 +125,14 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
         fence = null
         y += Math.round(body * 0.4)
       } else {
-        place(content, { x: margin + pad, size: codeSize, bold: false, mono: true })
+        const tokens = tokenizeLine(content, fence.language, fence.state)
+        place(content, { x: margin + pad, size: codeSize, bold: false, mono: true, tokens })
       }
       continue
     }
     if (fenceMark) {
       closeQuote()
-      fence = { marker: fenceMark[1]!, top: y }
+      fence = { marker: fenceMark[1]!, top: y, language: fenceMark[2] || undefined, state: { inBlockComment: false } }
       y += pad
       continue
     }
