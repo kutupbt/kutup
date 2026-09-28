@@ -5,7 +5,8 @@
 // Notes (`prose`) are laid out as their Markdown reads: headings, fenced
 // code in a shaded box, lists, task checkboxes, quotes, tables and rules,
 // with inline marks (`**`, backticks, link targets) left out; fenced code
-// is coloured by its language (codeTokens.ts). Code files show as written.
+// is coloured by its language (codeTokens.ts). Code files show as written,
+// coloured by their extension.
 
 import { cutTokens, tokenizeLine, type Token, type TokenState } from './codeTokens'
 
@@ -58,7 +59,8 @@ export function stripInline(text: string): string {
     .replace(/`([^`]+)`/g, '$1')
 }
 
-export function layoutTextPage(text: string, mode: 'prose' | 'code', width: number, height: number): PageLayout {
+/** `language`: a code file's extension, which colours it. */
+export function layoutTextPage(text: string, mode: 'prose' | 'code', width: number, height: number, language?: string): PageLayout {
   const margin = Math.round(width * 0.08)
   // Big enough to read at card size, where a page shows at about half scale.
   const body = Math.max(6, Math.round(width / (mode === 'code' ? 26 : 22)))
@@ -95,9 +97,11 @@ export function layoutTextPage(text: string, mode: 'prose' | 'code', width: numb
   const source = text.slice(0, 8192).replace(/\r\n?/g, '\n').split('\n')
 
   if (mode === 'code') {
+    const state: TokenState = { inBlockComment: false }
     for (const raw of source) {
       if (y >= bottom) break
-      place(raw.replace(/\t/g, '  '), { x: margin, size: body, bold: false, mono: true })
+      const content = raw.replace(/\t/g, '  ')
+      place(content, { x: margin, size: body, bold: false, mono: true, tokens: tokenizeLine(content, language, state) })
     }
     return { margin, lines, boxes }
   }

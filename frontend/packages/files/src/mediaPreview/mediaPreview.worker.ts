@@ -28,7 +28,8 @@ self.onmessage = async (event: MessageEvent<PreviewWorkerRequestV1>) => {
     const outputTypes = checkOutputTypes(request.outputTypes)
     if (typeof OffscreenCanvas === 'undefined') throw new Error('bounded raster worker is unavailable')
     if (request.type === 'text-page-v1') {
-      await drawTextPage(request.text, request.mode, request.maxEdge, request.maxOutputBytes, outputTypes)
+      const language = typeof request.language === 'string' && /^[\w+#.-]{1,32}$/.test(request.language) ? request.language : undefined
+      await drawTextPage(request.text, request.mode, request.maxEdge, request.maxOutputBytes, outputTypes, language)
       return
     }
     if (!Number.isSafeInteger(request.maxInputPixels) || request.maxInputPixels < 1) {
@@ -223,11 +224,12 @@ async function drawTextPage(
   maxEdge: number,
   maxOutputBytes: number,
   outputTypes: RasterOutputType[],
+  language?: string,
 ): Promise<void> {
   // A portrait page, 3:4, whose longest side is the budget's.
   const height = maxEdge
   const width = Math.round((maxEdge * 3) / 4)
-  const page = layoutTextPage(text, mode, width, height)
+  const page = layoutTextPage(text, mode, width, height, language)
   const canvas = new OffscreenCanvas(width, height)
   const context = canvas.getContext('2d', { alpha: false })
   if (!context) throw new Error('preview canvas is unavailable')

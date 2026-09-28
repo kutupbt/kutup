@@ -44,6 +44,7 @@
     "@kutup/map": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
+    "@lezer/highlight": "^1.2.3",
     "@tanstack/react-query": "^5",
     "axios": "^1.18.0",
     "codemirror": "^6.0.2",

@@ -1,3 +1,4 @@
+import { extensionOf } from '../editor/editorKind'
 import { thumbnailsOfText, thumbnailSourceFor } from './make'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails, type ThumbnailTarget } from '@kutup/drive-core/thumbnails'
@@ -20,7 +21,9 @@ export function noteThumbnailScheduler(target: ThumbnailTarget, filename: string
   const draw = (versionId: string, text: string) => {
     lastAt = Date.now()
     pending = null
-    enqueueThumbnail(target.fileId, async () => storeThumbnails(target, await thumbnailsOfText(text, mode), versionId))
+    enqueueThumbnail(target.fileId, async () =>
+      storeThumbnails(target, await thumbnailsOfText(text, mode, undefined, mode === 'code' ? extensionOf(filename) : undefined), versionId),
+    )
   }
   const clear = () => {
     if (timer) clearTimeout(timer)

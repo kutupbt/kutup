@@ -13,7 +13,7 @@ import {
   toThumbnailImage,
   type MadeThumbnails,
 } from '@kutup/files/thumbnails'
-import { editorKindFor } from '../editor/editorKind'
+import { editorKindFor, extensionOf } from '../editor/editorKind'
 import { fileKind } from '@kutup/drive-core/kinds'
 
 export { thumbnailsOfPicture, type MadeThumbnails }
@@ -35,8 +35,11 @@ export function thumbnailSourceFor(name: string, mimeType?: string): ThumbnailSo
   return null
 }
 
-export async function thumbnailsOfText(text: string, mode: 'prose' | 'code', signal?: AbortSignal): Promise<MadeThumbnails> {
-  const sm = toThumbnailImage(await renderTextPageV1(text, mode, thumbnailBudget('sm'), DRIVE_PREVIEW_GENERATION_LIMITS_V1, signal))
+/** A note or code file's page; `language` (a code file's extension) colours code. */
+export async function thumbnailsOfText(text: string, mode: 'prose' | 'code', signal?: AbortSignal, language?: string): Promise<MadeThumbnails> {
+  const sm = toThumbnailImage(
+    await renderTextPageV1(text, mode, thumbnailBudget('sm'), DRIVE_PREVIEW_GENERATION_LIMITS_V1, signal, {}, language),
+  )
   return sm ? { sm } : {}
 }
 
@@ -83,7 +86,7 @@ export async function thumbnailsOfFile(file: File, signal?: AbortSignal): Promis
       return thumbnailsOfImage(file, signal)
     case 'prose':
     case 'code':
-      return thumbnailsOfText(await file.slice(0, TEXT_BYTES).text(), source, signal)
+      return thumbnailsOfText(await file.slice(0, TEXT_BYTES).text(), source, signal, source === 'code' ? extensionOf(file.name) : undefined)
     case 'whiteboard': {
       const png = await exportScene(await file.text())
       return png ? thumbnailsOfDrawing(png, signal) : {}

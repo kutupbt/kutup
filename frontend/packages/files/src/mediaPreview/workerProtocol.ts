@@ -27,6 +27,8 @@ export interface TextPageWorkerRequestV1 {
   text: string
   /** `prose`: proportional font, Markdown headings bold; `code`: monospace. */
   mode: 'prose' | 'code'
+  /** Code: the file's extension, for its colours (comment style and all). */
+  language?: string
   maxEdge: number
   maxOutputBytes: number
   outputTypes?: RasterOutputType[]

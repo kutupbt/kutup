@@ -275,7 +275,10 @@ export async function rasterizeImageFileV1(
   }
 }
 
-/** The start of a text file drawn as a page (Drive thumbnails of notes and code). */
+/**
+ * The start of a text file drawn as a page (Drive thumbnails of notes and
+ * code); `language`, a code file's extension, colours it.
+ */
 export async function renderTextPageV1(
   text: string,
   mode: 'prose' | 'code',
@@ -283,6 +286,7 @@ export async function renderTextPageV1(
   limits: PreviewGenerationLimitsV1,
   signal?: AbortSignal,
   dependencies: PreviewGenerationDependenciesV1 = {},
+  language?: string,
 ): Promise<RasterResultV1 | null> {
   validateGenerationLimits(limits)
   try {
@@ -293,6 +297,7 @@ export async function renderTextPageV1(
             type: 'text-page-v1',
             text: text.slice(0, 8192),
             mode,
+            ...(language ? { language } : {}),
             maxEdge: budget.maxEdge,
             maxOutputBytes: budget.maxOutputBytes,
             outputTypes: budget.outputTypes,

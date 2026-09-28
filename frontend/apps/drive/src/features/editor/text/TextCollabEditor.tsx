@@ -19,6 +19,7 @@ import { useResolvedTheme } from '../useResolvedTheme'
 
 import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
+import { liveMarkdown } from './liveMarkdown'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { toast } from 'sonner'
@@ -295,6 +296,8 @@ export default function TextCollabEditor({
         yCollab(ytext, awareness),
         // ---- Tier 1 baseline polish ----
         ...(prose ? [EditorView.lineWrapping, NOTE_LAYOUT] : [lineNumbers()]),
+        // Markdown notes read like the note while you edit them.
+        ...(markdownNote ? [liveMarkdown()] : []),
         ...(prose && !readOnly ? [placeholder(t('editor.notePlaceholder'))] : []),
         highlightActiveLine(),
         drawSelection(),

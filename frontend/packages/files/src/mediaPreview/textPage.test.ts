@@ -84,4 +84,13 @@ describe('text page layout', () => {
     expect(line.tokens?.map((t) => t.kind)).toEqual(['function', 'plain', 'string', 'plain', 'comment'])
     expect(line.tokens?.map((t) => t.text).join('')).toBe(line.text)
   })
+
+  it('colours code files by their extension, block comments across lines', () => {
+    const page = layoutTextPage('/* a\nb */ fn main() {}\n# not a comment in Rust', 'code', 384, 512, 'rs')
+    expect(page.lines[0]!.tokens?.[0]).toMatchObject({ kind: 'comment' })
+    expect(page.lines[1]!.tokens?.map((t) => t.kind)).toEqual(['comment', 'plain', 'keyword', 'plain', 'function', 'plain'])
+    expect(page.lines[2]!.tokens?.[0]?.kind).not.toBe('comment')
+    const py = layoutTextPage('# a comment', 'code', 384, 512, 'py')
+    expect(py.lines[0]!.tokens).toEqual([{ text: '# a comment', kind: 'comment' }])
+  })
 })
