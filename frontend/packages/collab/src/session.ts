@@ -91,7 +91,14 @@ export interface CollabSessionOptions {
   /** Called after each saved version (e.g. to redraw a thumbnail). */
   onSnapshot?: (versionId: string, explicit: boolean) => void
   onSaveError?: (error: unknown) => void
+  /** `ready`: connected to the relay (its replay may still be arriving; see `onReplayed`). */
   onStatus: (status: 'connecting' | 'ready' | 'error') => void
+  /**
+   * The relay finished replaying what came after the saved state: the
+   * document now holds every change so far, through `throughSeq` in the
+   * log (after each connect).
+   */
+  onReplayed?: (throughSeq: number) => void
   /** Other people (tabs) in the document now. */
   onCollaborators?: (count: number) => void
   /** Stop: resolves to null if aborted before the session was up. */
@@ -115,7 +122,8 @@ export interface CollabSession {
 
 /**
  * Open the session. Resolves once the saved state is loaded and the relay is
- * connecting; `onStatus('ready')` follows when the relay has replayed.
+ * connecting; `onStatus('ready')` follows when the relay answers, and
+ * `onReplayed` once it has replayed the changes since the saved state.
  */
 export async function openCollabSession(options: CollabSessionOptions): Promise<CollabSession | null> {
   const { fileId, fileKey, keyGeneration, fileKeyAt, readOnly, signal } = options
@@ -324,6 +332,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         applied = Math.max(applied, message.throughSeq, version)
       }
       advance()
+      // Frames arrive, and are applied, before the position that follows them.
+      if (message.type === 'replayed') options.onReplayed?.(message.throughSeq)
     },
     onHello: (hello: HelloMsg) => {
       docKeyId = hello.currentDocKeyId

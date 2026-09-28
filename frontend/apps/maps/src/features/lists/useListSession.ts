@@ -65,24 +65,28 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
       !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
         ? listThumbnailScheduler(pictureTarget, () => lookRef.current)
         : null
-    // No picture yet, or one from an older version: drawn once the list is
-    // up, by someone who may manage it (readers of a shared folder do not
-    // spend its owner's quota), as Drive's backfill does.
-    const needsPicture =
-      pictures !== null &&
-      (!file.thumbnails.sm || file.thumbnailStale) &&
-      (!folder || folder.canManage || file.uploaderUserId === account.userId)
+    // An outdated picture is redrawn once the list is up, by someone who
+    // may manage it (readers of a shared folder do not spend its owner's
+    // quota), as Drive's backfill does.
+    const mayPicture = pictures !== null && (!folder || folder.canManage || file.uploaderUserId === account.userId)
     let pictured = false
-    let ready = false
-    // Once the session is up and has replayed (in either order).
+    let replayedThrough: number | null = null
+    // Once the session is up and the relay has replayed every change since
+    // the saved state (in either order): the picture shows all the places.
     const picture = () => {
-      if (!needsPicture || pictured || !ready || !session) return
+      if (!mayPicture || pictured || replayedThrough === null || !session) return
       pictured = true
       const doc = session.doc
+      const through = replayedThrough
       void listVersions(file.id)
         .then((versions) => {
-          if (!controller.signal.aborted) {
-            drawListThumbnail(pictureTarget, versions[0]?.id ?? 'original', placesOf(doc), lookRef.current)
+          const latest = versions[0]
+          // None yet, one from an older version, or changes in the log past
+          // the latest version (its editors left before it was saved again),
+          // which no picture drawn from a version holds.
+          const outdated = !file.thumbnails.sm || file.thumbnailStale || through > (latest?.seqAtSnapshot ?? 0)
+          if (outdated && !controller.signal.aborted) {
+            drawListThumbnail(pictureTarget, latest?.id ?? 'original', placesOf(doc), lookRef.current)
           }
         })
         .catch(() => undefined)
@@ -118,12 +122,10 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           onSaveError: (error) => {
             if (error instanceof QuotaExceededError) toast.error(t('list.quota'))
           },
-          onStatus: (next) => {
-            setStatus(next)
-            if (next === 'ready') {
-              ready = true
-              picture()
-            }
+          onStatus: setStatus,
+          onReplayed: (throughSeq) => {
+            replayedThrough = throughSeq
+            picture()
           },
           onCollaborators: setCollaborators,
           signal: controller.signal,

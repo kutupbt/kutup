@@ -162,7 +162,7 @@ falls back to JPEG where the browser cannot encode WebP; quality steps down
 | Video | a `<video>` frame at 10% (max 5 s in) | upload |
 | PDF | first page via PDF.js, loaded only when needed | upload (phase C) |
 | Office | first page rendered by OnlyOffice's own canvas on save, inside the sandbox, returned over the bridge | editor save (phase D) |
-| Place list (`.kutupmap`) | a hidden 960×720 map in the Maps app, fitted to the list's places, with its pins (in the list's colour) and the map data's credit drawn on (`@kutup/map/preview`) | Maps: each saved version, at most once a minute; opening a list with no or a stale picture |
+| Place list (`.kutupmap`) | a hidden 960×720 map in the Maps app, fitted to the list's places, with its pins (in the list's colour) and the map data's credit drawn on (`@kutup/map/preview`) | Maps: each saved version, at most once a minute; opening a list whose picture is missing or behind its places |
 
 Uploads already hold the plaintext `File`, so thumbnails cost no extra
 download there. Copies go through the upload path and get them for free.
@@ -179,8 +179,11 @@ saved, by the browser that saved it, from the content it already holds:
   thumbnail.
 - Place lists save live like notes; Maps redraws their picture from the
   places as of each saved version, at most once a minute (and when the list
-  closes with a newer one pending). A list opened in Maps without an
-  up-to-date picture gets one, by someone who may manage it. The picture
+  closes with a newer one pending). A list opened in Maps gets a new
+  picture, by someone who may manage it, when it has none, a stale one, or
+  changes in the relay's log past its latest version (editors who left
+  before it was saved again); it is drawn once the relay has replayed them
+  (the session's `onReplayed`), so it holds every place. The picture
   loads tiles exactly as the open list does (the person's provider, through
   the relay when that is on), so drawing it reveals nothing opening the list
   did not; Drive never draws one itself (it has no map, and a backfill would
