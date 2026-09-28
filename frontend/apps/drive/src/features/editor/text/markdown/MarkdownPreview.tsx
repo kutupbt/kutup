@@ -53,6 +53,7 @@ import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { rehypeCodeLines, remarkCodeMeta, sanitizeSchema } from './codeBlocks'
 import { assetIdFromSrc } from '../noteImages'
+import { parseKutupHref } from '../links/kutupLinks'
 import 'katex/dist/katex.min.css'
 
 // Initialize mermaid once at module load. `securityLevel: 'strict'` is
@@ -74,6 +75,10 @@ interface Props {
   containerRef?: MutableRefObject<HTMLDivElement | null>
   /** Opens the note's own images (`kutup:asset/…`) as blob: URLs; absent, they show as unavailable. */
   resolveAsset?: (assetId: string) => Promise<string | null>
+  /** Opens a picture in Drive linked as `![…](kutup:file/…)`. */
+  resolveFileImage?: (fileId: string) => Promise<string | null>
+  /** Draws a link to a Kutup item (`kutup:file/…`, `kutup:folder/…`). */
+  renderKutupLink?: (href: string, children: ReactNode) => ReactNode
 }
 
 /** The text inside rendered children (a code block's source). */
@@ -225,6 +230,8 @@ export default function MarkdownPreview({
   className,
   containerRef,
   resolveAsset,
+  resolveFileImage,
+  renderKutupLink,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Suppress the next scroll-event echo when the parent drives our position
@@ -305,9 +312,18 @@ export default function MarkdownPreview({
             // react-markdown's hast node is not a DOM attribute.
             const rest: ComponentProps<'img'> & { node?: unknown } = { ...props }
             delete rest.node
-            const assetId = assetIdFromSrc(typeof rest.src === 'string' ? rest.src : undefined)
+            const src = typeof rest.src === 'string' ? rest.src : undefined
+            const assetId = assetIdFromSrc(src)
             if (assetId) return <NoteImage assetId={assetId} alt={rest.alt ?? ''} resolve={resolveAsset} />
+            const linked = parseKutupHref(src)
+            if (linked?.type === 'file') return <NoteImage assetId={linked.id} alt={rest.alt ?? ''} resolve={resolveFileImage} />
             return <img {...rest} />
+          },
+          a(props) {
+            const rest: ComponentProps<'a'> & { node?: unknown } = { ...props }
+            delete rest.node
+            if (parseKutupHref(rest.href) && renderKutupLink) return renderKutupLink(rest.href!, rest.children)
+            return <a {...rest} />
           },
           // Detect ` ```mermaid ` fenced blocks and render via the mermaid
           // package. Other languages fall through to the default <pre>.

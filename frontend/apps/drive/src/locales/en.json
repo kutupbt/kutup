@@ -381,6 +381,10 @@
       "copied": "Copied"
     },
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "links": {
+      "noAccess": "You don’t have access to this item, or it is gone",
+      "loading": "Looking this item up…"
+    },
     "image": {
       "adding_one": "Adding the image…",
       "adding_other": "Adding {{count}} images…",
@@ -410,7 +414,8 @@
       "bold": "Bold",
       "italic": "Italic",
       "code": "Inline code",
-      "link": "Link",
+      "link": "Link (nothing selected: link a file or folder)",
+      "kutupLink": "Link a file or folder in your Drive (![[ shows a picture)",
       "continueList": "Continue a list (again on an empty item to end it)",
       "title": "Editor keyboard shortcuts",
       "description": "Save and search work anywhere on the page; the rest only while the editor has focus.",

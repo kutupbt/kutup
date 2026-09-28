@@ -3,7 +3,8 @@
 // off), for every selection at once.
 
 import { EditorSelection, type StateCommand } from '@codemirror/state'
-import type { KeyBinding } from '@codemirror/view'
+import type { EditorView, KeyBinding } from '@codemirror/view'
+import { openLinkPicker } from './links/linkPicker'
 import { insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
 
 /** Wraps each selection in `marker`, or unwraps it when already wrapped. */
@@ -95,7 +96,8 @@ export const markdownNoteKeymap: KeyBinding[] = [
   { key: 'Mod-b', run: toggleWrap('**') },
   { key: 'Mod-i', run: toggleWrap('_') },
   { key: 'Mod-Shift-c', run: toggleWrap('`') },
-  { key: 'Mod-k', run: insertLink },
+  // A selection becomes a link's text; nothing selected picks a Kutup item.
+  { key: 'Mod-k', run: (view: EditorView) => (view.state.selection.main.empty ? openLinkPicker(view) : insertLink(view)) },
   { key: 'Enter', run: continueOrEndList },
   { key: 'Backspace', run: deleteMarkupBackward },
 ]

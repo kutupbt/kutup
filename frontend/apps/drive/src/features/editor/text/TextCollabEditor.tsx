@@ -1,7 +1,7 @@
 // TextCollabEditor: CodeMirror 6 + Yjs + AEAD-encrypted relay transport.
 // Mounts in place of the existing file preview when the file extension matches a
 // CodeMirror language (see ../components/editors/dispatch.tsx, written in G1).
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
 import { Compartment, EditorState, type Extension } from '@codemirror/state'
@@ -26,6 +26,13 @@ import {
   noteImageResolver, storeNoteImage,
 } from './noteImages'
 import { formatBytes } from '@kutup/ui/lib/format'
+import { autocompletion } from '@codemirror/autocomplete'
+import { readFile } from '../../drive/copy'
+import { hasKutupLinks, parseKutupHref } from './links/kutupLinks'
+import { KutupLinkChip } from './links/KutupLinkChip'
+import { linkPicker } from './links/linkPicker'
+import { useKutupItems, type KutupItem } from './links/useKutupItems'
+import { imageTypeOf } from './noteImages'
 import { currentHeading, headingsOf } from './outline/headings'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
@@ -122,6 +129,7 @@ export default function TextCollabEditor({
   const images = useMemo(() => (base ? null : noteImageResolver(imageTarget)), [base, imageTarget])
   useEffect(() => () => images?.dispose(), [images])
   const resolveAsset = useMemo(() => (images ? (assetId: string) => images.resolve(assetId) : undefined), [images])
+
   const [namingVersion, setNamingVersion] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string, choice: 'save-and-restore' | 'restore-only') => Promise<void>) | null>(null)
@@ -169,6 +177,63 @@ export default function TextCollabEditor({
   // from the CodeMirror updateListener below — we read ytext.toJSON()
   // each tick so it picks up remote changes too.
   const [docText, setDocText] = useState<string>(initialContent ?? '')
+
+  // Links to Kutup items: the reader's own items, loaded once the note has
+  // a link or the picker is opened (docs: README, notes).
+  const [linksWanted, setLinksWanted] = useState(false)
+  const kutupItems = useKutupItems(isMarkdown && (linksWanted || hasKutupLinks(docText)))
+  const itemsRef = useRef(kutupItems)
+  itemsRef.current = kutupItems
+  const itemWaiters = useRef<(() => void)[]>([])
+  useEffect(() => {
+    if (!kutupItems.ready) return
+    for (const wake of itemWaiters.current.splice(0)) wake()
+  }, [kutupItems.ready])
+  /** The items once loaded (asking for them); empty if they never come. */
+  const whenItems = useCallback((): Promise<KutupItem[]> => {
+    setLinksWanted(true)
+    if (itemsRef.current.ready) return Promise.resolve(itemsRef.current.all)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve([]), 20_000)
+      itemWaiters.current.push(() => {
+        clearTimeout(timer)
+        resolve(itemsRef.current.all)
+      })
+    })
+  }, [])
+  const renderKutupLink = useCallback(
+    (href: string, children: ReactNode) => {
+      const target = parseKutupHref(href)
+      return <KutupLinkChip item={target ? kutupItems.byId.get(target.id) : undefined} ready={kutupItems.ready}>{children}</KutupLinkChip>
+    },
+    [kutupItems],
+  )
+  // Pictures in Drive shown in the note: opened here, once each.
+  const drivePictures = useRef(new Map<string, Promise<string | null>>())
+  useEffect(() => {
+    const cache = drivePictures.current
+    return () => {
+      for (const url of cache.values()) void url.then((u) => u && URL.revokeObjectURL(u))
+      cache.clear()
+    }
+  }, [])
+  const resolveFileImage = useCallback(
+    (fileId: string): Promise<string | null> => {
+      let hit = drivePictures.current.get(fileId)
+      if (!hit) {
+        hit = whenItems().then(async () => {
+          const item = itemsRef.current.byId.get(fileId)
+          if (!item?.file || item.kind !== 'image' || item.file.size > MAX_NOTE_IMAGE_BYTES) return null
+          const bytes = new Uint8Array(await (await readFile(item.folder, item.file)).arrayBuffer())
+          const type = imageTypeOf(bytes)
+          return type ? URL.createObjectURL(new Blob([bytes], { type })) : null
+        }).catch(() => null)
+        drivePictures.current.set(fileId, hit)
+      }
+      return hit
+    },
+    [whenItems],
+  )
   const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 })
   // Scroll-percent state shared between editor pane and preview pane in
   // Split mode. The pane that scrolled most-recently is the source of
@@ -384,6 +449,8 @@ export default function TextCollabEditor({
         // CSS makes .cm-content fill the height — but as a belt+braces
         // measure, if a click reports no position we move the caret to
         // end-of-document (matches Obsidian/VSCode behavior).
+        // `[[` picks a Kutup item to link (`![[` a picture to show).
+        ...(markdownNote && !readOnly ? [autocompletion({ override: [linkPicker({ items: whenItems })], icons: false })] : []),
         // Pasted or dropped pictures go into the note, stored inside it.
         ...(markdownNote && !readOnly ? [EditorView.domEventHandlers({
           paste(event, v) {
@@ -698,6 +765,8 @@ export default function TextCollabEditor({
             className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
             containerRef={previewRef}
             resolveAsset={resolveAsset}
+            resolveFileImage={resolveFileImage}
+            renderKutupLink={renderKutupLink}
           />
         )}
 

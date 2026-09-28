@@ -215,3 +215,38 @@
   color: var(--color-muted-foreground);
   font-size: 0.875em;
 }
+
+/* Links to Kutup items in the notes preview (links/KutupLinkChip.tsx). */
+.prose .kutup-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  max-width: 100%;
+  padding: 0.05em 0.45em;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-muted);
+  color: var(--color-foreground);
+  font: inherit;
+  line-height: 1.4;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.prose .kutup-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prose button.kutup-link:hover {
+  border-color: var(--color-primary);
+}
+.prose button.kutup-link:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 1px;
+}
+.prose .kutup-link-missing {
+  border-style: dashed;
+  background: transparent;
+  color: var(--color-muted-foreground);
+  cursor: default;
+}
