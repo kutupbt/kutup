@@ -20,6 +20,7 @@ import { useResolvedTheme } from '../useResolvedTheme'
 import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
+import { noteFolding } from './folding'
 import OutlinePanel from './outline/OutlinePanel'
 import NoteContextMenu from './NoteContextMenu'
 import {
@@ -468,8 +469,8 @@ export default function TextCollabEditor({
         yCollab(ytext, awareness),
         // ---- Tier 1 baseline polish ----
         ...(prose ? [EditorView.lineWrapping, NOTE_LAYOUT] : [lineNumbers()]),
-        // Markdown notes read like the note while you edit them.
-        ...(markdownNote ? [liveMarkdown()] : []),
+        // Markdown notes read like the note while you edit them, and fold.
+        ...(markdownNote ? [liveMarkdown(), noteFolding(t('editor.unfold'))] : []),
         ...(prose && !readOnly ? [placeholder(t('editor.notePlaceholder'))] : []),
         highlightActiveLine(),
         drawSelection(),

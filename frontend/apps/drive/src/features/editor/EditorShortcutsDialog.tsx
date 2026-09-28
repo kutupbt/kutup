@@ -42,6 +42,8 @@ const SHORTCUTS: Shortcut[] = [
   { keys: ['[', '['],          key: 'editor.shortcuts.kutupLink', markdownOnly: true },
   { keys: ['Enter'],           key: 'editor.shortcuts.continueList', markdownOnly: true },
   { keys: [MOD, 'Shift', 'F'], key: 'editor.shortcuts.focusMode' },
+  { keys: [MOD, 'Shift', '[ / ]'], key: 'editor.shortcuts.fold', markdownOnly: true },
+  { keys: [MOD, 'Alt', '[ / ]'], key: 'editor.shortcuts.foldAll', markdownOnly: true },
   { keys: [MOD, 'E'],          key: 'editor.shortcuts.cycleMode', markdownOnly: true },
   { keys: [MOD, 'Shift', 'E'], key: 'editor.shortcuts.cycleModeRev', markdownOnly: true },
   // Multi-cursor / selection

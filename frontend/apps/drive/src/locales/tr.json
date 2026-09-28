@@ -380,6 +380,7 @@
       "copy": "Kodu kopyala",
       "copied": "Kopyalandı"
     },
+    "unfold": "Aç",
     "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
     "focus": {
       "enter": "Odak modu (Ctrl/⌘+Shift+F)",
@@ -464,6 +465,8 @@
       "code": "Satır içi kod",
       "link": "Bağlantı (seçim yoksa: bir dosya ya da klasör bağla)",
       "focusMode": "Odak modu (çıkmak için Esc)",
+      "fold": "İmleçteki bölümü katla ya da aç",
+      "foldAll": "Her şeyi katla ya da aç",
       "kutupLink": "Drive’ındaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
       "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
       "title": "Düzenleyici klavye kısayolları",

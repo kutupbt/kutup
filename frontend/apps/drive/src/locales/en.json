@@ -380,6 +380,7 @@
       "copy": "Copy code",
       "copied": "Copied"
     },
+    "unfold": "Unfold",
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
     "focus": {
       "enter": "Focus mode (Ctrl/⌘+Shift+F)",
@@ -464,6 +465,8 @@
       "code": "Inline code",
       "link": "Link (nothing selected: link a file or folder)",
       "focusMode": "Focus mode (Esc to leave)",
+      "fold": "Fold or unfold the section at the cursor",
+      "foldAll": "Fold or unfold everything",
       "kutupLink": "Link a file or folder in your Drive (![[ shows a picture)",
       "continueList": "Continue a list (again on an empty item to end it)",
       "title": "Editor keyboard shortcuts",
