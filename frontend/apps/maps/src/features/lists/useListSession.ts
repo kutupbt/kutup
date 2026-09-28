@@ -11,8 +11,11 @@ import { fillDoc, placesMap, placesOf, replacePlaces, type Place } from '@kutup/
 import { QuotaExceededError } from '@kutup/session/errors'
 import { useRequiredSession } from '@kutup/session/store'
 import { listVersions } from '@kutup/collab/api'
-import { drawListThumbnail, listThumbnailScheduler, type ListLook } from './listThumbnail'
+import { drawListThumbnail, type ListLook } from './listThumbnail'
 import { savedPlacesKey, uploadedPlaces } from './savedPlaces'
+
+/** A change of your own redraws the list's Drive picture after this pause. */
+const LIVE_PICTURE_DELAY_MS = 2000
 
 export type ListStatus = 'connecting' | 'ready' | 'error'
 
@@ -61,16 +64,29 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     // the folder's current key only (as Drive's are).
     const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
     const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration }
-    const pictures =
-      !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
-        ? listThumbnailScheduler(pictureTarget, () => lookRef.current)
-        : null
+    const pictures = !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
     // An outdated picture is redrawn once the list is up, by someone who
     // may manage it (readers of a shared folder do not spend its owner's
     // quota), as Drive's backfill does.
-    const mayPicture = pictures !== null && (!folder || folder.canManage || file.uploaderUserId === account.userId)
+    const mayPicture = pictures && (!folder || folder.canManage || file.uploaderUserId === account.userId)
     let pictured = false
     let replayedThrough: number | null = null
+    // The latest saved version, which a picture of the live places is filed
+    // under until the next save (a save redraws and files it anew).
+    let latestVersion: Promise<string> | null = null
+    const latestVersionId = () =>
+      (latestVersion ??= listVersions(file.id).then((versions) => versions[0]?.id ?? 'original'))
+    // Your own changes redraw the picture shortly after (a burst draws once);
+    // other people's are drawn by their own browsers.
+    let liveTimer: ReturnType<typeof setTimeout> | null = null
+    const drawLive = () => {
+      liveTimer = null
+      if (!session || controller.signal.aborted) return
+      const places = placesOf(session.doc)
+      void latestVersionId()
+        .then((source) => drawListThumbnail(pictureTarget, source, places, lookRef.current))
+        .catch(() => undefined)
+    }
     // Once the session is up and the relay has replayed every change since
     // the saved state (in either order): the picture shows all the places.
     const picture = () => {
@@ -116,8 +132,10 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
             preRestore: () => t('list.preRestoreLabel', { time: new Date().toLocaleString() }),
             restored: () => t('list.restoredLabel', { time: new Date().toLocaleString() }),
           },
-          onSnapshot: (versionId, explicit) => {
-            if (session) pictures?.saved(versionId, explicit, placesOf(session.doc))
+          onSnapshot: (versionId) => {
+            latestVersion = Promise.resolve(versionId)
+            // Each saved version, from the places it holds, filed under it.
+            if (session && pictures) drawListThumbnail(pictureTarget, versionId, placesOf(session.doc), lookRef.current)
           },
           onSaveError: (error) => {
             if (error instanceof QuotaExceededError) toast.error(t('list.quota'))
@@ -135,7 +153,12 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
         const map = placesMap(doc)
         const refresh = () => setPlaces(placesOf(doc))
         const markDirty = (_update: Uint8Array, origin: unknown) => {
-          if (origin !== 'remote') dirty = true
+          if (origin === 'remote') return
+          dirty = true
+          if (pictures && origin !== 'seed') {
+            if (liveTimer) clearTimeout(liveTimer)
+            liveTimer = setTimeout(drawLive, LIVE_PICTURE_DELAY_MS)
+          }
         }
         map.observeDeep(refresh)
         doc.on('update', markDirty)
@@ -152,7 +175,17 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     })()
     return () => {
       controller.abort()
-      pictures?.flush()
+      // A change still waiting to be drawn is drawn now (the queue outlives the list).
+      if (liveTimer) {
+        clearTimeout(liveTimer)
+        liveTimer = null
+        if (session) {
+          const places = placesOf(session.doc)
+          void latestVersionId()
+            .then((source) => drawListThumbnail(pictureTarget, source, places, lookRef.current))
+            .catch(() => undefined)
+        }
+      }
       unobserve?.()
       setLive(null)
       const leaving = session

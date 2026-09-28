@@ -45,6 +45,12 @@ export async function storeThumbnails(
   return stored
 }
 
+/** Remove the file's thumbnails (its content no longer has a picture). */
+export async function removeThumbnails(fileId: string): Promise<boolean> {
+  await api.delete(`/files/${fileId}/thumbnails`)
+  return true
+}
+
 // Decrypted thumbnails, as blob: URLs, for this tab only. Keyed by the
 // stored version, so a replaced thumbnail is a new entry; the oldest are
 // released past the limit (a grid shows at most a few hundred at once).
