@@ -7,7 +7,7 @@ import type { StateCommand } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type { useTranslation } from 'react-i18next'
 import {
-  BookmarkPlus, BookOpen, Bold, ChevronsDownUp, ChevronsUpDown, Code, Columns2, ExternalLink, FoldVertical,
+  BookmarkPlus, BookOpen, Eye, FileCode, Bold, ChevronsDownUp, ChevronsUpDown, Code, Columns2, ExternalLink, FoldVertical,
   Heading1, Heading2, Heading3, Heading4, Highlighter, History, Italic, Keyboard, Link, List, ListOrdered, ListTodo,
   ListTree, Maximize2, MessageSquareQuote, Minus, PencilLine, Quote, Save, Search, Sigma, SquareCode, Strikethrough,
   Table, Type, UnfoldVertical,
@@ -32,6 +32,9 @@ export interface NoteCommandContext {
   toggleFocus: () => void
   showShortcuts: () => void
   openSwitcher: () => void
+  /** Live preview or source mode (Markdown notes). */
+  sourceMode: boolean
+  toggleSourceMode: () => void
   save: (() => void) | null
   saveVersion: (() => void) | null
 }
@@ -63,6 +66,13 @@ export function noteCommands(ctx: NoteCommandContext): PaletteItem[] {
     add('mode-split', t('editor.mode.split'), groups.view, <Columns2 />, () => ctx.setMode('split'))
     add('mode-read', t('editor.mode.read'), groups.view, <BookOpen />, () => ctx.setMode('read'))
     add('outline', t('editor.outline.title'), groups.view, <ListTree />, ctx.toggleOutline)
+    add(
+      'source-mode',
+      ctx.sourceMode ? t('editor.palette.livePreview') : t('editor.palette.sourceMode'),
+      groups.view,
+      ctx.sourceMode ? <Eye /> : <FileCode />,
+      ctx.toggleSourceMode,
+    )
   }
   add('history', t('editor.historyTitle'), groups.view, <History />, ctx.toggleHistory)
   add('focus', t('editor.focus.enter'), groups.view, <Maximize2 />, ctx.toggleFocus, `${MOD}⇧F`)

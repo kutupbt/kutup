@@ -388,6 +388,8 @@
       "empty": "No command matches.",
       "switcher": "Open a file or folder",
       "switcherPlaceholder": "Find a file or folder…",
+      "livePreview": "Live preview: show the note as it reads",
+      "sourceMode": "Source mode: show plain Markdown",
       "switcherEmpty": "Nothing by that name.",
       "fold": "Fold at the cursor",
       "unfold": "Unfold at the cursor",

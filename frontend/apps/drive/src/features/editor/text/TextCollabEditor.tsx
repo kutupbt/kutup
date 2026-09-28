@@ -21,6 +21,7 @@ import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
 import { noteFolding } from './folding'
+import { livePreview, refreshLivePreview, type LivePreviewConfig } from './livePreview'
 import OutlinePanel from './outline/OutlinePanel'
 import NoteContextMenu from './NoteContextMenu'
 import CommandPalette, { type PaletteItem } from './palette/CommandPalette'
@@ -124,6 +125,8 @@ const SEARCH_PANEL = EditorView.theme({
 
 /** Notes: room at the edges and a line length made for reading, centred. */
 const NOTE_LAYOUT = EditorView.theme({
+  // A note sits on the page (in dark mode too), not on a code editor's panel.
+  '&': { backgroundColor: 'var(--color-background)' },
   '.cm-content': { maxWidth: '80ch', margin: '0 auto', padding: '16px 24px' },
 })
 
@@ -155,6 +158,17 @@ export default function TextCollabEditor({
   const [outlineOpen, setOutlineOpen] = useState(false)
   const previewRef = useRef<HTMLDivElement | null>(null)
   const picturesRef = useRef<((files: File[]) => void) | null>(null)
+  // Live preview (Obsidian's editing mode) or source mode, remembered here.
+  const [sourceMode, setSourceMode] = useState(() => {
+    try {
+      return localStorage.getItem('kutup.notes.sourceMode') === '1'
+    } catch {
+      return false
+    }
+  })
+  const livePreviewCompartment = useMemo(() => new Compartment(), [])
+  const livePreviewRef = useRef<Omit<LivePreviewConfig, 'readOnly' | 'labels'> | null>(null)
+  const livePreviewExtension = useRef<Extension | null>(null)
   // The note's own images: stored and opened here (notes on this server).
   const imageTarget = useMemo(
     () => ({ fileId, fileKey, generation: keyGeneration, keyAt: fileKeyAt }),
@@ -270,6 +284,44 @@ export default function TextCollabEditor({
     },
     [whenItems],
   )
+  livePreviewRef.current = {
+    resolveImage: (src) => {
+      const asset = /^kutup:asset\/([A-Za-z0-9-]{1,100})$/.exec(src)
+      if (asset) return images ? images.resolve(asset[1]) : Promise.resolve(null)
+      const linked = parseKutupHref(src)
+      if (linked?.type === 'file') return resolveFileImage(linked.id)
+      return Promise.resolve(/^https?:\/\//.test(src) ? src : null)
+    },
+    describeLink: (href) => {
+      const target = parseKutupHref(href)
+      const item = target ? itemsRef.current.byId.get(target.id) : undefined
+      return item ? { name: item.name, folder: item.type === 'folder' } : undefined
+    },
+    openLink: (href) => {
+      const target = parseKutupHref(href)
+      if (!target) {
+        if (/^https?:\/\//.test(href)) window.open(href, '_blank', 'noopener,noreferrer')
+        return
+      }
+      const item = itemsRef.current.byId.get(target.id)
+      if (!item) return
+      if (item.type === 'folder') void navigate(folderPath(item.folder))
+      else openFile(navigate, item.folder, { id: item.id, name: item.name })
+    },
+  }
+  // The lookup finished loading: chips can name their items now.
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: refreshLivePreview.of(null) })
+  }, [kutupItems])
+  // Source mode on or off, without rebuilding the editor.
+  useEffect(() => {
+    try {
+      localStorage.setItem('kutup.notes.sourceMode', sourceMode ? '1' : '0')
+    } catch {
+      // Private windows may refuse; the choice holds for this visit.
+    }
+    viewRef.current?.dispatch({ effects: livePreviewCompartment.reconfigure(sourceMode ? [] : livePreviewExtension.current ?? []) })
+  }, [sourceMode, livePreviewCompartment])
   const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 })
   // Counts of the selection, shown in the status bar instead of the note's.
   const [selectionCounts, setSelectionCounts] = useState<{ words: number; chars: number } | null>(null)
@@ -434,6 +486,16 @@ export default function TextCollabEditor({
         return true
       }
 
+      // Live preview delegates to the latest resolvers (they change as the
+      // link lookup loads), through the ref.
+      livePreviewExtension.current = livePreview({
+        resolveImage: (src) => livePreviewRef.current?.resolveImage(src) ?? Promise.resolve(null),
+        describeLink: (href) => livePreviewRef.current?.describeLink(href),
+        openLink: (href) => livePreviewRef.current?.openLink(href),
+        readOnly,
+        labels: { noAccess: t('editor.links.noAccess'), task: t('editor.menu.task') },
+      })
+
       // The right-click menu's Insert → Picture and its Paste put pictures at the cursor.
       picturesRef.current = (files) => {
         const v = viewRef.current
@@ -480,6 +542,7 @@ export default function TextCollabEditor({
         ...(prose ? [EditorView.lineWrapping, NOTE_LAYOUT] : [lineNumbers()]),
         // Markdown notes read like the note while you edit them, and fold.
         ...(markdownNote ? [liveMarkdown(), noteFolding(t('editor.unfold'))] : []),
+        ...(markdownNote ? [livePreviewCompartment.of(sourceMode ? [] : livePreviewExtension.current ?? [])] : []),
         ...(prose && !readOnly ? [placeholder(t('editor.notePlaceholder'))] : []),
         highlightActiveLine(),
         drawSelection(),
@@ -720,6 +783,8 @@ export default function TextCollabEditor({
           setOutlineOpen(false)
         },
         toggleFocus: () => setFocus((f) => !f),
+        sourceMode,
+        toggleSourceMode: () => setSourceMode((m) => !m),
         showShortcuts: () => setShortcutsOpen(true),
         openSwitcher: () => {
           setLinksWanted(true)
@@ -732,7 +797,7 @@ export default function TextCollabEditor({
         },
         saveVersion: readOnly || !trigger ? null : () => setNamingVersion(true),
       }),
-    [t, isMarkdown, readOnly, setMdMode, trigger],
+    [t, isMarkdown, readOnly, setMdMode, trigger, sourceMode],
   )
   // The switcher: every file and folder you can see, files first.
   const switcherItems = useMemo<PaletteItem[]>(

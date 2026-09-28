@@ -388,6 +388,8 @@
       "empty": "Eşleşen komut yok.",
       "switcher": "Bir dosya ya da klasör aç",
       "switcherPlaceholder": "Dosya ya da klasör bul…",
+      "livePreview": "Canlı önizleme: notu okunduğu gibi göster",
+      "sourceMode": "Kaynak modu: düz Markdown göster",
       "switcherEmpty": "Bu adla bir şey yok.",
       "fold": "İmleçte katla",
       "unfold": "İmleçte aç",

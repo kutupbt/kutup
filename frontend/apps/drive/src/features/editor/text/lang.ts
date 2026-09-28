@@ -3,7 +3,7 @@
 // Extensions not listed return null (plain-text mode).
 import { type Extension } from '@codemirror/state'
 import { Language, LanguageSupport, StreamLanguage } from '@codemirror/language'
-import { markdown } from '@codemirror/lang-markdown'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
 import { rust } from '@codemirror/lang-rust'
@@ -30,8 +30,9 @@ export function langForExtension(ext: string): Extension | null {
   switch (ext.toLowerCase()) {
     case 'md':
     case 'markdown':
-      // Fenced code blocks are highlighted in their language as you type.
-      return markdown({ codeLanguages: languageForFence })
+      // GitHub-flavoured (tasks, strikethrough, tables), as the preview is;
+      // fenced code blocks are highlighted in their language as you type.
+      return markdown({ base: markdownLanguage, codeLanguages: languageForFence })
     case 'js':
     case 'mjs':
     case 'cjs':
