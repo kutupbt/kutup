@@ -31,7 +31,8 @@ How Kutup meets them:
 - in Kutup's office editor, an **About this editor** button in the header
   identifies ONLYOFFICE and Ascensio System SIA as the original developer,
   states that the version is modified, and links to this licence and to the
-  source code; the ONLYOFFICE logo in the editor is kept;
+  source code. The ONLYOFFICE logo itself is hidden in Kutup's editor: the
+  9.4 terms do not require it, and no trademark rights are granted;
 - the licence texts, with these additional terms, are under `LICENSES/`.
 
 The pinned corresponding source:

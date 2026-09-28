@@ -1,8 +1,9 @@
 # OnlyOffice in kutup
 
 **Status:** current. Office editing is included in the normal Compose frontend
-build through a public digest-pinned asset image; the visible OnlyOffice logo
-and attribution are preserved.
+build through a public digest-pinned asset image; ONLYOFFICE is credited in
+the editor's "About this editor" notice (its logo is hidden, as 9.4's licence
+allows).
 
 kutup uses a **CryptPad-pinned bundle** of OnlyOffice — not the upstream `@onlyoffice/document-server`. This doc explains the why, the layout, and the cost of the choice.
 
@@ -26,7 +27,7 @@ CryptPad already did option 2. They maintain a fork of OnlyOffice's `web-apps` r
 1. **Client-side x2t conversion** — the OOXML ↔ binary converter compiled to WebAssembly, loaded inside an isolated iframe. Replaces server-side conversion entirely.
 2. **postMessage bridge replaces CommandService** — CryptPad's `inner.html` and `inner.js` (~3400 LOC) sit between the OO editor and the host page, brokering operations over `window.postMessage`. The host page (kutup, in our case) wires this bridge to its own transport — for us, our envelope-framed WebSocket relay.
 3. **Stripped server-required features** — spell-check, format-convert, callback URLs, telemetry.
-4. **Kutup presentation layer** — CSS removes selected stock chrome and unavailable controls without patching the editor source; the visible OnlyOffice logo and attribution are preserved.
+4. **Kutup presentation layer** — CSS removes selected stock chrome and unavailable controls without patching the editor source. It also hides the ONLYOFFICE logo (`#header-logo`): 9.4's licence no longer asks for it, and the attribution it does ask for is Kutup's "About this editor" notice.
 5. **Hooks for `getDoc` / `setDoc` / `saveChanges`** — entry points the host page uses to feed initial bytes in, get current bytes out, and react to changes.
 
 The total surface is **tens of thousands of lines of patches** to OnlyOffice's compiled JS. Building it from scratch on top of upstream OO would mean redoing that work, then re-doing it on every OO release.
@@ -61,7 +62,7 @@ frontend/public/onlyoffice/
 
 **Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.1` for both, **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
 
-**Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. Keep both in place when changing the editor (`frontend/apps/office/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
+**Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. The editor's own ONLYOFFICE logo is hidden (not required from 9.4; decided 2026-09-28). Keep both notices in place when changing the editor (`frontend/apps/office/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
 
@@ -77,8 +78,8 @@ does not run in production.
 
 The packaging repository pins immutable upstream commits and artifact hashes,
 rejects unsafe archives, verifies required files and the complete output tree,
-and publishes source metadata, licenses, and an SPDX SBOM. The visible
-OnlyOffice logo and attribution remain present. For local frontend work outside
+and publishes source metadata, licenses, modification notices, and an SPDX
+SBOM. For local frontend work outside
 Docker, run `./install-onlyoffice.sh`; this is a development fallback, not a
 Compose prerequisite.
 
@@ -110,12 +111,13 @@ updates. Each fork's `KUTUP.md` says how to build and release.
 2. Update `assets.lock.json` in `kutupbt/kutup-office-assets` with the
    release's commit, artifact size and hashes, license inputs, and the new
    package version; update `install-onlyoffice.sh` to match.
-3. Build and run the independent verifier locally; inspect that the visible
-   OnlyOffice logo and attribution remain present.
+3. Build and run the independent verifier locally; check that the licence,
+   `MODIFICATIONS.md` and the editor's About notice still meet the licence's
+   terms.
 4. Update `inner.html` if the bridge contract shifted and update its editor path
    if the packaged directory changes.
 5. Smoke-test `.docx`, `.xlsx`, and `.pptx` open/edit/save, two-tab collaboration,
-   refresh, and logo visibility.
+   refresh, the logo staying hidden, and the About notice and its links.
 6. Publish an AMD64/ARM64 OCI index, then update Kutup's Dockerfile to its exact
    digest and repeat the clean-clone Compose test.
 

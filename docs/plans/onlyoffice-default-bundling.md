@@ -375,6 +375,12 @@ downloaded with the text; a saved document reopened after a reload and took
 more; a second tab received the first tab's typing and saved it; the About
 dialog's four links open; no page errors.
 
+**Logo dropped (2026-09-28).** With the logo clause gone from 9.4's files
+and `LICENSE`, Kutup hides the editor's ONLYOFFICE logo (`#header-logo`, in
+`inner.html`'s injected chrome CSS). The attribution and legal notice are the
+About dialog and `MODIFICATIONS.md`. The "preserve the visible logo" items in
+the earlier sections above describe the 2026-08 contract.
+
 ## Primary upstream references
 
 - <https://github.com/cryptpad/onlyoffice-editor/tree/v9.2.0.119%2B5>

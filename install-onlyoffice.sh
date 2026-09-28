@@ -327,7 +327,7 @@ install_source_metadata() (
     trap 'rm -f -- "$candidate"' EXIT
     cat >"$candidate" <<EOF
 {
-  "bundle_version": "2026.09.27-kutup-v9.4",
+  "bundle_version": "2026.09.28-kutup-v9.4",
   "packaging_repository": "https://github.com/kutupbt/kutup-office-assets",
   "editor": {
     "version": "$OO_VERSION",
