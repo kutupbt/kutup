@@ -382,6 +382,23 @@
     },
     "unfold": "Aç",
     "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
+    "palette": {
+      "title": "Komut paleti",
+      "placeholder": "Bir komut yaz…",
+      "empty": "Eşleşen komut yok.",
+      "switcher": "Bir dosya ya da klasör aç",
+      "switcherPlaceholder": "Dosya ya da klasör bul…",
+      "switcherEmpty": "Bu adla bir şey yok.",
+      "fold": "İmleçte katla",
+      "unfold": "İmleçte aç",
+      "foldAll": "Her şeyi katla",
+      "unfoldAll": "Her şeyi aç",
+      "groups": {
+        "view": "Görünüm",
+        "file": "Dosya",
+        "fold": "Katlama"
+      }
+    },
     "focus": {
       "enter": "Odak modu (Ctrl/⌘+Shift+F)",
       "exit": "Odak modundan çık (Esc)"
@@ -467,6 +484,8 @@
       "focusMode": "Odak modu (çıkmak için Esc)",
       "fold": "İmleçteki bölümü katla ya da aç",
       "foldAll": "Her şeyi katla ya da aç",
+      "palette": "Komut paleti",
+      "switcher": "Bir dosya ya da klasör aç",
       "kutupLink": "Drive’ındaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
       "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
       "title": "Düzenleyici klavye kısayolları",

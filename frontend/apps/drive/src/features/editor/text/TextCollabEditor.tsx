@@ -23,6 +23,11 @@ import { liveMarkdown } from './liveMarkdown'
 import { noteFolding } from './folding'
 import OutlinePanel from './outline/OutlinePanel'
 import NoteContextMenu from './NoteContextMenu'
+import CommandPalette, { type PaletteItem } from './palette/CommandPalette'
+import { noteCommands } from './palette/noteCommands'
+import { KindIcon } from '../../explorer/KindIcon'
+import { folderPath, openFile } from '../../drive/paths'
+import { useNavigate } from 'react-router-dom'
 import {
   imageMarkdown, MAX_NOTE_IMAGE_BYTES, NoteImageTooLargeError, NoteImageTypeError,
   noteImageResolver, storeNoteImage,
@@ -270,6 +275,10 @@ export default function TextCollabEditor({
   const [selectionCounts, setSelectionCounts] = useState<{ words: number; chars: number } | null>(null)
   // Focus mode: the editor fills the window, the chrome hides.
   const [focus, setFocus] = useState(false)
+  // The command palette (Ctrl/Cmd+P) and the quick switcher (Ctrl/Cmd+O).
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const navigate = useNavigate()
   // Scroll-percent state shared between editor pane and preview pane in
   // Split mode. The pane that scrolled most-recently is the source of
   // truth; the other mirrors via this state.
@@ -612,6 +621,20 @@ export default function TextCollabEditor({
       }
       // Focus mode: Ctrl/Cmd+Shift+F in and out; Esc out (unless something
       // else, like the link picker, took the Esc).
+      // The palette and the switcher (over the browser's Print and Open).
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setSwitcherOpen(false)
+        setPaletteOpen((o) => !o)
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault()
+        setPaletteOpen(false)
+        setLinksWanted(true)
+        setSwitcherOpen((o) => !o)
+        return
+      }
       if (!e.defaultPrevented && (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault()
         setFocus((f) => !f)
@@ -679,6 +702,56 @@ export default function TextCollabEditor({
     view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'start', yMargin: 24 }) })
     view.focus()
   }
+
+  const commands = useMemo(
+    () =>
+      noteCommands({
+        t,
+        view: () => viewRef.current,
+        markdown: isMarkdown,
+        editable: !readOnly,
+        setMode: setMdMode,
+        toggleOutline: () => {
+          setOutlineOpen((v) => !v)
+          setHistoryOpen(false)
+        },
+        toggleHistory: () => {
+          setHistoryOpen((v) => !v)
+          setOutlineOpen(false)
+        },
+        toggleFocus: () => setFocus((f) => !f),
+        showShortcuts: () => setShortcutsOpen(true),
+        openSwitcher: () => {
+          setLinksWanted(true)
+          setSwitcherOpen(true)
+        },
+        save: readOnly || !trigger ? null : () => {
+          trigger.forceSave(undefined, false)
+            .then(() => { setJustSaved(true); setTimeout(() => setJustSaved(false), 1200) })
+            .catch((e: unknown) => toast.error(e instanceof QuotaExceededError ? t('editor.quotaSave') : t('common.tryAgain')))
+        },
+        saveVersion: readOnly || !trigger ? null : () => setNamingVersion(true),
+      }),
+    [t, isMarkdown, readOnly, setMdMode, trigger],
+  )
+  // The switcher: every file and folder you can see, files first.
+  const switcherItems = useMemo<PaletteItem[]>(
+    () =>
+      [...kutupItems.all]
+        .sort((a, b) => (a.type === b.type ? 0 : a.type === 'file' ? -1 : 1))
+        .filter((item) => item.id !== fileId)
+        .map((item) => ({
+          id: item.id,
+          label: item.name,
+          detail: item.where,
+          icon: <KindIcon kind={item.kind} className="size-4" />,
+          run: () => {
+            if (item.type === 'folder') void navigate(folderPath(item.folder))
+            else openFile(navigate, item.folder, { id: item.id, name: item.name })
+          },
+        })),
+    [kutupItems.all, fileId, navigate],
+  )
 
   const statusDot = status === 'ready'
     ? 'bg-primary'
@@ -938,6 +1011,24 @@ export default function TextCollabEditor({
             setSavingVersion(false)
           }
         })()}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        title={t('editor.palette.title')}
+        placeholder={t('editor.palette.placeholder')}
+        empty={t('editor.palette.empty')}
+        items={commands}
+      />
+      <CommandPalette
+        open={switcherOpen}
+        onOpenChange={setSwitcherOpen}
+        title={t('editor.palette.switcher')}
+        placeholder={t('editor.palette.switcherPlaceholder')}
+        empty={t('editor.palette.switcherEmpty')}
+        items={switcherItems}
+        loading={!kutupItems.ready}
+        loadingLabel={t('editor.links.loading')}
       />
       <EditorShortcutsDialog
         open={shortcutsOpen}

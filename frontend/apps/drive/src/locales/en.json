@@ -382,6 +382,23 @@
     },
     "unfold": "Unfold",
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "palette": {
+      "title": "Command palette",
+      "placeholder": "Type a command…",
+      "empty": "No command matches.",
+      "switcher": "Open a file or folder",
+      "switcherPlaceholder": "Find a file or folder…",
+      "switcherEmpty": "Nothing by that name.",
+      "fold": "Fold at the cursor",
+      "unfold": "Unfold at the cursor",
+      "foldAll": "Fold everything",
+      "unfoldAll": "Unfold everything",
+      "groups": {
+        "view": "View",
+        "file": "File",
+        "fold": "Folding"
+      }
+    },
     "focus": {
       "enter": "Focus mode (Ctrl/⌘+Shift+F)",
       "exit": "Leave focus mode (Esc)"
@@ -467,6 +484,8 @@
       "focusMode": "Focus mode (Esc to leave)",
       "fold": "Fold or unfold the section at the cursor",
       "foldAll": "Fold or unfold everything",
+      "palette": "Command palette",
+      "switcher": "Open a file or folder",
       "kutupLink": "Link a file or folder in your Drive (![[ shows a picture)",
       "continueList": "Continue a list (again on an empty item to end it)",
       "title": "Editor keyboard shortcuts",
