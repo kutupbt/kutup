@@ -158,7 +158,7 @@ falls back to JPEG where the browser cannot encode WebP; quality steps down
 |---|---|---|
 | Image | `createImageBitmap` (EXIF orientation honoured); skipped above 50 MP or 100 MiB; HEIC only where the browser decodes it | upload |
 | Whiteboard | Excalidraw `exportToBlob` of the scene, light theme, padded | every save (Save / Ctrl+S) |
-| Note / text / code | the first ~40 lines drawn on a white page (monospace for code, the body font for notes; Markdown headings bold) — a paper look, the same in both themes, like Google's document cards | upload; text editor snapshot, at most once a minute |
+| Note / text / code | the start of the file drawn on a white page — a paper look, the same in both themes, like Google's document cards. Code files as written, in monospace; notes laid out as their Markdown reads: headings, fenced code in a shaded monospace box, bullets and numbers, task checkboxes (ticked when done), quotes beside a bar, tables in columns, rules; inline marks and link targets left out (`textPage.ts`) | upload; text editor snapshot, at most once a minute |
 | Video | a `<video>` frame at 10% (max 5 s in) | upload |
 | PDF | first page via PDF.js, loaded only when needed | upload (phase C) |
 | Office | first page rendered by OnlyOffice's own canvas on save, inside the sandbox, returned over the bridge | editor save (phase D) |

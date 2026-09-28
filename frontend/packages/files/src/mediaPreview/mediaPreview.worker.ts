@@ -1,6 +1,6 @@
 import { classifyFileForKutup } from './fileSafety'
 import { inspectRasterDimensions } from './imageDimensions'
-import { layoutTextPage } from './textPage'
+import { layoutTextPage, type PageLine } from './textPage'
 import type {
   PreviewWorkerRequestV1,
   RasterOutputType,
@@ -198,7 +198,13 @@ async function encode(
 
 const PAPER = '#ffffff'
 const INK = '#1f2937'
+const MUTED = '#6b7280'
 const RULE = '#e5e7eb'
+const CODE_BG = '#f3f4f6'
+const ACCENT = '#0369a1'
+
+const SANS = 'system-ui, sans-serif'
+const MONO = 'ui-monospace, monospace'
 
 async function drawTextPage(
   text: string,
@@ -217,15 +223,27 @@ async function drawTextPage(
   context.fillStyle = PAPER
   context.fillRect(0, 0, width, height)
   context.textBaseline = 'top'
+  for (const box of page.boxes) {
+    context.fillStyle = box.kind === 'code' ? CODE_BG : RULE
+    if (box.kind === 'code') {
+      context.beginPath()
+      context.roundRect(box.x, box.y, box.width, box.height, Math.round(width / 80))
+      context.fill()
+    } else {
+      context.fillRect(box.x, box.y, box.width, box.height)
+    }
+  }
   for (const line of page.lines) {
     if (line.rule) {
       context.fillStyle = RULE
       context.fillRect(page.margin, line.y, width - page.margin * 2, Math.max(1, Math.round(line.size / 12)))
       continue
     }
-    context.fillStyle = INK
-    context.font = `${line.bold ? '600 ' : ''}${line.size}px ${mode === 'code' ? 'ui-monospace, monospace' : 'system-ui, sans-serif'}`
-    context.fillText(line.text, page.margin, line.y)
+    const font = line.mono ? MONO : SANS
+    if (line.marker && line.markerX !== undefined) drawMarker(context, line.marker, line.markerX, line.y, line.size, font)
+    context.fillStyle = line.muted ? MUTED : INK
+    context.font = `${line.bold ? '600 ' : ''}${line.size}px ${font}`
+    context.fillText(line.text, line.x, line.y)
   }
   const encoded = await encode(canvas, maxOutputBytes, outputTypes)
   if (!encoded) throw new Error('text page could not fit the preview byte budget')
@@ -238,6 +256,50 @@ async function drawTextPage(
     sourceWidth: width,
     sourceHeight: height,
   }, [encoded.raster])
+}
+
+/** A list item's bullet or number, or a task's box (ticked when done). */
+function drawMarker(
+  context: OffscreenCanvasRenderingContext2D,
+  marker: NonNullable<PageLine['marker']>,
+  x: number,
+  y: number,
+  size: number,
+  font: string,
+): void {
+  if (marker.kind === 'number') {
+    context.fillStyle = MUTED
+    context.font = `${size}px ${font}`
+    context.fillText(marker.text, x, y)
+    return
+  }
+  if (marker.kind === 'bullet') {
+    context.fillStyle = MUTED
+    context.beginPath()
+    context.arc(x + size * 0.3, y + size * 0.55, Math.max(1, size * 0.16), 0, Math.PI * 2)
+    context.fill()
+    return
+  }
+  const box = Math.round(size * 0.85)
+  const top = y + Math.round(size * 0.12)
+  context.lineWidth = Math.max(1, size / 10)
+  if (marker.checked) {
+    context.fillStyle = ACCENT
+    context.beginPath()
+    context.roundRect(x, top, box, box, box / 5)
+    context.fill()
+    context.strokeStyle = PAPER
+    context.beginPath()
+    context.moveTo(x + box * 0.22, top + box * 0.52)
+    context.lineTo(x + box * 0.42, top + box * 0.72)
+    context.lineTo(x + box * 0.78, top + box * 0.3)
+    context.stroke()
+  } else {
+    context.strokeStyle = MUTED
+    context.beginPath()
+    context.roundRect(x, top, box, box, box / 5)
+    context.stroke()
+  }
 }
 
 function post(message: RasterPreviewWorkerResponseV1, transfer: Transferable[] = []): void {
