@@ -24,9 +24,9 @@ LICENSE_DEST="$ASSET_ROOT/LICENSES"
 
 # Pinned versions. Bumping these means re-testing the OnlyOffice integration;
 # private API signatures (asc_nativeGetFile, asc_setRestriction, …) can drift.
-OO_VERSION="kutup-v9.4.0.131.2"
-OO_SOURCE_COMMIT="42f754df28cadb034ce64c8ca0167c3e048d7e4c"
-OO_SHA512="de05235b1cddda2e2e515dfd7c135b72d1233ce625f08c6a782ec9897ec7bb31b9cb4649e186cedd8cf4cd7afdf4176ab981fe4e542d2aa24fcaab69d2940bad"
+OO_VERSION="kutup-v9.4.0.131.3"
+OO_SOURCE_COMMIT="aa78683e3a41459bb821ddba7af8fee50d919f3d"
+OO_SHA512="a140ab71ecc7f324c8bc8e49bd87b6d675c80f37b9cfbe33cc76e8e137b4835d0b66573b39d32c5be330dd144efb8a1d977b955eefd513f0254b1c873a50f119"
 X2T_VERSION="kutup-v9.4.0.131.1"
 X2T_SOURCE_COMMIT="7546e7970a212486057529aa2e969984fde0fdf2"
 X2T_SHA512="6786b179d46ce2c81f8d61d1a4ade16449278f83ca72a3332a1be511b23b661944cff9910552b61a4e1b5735cc8f6c67668483e584c5d94bc86132115e1b35f8"
@@ -285,7 +285,7 @@ install_licenses() (
         "editor-web-apps-LICENSE|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/web-apps/LICENSE|e3ddb5bc42529c6130350f38f51bcf250c5b91511ce59223b65a7100de0c8ccc0f5ff83901e8d9eda098df18f0640ec3523cad933c62aaedc14229cc0835d4ae"
         "x2t-core-LICENSE|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/core/LICENSE|e3ddb5bc42529c6130350f38f51bcf250c5b91511ce59223b65a7100de0c8ccc0f5ff83901e8d9eda098df18f0640ec3523cad933c62aaedc14229cc0835d4ae"
         "cryptpad-templates-AGPL-3.0.txt|https://raw.githubusercontent.com/cryptpad/cryptpad/$CRYPTPAD_TEMPLATES_COMMIT/LICENSE|a0a86214ea153fb07ff35ceec0848dd1703eae22de036a825efc8394e50f65e3044832f3b49cf7e45a39edc470bdf738abc36a3a78ca7df3a6e73c14eaef94a8"
-        "editor-MODIFICATIONS.md|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/MODIFICATIONS.md|9c3ef4b0c922cebd3b1f3bb1eb77bd1cf54950dfd83fe2dfcd6bac95e795b61720cb3528cf5dc40ec410e7d13fa8c688f722e11664b3d8359d50ca8d10f3ffe4"
+        "editor-MODIFICATIONS.md|https://raw.githubusercontent.com/kutupbt/onlyoffice-editor/$OO_SOURCE_COMMIT/MODIFICATIONS.md|80bbddd211a97847d2c6e00d71017bd0bb68356f3cd9ba1781770d3425009e57e5e90311e7b64c2330e8ca3b225b3cf3d7783c84f2291d6d95a21b92168340c4"
         "x2t-MODIFICATIONS.md|https://raw.githubusercontent.com/kutupbt/onlyoffice-x2t-wasm/$X2T_SOURCE_COMMIT/MODIFICATIONS.md|00870df45f64ab84bf0a511de8809dda0709bcf4fcc55dbd6eebebb0f0b5d1c2090859c563c752004a31a7f883620a64292dcbb22d128cd4aa6033052689eae0"
         "CC-BY-SA-4.0.txt|https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt|a0ddd81c4f9af3702ae874d8c04aac4d23f17267ae23ef187e92b119d17c3527ad9a8615dd213c5d2d0f19c69739fe98145c14072a562babaa25286937988984"
     )
@@ -327,7 +327,7 @@ install_source_metadata() (
     trap 'rm -f -- "$candidate"' EXIT
     cat >"$candidate" <<EOF
 {
-  "bundle_version": "2026.09.28-kutup-v9.4-pdf",
+  "bundle_version": "2026.09.28-kutup-v9.4-pdf-2",
   "packaging_repository": "https://github.com/kutupbt/kutup-office-assets",
   "editor": {
     "version": "$OO_VERSION",

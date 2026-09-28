@@ -428,6 +428,8 @@
       "loading": "Loading the document editor…",
       "unsupported": "This kind of office file can't be edited here.",
       "unavailable": "The document editor could not be loaded. Try again, or download the file.",
+      "notPdf": "This file doesn't look like a PDF, so the PDF editor can't open it. Download it or open it in the viewer.",
+      "openFailed": "The editor could not open this document. Try again, or download the file.",
       "about": {
         "open": "About this editor",
         "title": "About this editor",

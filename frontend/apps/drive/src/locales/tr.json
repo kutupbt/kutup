@@ -428,6 +428,8 @@
       "loading": "Belge düzenleyici yükleniyor…",
       "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
       "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir.",
+      "notPdf": "Bu dosya bir PDF gibi görünmüyor, bu yüzden PDF düzenleyici açamıyor. Dosyayı indir ya da görüntüleyicide aç.",
+      "openFailed": "Düzenleyici bu belgeyi açamadı. Yeniden dene ya da dosyayı indir.",
       "about": {
         "open": "Bu düzenleyici hakkında",
         "title": "Bu düzenleyici hakkında",

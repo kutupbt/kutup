@@ -33,6 +33,7 @@ import {
 } from '@kutup/collab/devices'
 import { randomSenderSeqPrefix } from '@kutup/collab/identity'
 import { registerDevice } from '@kutup/collab/api'
+import { useResolvedTheme } from '../useResolvedTheme'
 
 export interface OfficeEditorHandle {
   /** Asks inner.html for the document as a file: OOXML through x2t, or
@@ -107,6 +108,8 @@ type FromBridge =
   | { type: 'oo-local-op'; payload: string }
   | { type: 'oo-local-cursor'; payload: string }
   | { type: 'oo-save-shortcut' }
+  /** The document cannot open (`notPdf`: no PDF header in the file). */
+  | { type: 'failed'; reason: string; detail: string | null }
 type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
@@ -117,6 +120,7 @@ type ToBridge =
   | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
   | { type: 'oo-self'; deviceId: number; userId: string }
   | { type: 'oo-color-update'; userId: string; color: string | null }
+  | { type: 'oo-theme'; theme: 'dark' | 'light' }
 
 interface InitPayload {
   type: DocType
@@ -133,6 +137,8 @@ interface InitPayload {
   color?: string | null
   /** Open in OnlyOffice's viewer. */
   readOnly?: boolean
+  /** Drive's theme as shown: OnlyOffice opens in its light or dark theme. */
+  theme: 'dark' | 'light'
 }
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the
@@ -173,6 +179,10 @@ function OfficeEditorBase(
   const [error, setError] = useState<string | null>(null)
   const { t } = useTranslation()
   const docType = detectType(filename)
+  // Read when the editor starts; later changes go over as 'oo-theme'.
+  const theme = useResolvedTheme()
+  const themeRef = useRef(theme)
+  themeRef.current = theme
 
   // Save() imperative handle plumbing.
   const pendingSavesRef = useRef<Map<number, {
@@ -341,6 +351,7 @@ function OfficeEditorBase(
               username: username ?? undefined,
               color: color ?? null,
               readOnly,
+              theme: themeRef.current,
             },
           })
           return
@@ -383,6 +394,10 @@ function OfficeEditorBase(
           // forwarded the intent here. Bubble up to the parent.
           onSaveShortcutRef.current?.()
           return
+        case 'failed':
+          console.warn('[office] the editor could not open the document', msg.reason, msg.detail)
+          setError(msg.reason === 'notPdf' ? t('editor.office.notPdf') : t('editor.office.openFailed'))
+          return
       }
     }
 
@@ -407,6 +422,11 @@ function OfficeEditorBase(
       officeOrigin(),
     )
   }, [userId, color])
+
+  // Drive's theme toggled: OnlyOffice switches with it.
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage({ type: 'oo-theme', theme } satisfies ToBridge, officeOrigin())
+  }, [theme])
 
   // ---- WebSocket transport ----
   useEffect(() => {

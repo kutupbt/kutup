@@ -704,6 +704,41 @@
           return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
         }
 
+        // OnlyOffice's theme for Drive's: its classic light one, or its dark one.
+        var ooThemeFor = function (theme) {
+          return theme === 'dark' ? 'theme-dark' : 'theme-classic-light'
+        }
+        // Drive's latest theme, applied once the editor is up if it changed
+        // while OnlyOffice was loading.
+        var driveTheme = null
+        var applyTheme = function () {
+          try {
+            var themeFrame = docEditor && typeof docEditor.getIframe === 'function' && docEditor.getIframe()
+            var w = themeFrame && themeFrame.contentWindow
+            var themes = w && w.Common && w.Common.UI && w.Common.UI.Themes
+            if (driveTheme && themes && typeof themes.setTheme === 'function') themes.setTheme(ooThemeFor(driveTheme))
+          } catch (err) {
+            console.warn('[kutup-bridge] theme switch failed', err)
+          }
+        }
+
+        // Where "%PDF-" starts within the first 1024 bytes, or -1.
+        var pdfHeaderAt = function (bytes) {
+          if (!bytes) return -1
+          var end = Math.min(bytes.length - 5, 1024 - 5)
+          for (var i = 0; i <= end; i++) {
+            if (bytes[i] === 0x25 && bytes[i + 1] === 0x50 && bytes[i + 2] === 0x44 &&
+                bytes[i + 3] === 0x46 && bytes[i + 4] === 0x2d) return i
+          }
+          return -1
+        }
+
+        // The document cannot open: Drive shows why instead of an empty frame.
+        var fail = function (reason, detail) {
+          setStatus('failed: ' + reason + (detail ? ' (' + detail + ')' : ''))
+          if (PARENT_ORIGIN) send(window.parent, { type: 'failed', reason: reason, detail: detail || null })
+        }
+
         var pendingInitPayload = null
         var maybeStart = function () {
           if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
@@ -729,7 +764,7 @@
 
           var t = DOC_TYPES[payload.type]
           if (!t) {
-            setStatus('unsupported type: ' + payload.type)
+            fail('unsupported', String(payload.type))
             return
           }
 
@@ -744,12 +779,16 @@
 
           var docPromise
           if (t.native) {
-            if (!initialBytes || initialBytes.length < 5 || String.fromCharCode.apply(null, initialBytes.subarray(0, 5)) !== '%PDF-') {
-              setStatus('not a PDF')
+            // Readers accept a PDF whose header is anywhere in its first
+            // 1024 bytes (some writers put junk before it); the editor
+            // gets the file from its header on.
+            var header = pdfHeaderAt(initialBytes)
+            if (header < 0) {
+              fail('notPdf')
               return
             }
-            basePdf = initialBytes
-            docPromise = Promise.resolve(new Blob([initialBytes], { type: 'application/pdf' }))
+            basePdf = header === 0 ? initialBytes : initialBytes.slice(header)
+            docPromise = Promise.resolve(new Blob([basePdf], { type: 'application/pdf' }))
           } else if (useExisting) {
             // Existing OOXML file: convert to OnlyOffice's .bin via x2t.
             setStatus('converting ' + payload.type + ' via x2t…')
@@ -822,7 +861,9 @@
                         // chat moved to permissions per OO deprecation warning.
                         comments: false,
                         hideRightMenu: true,
-                        uiTheme: 'theme-classic-light',
+                        // Drive's light or dark theme (then kept in step
+                        // by 'oo-theme'); the page stays white either way.
+                        uiTheme: ooThemeFor(driveTheme || payload.theme),
                       },
                       // Force fast coediting mode so each cell commit
                       // emits saveChanges immediately instead of buffering
@@ -858,6 +899,7 @@
                       },
                       onDocumentReady: function () {
                         setStatus('editor: document ready')
+                        applyTheme()
                         // Attach Cmd/Ctrl+S listeners inside OO's own
                         // iframe — when the user is focused on a cell or
                         // canvas, our outer-page listener never sees the
@@ -892,6 +934,7 @@
                         }
                       },
                       onError: function (e) {
+                        // OnlyOffice shows its own error dialog.
                         console.error('OO error:', e)
                         setStatus('editor error — see console')
                       },
@@ -902,7 +945,7 @@
             })
             .catch(function (err) {
               console.error('inner.html startup failed:', err)
-              setStatus('error: ' + (err && err.message ? err.message : String(err)))
+              fail('startup', err && err.message ? err.message : String(err))
             })
         }
 
@@ -1059,6 +1102,12 @@
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-cursor payload', err)
               }
+              return
+            case 'oo-theme':
+              // Drive switched between light and dark: OnlyOffice's own theme
+              // switcher (private API; re-check when bumping the build).
+              driveTheme = msg.theme === 'dark' ? 'dark' : 'light'
+              applyTheme()
               return
             case 'oo-color-update':
               // Live color picker update. Parent re-asserts the userId →

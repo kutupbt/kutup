@@ -61,11 +61,23 @@ frontend/public/onlyoffice/
 └── FILES.sha512                ← whole-tree integrity manifest
 ```
 
-**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.2` (editor, with the PDF editor) and `kutup-v9.4.0.131.1` (x2t), **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
+**Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.3` (editor, with the PDF editor) and `kutup-v9.4.0.131.1` (x2t), **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
 
 **Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. The editor's own ONLYOFFICE logo is hidden (not required from 9.4; decided 2026-09-28). Keep both notices in place when changing the editor (`frontend/apps/office/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
+
+- **Theme:** the editor opens in ONLYOFFICE's classic light or its dark theme,
+  following Drive's (`init` carries it); toggling Drive's theme switches it live
+  (`oo-theme`, through ONLYOFFICE's own `Common.UI.Themes.setTheme`, a private
+  API to re-check on each update). The document page stays white.
+- **Failures:** a document the editor cannot open (a file with no PDF header in
+  its first 1024 bytes, an unknown type, a startup error) is reported to Drive
+  (`failed`), which shows why instead of the loading screen.
+- **Content blockers:** uBlock Origin and browsers that build it in block any
+  file named `Analytics.js`. ONLYOFFICE's editors wait for their (inert) module
+  of that name, so the fork ships it as `common/UiEvents.js`. Keep file names
+  that blockers match out of the bundle when updating it.
 
 ## PDFs
 

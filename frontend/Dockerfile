@@ -1,7 +1,7 @@
 # The Kutup web apps: account, drive, chat and the OnlyOffice sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
-ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:0a88835f0f7cd245a82bfd5477fb889cb239dff6030e9dcd857fe399958804d8
+ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:724ae7164bdfa79018a70b59fa7e84b96e300b05995183584bb5055fa7f8282a
 
 FROM ${KUTUP_OFFICE_ASSETS_IMAGE} AS office-assets
 
