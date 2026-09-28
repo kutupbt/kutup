@@ -114,3 +114,80 @@
 .prose pre code.hljs .hljs-strong {
   font-weight: 600;
 }
+
+/* Preview code blocks (codeBlocks.ts): a copy button, an optional title bar,
+   numbered and highlighted lines. */
+.prose .code-block-body {
+  position: relative;
+}
+.prose .code-block-title {
+  margin-top: 1.25em;
+  padding: 0.4em 1em;
+  border: 1px solid var(--color-border);
+  border-bottom: 0;
+  border-radius: 0.375rem 0.375rem 0 0;
+  background: var(--color-muted);
+  color: var(--color-muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8em;
+}
+.prose .code-block pre.has-title {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top: 1px solid var(--color-border);
+}
+.prose .code-block-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-background);
+  color: var(--color-muted-foreground);
+  opacity: 0;
+  transition: opacity 120ms;
+  cursor: pointer;
+}
+.prose .code-block:hover .code-block-copy,
+.prose .code-block-copy:focus-visible {
+  opacity: 1;
+}
+.prose .code-block-copy:hover {
+  color: var(--color-foreground);
+}
+/* Touch screens have no hover: the button stays shown. */
+@media (hover: none) {
+  .prose .code-block-copy {
+    opacity: 1;
+  }
+}
+.prose pre code .code-line {
+  display: block;
+  min-height: 1lh;
+  margin: 0 -1.1428571em;
+  padding: 0 1.1428571em;
+}
+.prose pre code .code-line.highlighted {
+  background: color-mix(in oklab, var(--color-primary) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+.prose pre code[data-line-numbers] {
+  counter-reset: code-line;
+}
+.prose pre code[data-line-numbers] .code-line::before {
+  counter-increment: code-line;
+  content: counter(code-line);
+  display: inline-block;
+  width: 2.5ch;
+  margin-right: 1.25ch;
+  text-align: right;
+  color: var(--color-muted-foreground);
+  opacity: 0.7;
+  user-select: none;
+}

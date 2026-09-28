@@ -376,6 +376,10 @@
       "split": "Split",
       "read": "Read"
     },
+    "code": {
+      "copy": "Copy code",
+      "copied": "Copied"
+    },
     "statusBar": {
       "cursor": "Ln {{line}}, Col {{col}}",
       "words_one": "{{count}} word",

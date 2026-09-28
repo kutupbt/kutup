@@ -376,6 +376,10 @@
       "split": "Böl",
       "read": "Oku"
     },
+    "code": {
+      "copy": "Kodu kopyala",
+      "copied": "Kopyalandı"
+    },
     "statusBar": {
       "cursor": "Satır {{line}}, Sütun {{col}}",
       "words_one": "{{count}} kelime",

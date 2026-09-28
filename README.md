@@ -54,6 +54,8 @@ Nested collections, drag-and-drop upload, public share links, per-user folder sh
 
 CodeMirror 6 + Yjs CRDT for `.md`, `.txt`, and 20+ code formats (Go, TS, Rust, Python, C/C++, Java, Shell, …). Multi-user cursors, selection presence, awareness color picked by the user. Every edit is a Yjs binary update wrapped in an AEAD envelope — the server gets opaque ciphertext.
 
+Markdown notes have Edit, Split and Read views with GFM, KaTeX math and Mermaid diagrams. Code is highlighted as you type, fenced blocks included, and in the preview. Preview code blocks have a copy button and take the fence options docs sites use (GitHub ignores them): ```` ```python title="greet.py" showLineNumbers {2,4-6} ```` gives a file-name bar, numbered lines and highlighted lines.
+
 ### Office docs — fully client-side
 
 <img src="docs/screenshots/03-xlsx.png" alt="Spreadsheet editor" width="800" />
