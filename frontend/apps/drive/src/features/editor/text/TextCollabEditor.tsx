@@ -20,6 +20,8 @@ import { useResolvedTheme } from '../useResolvedTheme'
 import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
+import OutlinePanel from './outline/OutlinePanel'
+import { currentHeading, headingsOf } from './outline/headings'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { toast } from 'sonner'
@@ -31,7 +33,7 @@ import type { Awareness } from 'y-protocols/awareness'
 import VersionHistoryPanel from '../versions/VersionHistoryPanel'
 import RestoreConfirmDialog from '../versions/RestoreConfirmDialog'
 import { Button } from '@kutup/ui/components/button'
-import { Save, BookmarkPlus, History, X, Check, Keyboard, Eye } from 'lucide-react'
+import { Save, BookmarkPlus, History, X, Check, Keyboard, Eye, ListTree } from 'lucide-react'
 import { NameDialog } from '../../dialogs/NameDialog'
 import EditorShortcutsDialog from '../EditorShortcutsDialog'
 import CursorColorPicker from '../CursorColorPicker'
@@ -102,6 +104,9 @@ export default function TextCollabEditor({
   const [savingPlain, setSavingPlain] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // One side panel at a time: history or the outline.
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const previewRef = useRef<HTMLDivElement | null>(null)
   const [namingVersion, setNamingVersion] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string, choice: 'save-and-restore' | 'restore-only') => Promise<void>) | null>(null)
@@ -465,6 +470,25 @@ export default function TextCollabEditor({
     })
   }, [theme, themeCompartment])
 
+  const headings = useMemo(() => (isMarkdown && outlineOpen ? headingsOf(docText) : []), [isMarkdown, outlineOpen, docText])
+
+  // The outline's jump: the editor's cursor to the heading (Edit, Split),
+  // or the preview scrolled to it (Read).
+  function jumpToHeading(index: number) {
+    const heading = headings[index]
+    if (!heading) return
+    if (mdMode === 'read') {
+      const el = previewRef.current?.querySelectorAll('h1, h2, h3, h4, h5, h6')[index]
+      el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      return
+    }
+    const view = viewRef.current
+    if (!view || heading.line > view.state.doc.lines) return
+    const at = view.state.doc.line(heading.line).from
+    view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'start', yMargin: 24 }) })
+    view.focus()
+  }
+
   const statusDot = status === 'ready'
     ? 'bg-primary'
     : status === 'connecting'
@@ -525,11 +549,31 @@ export default function TextCollabEditor({
             {savingVersion ? t('editor.saving') : t('editor.saveVersion')}
           </Button>
           </>)}
+          {isMarkdown && (
+            <Button
+              type="button"
+              size="sm"
+              variant={outlineOpen ? 'default' : 'outline'}
+              onClick={() => {
+                setOutlineOpen((v) => !v)
+                setHistoryOpen(false)
+              }}
+              aria-pressed={outlineOpen}
+              title={t('editor.outline.hint')}
+              className="gap-1.5"
+            >
+              <ListTree className="h-4 w-4" />
+              {t('editor.outline.title')}
+            </Button>
+          )}
           <Button
             type="button"
             size="sm"
             variant={historyOpen ? 'default' : 'outline'}
-            onClick={() => setHistoryOpen((v) => !v)}
+            onClick={() => {
+              setHistoryOpen((v) => !v)
+              setOutlineOpen(false)
+            }}
             className="gap-1.5"
           >
             <History className="h-4 w-4" />
@@ -582,6 +626,16 @@ export default function TextCollabEditor({
             onScrollPercent={mdMode === 'split' ? setScrollPercent : undefined}
             onToggleTaskList={readOnly ? undefined : handleToggleTaskList}
             className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
+            containerRef={previewRef}
+          />
+        )}
+
+        {outlineOpen && isMarkdown && (
+          <OutlinePanel
+            headings={headings}
+            current={mdMode === 'read' ? -1 : currentHeading(headings, cursorPos.line)}
+            onJump={jumpToHeading}
+            onClose={() => setOutlineOpen(false)}
           />
         )}
 

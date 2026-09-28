@@ -381,6 +381,12 @@
       "copied": "Copied"
     },
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "outline": {
+      "title": "Outline",
+      "hint": "The note’s headings; click one to go there",
+      "close": "Close the outline",
+      "empty": "No headings yet. Start a line with # to add one."
+    },
     "statusBar": {
       "cursor": "Ln {{line}}, Col {{col}}",
       "words_one": "{{count}} word",

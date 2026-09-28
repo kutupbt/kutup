@@ -39,7 +39,7 @@
 // and is expected to mutate the source markdown (typically via Yjs).
 
 import { useEffect, useId, useRef, useState, isValidElement } from 'react'
-import type { ComponentProps, ReactElement, ReactNode } from 'react'
+import type { ComponentProps, MutableRefObject, ReactElement, ReactNode } from 'react'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -69,6 +69,8 @@ interface Props {
    *  Caller is responsible for mutating the source string. */
   onToggleTaskList?: (index: number, checked: boolean) => void
   className?: string
+  /** Set to the scrolling container (the outline scrolls it to a heading). */
+  containerRef?: MutableRefObject<HTMLDivElement | null>
 }
 
 /** The text inside rendered children (a code block's source). */
@@ -189,8 +191,9 @@ export default function MarkdownPreview({
   onScrollPercent,
   onToggleTaskList,
   className,
+  containerRef,
 }: Props) {
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
   // Suppress the next scroll-event echo when the parent drives our position
   // (otherwise we'd report-back and create a feedback loop).
   const ignoreNextScroll = useRef(false)
@@ -231,7 +234,10 @@ export default function MarkdownPreview({
 
   return (
     <div
-      ref={scrollRef}
+      ref={(el) => {
+        scrollRef.current = el
+        if (containerRef) containerRef.current = el
+      }}
       onScroll={handleScroll}
       className={
         'overflow-auto px-6 py-4 ' +

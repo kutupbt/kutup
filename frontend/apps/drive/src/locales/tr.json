@@ -381,6 +381,12 @@
       "copied": "Kopyalandı"
     },
     "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
+    "outline": {
+      "title": "Ana hat",
+      "hint": "Notun başlıkları; oraya gitmek için birine tıkla",
+      "close": "Ana hattı kapat",
+      "empty": "Henüz başlık yok. Eklemek için bir satıra # ile başla."
+    },
     "statusBar": {
       "cursor": "Satır {{line}}, Sütun {{col}}",
       "words_one": "{{count}} kelime",
