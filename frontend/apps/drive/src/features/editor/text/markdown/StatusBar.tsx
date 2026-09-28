@@ -13,6 +13,8 @@ interface Props {
   /** Number of remote collaborators active right now (excludes self).
    *  Pass 0 to hide the indicator. */
   collaborators: number
+  /** Counts of the selected text, when something is selected. */
+  selection?: { words: number; chars: number } | null
 }
 
 export default function StatusBar({
@@ -21,6 +23,7 @@ export default function StatusBar({
   words,
   chars,
   collaborators,
+  selection,
 }: Props) {
   const { t } = useTranslation()
   return (
@@ -28,12 +31,19 @@ export default function StatusBar({
       <span>
         {t('editor.statusBar.cursor', { line: cursorLine, col: cursorCol })}
       </span>
-      <span>
-        {t('editor.statusBar.words', { count: words })}
-      </span>
-      <span>
-        {t('editor.statusBar.chars', { count: chars })}
-      </span>
+      {selection ? (
+        <span className="font-medium text-foreground">
+          {t('editor.statusBar.selected', {
+            words: t('editor.statusBar.words', { count: selection.words }),
+            chars: t('editor.statusBar.chars', { count: selection.chars }),
+          })}
+        </span>
+      ) : (
+        <>
+          <span>{t('editor.statusBar.words', { count: words })}</span>
+          <span>{t('editor.statusBar.chars', { count: chars })}</span>
+        </>
+      )}
       {collaborators > 0 && (
         <span className="ml-auto flex items-center gap-1.5">
           <span aria-hidden="true" className="inline-block h-2 w-2 rounded-full bg-primary" />

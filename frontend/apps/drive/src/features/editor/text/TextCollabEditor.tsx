@@ -46,7 +46,7 @@ import type { Awareness } from 'y-protocols/awareness'
 import VersionHistoryPanel from '../versions/VersionHistoryPanel'
 import RestoreConfirmDialog from '../versions/RestoreConfirmDialog'
 import { Button } from '@kutup/ui/components/button'
-import { Save, BookmarkPlus, History, X, Check, Keyboard, Eye, ListTree } from 'lucide-react'
+import { Save, BookmarkPlus, History, X, Check, Keyboard, Eye, ListTree, Maximize2, Minimize2 } from 'lucide-react'
 import { NameDialog } from '../../dialogs/NameDialog'
 import EditorShortcutsDialog from '../EditorShortcutsDialog'
 import CursorColorPicker from '../CursorColorPicker'
@@ -87,6 +87,34 @@ interface Props {
 function seedUpdate(fileId: string, text: string): Uint8Array {
   return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
 }
+
+/** The find / replace panel in Kutup's look (CodeMirror's is bare browser controls). */
+const SEARCH_PANEL = EditorView.theme({
+  '.cm-panels': { backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)', borderColor: 'var(--color-border)' },
+  '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--color-border)' },
+  '.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '13px' },
+  '.cm-search br': { flexBasis: '100%', height: 0, content: '""' },
+  '.cm-search .cm-textfield': {
+    height: '30px', minWidth: '14rem', padding: '0 10px', margin: 0, fontSize: '13px',
+    border: '1px solid var(--color-input, var(--color-border))', borderRadius: '6px',
+    backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)', outline: 'none',
+  },
+  '.cm-search .cm-textfield:focus': { borderColor: 'var(--color-ring)', boxShadow: '0 0 0 2px color-mix(in oklab, var(--color-ring) 25%, transparent)' },
+  '.cm-search .cm-button': {
+    height: '30px', padding: '0 10px', margin: 0, fontSize: '13px', backgroundImage: 'none',
+    border: '1px solid var(--color-border)', borderRadius: '6px',
+    backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)', cursor: 'pointer',
+  },
+  '.cm-search .cm-button:hover': { backgroundColor: 'var(--color-accent)' },
+  '.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '4px', margin: '0 4px', color: 'var(--color-muted-foreground)' },
+  '.cm-search [name=close]': {
+    position: 'absolute', top: '8px', right: '10px', width: '26px', height: '26px', padding: 0,
+    border: 0, borderRadius: '6px', background: 'transparent', color: 'var(--color-muted-foreground)', fontSize: '18px', cursor: 'pointer',
+  },
+  '.cm-search [name=close]:hover': { backgroundColor: 'var(--color-accent)', color: 'var(--color-foreground)' },
+  '.cm-searchMatch': { backgroundColor: 'color-mix(in oklab, #facc15 40%, transparent)', borderRadius: '2px' },
+  '.cm-searchMatch-selected': { backgroundColor: 'color-mix(in oklab, #f97316 45%, transparent)' },
+})
 
 /** Notes: room at the edges and a line length made for reading, centred. */
 const NOTE_LAYOUT = EditorView.theme({
@@ -237,6 +265,10 @@ export default function TextCollabEditor({
     [whenItems],
   )
   const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 })
+  // Counts of the selection, shown in the status bar instead of the note's.
+  const [selectionCounts, setSelectionCounts] = useState<{ words: number; chars: number } | null>(null)
+  // Focus mode: the editor fills the window, the chrome hides.
+  const [focus, setFocus] = useState(false)
   // Scroll-percent state shared between editor pane and preview pane in
   // Split mode. The pane that scrolled most-recently is the source of
   // truth; the other mirrors via this state.
@@ -427,6 +459,8 @@ export default function TextCollabEditor({
         // Note: saveKeymap and the user keymap come BEFORE search keymap
         // so Cmd+S still saves (search wires Cmd+F + a few others).
         saveKeymap,
+        // Focus mode, ahead of the search keys (which would open replace).
+        keymap.of([{ key: 'Mod-Shift-f', preventDefault: true, run: () => (setFocus((f) => !f), true) }]),
         ...(markdownNote && !readOnly ? [keymap.of(markdownNoteKeymap)] : []),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         history(),
@@ -442,6 +476,7 @@ export default function TextCollabEditor({
         bracketMatching(),
         closeBrackets(),
         search({ top: true }),
+        SEARCH_PANEL,
         rectangularSelection(),
         crosshairCursor(),
         EditorState.allowMultipleSelections.of(true),
@@ -507,6 +542,8 @@ export default function TextCollabEditor({
             const head = u.state.selection.main.head
             const line = u.state.doc.lineAt(head)
             setCursorPos({ line: line.number, col: head - line.from + 1 })
+            const picked = u.state.selection.ranges.filter((r) => !r.empty).map((r) => u.state.sliceDoc(r.from, r.to)).join('\n')
+            setSelectionCounts(picked ? { words: countWords(picked), chars: picked.length } : null)
           }
         }),
       ]
@@ -572,10 +609,18 @@ export default function TextCollabEditor({
         setMdMode(e.shiftKey ? prevMode(mdMode) : nextMode(mdMode))
         return
       }
+      // Focus mode: Ctrl/Cmd+Shift+F in and out; Esc out (unless something
+      // else, like the link picker, took the Esc).
+      if (!e.defaultPrevented && (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault()
+        setFocus((f) => !f)
+        return
+      }
+      if (focus && e.key === 'Escape' && !e.defaultPrevented) setFocus(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isMarkdown, mdMode, setMdMode])
+  }, [isMarkdown, mdMode, setMdMode, focus])
 
   // Push live cursor-color updates to awareness without remounting the editor.
   useEffect(() => {
@@ -641,8 +686,22 @@ export default function TextCollabEditor({
       : 'bg-destructive'
 
   return (
-    <div className="flex h-full w-full flex-col">
-      <div className="flex h-12 items-center gap-3 border-b border-border bg-background/95 px-4">
+    <div className={focus ? 'group/focus fixed inset-0 z-40 flex flex-col bg-background' : 'flex h-full w-full flex-col'}>
+      {focus ? (
+        // Out of focus mode: shown when the pointer comes near the corner.
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          onClick={() => setFocus(false)}
+          title={t('editor.focus.exit')}
+          aria-label={t('editor.focus.exit')}
+          className="absolute right-3 top-3 z-10 opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 group-hover/focus:opacity-60"
+        >
+          <Minimize2 />
+        </Button>
+      ) : null}
+      <div className={'flex h-12 items-center gap-3 border-b border-border bg-background/95 px-4' + (focus ? ' hidden' : '')}>
         <div className="flex min-w-0 items-center gap-2">
           <span className={`inline-block h-2 w-2 rounded-full ${statusDot}`} aria-hidden />
           <span className="truncate text-sm font-medium">{filename}</span>
@@ -723,6 +782,16 @@ export default function TextCollabEditor({
           >
             <History className="h-4 w-4" />
             {t('editor.history')}
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => setFocus(true)}
+            title={t('editor.focus.enter')}
+            aria-label={t('editor.focus.enter')}
+          >
+            <Maximize2 />
           </Button>
           <Button
             type="button"
@@ -826,13 +895,14 @@ export default function TextCollabEditor({
           the editor isn't visible. Shown for both markdown and code
           files since line:col + word/char count is useful in code too.
        */}
-      {mdMode !== 'read' && (
+      {mdMode !== 'read' && !focus && (
         <StatusBar
           cursorLine={cursorPos.line}
           cursorCol={cursorPos.col}
           words={countWords(docText)}
           chars={docText.length}
           collaborators={collaboratorCount}
+          selection={selectionCounts}
         />
       )}
 
