@@ -21,6 +21,7 @@ import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
 import OutlinePanel from './outline/OutlinePanel'
+import NoteContextMenu from './NoteContextMenu'
 import {
   imageMarkdown, MAX_NOTE_IMAGE_BYTES, NoteImageTooLargeError, NoteImageTypeError,
   noteImageResolver, storeNoteImage,
@@ -119,6 +120,7 @@ export default function TextCollabEditor({
   // One side panel at a time: history or the outline.
   const [outlineOpen, setOutlineOpen] = useState(false)
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const picturesRef = useRef<((files: File[]) => void) | null>(null)
   // The note's own images: stored and opened here (notes on this server).
   const imageTarget = useMemo(
     () => ({ fileId, fileKey, generation: keyGeneration, keyAt: fileKeyAt }),
@@ -348,10 +350,10 @@ export default function TextCollabEditor({
       // Pictures among pasted or dropped files: stored inside the note, then
       // written in where they were put (a Yjs relative position, so others'
       // edits meanwhile do not move it). Anything else pastes as usual.
-      const takeImages = (v: EditorView, files: File[], at: number, event: Event): boolean => {
+      const takeImages = (v: EditorView, files: File[], at: number, event?: Event): boolean => {
         const pictures = files.filter((f) => f.type.startsWith('image/'))
         if (pictures.length === 0) return false
-        event.preventDefault()
+        event?.preventDefault()
         if (base) {
           toast.error(t('editor.image.remote'))
           return true
@@ -388,6 +390,12 @@ export default function TextCollabEditor({
           else toast.dismiss(toastId)
         })()
         return true
+      }
+
+      // The right-click menu's Insert → Picture and its Paste put pictures at the cursor.
+      picturesRef.current = (files) => {
+        const v = viewRef.current
+        if (v) takeImages(v, files, v.state.selection.main.head)
       }
 
       // 7. Build the CodeMirror editor.
@@ -739,17 +747,24 @@ export default function TextCollabEditor({
             nearest line. The mousedown handler in the extension list
             above is the belt-and-suspenders fallback for the rare
             null-pos case. */}
-        <div
-          ref={ref}
-          className={
-            'overflow-auto [&>.cm-editor]:h-full [&_.cm-content]:min-h-full ' +
-            (isMarkdown && mdMode === 'read'
-              ? 'hidden'
-              : isMarkdown && mdMode === 'split'
-                ? 'flex-1 min-w-0 border-r border-border'
-                : 'flex-1')
-          }
-        />
+        <NoteContextMenu
+          view={() => viewRef.current}
+          markdown={isMarkdown}
+          readOnly={readOnly}
+          onPictures={isMarkdown && !readOnly && !base ? (files) => picturesRef.current?.(files) : undefined}
+        >
+          <div
+            ref={ref}
+            className={
+              'overflow-auto [&>.cm-editor]:h-full [&_.cm-content]:min-h-full ' +
+              (isMarkdown && mdMode === 'read'
+                ? 'hidden'
+                : isMarkdown && mdMode === 'split'
+                  ? 'flex-1 min-w-0 border-r border-border'
+                  : 'flex-1')
+            }
+          />
+        </NoteContextMenu>
 
         {/* Markdown preview pane. Visible in Split (50/50) and Read
             (full) modes; hidden in Edit. Source pulls from the live

@@ -381,6 +381,32 @@
       "copied": "Copied"
     },
     "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "menu": {
+      "addLink": "Add link",
+      "addExternalLink": "Add external link",
+      "format": "Format",
+      "paragraph": "Paragraph",
+      "insert": "Insert",
+      "strikethrough": "Strikethrough",
+      "math": "Math",
+      "bullet": "Bullet list",
+      "numbered": "Numbered list",
+      "task": "Task list",
+      "heading": "Heading {{level}}",
+      "quote": "Quote",
+      "body": "Body text",
+      "table": "Table",
+      "codeBlock": "Code block",
+      "mathBlock": "Math block",
+      "rule": "Horizontal rule",
+      "picture": "Picture…",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "pastePlain": "Paste as plain text",
+      "selectAll": "Select all",
+      "clipboardBlocked": "Your browser didn’t allow the clipboard here. Use Ctrl+C / Ctrl+V (⌘ on a Mac) instead."
+    },
     "links": {
       "noAccess": "You don’t have access to this item, or it is gone",
       "loading": "Looking this item up…"

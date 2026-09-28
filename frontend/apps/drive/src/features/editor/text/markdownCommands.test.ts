@@ -1,7 +1,7 @@
 import { EditorSelection, EditorState, type StateCommand } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { describe, expect, it } from 'vitest'
-import { continueOrEndList, insertLink, toggleWrap } from './markdownCommands'
+import { continueOrEndList, INSERTS, insertBlock, insertLink, setLineStyle, toggleWrap } from './markdownCommands'
 
 /** Runs a command on `doc` with the selection at [from, to]; returns text and selection. */
 function run(command: StateCommand, doc: string, from: number, to = from) {
@@ -60,5 +60,38 @@ describe('continueOrEndList', () => {
   it('leaves Enter outside lists to the default keymap', () => {
     const state = EditorState.create({ doc: 'text', selection: EditorSelection.cursor(4), extensions: [markdown()] })
     expect(continueOrEndList({ state, dispatch: () => undefined })).toBe(false)
+  })
+})
+
+describe('setLineStyle', () => {
+  it('turns lines into a heading, replacing any marker', () => {
+    expect(run(setLineStyle('h2'), 'title', 0).doc).toBe('## title')
+    expect(run(setLineStyle('h1'), '- item', 0).doc).toBe('# item')
+  })
+
+  it('makes a numbered list that counts, over several lines', () => {
+    expect(run(setLineStyle('number'), 'a\nb\nc', 0, 5).doc).toBe('1. a\n2. b\n3. c')
+  })
+
+  it('makes tasks and quotes, keeping indentation', () => {
+    expect(run(setLineStyle('task'), '  milk', 2).doc).toBe('  - [ ] milk')
+    expect(run(setLineStyle('quote'), '## hi', 0).doc).toBe('> hi')
+  })
+
+  it('toggles back to plain text when every line already has the style', () => {
+    expect(run(setLineStyle('bullet'), '- a\n- b', 0, 7).doc).toBe('a\nb')
+    expect(run(setLineStyle('body'), '### x', 0).doc).toBe('x')
+  })
+})
+
+describe('insertBlock', () => {
+  it('fills an empty line and puts the cursor in the block', () => {
+    const r = run(insertBlock(INSERTS.codeBlock.block, INSERTS.codeBlock.cursorAt), 'a\n\nb', 2)
+    expect(r.doc).toBe('a\n```\n\n```\nb')
+    expect(r.cursor).toBe(5)
+  })
+
+  it('goes on the next line after text', () => {
+    expect(run(insertBlock(INSERTS.table.block, INSERTS.table.cursorAt), 'text', 2).doc).toBe('text\n| Column 1 | Column 2 |\n| --- | --- |\n|  |  |')
   })
 })

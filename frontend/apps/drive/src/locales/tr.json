@@ -381,6 +381,32 @@
       "copied": "Kopyalandı"
     },
     "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
+    "menu": {
+      "addLink": "Bağlantı ekle",
+      "addExternalLink": "Dış bağlantı ekle",
+      "format": "Biçim",
+      "paragraph": "Paragraf",
+      "insert": "Ekle",
+      "strikethrough": "Üstü çizili",
+      "math": "Matematik",
+      "bullet": "Madde işaretli liste",
+      "numbered": "Numaralı liste",
+      "task": "Görev listesi",
+      "heading": "Başlık {{level}}",
+      "quote": "Alıntı",
+      "body": "Gövde metni",
+      "table": "Tablo",
+      "codeBlock": "Kod bloğu",
+      "mathBlock": "Matematik bloğu",
+      "rule": "Yatay çizgi",
+      "picture": "Görsel…",
+      "cut": "Kes",
+      "copy": "Kopyala",
+      "paste": "Yapıştır",
+      "pastePlain": "Düz metin olarak yapıştır",
+      "selectAll": "Tümünü seç",
+      "clipboardBlocked": "Tarayıcın burada panoya izin vermedi. Bunun yerine Ctrl+C / Ctrl+V (Mac’te ⌘) kullan."
+    },
     "links": {
       "noAccess": "Bu öğeye erişimin yok ya da öğe artık yok",
       "loading": "Öğe aranıyor…"
