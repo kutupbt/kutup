@@ -380,6 +380,7 @@
       "copy": "Kodu kopyala",
       "copied": "Kopyalandı"
     },
+    "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
     "statusBar": {
       "cursor": "Satır {{line}}, Sütun {{col}}",
       "words_one": "{{count}} kelime",
@@ -390,6 +391,11 @@
       "collaborators_other": "Burada {{count}} kişi daha var"
     },
     "shortcuts": {
+      "bold": "Kalın",
+      "italic": "İtalik",
+      "code": "Satır içi kod",
+      "link": "Bağlantı",
+      "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
       "title": "Düzenleyici klavye kısayolları",
       "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
       "save": "Kaydet",

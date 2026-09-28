@@ -8,7 +8,7 @@ import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap,
   lineNumbers, highlightActiveLine, drawSelection,
-  rectangularSelection, crosshairCursor,
+  rectangularSelection, crosshairCursor, placeholder,
 } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
@@ -18,6 +18,7 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { useResolvedTheme } from '../useResolvedTheme'
 
 import { langForExtension } from './lang'
+import { markdownNoteKeymap } from './markdownCommands'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { toast } from 'sonner'
@@ -70,6 +71,11 @@ interface Props {
 function seedUpdate(fileId: string, text: string): Uint8Array {
   return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
 }
+
+/** Notes: room at the edges and a line length made for reading, centred. */
+const NOTE_LAYOUT = EditorView.theme({
+  '.cm-content': { maxWidth: '80ch', margin: '0 auto', padding: '16px 24px' },
+})
 
 /** The editor's look and code colours for Drive's theme. */
 function editorTheme(theme: 'dark' | 'light'): Extension {
@@ -256,6 +262,11 @@ export default function TextCollabEditor({
       // 7. Build the CodeMirror editor.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
       const langExt = langForExtension(ext)
+      // Notes are writing, not code: lines wrap, no line numbers, a hint
+      // when empty; Markdown notes also get formatting keys and lists
+      // that continue on Enter.
+      const prose = ext === 'md' || ext === 'markdown' || ext === 'txt'
+      const markdownNote = prose && ext !== 'txt'
       // Cmd/Ctrl+S → force-save snapshot. Wires to the same `trig.forceSave()`
       // the Save button calls; `triggerRef.current` lets the closure see the
       // latest trigger instance even though it's captured at editor build time.
@@ -277,12 +288,14 @@ export default function TextCollabEditor({
         // Note: saveKeymap and the user keymap come BEFORE search keymap
         // so Cmd+S still saves (search wires Cmd+F + a few others).
         saveKeymap,
+        ...(markdownNote && !readOnly ? [keymap.of(markdownNoteKeymap)] : []),
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         history(),
         ...(langExt ? [langExt] : []),
         yCollab(ytext, awareness),
         // ---- Tier 1 baseline polish ----
-        lineNumbers(),
+        ...(prose ? [EditorView.lineWrapping, NOTE_LAYOUT] : [lineNumbers()]),
+        ...(prose && !readOnly ? [placeholder(t('editor.notePlaceholder'))] : []),
         highlightActiveLine(),
         drawSelection(),
         bracketMatching(),

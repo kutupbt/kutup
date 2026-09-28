@@ -380,6 +380,7 @@
       "copy": "Copy code",
       "copied": "Copied"
     },
+    "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
     "statusBar": {
       "cursor": "Ln {{line}}, Col {{col}}",
       "words_one": "{{count}} word",
@@ -390,6 +391,11 @@
       "collaborators_other": "{{count}} other people here"
     },
     "shortcuts": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "code": "Inline code",
+      "link": "Link",
+      "continueList": "Continue a list (again on an empty item to end it)",
       "title": "Editor keyboard shortcuts",
       "description": "Save and search work anywhere on the page; the rest only while the editor has focus.",
       "save": "Save",

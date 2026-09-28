@@ -35,6 +35,11 @@ const SHORTCUTS: Shortcut[] = [
   { keys: [MOD, 'Shift', 'Z'], key: 'editor.shortcuts.redo' },
   { keys: [MOD, '/'],          key: 'editor.shortcuts.comment' },
   // Markdown-only modes
+  { keys: [MOD, 'B'],          key: 'editor.shortcuts.bold', markdownOnly: true },
+  { keys: [MOD, 'I'],          key: 'editor.shortcuts.italic', markdownOnly: true },
+  { keys: [MOD, 'Shift', 'C'], key: 'editor.shortcuts.code', markdownOnly: true },
+  { keys: [MOD, 'K'],          key: 'editor.shortcuts.link', markdownOnly: true },
+  { keys: ['Enter'],           key: 'editor.shortcuts.continueList', markdownOnly: true },
   { keys: [MOD, 'E'],          key: 'editor.shortcuts.cycleMode', markdownOnly: true },
   { keys: [MOD, 'Shift', 'E'], key: 'editor.shortcuts.cycleModeRev', markdownOnly: true },
   // Multi-cursor / selection
