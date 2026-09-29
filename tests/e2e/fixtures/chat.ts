@@ -21,7 +21,9 @@ export async function openChat(
 
 /** The sidebar's conversation list. */
 export async function openChats(page: Page): Promise<void> {
-  await page.getByRole('link', { name: /^Chats/ }).click()
+  // After a reload Chat starts again (keys, mailbox, history) before its
+  // navigation appears.
+  await page.getByRole('link', { name: /^Chats/ }).click({ timeout: 60_000 })
   await expect(page.getByRole('region', { name: 'Conversations' })).toBeVisible({ timeout: 60_000 })
 }
 

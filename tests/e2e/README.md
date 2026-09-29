@@ -75,11 +75,16 @@ npm exec -- playwright test specs/35-polar-workspace-accessibility.spec.ts --pro
 npm exec -- playwright test --headed
 ```
 
-Specs that need a clean database call `wipeStack()` from `fixtures/stack.ts`.
-It performs a Compose teardown with volumes and bind-mount cleanup, then boots a
-fresh break-glass account. The fixture refuses to reset storage unless
-`KUTUP_E2E_DATA_DIR` is explicitly set. Keep the isolated Compose variables in
-the shell that launches Playwright so resets target only disposable test data.
+Every spec registers its own fresh accounts, so specs need no database reset
+and can run in any order against one stack. Admin specs sign in as the
+isolated stack's break-glass administrator (`docker-compose.isolated.yml`);
+its first sign-in replaces the bootstrap password through the key wizard. Run
+one Playwright process at a time: runs share `test-results/`, which each run
+clears when it starts.
+
+A local stack uses a self-signed certificate, which Playwright's
+`ignoreHTTPSErrors` does not extend to service-worker scripts (ONLYOFFICE
+registers one); `E2E_TRUST_LOCAL_CERT=1` makes Chromium accept it.
 
 Normal local runs write the HTML report to `playwright-report/` and per-test
 artifacts to `test-results/`; both are ignored by Git.
@@ -145,17 +150,29 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   selection.
 - `safe-reporter.ts`, `safe-diagnostics.ts`: allow-listed output for sensitive
   Chat/backup runs.
-- `fixtures/apps.ts`: app origins, account registration and sign-in through
-  the account app, and opening Drive.
+- `fixtures/apps.ts`: app origins, account registration, first sign-in and
+  administrator sign-in through the account app, and opening Drive.
 - `fixtures/chat.ts`: Chat helpers (open, settings, conversations, messages,
   reactions, edits, groups, attachments, backup state).
-- `fixtures/auth.ts`: the old single-app bootstrap/login helpers, still used
-  by specs 01–24 and 26–30 until they are ported.
-- `fixtures/stack.ts`: destructive fresh-stack fixture for isolated specs.
+- `fixtures/drive.ts`: Drive items and their menus, folders, notes and the
+  note editor.
+- `fixtures/office.ts`: ONLYOFFICE files, readiness from the bridge's log,
+  sent and applied changes, and the cross-origin editor frame.
+- `fixtures/whiteboard.ts`: whiteboards through Excalidraw's API.
+- spec 01: an administrator-created account's first sign-in; wrong password
+  and unknown email read the same.
+- spec 02: note collaboration: a single seed, simultaneous opening, several
+  tabs.
+- specs 03, 04, 13, 19: office editing and reload, collaboration and
+  cursors, formatting, and version history, in documents, sheets and slides.
+- specs 18, 26, 27, 30: Drive rename, byte-exact download, folder upload,
+  and trash.
+- specs 20, 21, 24: whiteboard versions and restore, collaboration with
+  images, and image storage accounting.
 - spec 25: resumable encrypted tus upload into Drive.
-- specs 01–24 and 26–30: onboarding, collaboration, office, whiteboard,
-  download, admin, sharing, and trash regressions. They still target the old
-  single-origin app and are being ported to the per-app hostnames.
+- spec 28: administration: users, the break-glass admin's protections,
+  roles, temporary passwords, wipe, activity, settings.
+- spec 29: two people editing a note in a shared folder.
 - spec 31: local Chat, linked-device transcripts, Note to Self, active
   installation review/rename/revoke, immutable numeric routing IDs, and
   durable IndexedDB reload.
@@ -167,3 +184,6 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 35: every app's sign-in and signed-in views at phone and desktop
   widths, both themes: one `main`, no page overflow, no serious/critical axe
   findings.
+- spec 36: a group chat on a server with no federation settings.
+- `screenshots.spec.ts`: refreshes the README images; runs only with
+  `KUTUP_README_SCREENSHOTS=1`.

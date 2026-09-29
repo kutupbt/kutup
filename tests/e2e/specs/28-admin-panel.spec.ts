@@ -1,213 +1,141 @@
-import { test, expect, type Page, type BrowserContext } from '@playwright/test'
-import { signInOrBootstrap, ADMIN_EMAIL } from '../fixtures/auth'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { ADMIN_EMAIL, appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
-// E2E coverage for the desktop admin panel (PR #28 — feat/admin-backend):
-//   - Overview tab renders the KPI grid + encryption banner.
-//   - The break-glass admin row is badged and its destructive ⋯ actions
-//     are disabled (the backend would 403 them anyway).
-//   - The create → promote → demote → delete user lifecycle works end-to-end
-//     through the real API.
-//   - The Disable-2FA menu item is correctly disabled for a user with no 2FA.
-//   - The Settings → Storage card renders real, formatted capacity numbers.
-//
-// Serial + a shared signed-in page: the suite mutates shared DB state and
-// the E2EE login (Argon2id) is ~1s — re-authenticating per test is wasteful.
-test.describe.serial('admin panel', () => {
-  let ctx: BrowserContext
+test.describe.serial('administration', () => {
+  let context: BrowserContext
   let page: Page
 
   test.beforeAll(async ({ browser }) => {
-    ctx = await browser.newContext({ ignoreHTTPSErrors: true })
-    page = await signInOrBootstrap(ctx)
-    await page.goto('/admin')
-    await expect(page.getByRole('heading', { level: 2, name: 'Admin Overview' })).toBeVisible({
-      timeout: 30_000,
-    })
+    context = await browser.newContext()
+    await signInAsAdmin(context)
+    page = await context.newPage()
   })
 
   test.afterAll(async () => {
-    await ctx.close()
+    await context.close()
   })
 
-  /** Switch sections through the dedicated admin navigation. */
-  async function gotoTab(name: 'Overview' | 'Users' | 'Settings') {
-    const navigation = page.getByRole('navigation', { name: 'Admin' })
-    const section = navigation.getByRole('button', { name, exact: true })
-    await section.click()
-    await expect(section).toHaveAttribute('aria-current', 'page')
-    await expect(page).toHaveURL(
-      name === 'Overview' ? /\/admin$/ : new RegExp(`/admin/${name.toLowerCase()}$`),
-    )
-    await expect(
-      page.getByRole('heading', {
-        level: 2,
-        name: name === 'Overview' ? 'Admin Overview' : name,
-      }),
-    ).toBeVisible()
+  async function openUser(email: string) {
+    await page.goto(appUrl('account', '/admin/users'))
+    await page.getByPlaceholder('Search by email or username').fill(email)
+    await page.getByRole('row').filter({ hasText: email }).first().click()
+    await page.waitForURL(/\/admin\/users\/[0-9a-f-]{36}$/)
   }
 
-  test('Overview renders the KPI grid + encryption banner', async () => {
-    await gotoTab('Overview')
-    await expect(page.getByText('Total users').first()).toBeVisible()
-    await expect(page.getByText('End-to-end encrypted').first()).toBeVisible()
-  })
+  /** Creates an account awaiting its first sign-in; returns its email. */
+  async function createUser(prefix: string): Promise<string> {
+    const person = newAccount(prefix, 'unused')
+    await page.goto(appUrl('account', '/admin/users/new'))
+    await page.getByLabel('Email', { exact: true }).fill(person.email)
+    await page.getByLabel('Username', { exact: true }).fill(person.username)
+    await page.getByRole('button', { name: 'Create user' }).click()
+    await expect(page.getByRole('heading', { name: 'User created' })).toBeVisible({ timeout: 30_000 })
+    await page.getByRole('button', { name: 'Done' }).click()
+    return person.email
+  }
 
-  test('break-glass admin row is badged and its destructive actions are disabled', async () => {
-    await gotoTab('Users')
-    const row = page.locator('tr', { hasText: ADMIN_EMAIL }).first()
-    await expect(row).toBeVisible({ timeout: 15_000 })
-    // The break-glass badge.
-    await expect(row.getByText('Break-glass', { exact: true })).toBeVisible()
-
-    // Open the row's ⋯ menu — demote / disable / delete must be disabled.
-    await row.getByRole('button', { name: 'Actions' }).click()
-    const menu = page.getByRole('menu')
-    await expect(menu).toBeVisible()
-    await expect(menu.getByRole('menuitem', { name: 'Remove admin role' })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: 'Disable account' })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: 'Delete permanently' })).toBeDisabled()
-    // Edit quota stays available on the break-glass admin.
-    await expect(menu.getByRole('menuitem', { name: 'Edit quota' })).toBeEnabled()
-    await page.keyboard.press('Escape')
-  })
-
-  test('create → promote → demote → delete a user', async () => {
-    const stamp = Date.now()
-    const email = `e2e-admin-${stamp}@kutup.local`
-    const username = `e2eadmin${stamp}` // lowercase digits — satisfies ^[a-z0-9_-]{3,32}$
-
-    await gotoTab('Users')
-
-    // ── Create ──────────────────────────────────────────────────────
-    await page.getByRole('button', { name: 'Create user' }).first().click()
-    const dialog = page.getByRole('dialog')
-    await expect(dialog).toBeVisible()
-    await dialog.getByLabel('Email').fill(email)
-    await dialog.getByLabel('Username').fill(username)
-    await dialog.getByLabel('Temporary password').fill('TempPass-e2e-123')
-    await dialog.getByRole('button', { name: 'Create user' }).click()
+  async function confirm(submit: string, phrase?: string) {
+    const dialog = page.getByRole('alertdialog')
+    if (phrase) {
+      await expect(dialog.getByRole('button', { name: submit, exact: true })).toBeDisabled()
+      await dialog.getByRole('textbox').fill(phrase)
+    }
+    await dialog.getByRole('button', { name: submit, exact: true }).click()
     await expect(dialog).toBeHidden({ timeout: 15_000 })
+  }
 
-    // Search to isolate the new row regardless of pagination.
-    const search = page.getByPlaceholder(/Search by email/i)
-    await search.fill(email)
-    const row = page.locator('tr', { hasText: email }).first()
-    await expect(row).toBeVisible({ timeout: 15_000 })
-    // Fresh user has no 2FA → the Disable-2FA action is disabled.
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await expect(page.getByRole('menuitem', { name: 'Disable 2FA' })).toBeDisabled()
-    await page.keyboard.press('Escape')
-
-    // ── Promote ─────────────────────────────────────────────────────
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Make admin' }).click()
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Make admin' }).click()
-    await expect(row.getByText('Admin', { exact: true })).toBeVisible({ timeout: 15_000 })
-
-    // ── Demote ──────────────────────────────────────────────────────
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Remove admin role' }).click()
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Remove admin role' }).click()
-    await expect(row.getByText('Admin', { exact: true })).toBeHidden({ timeout: 15_000 })
-
-    // ── Delete (cleanup) ────────────────────────────────────────────
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Delete permanently' }).click()
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click()
-    await expect(page.locator('tr', { hasText: email })).toHaveCount(0, { timeout: 15_000 })
-
-    // ── Audit trail ─────────────────────────────────────────────────
-    // The lifecycle above must be visible in the Recent-activity feed.
-    // The delete row resolves the target from the payload snapshot (the
-    // account no longer exists), proving the trail outlives the user.
-    await gotoTab('Overview')
-    const activityCard = page.getByTestId('admin-activity')
-    await expect(activityCard.getByText(`deleted user ${email}`).first()).toBeVisible({
-      timeout: 15_000,
-    })
-    await expect(activityCard.getByText(`created user ${email}`).first()).toBeVisible()
+  test('the users page shows the server at a glance', async () => {
+    await page.goto(appUrl('account', '/admin/users'))
+    for (const stat of ['Users', 'Storage used', 'Files']) await expect(page.getByText(stat, { exact: true }).first()).toBeVisible()
+    await expect(page.getByRole('row').filter({ hasText: ADMIN_EMAIL })).toBeVisible()
   })
 
-  test('rotate temp password (first-login only) + destructive wipe', async () => {
-    const stamp = Date.now()
-    const email = `e2e-wipe-${stamp}@kutup.local`
-    const username = `e2ewipe${stamp}`
-
-    await gotoTab('Users')
-
-    // Create a user — stays in first-login state (never signs in).
-    await page.getByRole('button', { name: 'Create user' }).first().click()
-    const createDialog = page.getByRole('dialog')
-    await expect(createDialog).toBeVisible()
-    await createDialog.getByLabel('Email').fill(email)
-    await createDialog.getByLabel('Username').fill(username)
-    await createDialog.getByLabel('Temporary password').fill('TempPass-e2e-123')
-    await createDialog.getByRole('button', { name: 'Create user' }).click()
-    await expect(createDialog).toBeHidden({ timeout: 15_000 })
-
-    const search = page.getByPlaceholder(/Search by email/i)
-    await search.fill(email)
-    const row = page.locator('tr', { hasText: email }).first()
-    await expect(row).toBeVisible({ timeout: 15_000 })
-
-    // Rotate temp password — enabled because the account is first-login.
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Rotate temp password' }).click()
-    const rotateDialog = page.getByRole('dialog')
-    await expect(rotateDialog).toBeVisible()
-    await rotateDialog.locator('input').fill('Rotated-e2e-456')
-    await rotateDialog.getByRole('button', { name: 'Rotate password' }).click()
-    await expect(rotateDialog).toBeHidden({ timeout: 15_000 })
-
-    // The same action on the ESTABLISHED break-glass admin must be disabled.
-    await search.fill(ADMIN_EMAIL)
-    const adminRow = page.locator('tr', { hasText: ADMIN_EMAIL }).first()
-    await adminRow.getByRole('button', { name: 'Actions' }).click()
-    await expect(
-      page.getByRole('menuitem', { name: 'Rotate temp password' }),
-    ).toBeDisabled()
-    await page.keyboard.press('Escape')
-
-    // Destructive wipe — requires typing the email to arm the button.
-    await search.fill(email)
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Wipe account…' }).click()
-    const wipeDialog = page.getByRole('dialog')
-    await expect(wipeDialog).toBeVisible()
-    await wipeDialog.locator('input').first().fill('Wiped-e2e-789')
-    await expect(wipeDialog.getByRole('button', { name: 'Wipe account' })).toBeDisabled()
-    await wipeDialog.locator('input').nth(1).fill(email)
-    await wipeDialog.getByRole('button', { name: 'Wipe account' }).click()
-    await expect(wipeDialog).toBeHidden({ timeout: 15_000 })
-
-    // The account survives a wipe (reset to first-login, not deleted).
-    await expect(row).toBeVisible()
-
-    // Both actions appear in the audit feed.
-    await gotoTab('Overview')
-    const activityCard = page.getByTestId('admin-activity')
-    await expect(
-      activityCard.getByText(`rotated the temp password of ${email}`).first(),
-    ).toBeVisible({ timeout: 15_000 })
-    await expect(activityCard.getByText(`wiped ${email}`).first()).toBeVisible()
-
-    // Cleanup.
-    await gotoTab('Users')
-    await search.fill(email)
-    await row.getByRole('button', { name: 'Actions' }).click()
-    await page.getByRole('menuitem', { name: 'Delete permanently' }).click()
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click()
-    await expect(page.locator('tr', { hasText: email })).toHaveCount(0, { timeout: 15_000 })
+  test('the break-glass administrator cannot be disabled, demoted, wiped or deleted', async () => {
+    await openUser(ADMIN_EMAIL)
+    await expect(page.getByText('Break-glass admin').first()).toBeVisible()
+    for (const action of ['Disable account', 'Remove administrator', 'Wipe account', 'Delete account']) {
+      await expect(page.getByRole('button', { name: action, exact: true })).toBeDisabled()
+    }
   })
 
-  test('Settings → Storage card renders real formatted capacity', async () => {
-    await gotoTab('Settings')
-    await expect(page.getByText('Storage backend').first()).toBeVisible()
-    await expect(page.getByText('SeaweedFS · S3-compatible').first()).toBeVisible()
-    // The storage-used row: "<used> of <total> · <free> free" — unit-agnostic
-    // (the deterministic TB/PB check lives in frontend format.test.ts).
-    await expect(
-      page.getByText(/\d[\d.,]*\s(B|KB|MB|GB|TB|PB)\b.*\bfree\b/).first(),
-    ).toBeVisible()
+  test('an administrator can create, promote, demote and delete a user', async () => {
+    const email = await createUser('e2eadmin')
+    await openUser(email)
+    await page.getByRole('button', { name: 'Make administrator', exact: true }).click()
+    await confirm('Make administrator')
+    await expect(page.getByRole('button', { name: 'Remove administrator', exact: true })).toBeEnabled({ timeout: 15_000 })
+    await page.getByRole('button', { name: 'Remove administrator', exact: true }).click()
+    await confirm('Remove administrator')
+    await expect(page.getByRole('button', { name: 'Make administrator', exact: true })).toBeEnabled({ timeout: 15_000 })
+
+    await page.getByRole('button', { name: 'Delete account', exact: true }).click()
+    await confirm('Delete account', email)
+    await page.waitForURL(/\/admin\/users$/)
+    await page.getByPlaceholder('Search by email or username').fill(email)
+    await expect(page.getByRole('row').filter({ hasText: email })).toHaveCount(0)
+
+    await page.goto(appUrl('account', '/admin/activity'))
+    await expect(page.getByText(new RegExp(`created ${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/deleted/).first()).toBeVisible()
+  })
+
+  test('an account awaiting its first sign-in gets a new temporary password', async () => {
+    const email = await createUser('e2erotate')
+    await openUser(email)
+    await page.getByRole('button', { name: 'New temporary password', exact: true }).click()
+    await confirm('New temporary password')
+    await expect(page.getByRole('button', { name: 'Copy' }).first()).toBeVisible({ timeout: 15_000 })
+    await page.goto(appUrl('account', '/admin/activity'))
+    await expect(page.getByText(/replaced the temporary password of/).first()).toBeVisible({ timeout: 15_000 })
+
+    await openUser(email)
+    await page.getByRole('button', { name: 'Delete account', exact: true }).click()
+    await confirm('Delete account', email)
+    await page.waitForURL(/\/admin\/users$/)
+  })
+
+  test('wiping a locked-out account starts it over with a temporary password', async ({ browser }) => {
+    test.slow()
+    const person = newAccount('e2ewipe', 'Deneme123*WipedAccountPassword')
+    const own = await browser.newContext()
+    await registerAccount(own, person)
+    await own.close()
+
+    await openUser(person.email)
+    await page.getByRole('button', { name: 'Wipe account', exact: true }).click()
+    await confirm('Wipe account', person.email)
+    const copy = page.getByRole('button', { name: 'Copy' }).first()
+    await expect(copy).toBeVisible({ timeout: 15_000 })
+    const temporary = (await copy.locator('xpath=preceding-sibling::*[1]').textContent())?.trim()
+    expect(temporary).toBeTruthy()
+    await page.goto(appUrl('account', '/admin/activity'))
+    await expect(page.getByText(/wiped/).first()).toBeVisible({ timeout: 15_000 })
+
+    // The old password is gone; the temporary one leads to a fresh setup.
+    const fresh = await browser.newContext()
+    const signIn = await fresh.newPage()
+    for (const [password, outcome] of [
+      [person.password, 'failed'],
+      [temporary!, 'setup'],
+    ] as const) {
+      await signIn.goto(appUrl('account', '/login'))
+      await signIn.getByLabel('Email', { exact: true }).fill(person.email)
+      await signIn.getByLabel('Password', { exact: true }).fill(password)
+      await signIn.getByRole('button', { name: 'Sign in' }).click()
+      if (outcome === 'failed') await expect(signIn.getByRole('alert').filter({ hasText: 'Sign-in failed' })).toBeVisible({ timeout: 60_000 })
+      else await expect(signIn.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible({ timeout: 60_000 })
+    }
+    await fresh.close()
+
+    await openUser(person.email)
+    await page.getByRole('button', { name: 'Delete account', exact: true }).click()
+    await confirm('Delete account', person.email)
+    await page.waitForURL(/\/admin\/users$/)
+  })
+
+  test('server settings open for the administrator', async () => {
+    await page.goto(appUrl('account', '/admin/settings'))
+    await expect(page.getByRole('heading', { name: 'Server settings' })).toBeVisible()
+    await expect(page.getByText('Open registration').first()).toBeVisible()
   })
 })
