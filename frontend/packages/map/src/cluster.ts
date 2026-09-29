@@ -160,32 +160,3 @@ export function clusterPoints(points: readonly ClusterPoint[], view: Viewport, m
     })),
   }
 }
-
-/** Great-circle distance in kilometres. */
-export function distanceKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
-  const rad = Math.PI / 180
-  const dLat = (b.lat - a.lat) * rad
-  const dLon = (b.lon - a.lon) * rad
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2
-  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)))
-}
-
-/**
- * Where a map of photos opens, as Ente's does: among the ten newest points,
- * the one with the most others within 50 km seeds a group; the group is those
- * within 50 km of it. Returns that group (newest first), or [] for none.
- */
-export function recentGroup<T extends { lat: number; lon: number }>(newestFirst: readonly T[], sample = 10, radiusKm = 50): T[] {
-  const recent = newestFirst.slice(0, sample)
-  let seed: T | undefined
-  let best = 0
-  for (const candidate of recent) {
-    const near = recent.filter((other) => distanceKm(candidate, other) <= radiusKm).length
-    if (near > best) {
-      best = near
-      seed = candidate
-    }
-  }
-  if (!seed) return []
-  return recent.filter((p) => distanceKm(seed, p) <= radiusKm)
-}

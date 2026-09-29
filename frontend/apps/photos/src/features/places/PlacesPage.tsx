@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
-import { clusterPoints, recentGroup, type Cluster } from '@kutup/map/cluster'
+import { clusterPoints, type Cluster } from '@kutup/map/cluster'
 import { useMapConfig } from '@kutup/map/config'
 import { maplibregl, useKutupMap } from '@kutup/map/useKutupMap'
 import { appUrl } from '@kutup/session/apps'
@@ -89,9 +89,7 @@ export function PlacesPage() {
     [photos, marks.archived, marks.hidden],
   )
   const byId = useMemo(() => new Map(located.map((p) => [p.id, p])), [located])
-  // Where it opens: the group of your newest photos (Ente's rule).
-  const start = useMemo(() => recentGroup(located), [located])
-  const first = start[0]
+  const first = located[0]
   const { container, map, effective } = useKutupMap({ center: first ?? { lat: 20, lon: 0 }, zoom: first ? 11 : 1.5 })
   const [visible, setVisible] = useState<string[]>([])
   const markers = useRef(new Map<string, maplibregl.Marker>())
@@ -107,14 +105,15 @@ export function PlacesPage() {
     [setParams],
   )
 
-  // Frame the recent group once there is a map and something to show.
+  // Open on every place at once, after the whole library has loaded so a
+  // first page of photos does not decide the view.
   useEffect(() => {
-    if (!map || framed.current || start.length === 0) return
+    if (!map || framed.current || loading || located.length === 0) return
     framed.current = true
     const bounds = new maplibregl.LngLatBounds()
-    for (const p of start) bounds.extend([p.lon, p.lat])
+    for (const p of located) bounds.extend([p.lon, p.lat])
     map.fitBounds(bounds, { padding: 80, maxZoom: 14, duration: 0 })
-  }, [map, start])
+  }, [map, loading, located])
 
   // Group after every move, and draw the groups as picture markers.
   useEffect(() => {

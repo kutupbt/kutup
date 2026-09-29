@@ -212,8 +212,9 @@ A lock on Hidden (asking again for the password) is a later choice.
   zooms to fit it; a single photo opens the viewer.
 - **Panel:** the photos in view (a bottom sheet on phones), newest first, by
   day, updating as the map moves.
-- **Opening position:** Ente's rule (the biggest recent group); otherwise
-  the whole library fitted.
+- **Opening position:** every photo with a place fitted in view, once the
+  library has loaded (unlike Ente, which opens on the biggest recent group),
+  so no place is hidden until you zoom out.
 - **Which photos:** those with a place, minus archived and hidden. A photo's
   place comes only from its encrypted metadata; tiles are the only thing
   fetched, as for every map.

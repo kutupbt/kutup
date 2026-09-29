@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clusterPoints, distanceKm, recentGroup, type Viewport } from './cluster'
+import { clusterPoints, type Viewport } from './cluster'
 
 const istanbul = { lat: 41.0082, lon: 28.9784 }
 const view = (over: Partial<Viewport> = {}): Viewport => ({
@@ -59,25 +59,5 @@ describe('clusterPoints', () => {
     expect(visible).toEqual(['fiji', 'samoa'])
     expect(clusters).toHaveLength(1)
     expect(clusters[0].count).toBe(2)
-  })
-})
-
-describe('where a map opens', () => {
-  it('measures distance on the globe', () => {
-    expect(distanceKm(istanbul, { lat: 48.8584, lon: 2.2945 })).toBeGreaterThan(2200)
-    expect(distanceKm(istanbul, { lat: 48.8584, lon: 2.2945 })).toBeLessThan(2300)
-  })
-
-  it('picks the biggest group among the newest photos', () => {
-    const paris = { lat: 48.8584, lon: 2.2945 }
-    const newestFirst = [
-      { id: '1', ...paris },
-      { id: '2', ...istanbul },
-      { id: '3', lat: 41.05, lon: 29.03 },
-      { id: '4', lat: 41.02, lon: 28.95 },
-      { id: '5', lat: 35.6, lon: 139.7 },
-    ]
-    expect(recentGroup(newestFirst).map((p) => p.id)).toEqual(['2', '3', '4'])
-    expect(recentGroup([])).toEqual([])
   })
 })
