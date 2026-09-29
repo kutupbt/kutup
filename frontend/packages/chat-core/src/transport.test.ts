@@ -28,6 +28,38 @@ describe('ApiChatTransport', () => {
     expect(remove).toHaveBeenCalledWith('/chat/device/2')
   })
 
+  it('waits for a lagging ordering server before giving up on a quorum', async () => {
+    vi.useFakeTimers()
+    try {
+      const unavailable = new axios.AxiosError('quorum', '503', undefined, undefined, { status: 503 } as never)
+      const post = vi
+        .spyOn(api, 'post')
+        .mockRejectedValueOnce(unavailable)
+        .mockRejectedValueOnce(unavailable)
+        .mockResolvedValueOnce({ data: { votes: [] } } as never)
+      const votes = new ApiChatTransport().collectMlsOrderingVotes({ block: 1 })
+      await vi.advanceTimersByTimeAsync(9_000)
+      await expect(votes).resolves.toEqual({ votes: [] })
+      expect(post).toHaveBeenCalledTimes(3)
+
+      post.mockReset().mockRejectedValue(unavailable)
+      const refused = new ApiChatTransport().collectMlsOrderingVotes({ block: 2 })
+      const settled = expect(refused).rejects.toBe(unavailable)
+      await vi.advanceTimersByTimeAsync(9_000)
+      await settled
+      expect(post).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry votes the server refused for another reason', async () => {
+    const conflict = new axios.AxiosError('conflict', '409', undefined, undefined, { status: 409 } as never)
+    const post = vi.spyOn(api, 'post').mockRejectedValue(conflict)
+    await expect(new ApiChatTransport().collectMlsOrderingVotes({})).rejects.toBe(conflict)
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
   it('maps a successful send response to the engine outcome', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 2 } } as never)
     const transport = new ApiChatTransport()

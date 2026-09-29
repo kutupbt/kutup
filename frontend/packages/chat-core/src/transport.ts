@@ -16,6 +16,9 @@ import type {
 } from './types'
 
 /** Authenticated REST adapter consumed by the Rust engine. */
+/** Extra waits for an ordering quorum, after the API client's own retries. */
+const QUORUM_RETRY_DELAYS_MS = [3_000, 6_000]
+
 export class ApiChatTransport implements ChatTransportPort {
   async listDevices(): Promise<ChatDevice[]> {
     return api
@@ -193,10 +196,22 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
+  /**
+   * A quorum certificate for a control block. 503 means an ordering server
+   * declined to vote, usually because it is one block behind the others and
+   * still replicating it; the API client's short retry window is not always
+   * enough, so this waits a little longer before giving up.
+   */
   async collectMlsOrderingVotes(request: unknown): Promise<unknown> {
-    return api
-      .post('/chat/mls/control/votes', request)
-      .then((response) => response.data)
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return (await api.post('/chat/mls/control/votes', request)).data
+      } catch (error) {
+        const quorumUnavailable = axios.isAxiosError(error) && error.response?.status === 503
+        if (!quorumUnavailable || attempt >= QUORUM_RETRY_DELAYS_MS.length) throw error
+        await new Promise((resolve) => setTimeout(resolve, QUORUM_RETRY_DELAYS_MS[attempt]))
+      }
+    }
   }
 
   async commitMlsControlBlock(request: unknown): Promise<unknown> {
