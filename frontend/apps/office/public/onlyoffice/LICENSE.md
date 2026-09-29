@@ -1,8 +1,8 @@
-# Licensing note for `frontend/public/onlyoffice/`
+# Licensing note for `frontend/apps/office/public/onlyoffice/`
 
 Kutup is licensed under **AGPL-3.0-only** (see top-level
-[LICENSE](../../../LICENSE)). This subdirectory plus
-`frontend/src/components/editors/office/` form the integration with the
+[LICENSE](../../../../../LICENSE)). This subdirectory plus
+`frontend/apps/drive/src/features/editor/office/` form the integration with the
 [OnlyOffice client editor](https://github.com/kutupbt/onlyoffice-editor).
 Kutup-authored integration files carry `AGPL-3.0-or-later` SPDX headers where
 they link to the editor.

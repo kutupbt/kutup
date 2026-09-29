@@ -128,7 +128,7 @@ jobs:
       - name: Verify generated crypto WASM vectors
         run: pnpm -C frontend run test:crypto-wasm
       - name: Build production web app
-        run: pnpm -C frontend run build:web
+        run: pnpm -C frontend run build
 
   chat-backup-integration:
     name: Chat backup lifecycle (Postgres and SeaweedFS)

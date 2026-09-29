@@ -187,5 +187,5 @@ updates. Each fork's `KUTUP.md` says how to build and release.
 - [`docs/architecture.md`](architecture.md) — overall system & E2EE model.
 - [`docs/research/05-cryptpad-onlyoffice-integration.md`](research/05-cryptpad-onlyoffice-integration.md) — deep code-level analysis of CryptPad's integration (May 2026 snapshot).
 - [`docs/research/04-office-collab-engines.md`](research/04-office-collab-engines.md) — original engine-selection rationale.
-- [`frontend/src/components/editors/office/OfficeEditor.tsx`](../frontend/src/components/editors/office/OfficeEditor.tsx) — host-side React wrapper.
-- [`frontend/public/onlyoffice/inner.html`](../frontend/public/onlyoffice/inner.html) — postMessage bridge.
+- [`frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx`](../frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx) — host-side React wrapper.
+- [`frontend/apps/office/public/onlyoffice/inner.html`](../frontend/apps/office/public/onlyoffice/inner.html) — postMessage bridge.
