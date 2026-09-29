@@ -576,6 +576,17 @@ late. The cause is inside the vendored editor build
 (`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office
 editing spec (`tests/e2e/specs/03-office-editing.spec.ts`) exercises reloads.
 
+### Chat · MLS changes built on a stale epoch
+
+When an administrator or owner changes a group moments after another
+member's commit, before their own client has applied it, both ordering
+servers refuse the new block (the local one with 409, a stale height) and
+the client shows "Secure chat is temporarily unavailable". It should instead
+fetch the control history it is missing, rebuild the change on the current
+epoch, and retry. The browser gate
+(`tests/e2e/specs/32-chat-two-server-security.spec.ts`) waits for the peer's
+commit before acting, as a person usually would.
+
 ### Federation polish
 
 Cross-server presence indicators in collab, outgoing Drive-share revocation,

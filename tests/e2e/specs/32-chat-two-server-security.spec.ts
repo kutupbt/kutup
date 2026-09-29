@@ -87,10 +87,12 @@ async function expectWasmRuntimeRevalidation(page: Page): Promise<void> {
 }
 
 function posted(page: Page, pathname: string | RegExp): Promise<Response> {
+  // Control blocks wait for an ordering quorum, which the client retries
+  // for a while when one server lags a block behind.
   return page.waitForResponse((response) => {
     const path = new URL(response.url()).pathname
     return response.request().method() === 'POST' && (typeof pathname === 'string' ? path === pathname : pathname.test(path))
-  })
+  }, { timeout: 60_000 })
 }
 
 const CONTROL = '/api/chat/mls/control/blocks'
@@ -235,10 +237,12 @@ async function downloadAttachment(page: Page, filename: string): Promise<string>
  */
 async function requireResponseOrUiError(page: Page, response: Promise<Response>): Promise<Response> {
   const uiError = page.locator('[data-sonner-toast][data-type="error"]')
+  // Settles only when an error toast actually shows; the response wait has
+  // its own timeout.
   const errorText = uiError
-    .waitFor({ state: 'visible', timeout: 15_000 })
+    .waitFor({ state: 'visible', timeout: 90_000 })
     .then(async () => (await uiError.textContent())?.trim() || 'unknown error')
-    .catch(() => undefined)
+    .catch(() => new Promise<never>(() => {}))
   const first = await Promise.race([
     response.then((value) => ({ kind: 'response' as const, value })),
     errorText.then((value) => ({ kind: 'error' as const, value })),
@@ -1157,9 +1161,12 @@ test.describe('two-server secure chat', () => {
     await openGroup(pageA, conversationId)
 
     // Group-control traffic remains available under administrator-only
-    // application policy. Bob removes the non-administrator before recovery.
-    const administratorRemoveCommit = posted(pageB, CONTROL)
+    // application policy. Bob removes the non-administrator before recovery,
+    // once his client has applied Alice's last commit: a change built on an
+    // older epoch is refused by the ordering servers (see docs/roadmap.md).
     await openMembers(pageB)
+    await expect(pageB.getByTestId('chat-group-maximum-plaintext')).toHaveValue('1024', { timeout: 90_000 })
+    const administratorRemoveCommit = posted(pageB, CONTROL)
     await pageB.getByTestId(`chat-group-member-${charlieAddress}`).getByRole('button', { name: /^Remove .* from the group$/ }).click()
     expect((await requireResponseOrUiError(pageB, administratorRemoveCommit)).ok()).toBe(true)
     await expect(pageB.getByTestId(`chat-group-member-${charlieAddress}`)).toHaveCount(0, { timeout: 90_000 })

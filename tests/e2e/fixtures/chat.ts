@@ -43,19 +43,33 @@ export async function deviceId(page: Page): Promise<number> {
   return id
 }
 
+/**
+ * Waits until the open conversation is no longer `from`: each conversation
+ * mounts its own view, and until it does the previous one's composer is
+ * still on screen.
+ */
+async function conversationChanged(page: Page, from: string) {
+  await page.waitForURL((url) => url.href !== from && /\/c\/[^/]+$/.test(url.pathname), { timeout: 45_000 })
+}
+
 export async function openNoteToSelf(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'New chat' }).first().click()
   await page.getByRole('dialog').getByRole('button', { name: 'Note to Self' }).click()
+  // Only Note to Self carries this subtitle, so the previous conversation's
+  // composer cannot pass for it.
+  await expect(page.getByText('Private notes synced to your linked devices').first()).toBeVisible({ timeout: 60_000 })
   await expect(composer(page)).toBeVisible({ timeout: 60_000 })
 }
 
 /** Starts (or opens) a direct chat with `address`. */
 export async function openDirectChat(page: Page, address: string): Promise<void> {
   await page.getByRole('button', { name: 'New chat' }).first().click()
+  const from = page.url()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('textbox').fill(address)
   await dialog.getByRole('textbox').press('Enter')
-  await expect(composer(page)).toBeVisible({ timeout: 60_000 })
+  await page.waitForURL((url) => decodeURIComponent(url.href).includes(address), { timeout: 45_000 })
+  if (page.url() !== from) await expect(composer(page)).toBeVisible({ timeout: 60_000 })
 }
 
 export function composer(page: Page) {
@@ -85,8 +99,11 @@ export function message(page: Page, text: string) {
 /** Opens the existing conversation whose row names `peer`. */
 export async function openConversationWith(page: Page, peer: string): Promise<void> {
   await openChats(page)
-  await page.getByRole('region', { name: 'Conversations' }).getByRole('link', { name: new RegExp(`^${peer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().click()
-  await page.waitForURL(/\/c\/[^/]+$/, { timeout: 45_000 })
+  const from = page.url()
+  const row = page.getByRole('region', { name: 'Conversations' }).getByRole('link', { name: new RegExp(`^${peer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first()
+  const target = new URL(await row.getAttribute('href') ?? '', from).href
+  await row.click()
+  if (target !== from) await conversationChanged(page, from)
 }
 
 /** Accepts the open conversation's message request. */
