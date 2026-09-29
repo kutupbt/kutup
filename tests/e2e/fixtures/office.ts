@@ -1,4 +1,5 @@
-import { expect, type BrowserContext, type Frame, type Page } from '@playwright/test'
+import { expect, type Browser, type BrowserContext, type Frame, type Page } from '@playwright/test'
+import { newAccount, openDrive, registerAccount } from './apps'
 
 /**
  * ONLYOFFICE runs client-side in the office app's sandboxed origin, framed by
@@ -124,4 +125,29 @@ export async function typeAt(tab: OfficeTab, x: number, y: number, text: string)
   await tab.page.bringToFront()
   await tab.page.mouse.click(x, y)
   await tab.page.keyboard.type(text, { delay: 60 })
+}
+
+/** Where typing lands in a fresh file of each kind (a 1280×720 window). */
+export const WRITE_AT: Record<OfficeKind, { x: number; y: number; open?: 'dblclick' }> = {
+  Document: { x: 640, y: 300 },
+  Spreadsheet: { x: 162, y: 237 },
+  Presentation: { x: 760, y: 330, open: 'dblclick' },
+}
+
+/** Types into a fresh file where each kind takes text (a slide's title). */
+export async function write(tab: OfficeTab, kind: OfficeKind, text: string, at = WRITE_AT[kind]) {
+  await tab.page.bringToFront()
+  if (at.open === 'dblclick') await tab.page.mouse.dblclick(at.x, at.y)
+  else await tab.page.mouse.click(at.x, at.y)
+  await tab.page.keyboard.type(text, { delay: 60 })
+}
+
+/** A new account's new office file of `kind`, not yet opened. */
+export async function freshOfficeFile(browser: Browser, kind: OfficeKind, password: string) {
+  const context = await browser.newContext()
+  await registerAccount(context, newAccount(`off${kind.slice(0, 3).toLowerCase()}`, password))
+  const drive = await openDrive(context)
+  const url = await createOffice(drive, kind)
+  await drive.close()
+  return { context, url }
 }

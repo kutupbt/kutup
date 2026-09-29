@@ -1,34 +1,11 @@
 import { expect, test, type Browser } from '@playwright/test'
-import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
-import { createOffice, editorCanvases, openOffice, outboundChanges, reloadOffice, typeAt, type OfficeKind, type OfficeTab } from '../fixtures/office'
+import { editorCanvases, freshOfficeFile, openOffice, outboundChanges, reloadOffice, write, type OfficeKind } from '../fixtures/office'
 
 const PASSWORD = 'Deneme123*OfficeEditPassword'
 
-/** Where typing lands in a fresh file of each kind (a 1280×720 window). */
-const WRITE_AT: Record<OfficeKind, { x: number; y: number; open?: 'dblclick' }> = {
-  Document: { x: 640, y: 300 },
-  Spreadsheet: { x: 162, y: 237 },
-  Presentation: { x: 760, y: 330, open: 'dblclick' },
-}
-
 async function freshFile(browser: Browser, kind: OfficeKind) {
-  const context = await browser.newContext()
-  await registerAccount(context, newAccount(`off${kind.slice(0, 3).toLowerCase()}`, PASSWORD))
-  const drive = await openDrive(context)
-  const url = await createOffice(drive, kind)
-  await drive.close()
+  const { context, url } = await freshOfficeFile(browser, kind, PASSWORD)
   return { context, url, tab: await openOffice(context, url) }
-}
-
-async function write(tab: OfficeTab, kind: OfficeKind, text: string) {
-  const at = WRITE_AT[kind]
-  if (at.open === 'dblclick') {
-    await tab.page.bringToFront()
-    await tab.page.mouse.dblclick(at.x, at.y)
-    await tab.page.keyboard.type(text, { delay: 60 })
-  } else {
-    await typeAt(tab, at.x, at.y, text)
-  }
 }
 
 for (const kind of ['Document', 'Spreadsheet', 'Presentation'] as const) {
