@@ -2200,7 +2200,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled federation capabilities",
     );
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
-    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], false);
+    // Groups among local accounts outlive a closed federation: admission
+    // decides only which other servers members may come from.
+    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], true);
     let disabled_mls_status = json_response(
         c.get(format!("{a}/api/admin/chat/mls/status"))
             .bearer_auth(&admin_a)
@@ -2209,7 +2211,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled MLS administrative status",
     );
     assert_eq!(disabled_mls_status["enabled"], true);
-    assert_eq!(disabled_mls_status["advertised"], false);
+    assert_eq!(disabled_mls_status["advertised"], true);
     json_response(
         drive_remote_user(c, a, &alice_token),
         "Drive remains enabled while Chat is disabled",
