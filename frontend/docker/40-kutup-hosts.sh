@@ -41,9 +41,17 @@ server {
     return 404;
 }
 NGINX
+  office_origin=$(printf '%s' "$office" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
   for app in account drive chat maps photos; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
+    # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
+    # count as eval); in-tab viewers render decrypted PDFs and media from
+    # blob: URLs; Chat and collaboration use WebSockets. Drive alone may
+    # frame the office sandbox; nothing may frame an app.
+    frames="'self' blob:"
+    if [ "$app" = drive ]; then frames="$frames $office_origin"; fi
+    app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
     cat <<NGINX
 server {
     listen 80;
@@ -51,6 +59,8 @@ server {
     root /usr/share/nginx/html/$app;
     index index.html;
     add_header X-Content-Type-Options nosniff always;
+    add_header Content-Security-Policy "$app_csp" always;
+    add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy same-origin always;
 
     # wasm-bindgen emits stable filenames: revalidate so a deployment never
@@ -59,6 +69,8 @@ server {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "$app_csp" always;
+        add_header X-Frame-Options SAMEORIGIN always;
     }
 
     # Vite's content-hashed bundles.
@@ -66,12 +78,16 @@ server {
         try_files \$uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "$app_csp" always;
+        add_header X-Frame-Options SAMEORIGIN always;
     }
 
     location / {
         try_files \$uri \$uri/ /index.html;
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "$app_csp" always;
+        add_header X-Frame-Options SAMEORIGIN always;
         add_header Referrer-Policy same-origin always;
     }
 }
