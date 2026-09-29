@@ -82,6 +82,10 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
+      # This server's canonical external address (docs/self-hosting.md). In
+      # production it must be HTTPS; it also anchors the server identity that
+      # Chat groups need.
+      SERVER_URL: ${SERVER_URL:-}
       # Where each web app lives (https://<app>.<KUTUP_BASE_DOMAIN>, or the
       # explicit URLs); the frontend container serves the same hostnames.
       KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}

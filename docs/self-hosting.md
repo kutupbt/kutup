@@ -55,7 +55,8 @@ SERVER_URL=https://kutup.example.com
 # If federation is enabled, it must match FEDERATION_SERVER_NAME.
 CHAT_SERVER_NAME=kutup.example.com
 
-# Unified federation v2 identity used by both Chat and Drive:
+# Unified federation v2 identity used by both Chat and Drive. Optional: a
+# server without it makes and keeps its own (see "SERVER_URL" below).
 #   openssl rand -base64 32
 # FEDERATION_SERVER_NAME=kutup.example.com
 # FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
@@ -103,8 +104,9 @@ CHAT_WEB_PUSH=true
 # CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
 # CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
 
-# Private MLS groups are advertised only when both authenticated values are
-# complete and Chat is enabled by the shared federation policy.
+# Private MLS groups work without configuration: the server orders them with
+# a control key it makes and the standard v1 policy. Set both values only to
+# publish a custom policy.
 # CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
 # CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
 
@@ -353,9 +355,24 @@ move the new seed into `FEDERATION_SIGNING_KEY`, remove
 seed does not authorize replacement; remote peers will quarantine a competing
 history and require an explicitly confirmed break-glass re-pin.
 
-Federation is unavailable until both generic identity variables are set. Back
-up the signing seed: losing it does not authorize silent replacement, and
-remote servers will quarantine a conflicting history.
+Without these variables the server makes its own identity on first start:
+it is named after `CHAT_SERVER_NAME`, anchored at `SERVER_URL` (which must be
+canonical HTTPS in production), and its seed is kept in the database table
+`server_generated_keys`, so database backups carry it. Chat groups need this
+identity even when every member is local, because clients verify each
+ordering server's signed policy history; it admits no other server by itself.
+Once a server has an identity it never makes another: to manage the seed
+yourself (for rotation, say), copy it into the environment unchanged,
+
+```sh
+docker compose exec -T postgres psql -U kutup -d kutup -Atc \
+  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federation-identity'"
+```
+
+and set it as `FEDERATION_SIGNING_KEY` with `FEDERATION_SERVER_NAME` equal to
+`CHAT_SERVER_NAME`. Back up the signing seed either way: losing it does not
+authorize silent replacement, and remote servers will quarantine a conflicting
+history.
 
 After configuring the identity, manage the unified control plane in **Admin →
 Settings → Federation**. It has an emergency global stop and a feature-scoped

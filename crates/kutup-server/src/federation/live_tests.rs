@@ -514,6 +514,7 @@ fn runtime_config(
         signing_key,
         next_signing_key,
         allow_private_test_network: false,
+        generated: false,
     }
 }
 

@@ -285,7 +285,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     } else {
         None
     };
-    let mls_groups = crate::chat_mls::policy::advertised_policy(&state, federation_enabled)
+    let mls_groups = crate::chat_mls::policy::advertised_policy(&state)
         .await?
         .is_some();
     let chat_storage_default_quota_bytes: u64 = sqlx::query_scalar::<_, String>(

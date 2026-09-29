@@ -7,11 +7,13 @@ remains a later suite upgrade after the relevant IETF work and interoperable
 library support stabilize.
 
 Private MLS groups are **advertised and enabled** when the server has a
-federation-identity-authenticated MLS ordering policy and the administrator has
-publicly enabled Chat in the shared federation control plane. The same
-fail-closed gate drives `/api/auth/settings` and the administrative MLS status;
-disabling Chat withdraws the browser capability without deleting durable group
-state. Note to Self and 1:1 Chat use libsignal and have no MLS fallback.
+federation-identity-authenticated MLS ordering policy. A server with no
+federation or MLS settings has one: it makes its own identity and control key
+(kept in `server_generated_keys`) and publishes the standard v1 policy, so
+groups among its own accounts work out of the box. The same fail-closed gate
+drives `/api/auth/settings` and the administrative MLS status. Federation
+admission does not withdraw groups: it decides which other servers members may
+come from, and the signed transport enforces it on every remote call. Note to Self and 1:1 Chat use libsignal and have no MLS fallback.
 
 Protocol types, durable storage, authenticated federation routes, OpenMLS
 client state, WASM bindings, anonymous delivery, authority catch-up,

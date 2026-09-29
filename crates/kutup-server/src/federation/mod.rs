@@ -54,8 +54,23 @@ impl FederationStack {
         config: &Config,
         now: OffsetDateTime,
     ) -> anyhow::Result<Option<Self>> {
-        let Some(config) = FederationRuntimeConfig::from_server_config(config)? else {
-            return Ok(None);
+        let config = match FederationRuntimeConfig::from_server_config(config)? {
+            Some(configured) => configured,
+            None => {
+                let Some((server_name, api_base)) =
+                    FederationRuntimeConfig::generated_identity(config)?
+                else {
+                    return Ok(None);
+                };
+                let mut seed = crate::server_keys::load_or_create(
+                    &pool,
+                    crate::server_keys::GeneratedKey::FederationIdentity,
+                )
+                .await?;
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+                seed.fill(0);
+                FederationRuntimeConfig::with_generated_key(server_name, api_base, signing_key)
+            }
         };
         config.ensure_normal_startup()?;
         let local_identity =

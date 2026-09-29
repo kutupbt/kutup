@@ -1345,6 +1345,25 @@ fn ordering_policy_requires_production_group_capacity() {
 }
 
 #[test]
+fn standard_ordering_policy_is_the_valid_v1_default() {
+    let (authority, _) = authority("orderer.example", 42);
+    let policy = MlsOrderingServicePolicyV1::standard(
+        "orderer.example",
+        &authority.key_id,
+        &authority.public_key,
+    );
+    policy.validate().unwrap();
+    assert!(policy.accepts_group_ordering);
+    assert_eq!(policy.canonical_domain, "orderer.example");
+    assert_eq!(policy.control_signing_key_id, authority.key_id);
+    let bytes = policy.canonical_bytes().unwrap();
+    assert_eq!(
+        MlsOrderingServicePolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        policy
+    );
+}
+
+#[test]
 fn private_control_and_client_history_have_stable_canonical_vectors() {
     let (authorities, _) = authority_set(1);
     let owner_key = ed25519_dalek::SigningKey::from_bytes(&[44; 32]);

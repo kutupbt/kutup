@@ -35,6 +35,7 @@ mod openapi;
 mod photos;
 mod ratelimit;
 mod sealed_sender_service;
+mod server_keys;
 mod sessions;
 mod site_settings;
 mod ssrf;
@@ -165,7 +166,9 @@ async fn main() -> anyhow::Result<()> {
         &config,
         time::OffsetDateTime::now_utc(),
     )?;
-    let mls_ordering = chat_mls::MlsOrderingService::from_config(&config)?.map(Arc::new);
+    let mls_ordering = chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
+        .await?
+        .map(Arc::new);
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
             .feature_policies()

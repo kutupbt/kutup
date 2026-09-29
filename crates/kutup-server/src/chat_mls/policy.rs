@@ -22,22 +22,47 @@ pub(crate) struct MlsOrderingService {
 }
 
 impl MlsOrderingService {
-    pub(crate) fn from_config(config: &Config) -> anyhow::Result<Option<Self>> {
+    /// The server's ordering service. Configured policy and key
+    /// (`CHAT_MLS_ORDERING_POLICY`, `CHAT_MLS_CONTROL_SIGNING_KEY`) take
+    /// precedence; without them a server with an identity orders groups with
+    /// its own generated control key and the standard v1 policy.
+    pub(crate) async fn load(
+        pool: &sqlx::PgPool,
+        config: &Config,
+        federation: Option<&crate::federation::FederationStack>,
+    ) -> anyhow::Result<Option<Self>> {
         let has_policy = !config.chat_mls_ordering_policy.trim().is_empty();
         let has_key = !config.chat_mls_control_signing_key.trim().is_empty();
-        if !has_policy && !has_key {
+        let Some(federation) = federation else {
+            if has_policy || has_key {
+                anyhow::bail!("MLS ordering requires a server identity (federation)");
+            }
             return Ok(None);
-        }
-        if !has_policy || !has_key || config.federation_server_name.is_empty() {
-            anyhow::bail!(
-                "MLS ordering requires federation, a complete policy, and a control signing key"
+        };
+        if !has_policy && !has_key {
+            let mut seed = crate::server_keys::load_or_create(
+                pool,
+                crate::server_keys::GeneratedKey::MlsControl,
+            )
+            .await?;
+            let signer = Ed25519MlsControlSigner::new(ed25519_dalek::SigningKey::from_bytes(&seed));
+            seed.fill(0);
+            let policy = MlsOrderingServicePolicyV1::standard(
+                federation.server_name(),
+                &signer.key_id(),
+                &signer.public_key(),
             );
+            policy.validate().map_err(anyhow::Error::msg)?;
+            return Ok(Some(Self { policy, signer }));
+        }
+        if !has_policy || !has_key {
+            anyhow::bail!("MLS ordering requires both a complete policy and a control signing key");
         }
         let policy = MlsOrderingServicePolicyV1::from_canonical_bytes(
             config.chat_mls_ordering_policy.as_bytes(),
         )
         .map_err(anyhow::Error::msg)?;
-        if policy.canonical_domain != config.federation_server_name {
+        if policy.canonical_domain != federation.server_name() {
             anyhow::bail!("MLS ordering policy domain does not match federation identity");
         }
         let seed = decode_canonical_base64_config(
@@ -98,17 +123,15 @@ pub(super) async fn active_policy(state: &AppState) -> AppResult<MlsOrderingServ
     Ok(policy)
 }
 
-/// Return the authenticated local MLS policy only while the shared federation
-/// control plane publicly enables Chat. This is the single activation gate
-/// used by both the public browser capability and administrative status.
+/// The authenticated local MLS policy when this server orders groups. This
+/// is the single activation gate for the browser capability and the
+/// administrative status. Federation admission does not switch groups off:
+/// it decides only which other servers members may come from, and the
+/// signed transport enforces it on every remote call.
 pub(crate) async fn advertised_policy(
     state: &AppState,
-    chat_publicly_enabled: bool,
 ) -> AppResult<Option<MlsOrderingServicePolicyV1>> {
-    if !chat_publicly_enabled || state.mls_ordering.is_none() {
-        return Ok(None);
-    }
-    if state.federation.is_none() {
+    if state.mls_ordering.is_none() || state.federation.is_none() {
         return Ok(None);
     }
     Ok(Some(active_policy(state).await?))
