@@ -25,7 +25,7 @@ What makes it different from "encrypted Dropbox" clones is the second word in th
 Self-hosted by design. One authenticated federation stack carries encrypted Drive shares and Chat between Kutup servers without giving either backend the protected plaintext.
 
 > **Release status:** Kutup is pre-production and has not published its first
-> stable `v*` or `desktop-v*` release. The implementation and test gates are
+> stable `v*` release. The implementation and test gates are
 > production-oriented, but operators should review the remaining release
 > blockers in [`docs/roadmap.md`](docs/roadmap.md) before serving real users.
 

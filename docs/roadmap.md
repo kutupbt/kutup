@@ -1,7 +1,7 @@
 # Production-readiness roadmap
 
 Kutup is **pre-production**: there is no public release yet (until the first
-`v*` / `desktop-v*` git tag). This document is the canonical list of everything
+`v*` git tag). This document is the canonical list of everything
 between today and "ready to tag v1".
 
 It is the bridge between `docs/` (current state, authoritative) and
@@ -80,15 +80,14 @@ The exact third-party ownership boundary is
 
 ### Signed builds
 
-Desktop release builds are currently unsigned. macOS Gatekeeper and Windows
-SmartScreen treat unsigned `.dmg` / `.msi` as untrusted; non-technical users
-see scary warnings.
+Release builds are currently unsigned. The CLI archives carry checksums only,
+and a future desktop app will need macOS notarization and Windows
+Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 
 | What's needed | Where |
 |---|---|
 | Apple Developer ID for macOS signing + notarization | external — requires Apple Developer Program ($99/yr) |
 | Microsoft Authenticode certificate for Windows | external — DigiCert / Sectigo (~$300/yr) |
-| `.github/workflows/release-desktop.yml` — accept signing secrets, run `codesign` (mac) + `signtool` (win) | repo |
 | Native iOS signing, TestFlight/App Store Connect, entitlements, and opaque production icons | external + sibling `kutup-ios` repository |
 | Native Android upload key, Play App Signing/Console, and release metadata | external + sibling `kutup-android` repository |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
@@ -157,11 +156,6 @@ platform lifecycle, secure storage, complete Direct/MLS/media/backup parity,
 packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
-
-The Tauri shell's retained mobile targets are experimental. In that path iOS
-Keychain works, while Android still lacks a keyring backend and re-authenticates
-after restart. Work on that wrapper must not be reported as completion of the
-dedicated native apps.
 
 ### Responsive web · mobile selection mode
 
@@ -579,7 +573,6 @@ implemented; these are product-lifecycle improvements above it.
 
 ### Test coverage gaps
 
-- Tauri session-persistence — no E2E test today
 - Browser-level Drive federation UI coverage (the isolated two-server server
   harness already covers the complete Drive and Chat transport lifecycle)
 - Responsive web has an automated phone/desktop axe and state-transition gate;
@@ -589,13 +582,12 @@ implemented; these are product-lifecycle improvements above it.
 
 `docs/research/perf-baseline-2026-05-06.md` is a single point. Continuous benchmarking (or even a manual quarterly pass) would catch regressions.
 
-### Tauri shell · real OnlyOffice / Office docs
+### Desktop app
 
-Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on
-`tauri::generate_context!()` (the ~2.6GB SDK gets embedded as a static byte
-array). The same applies to mobile. Loading the SDK from
-`${serverUrl}/onlyoffice/…` so the shell streams it from the user's server
-remains separate Tauri work.
+There is no desktop app for now. The Tauri shell, its desktop release
+workflow and the `desktop-v*` tags were removed with the multi-app web
+rewrite (it expected the old single app). Desktop returns after the Android
+and iOS apps, built against the per-app origins.
 
 ### Responsive web · federation share-with from sheet
 

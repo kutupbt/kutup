@@ -288,10 +288,7 @@ kutup/
 │   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
 │   ├── public/onlyoffice/   # Bridge source; verified assets overlay during Docker builds
 │   └── vite.config.ts       # Dev server proxy config
-├── src-tauri/                # Tauri desktop shell; experimental mobile targets remain available
-│   ├── src/lib.rs           # Plugin setup + OS-keychain vault commands (vault_set/get/delete)
-│   ├── tauri.conf.json      # Bundle id (dev.kutup.client), mainBinaryName (kutup-client), targets, scopes
-│   └── capabilities/        # Tauri permission capabilities (default.json + desktop.json)
+├── brand/                    # Logo sources (kutup-mark.svg/.png); see TRADEMARK.md
 ├── nginx/nginx.conf          # Production Nginx config
 ├── docs/                     # Start at docs/README.md
 ├── tests/e2e/                # Single- and two-server Playwright gates

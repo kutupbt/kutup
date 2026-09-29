@@ -296,6 +296,9 @@ the local dev stack):
      office sandbox's CSP; the federation compose runs one per server
      (`<app>.a.test`, `<app>.b.test`), and a cross-server Drive share was
      checked in a browser against it.
+   - (done 2026-09-29) `src-tauri/`, the desktop release workflow and the
+     root Tauri `package.json` are removed; the logo sources moved to
+     `brand/`.
 
 **Known gaps (to go to `docs/roadmap.md` in phase 5)**
 

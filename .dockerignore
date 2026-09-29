@@ -15,7 +15,6 @@ frontend/apps/office/public/onlyoffice/FILES.sha512
 frontend/apps/office/public/onlyoffice/SBOM.spdx.json
 frontend/apps/office/public/onlyoffice/SOURCE.json
 frontend/tsconfig.tsbuildinfo
-src-tauri/
 backend/
 cmd/
 nginx/

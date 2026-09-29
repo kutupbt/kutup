@@ -258,10 +258,7 @@ impl Config {
             admin_account: get_env("ADMIN_ACCOUNT", ""),
             break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
-            allowed_origins: get_env(
-                "ALLOWED_ORIGINS",
-                "https://localhost:38443,tauri://localhost,http://tauri.localhost",
-            ),
+            allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),

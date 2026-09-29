@@ -13,9 +13,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the workspace manifests + sources. src-tauri is excluded from the workspace and not
-# needed here. BuildKit caches Cargo downloads and compiled artifacts independently from
-# this source layer so an application-only change does not rebuild the whole dependency graph.
+# Copy the workspace manifests + sources. BuildKit caches Cargo downloads and compiled
+# artifacts independently from this source layer so an application-only change does not
+# rebuild the whole dependency graph.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 

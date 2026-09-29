@@ -11,11 +11,10 @@ Collectively referred to in this document as the **"kutup Marks"**:
 - The name **"Kutup"** and the organization name **"kutupbulut"**, in
   any capitalization or stylization.
 - The **three-diamond mark** in any rendering — including the inline
-  SVG in `frontend/src/components/KutupLogo.tsx`, the source SVG at
-  `src-tauri/icons/source.svg`, and the platform-specific icon set
-  rendered from it (the desktop `.icns` / `.ico` / `.png` files in
-  `src-tauri/icons/`, the iOS `AppIcon.appiconset`, the Android
-  `mipmap-*` assets, and the Windows `Square*Logo.png` tiles).
+  SVG in `frontend/packages/ui/src/components/brand.tsx`, the source SVG at
+  `brand/kutup-mark.svg` (with its `brand/kutup-mark.png` rendering), and
+  the platform-specific icon sets rendered from it (the iOS
+  `AppIcon.appiconset` and the Android `mipmap-*` assets).
 - Any wordmark, logotype, or composite mark that combines the name
   with the three-diamond mark.
 - Any future logo artwork, wordmarks, or brand assets committed to

@@ -21,11 +21,8 @@ frontend/apps/office/public/onlyoffice/FILES.sha512
 test-results/
 tests/e2e/sanitized-results/
 
-# Root package.json (Tauri orchestrator). Rust artifacts live under
-# src-tauri/.gitignore.
 node_modules/
 package-lock.json
 
 # Rust workspace (Go→Rust rewrite: crates/ + root Cargo workspace).
-# src-tauri keeps its own target dir via src-tauri/.gitignore.
 /target/
