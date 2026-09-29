@@ -26,23 +26,30 @@ interface Located extends Photo {
 
 /** A marker: the newest photo of its group, with how many there are. */
 function markerElement(label: string, count: number): { root: HTMLButtonElement; image: HTMLImageElement } {
+  // MapLibre positions the root with an inline `transform`, and CSS applies
+  // `scale` on top of `transform`, so scaling the root would scale its map
+  // offset too and throw the marker off its place. The hover grow lives on
+  // an inner box instead.
   const root = document.createElement('button')
   root.type = 'button'
-  root.className =
-    'relative block size-14 cursor-pointer overflow-hidden rounded-lg border-2 border-white bg-muted shadow-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  root.className = 'group block cursor-pointer rounded-lg focus-visible:outline-none'
   root.setAttribute('aria-label', label)
+  const box = document.createElement('span')
+  box.className =
+    'relative block size-14 overflow-hidden rounded-lg border-2 border-white bg-muted shadow-md transition-transform group-hover:scale-110 group-focus-visible:ring-2 group-focus-visible:ring-ring'
   const image = document.createElement('img')
   image.alt = ''
   image.draggable = false
   image.className = 'size-full object-cover'
-  root.append(image)
+  box.append(image)
   if (count > 1) {
     const badge = document.createElement('span')
     badge.className =
       'absolute right-0.5 top-0.5 min-w-5 rounded-full bg-primary px-1 text-center text-[11px] font-semibold leading-5 text-primary-foreground'
     badge.textContent = count > 999 ? '999+' : String(count)
-    root.append(badge)
+    box.append(badge)
   }
+  root.append(box)
   return { root, image }
 }
 
