@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { dataTransferToFolderEntries } from '@kutup/files/upload/uploadFolder'
-import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Breadcrumb, type Crumb } from '@kutup/ui/components/breadcrumb'
@@ -25,6 +24,7 @@ import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
 import { isWithin } from '../drive/copy'
 import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '../drive/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
+import { useRestore } from '@kutup/drive-core/trash'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
@@ -120,6 +120,14 @@ export function FolderPage() {
   const files = useFolderFiles(folder)
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
+  // The page stays mounted from folder to folder: a selection belongs to the
+  // folder it was made in.
+  const place = `${params.id ?? ''}/${params.shareId ?? ''}`
+  const [selectionPlace, setSelectionPlace] = useState(place)
+  if (selectionPlace !== place) {
+    setSelectionPlace(place)
+    setSelection(new Set())
+  }
   const [dialog, setDialog] = useState<Dialog>(null)
   const [dragging, setDragging] = useState(false)
   // An item is being dragged: the path stays on screen as a drop target.
@@ -200,6 +208,7 @@ export function FolderPage() {
     [lookup, navigate],
   )
 
+  const restore = useRestore()
   const moveToTrash = useCallback(
     async (targets: Target[]) => {
       let moved = 0
@@ -227,16 +236,13 @@ export function FolderPage() {
             ? {
                 label: t('drive.undo'),
                 onClick: () => {
-                  void Promise.all(undoable.map((id) => api.post(`/trash/${id}/restore`)))
-                    .then(() => folders.refetch())
-                    .then(() => files.refetch())
-                    .catch(() => toast.error(t('drive.undoFailed')))
+                  void Promise.all(undoable.map((id) => restore.mutateAsync(id))).catch(() => toast.error(t('drive.undoFailed')))
                 },
               }
             : undefined,
       })
     },
-    [trashFile, trashFolder, t, folders, files],
+    [trashFile, trashFolder, restore, t],
   )
 
   /** One file as itself; a folder, or several items, as a ZIP. */

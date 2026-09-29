@@ -13,6 +13,7 @@ import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import { peopleKey } from './people'
 import { foldersKey } from './folders'
+import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
 import { rekeyFile } from './rekey'
@@ -30,6 +31,8 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: foldersKey }),
         queryClient.invalidateQueries({ queryKey: ['files'] }),
+        // Moving to trash (or anything that empties a folder) changes the trash.
+        queryClient.invalidateQueries({ queryKey: trashKey }),
         // Files shared with this account by themselves (fileShares.sharedFilesKey).
         queryClient.invalidateQueries({ queryKey: ['shared-files'] }),
         queryClient.invalidateQueries({ queryKey: ['folder-access'] }),
