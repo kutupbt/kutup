@@ -21,6 +21,7 @@ import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { liveMarkdown } from './liveMarkdown'
 import { noteFolding } from './folding'
+import { pasteMarkdown } from './pasteMarkdown'
 import { livePreview, refreshLivePreview, type LivePreviewConfig } from './livePreview'
 import OutlinePanel from './outline/OutlinePanel'
 import NoteContextMenu from './NoteContextMenu'
@@ -496,6 +497,8 @@ export default function TextCollabEditor({
         labels: { noAccess: t('editor.links.noAccess'), task: t('editor.menu.task') },
       })
 
+      let plainPaste = false
+
       // The right-click menu's Insert → Picture and its Paste put pictures at the cursor.
       picturesRef.current = (files) => {
         const v = viewRef.current
@@ -569,8 +572,22 @@ export default function TextCollabEditor({
         ...(markdownNote && !readOnly ? [autocompletion({ override: [linkPicker({ items: whenItems })], icons: false })] : []),
         // Pasted or dropped pictures go into the note, stored inside it.
         ...(markdownNote && !readOnly ? [EditorView.domEventHandlers({
+          // Ctrl/Cmd+Shift+V: the next paste stays plain text.
+          keydown(event) {
+            if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
+              plainPaste = true
+              setTimeout(() => (plainPaste = false), 1000)
+            }
+            return false
+          },
           paste(event, v) {
-            return takeImages(v, [...(event.clipboardData?.files ?? [])], v.state.selection.main.head, event)
+            if (takeImages(v, [...(event.clipboardData?.files ?? [])], v.state.selection.main.head, event)) return true
+            // Rich text as Markdown; a URL over selected text as a link.
+            const plain = plainPaste
+            plainPaste = false
+            const handled = pasteMarkdown(v, event.clipboardData?.getData('text/plain') ?? '', event.clipboardData?.getData('text/html') ?? '', plain)
+            if (handled) event.preventDefault()
+            return handled
           },
           drop(event, v) {
             const at = v.posAtCoords({ x: event.clientX, y: event.clientY }) ?? v.state.selection.main.head

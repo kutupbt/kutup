@@ -18,6 +18,7 @@ import {
   ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger,
 } from '@kutup/ui/components/context-menu'
 import { INSERTS, insertBlock, insertLink, setLineStyle, toggleWrap, type LineStyle } from './markdownCommands'
+import { pasteMarkdown } from './pasteMarkdown'
 
 const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? '⌘' : 'Ctrl+'
 
@@ -71,14 +72,24 @@ export default function NoteContextMenu({
   const paste = (plain: boolean) =>
     on(async (v) => {
       try {
-        if (!plain && onPictures && navigator.clipboard.read) {
+        if (!plain && markdown && navigator.clipboard.read) {
           const items = await navigator.clipboard.read()
           const pictures: File[] = []
+          let html = ''
+          let rich = ''
           for (const item of items) {
             const type = item.types.find((ty) => ty.startsWith('image/'))
             if (type) pictures.push(new File([await item.getType(type)], `pasted.${type.split('/')[1]}`, { type }))
+            if (item.types.includes('text/html')) html = await (await item.getType('text/html')).text()
+            if (item.types.includes('text/plain')) rich = await (await item.getType('text/plain')).text()
           }
-          if (pictures.length) return onPictures(pictures)
+          if (pictures.length && onPictures) return onPictures(pictures)
+          // Rich text as Markdown; a URL over selected text as a link.
+          if (pasteMarkdown(v, rich, html, false)) return
+          if (rich) {
+            v.dispatch(v.state.replaceSelection(rich), { userEvent: 'input.paste', scrollIntoView: true })
+            return
+          }
         }
         const text = await navigator.clipboard.readText()
         if (text) v.dispatch(v.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true })
