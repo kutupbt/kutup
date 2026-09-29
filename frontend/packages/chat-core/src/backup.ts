@@ -1331,19 +1331,21 @@ function applyRecords(
 
     // mutationSequence is local to the device that emitted the segment. It is
     // therefore validated independently for every (record, source-device)
-    // chain. A first post-compaction mutation may continue the sequence stored
-    // in the base; a new independent chain must begin at one. A device may
-    // also start its chain by deleting a record it learned from another
-    // device (both prune the same superseded control, or remove the same
-    // deleted-for-me message): its tombstone continues the sequence it saw,
-    // which another device's tombstone may already have passed. A tombstone
-    // only ever removes, and always wins the reduction below.
+    // chain: within a chain each mutation follows the previous one. A chain's
+    // first mutation either begins at one or continues a sequence the device
+    // had seen of the record. That sequence may be the current one (a first
+    // post-compaction mutation continues the base) or an earlier one: two of
+    // an account's devices that change the same record from the same state
+    // (both apply a group closing, both prune the same superseded control)
+    // each continue it, so the second chain starts at or below the first's
+    // latest mutation. The reduction below settles such concurrent chains
+    // deterministically; a tombstone only ever removes, and always wins it.
     const sourceSequences = sources.get(record.recordId) ?? new Map<number, number>()
     const previousSourceSequence = sourceSequences.get(sourceDeviceId)
     const validSequence = previousSourceSequence === undefined
       ? record.mutationSequence === 1
         || (current !== undefined
-          && record.mutationSequence === current.mutationSequence + 1)
+          && record.mutationSequence <= current.mutationSequence + 1)
         || (current !== undefined && record.tombstone)
       : record.mutationSequence === previousSourceSequence + 1
     if (!validSequence) {

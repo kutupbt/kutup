@@ -331,6 +331,41 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(await restored.restoredHistoryAsync()).toHaveLength(0)
   })
 
+  it('accepts two devices changing the same record from the same state', async () => {
+    // Both of an account's devices apply the same change (a group closing,
+    // an edit synced to both): each continues the sequence it saw, so the
+    // second device's first mutation repeats the first device's number.
+    const transport = new ScriptedTransport()
+    const sourceDatabase = `backup-concurrent-source:${crypto.randomUUID()}`
+    const restoredDatabase = `backup-concurrent-restored:${crypto.randomUUID()}`
+    databaseNames.push(sourceDatabase, restoredDatabase)
+    let history = [historyEntry()]
+    const source = await open(transport, sourceDatabase, async () => history)
+    await source.settled()
+    const edited = historyEntry()
+    history = [{ ...edited, content: { ...edited.content, body: { text: 'edited' }, text: 'edited' } }]
+    await source.flushNow()
+    await source.settled()
+    source.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(source), 1)
+    expect(transport.appendRequests).toHaveLength(2)
+
+    const change = transport.appendRequests[1]
+    await transport.appendSegment({
+      ...structuredClone(change),
+      operationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      sourceDeviceId: 10,
+      deviceSequence: 1,
+      previousSegmentDigest: zeroDigest,
+    })
+
+    const restored = await open(transport, restoredDatabase, async () => [])
+    await restored.settled()
+    const restoredHistory = await restored.restoredHistoryAsync()
+    expect(restoredHistory).toHaveLength(1)
+    expect(restoredHistory[0].content.text).toBe('edited')
+  })
+
   it('waits for routine compaction when only superseded controls were removed', async () => {
     const transport = new ScriptedTransport()
     const database = `backup-control-prune:${crypto.randomUUID()}`

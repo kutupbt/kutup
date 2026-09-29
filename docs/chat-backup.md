@@ -152,11 +152,16 @@ receipt, or advance a mailbox cursor. New and overlapping live messages
 deduplicate against stable backup record IDs. Deletes and expiry tombstones are
 irreversible in reduction, so an older edit, reaction, or message cannot
 resurrect removed content. Each record's mutation sequence is checked per
-device chain: a chain starts at one or continues the sequence already seen,
-and may also start with a tombstone at any sequence, because two devices of
-the account can remove the same record (a delete-for-me, a superseded
-conversation-state or read-position control) without seeing each other's
-tombstone first.
+device chain: within a chain every mutation follows the previous one. A chain
+starts at one, or continues a sequence its device had seen of the record: at
+most one past the latest reduced mutation, and possibly equal to or below it,
+because two devices of the account can change the same record from the same
+state (both apply a group closing, both prune the same superseded control)
+without seeing each other's change first. A chain may also start with a
+tombstone at any sequence, for the same reason (a delete-for-me, a superseded
+conversation-state or read-position control). Concurrent chains reduce
+deterministically: a tombstone wins, then the highest mutation, then a
+confirmed delivery, then a canonical order.
 
 ## Protected media
 
