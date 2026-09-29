@@ -68,3 +68,33 @@ export async function renameItem(page: Page, name: string, to: string) {
 export function driveUrl(path = '/') {
   return appUrl('drive', path)
 }
+
+/** Opens a note's editor at `url` and waits until it is live. */
+export async function openNote(context: import('@playwright/test').BrowserContext, url: string): Promise<Page> {
+  const page = await context.newPage()
+  await page.goto(url)
+  await noteLive(page)
+  return page
+}
+
+/** The note editor is connected and its document loaded. */
+export async function noteLive(page: Page) {
+  await expect(page.locator('.cm-content')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('status').filter({ hasText: 'Live' })).toBeVisible({ timeout: 60_000 })
+}
+
+/**
+ * The note as drawn. Live preview hides Markdown marks (a heading's `#`)
+ * away from the cursor, so compare words, not marks.
+ */
+export async function noteText(page: Page): Promise<string> {
+  return page.locator('.cm-content').innerText()
+}
+
+/** Types at the end of a note, as a person would. */
+export async function typeAtEnd(page: Page, text: string) {
+  await page.bringToFront()
+  await page.locator('.cm-content').click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(text, { delay: 20 })
+}
