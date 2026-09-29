@@ -14,6 +14,9 @@ export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
 export JWT_SECRET="backup-integration-jwt-secret-at-least-32-bytes"
+# A production server must know where its web apps live; this test only
+# talks to the API, so any domain will do.
+export KUTUP_BASE_DOMAIN="${KUTUP_BASE_DOMAIN:-backup.test}"
 
 compose() {
   docker compose \
