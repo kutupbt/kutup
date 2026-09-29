@@ -90,11 +90,13 @@ export function StorageSettings() {
   const quota = usage?.quotaBytes ?? storage?.totalQuotaBytes ?? 0
   const retention = capabilities?.backup?.deliveryMediaRetentionDays
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
-  const labelOf = (reference: string) =>
-    reference === self!.address
-      ? t('chat.noteToSelf')
-      : (profiles.get(reference)?.displayName ??
-        (snapshot.groups.some((g) => g.request.genesis.conversationId === reference) ? groupTitle(reference, t) : reference))
+  const labelOf = (reference: string) => {
+    if (reference === self!.address) return t('chat.noteToSelf')
+    const profile = profiles.get(reference)?.displayName
+    if (profile) return profile
+    const group = snapshot.groups.find((g) => g.request.genesis.conversationId === reference)
+    return group ? groupTitle(reference, t, group.currentGroupInfo) : reference
+  }
 
   return (
     <SettingsSection

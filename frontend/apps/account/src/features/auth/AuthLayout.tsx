@@ -35,7 +35,7 @@ export function AuthLayout({
         <LocaleToggle onChrome={false} />
         <ThemeToggle onChrome={false} />
       </div>
-      <div className={width === 'md' ? 'flex w-full max-w-lg flex-col gap-6' : 'flex w-full max-w-sm flex-col gap-6'}>
+      <main className={width === 'md' ? 'flex w-full max-w-lg flex-col gap-6' : 'flex w-full max-w-sm flex-col gap-6'}>
         <div className="flex items-center justify-center gap-3">
           <KutupLogo size={40} />
           <span className="font-display text-[28px] font-semibold tracking-[0.12em]">Kutup</span>
@@ -49,7 +49,7 @@ export function AuthLayout({
           </CardHeader>
           <CardContent>{children}</CardContent>
         </Card>
-      </div>
+      </main>
     </div>
   )
 }
