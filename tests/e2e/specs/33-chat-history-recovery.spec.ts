@@ -1,91 +1,9 @@
-import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test'
+import { expect, test, type Page, type Request } from '@playwright/test'
+import { newAccount, registerAccount, signIn } from '../fixtures/apps'
+import { backupCursor, bubble, openChat, openNoteToSelf, send, waitForProtection } from '../fixtures/chat'
 import { recordSafeCheckpoint } from '../safe-diagnostics'
 
 const PASSWORD = 'Deneme123*ContinuousBackupPassword'
-
-async function captureMnemonic(page: Page): Promise<string> {
-  const allText = await page.evaluate(() => document.body.innerText)
-  const seen = new Map<number, string>()
-  for (const match of allText.matchAll(/(?:^|\s)(\d{1,2})[.)]\s*([a-z]+)\b/gim)) {
-    const index = Number(match[1])
-    if (index >= 1 && index <= 24 && !seen.has(index)) seen.set(index, match[2])
-  }
-  const words = Array.from({ length: 24 }, (_, index) => seen.get(index + 1))
-  if (words.some(word => !word)) throw new Error('failed to capture recovery mnemonic')
-  return words.join(' ')
-}
-
-async function register(
-  context: BrowserContext,
-  email: string,
-  username: string,
-): Promise<string> {
-  const page = await context.newPage()
-  await page.goto('/register')
-  await page.locator('input[type=email]').fill(email)
-  await page.getByLabel(/username/i).fill(username)
-  const passwords = page.locator('input[type=password]')
-  await passwords.nth(0).fill(PASSWORD)
-  await passwords.nth(1).fill(PASSWORD)
-  await page.locator('button[type=submit]').click()
-  await expect(page.getByText(/once/i).first()).toBeVisible({ timeout: 30_000 })
-  const mnemonic = await captureMnemonic(page)
-  await page.getByRole('button', { name: /saved/i }).click()
-  await page.locator('textarea').fill(mnemonic)
-  await page.locator('button[type=submit]').click()
-  await expect(page.getByRole('button', { name: /sign ?in/i })).toBeVisible({ timeout: 30_000 })
-  await page.close()
-  return mnemonic
-}
-
-async function login(context: BrowserContext, email: string): Promise<Page> {
-  const page = await context.newPage()
-  await page.goto('/login')
-  await page.locator('input[type=email]').fill(email)
-  await page.locator('input[type=password]').fill(PASSWORD)
-  await page.locator('button[type=submit]').click()
-  await page.waitForURL(/\/drive/, { timeout: 30_000 })
-  return page
-}
-
-async function openChat(page: Page): Promise<void> {
-  await page.goto('/chat')
-  await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-  await expect(page.getByTestId('chat-device-status')).toHaveAttribute(
-    'data-device-id',
-    /^\d+$/,
-    { timeout: 90_000 },
-  )
-}
-
-async function openNoteToSelf(page: Page): Promise<void> {
-  await page.getByRole('complementary').getByText('Note to Self', { exact: true }).click()
-}
-
-async function backupCursor(page: Page): Promise<number> {
-  await page.getByTestId('chat-devices-button').click()
-  const status = page.getByTestId('chat-backup-state')
-  await expect(status).toHaveAttribute('data-current-cursor', /^\d+$/, { timeout: 45_000 })
-  const cursor = Number(await status.getAttribute('data-current-cursor'))
-  await page.keyboard.press('Escape')
-  return cursor
-}
-
-async function waitForProtection(page: Page, afterCursor: number): Promise<string> {
-  await page.getByTestId('chat-devices-button').click()
-  const status = page.getByTestId('chat-backup-state')
-  await expect(status).toHaveText('Protected', { timeout: 45_000 })
-  await expect.poll(async () => Number(await status.getAttribute('data-current-cursor')), {
-    timeout: 45_000,
-    intervals: [250, 500, 1_000, 2_000],
-  }).toBeGreaterThan(afterCursor)
-  const latest = page.getByTestId('chat-backup-latest-protected')
-  await expect(latest).not.toContainText(/waiting/i, { timeout: 45_000 })
-  const text = (await latest.textContent())?.trim() ?? ''
-  expect(text).not.toBe('')
-  await page.keyboard.press('Escape')
-  return text
-}
 
 async function sendNoteAttachment(
   page: Page,
@@ -103,7 +21,7 @@ async function sendNoteAttachment(
     mimeType: 'text/plain',
     buffer: Buffer.from(plaintext, 'utf8'),
   })
-  await expect(page.getByText(filename, { exact: true })).toBeVisible({ timeout: 45_000 })
+  await expect(bubble(page, filename).getByText(filename, { exact: true })).toBeVisible({ timeout: 45_000 })
   await protectedCopy
 }
 
@@ -117,32 +35,24 @@ function restorationSideEffect(request: Request): string | undefined {
   return undefined
 }
 
-test('a clean browser automatically restores server-protected Chat history', async ({
-  browser,
-  baseURL,
-}) => {
+test('a clean browser automatically restores server-protected Chat history', async ({ browser }) => {
   test.slow()
-  if (!baseURL) throw new Error('base URL is required')
   const run = `${Date.now().toString(36)}-${process.pid.toString(36)}`
-  const username = `user-${run}`.slice(0, 32)
-  const email = `user-${run}@kutup.dev`
-  const sourceContext = await browser.newContext({ baseURL })
+  const account = newAccount('user', PASSWORD)
+  const sourceContext = await browser.newContext()
   recordSafeCheckpoint('single-history-recovery', 'source-context-created')
 
   // The phrase deliberately remains only in this Playwright process. The
   // clean-browser recovery path below signs in normally and copies no state.
-  const recoveryPhrase = await register(sourceContext, email, username)
+  const recoveryPhrase = await registerAccount(sourceContext, account)
   expect(recoveryPhrase.split(' ')).toHaveLength(24)
-  const source = await login(sourceContext, email)
-  await openChat(source)
+  const source = await openChat(sourceContext)
   await openNoteToSelf(source)
 
   const cursorBeforeMessage = await backupCursor(source)
   const message = `protected-before-browser-loss-${run}`
-  const input = source.getByRole('main').getByRole('textbox')
-  await input.fill(message)
-  await input.press('Enter')
-  await expect(source.getByRole('main').getByText(message, { exact: true })).toBeVisible()
+  await send(source, message)
+  await expect(bubble(source, message)).toBeVisible()
   const protectedAt = await waitForProtection(source, cursorBeforeMessage)
   recordSafeCheckpoint('single-history-recovery', 'source-history-protected', { records: 1 })
 
@@ -150,19 +60,17 @@ test('a clean browser automatically restores server-protected Chat history', asy
   // new context with no cookies, sessions, Cache API, local storage, or IDB.
   await sourceContext.close()
   recordSafeCheckpoint('single-history-recovery', 'source-browser-lost', { records: 1 })
-  const restoredContext = await browser.newContext({ baseURL })
+  const restoredContext = await browser.newContext()
   const forbiddenActivity: string[] = []
   restoredContext.on('request', request => {
     const activity = restorationSideEffect(request)
     if (activity) forbiddenActivity.push(activity)
   })
 
-  const restored = await login(restoredContext, email)
-  await openChat(restored)
+  await signIn(restoredContext, account)
+  const restored = await openChat(restoredContext)
   await openNoteToSelf(restored)
-  await expect(restored.getByRole('main').getByText(message, { exact: true })).toBeVisible({
-    timeout: 45_000,
-  })
+  await expect(bubble(restored, message)).toBeVisible({ timeout: 45_000 })
   recordSafeCheckpoint('single-history-recovery', 'clean-browser-restored', { records: 1 })
   expect(forbiddenActivity, 'restore must not acknowledge mailbox rows or use device transfer')
     .toEqual([])
@@ -174,44 +82,33 @@ test('a clean browser automatically restores server-protected Chat history', asy
   expect(protectedAt).not.toMatch(/waiting/i)
 
   await restored.reload()
-  await expect(restored.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-  await openNoteToSelf(restored)
-  await expect(restored.getByRole('main').getByText(message, { exact: true })).toBeVisible()
+  await expect(bubble(restored, message)).toBeVisible({ timeout: 90_000 })
 
-  await restored.getByTestId('chat-reply-button').click()
+  await bubble(restored, message).hover()
+  await bubble(restored, message).getByTestId('chat-reply-button').click()
   await expect(restored.getByTestId('chat-reply-composer')).toContainText(message)
   const reply = `reply-to-restored-history-${run}`
-  const replyInput = restored.getByRole('main').getByRole('textbox')
-  await replyInput.fill(reply)
-  await replyInput.press('Enter')
-  await expect(restored.getByRole('main').getByText(reply, { exact: true })).toBeVisible()
+  await send(restored, reply)
+  await expect(bubble(restored, reply)).toBeVisible()
   await expect(restored.getByTestId('chat-reply-context')).toContainText(message)
   await waitForProtection(restored, restoredCursor)
 
   await restored.reload()
-  await expect(restored.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-  await openNoteToSelf(restored)
-  await expect(restored.getByRole('main').getByText(reply, { exact: true })).toBeVisible()
+  await expect(bubble(restored, reply)).toBeVisible({ timeout: 90_000 })
   await expect(restored.getByTestId('chat-reply-context')).toContainText(message)
   await restoredContext.close()
   recordSafeCheckpoint('single-history-recovery', 'reload-and-reply-persisted', { records: 2 })
 })
 
-test('protected media restores lazily and presents an unavailable state without partial import', async ({
-  browser,
-  baseURL,
-}) => {
+test('protected media restores lazily and presents an unavailable state without partial import', async ({ browser }) => {
   test.slow()
-  if (!baseURL) throw new Error('base URL is required')
   const run = `${Date.now().toString(36)}-${process.pid.toString(36)}`
-  const username = `media-${run}`.slice(0, 32)
-  const email = `media-${run}@kutup.dev`
+  const account = newAccount('media', PASSWORD)
   const filename = `protected-media-${run}.txt`
-  const sourceContext = await browser.newContext({ baseURL })
+  const sourceContext = await browser.newContext()
   recordSafeCheckpoint('single-media-recovery', 'source-context-created')
-  await register(sourceContext, email, username)
-  const source = await login(sourceContext, email)
-  await openChat(source)
+  await registerAccount(sourceContext, account)
+  const source = await openChat(sourceContext)
   await openNoteToSelf(source)
   const cursorBeforeMedia = await backupCursor(source)
   await sendNoteAttachment(source, filename, `protected media ${run}`)
@@ -219,7 +116,7 @@ test('protected media restores lazily and presents an unavailable state without 
   recordSafeCheckpoint('single-media-recovery', 'source-media-protected', { media: 1 })
   await sourceContext.close()
 
-  const restoredContext = await browser.newContext({ baseURL })
+  const restoredContext = await browser.newContext()
   const mediaGets: string[] = []
   restoredContext.on('request', request => {
     const path = new URL(request.url()).pathname
@@ -231,10 +128,10 @@ test('protected media restores lazily and presents an unavailable state without 
   // Simulate expiry of the ordinary 45-day delivery copy. The independent
   // protected-history copy must still be usable after clean-browser restore.
   await restoredContext.route('**/api/chat/media/objects/*', route => route.fulfill({ status: 404 }))
-  const restored = await login(restoredContext, email)
-  await openChat(restored)
+  await signIn(restoredContext, account)
+  const restored = await openChat(restoredContext)
   await openNoteToSelf(restored)
-  await expect(restored.getByText(filename, { exact: true })).toBeVisible({ timeout: 45_000 })
+  await expect(bubble(restored, filename).getByText(filename, { exact: true })).toBeVisible({ timeout: 45_000 })
   recordSafeCheckpoint('single-media-recovery', 'media-metadata-restored', { media: 1 })
   expect(mediaGets, 'restoring history must not eagerly download protected media').toEqual([])
 
@@ -267,7 +164,7 @@ test('protected media restores lazily and presents an unavailable state without 
   )
   await restored.getByRole('button', { name: `Download ${filename} into Kutup` }).click()
   await expect(restored.locator('[data-sonner-toast][data-type="error"]')).toContainText(
-    'Encrypted attachment download failed',
+    'The encrypted attachment could not be downloaded.',
     { timeout: 45_000 },
   )
   const attachmentMessage = restored.getByTestId('chat-message').filter({ hasText: filename })

@@ -33,6 +33,19 @@ wait_url() {
   done
 }
 
+wait_url_host() {
+  local url="$1"
+  local host="$2"
+  local deadline=$((SECONDS + 60))
+  until curl --fail --silent --show-error --header "Host: $host" "$url" >/dev/null; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for $host" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 ensure_node_toolchain() {
   if command -v npm >/dev/null 2>&1; then
     return
@@ -124,16 +137,18 @@ echo "CHAT MEDIA DESTINATION METADATA PRIVACY VERIFIED"
 if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
   ensure_node_toolchain
   # The API may be healthy while nginx is still reconnecting its separate
-  # frontend upstream after the deliberate edge/backend restart above.
-  wait_url "http://127.0.0.1:$port_a/register"
-  wait_url "http://127.0.0.1:$port_b/register"
+  # frontend upstream after the deliberate edge/backend restart above. The
+  # edges route by host name; the browser maps *.a.test and *.b.test here.
+  wait_url_host "http://127.0.0.1:$port_a/register" "account.a.test:$port_a"
+  wait_url_host "http://127.0.0.1:$port_b/register" "account.b.test:$port_b"
   (
     cd "$root_dir/tests/e2e"
-    E2E_BASE_URL="http://127.0.0.1:$port_a" \
-    E2E_SECONDARY_BASE_URL="http://127.0.0.1:$port_b" \
-    E2E_ADMIN_EMAIL="federation-admin-a@example.test" \
-    E2E_ADMIN_PASSWORD="federation-live-password" \
-    E2E_BOOTSTRAP_PASSWORD="federation-admin-temp" \
+    E2E_APP_ORIGIN="http://{app}.a.test:$port_a" \
+    E2E_SECONDARY_APP_ORIGIN="http://{app}.b.test:$port_b" \
+    E2E_API_URL="http://127.0.0.1:$port_a" \
+    E2E_SECONDARY_API_URL="http://127.0.0.1:$port_b" \
+    E2E_DOMAIN="a.test" \
+    E2E_SECONDARY_DOMAIN="b.test" \
     KUTUP_E2E_SAFE_ARTIFACTS="${KUTUP_E2E_SAFE_ARTIFACTS:-0}" \
     KUTUP_E2E_DIAGNOSTICS_DIR="${KUTUP_E2E_DIAGNOSTICS_DIR:-}" \
       npm exec -- playwright test \
