@@ -565,6 +565,17 @@ What it needs, found while starting it:
   do. Also still to come:
 shared files in Drive search.
 
+### Office · editor start-up race on reload
+
+On roughly one warm reload in four, ONLYOFFICE's own editor frame loads its
+scripts but never reports `onAppReady`, so `api.js` never sends it its
+configuration and the loading skeleton stays. The bridge
+(`frontend/apps/office/public/onlyoffice/inner.html`) recovers by mounting the
+editor again after 7 seconds, at most twice, so the document opens, but
+late. The cause is inside the vendored editor build
+(`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office
+editing spec (`tests/e2e/specs/03-office-editing.spec.ts`) exercises reloads.
+
 ### Federation polish
 
 Cross-server presence indicators in collab, outgoing Drive-share revocation,

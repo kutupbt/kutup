@@ -653,11 +653,40 @@
           }
         }
 
+        // ONLYOFFICE's own frame sometimes never receives its configuration
+        // from api.js (a race in its frame handshake, seen on warm reloads):
+        // its app loads but never creates the editor or reports onAppReady,
+        // and the loading skeleton stays. Mount again, a bounded number of
+        // times, when that happens.
+        var ooAppReady = false
+        var APP_READY_TIMEOUT_MS = 7000
+        var MAX_REMOUNTS = 2
+        var remounts = 0
+        var watchAppReady = function (cfg) {
+          setTimeout(function () {
+            if (ooAppReady) return
+            if (remounts >= MAX_REMOUNTS) {
+              console.error('[kutup-bridge] editor did not start after ' + (remounts + 1) + ' mounts')
+              fail('openFailed', 'onAppReady timeout')
+              return
+            }
+            remounts += 1
+            console.warn('[kutup-bridge] editor did not report ready; mounting again (' + remounts + ')')
+            try {
+              if (docEditor && typeof docEditor.destroyEditor === 'function') docEditor.destroyEditor()
+            } catch (err) {
+              console.warn('[kutup-bridge] destroyEditor failed', err)
+            }
+            startEditor(cfg)
+          }, APP_READY_TIMEOUT_MS)
+        }
+
         var startEditor = function (cfg) {
           if (!window.DocsAPI || typeof window.DocsAPI.DocEditor !== 'function') {
             throw new Error('window.DocsAPI.DocEditor not found after api.js load')
           }
           docEditor = new window.DocsAPI.DocEditor('placeholder', cfg)
+          watchAppReady(cfg)
           // The CryptPad-fork's connectMockServer assigns its callbacks onto
           // window.APP (CryptPad's global state container) — e.g.
           // `window.APP.getImageURL = e.getImageURL ? ... : ...`. Without a
@@ -740,6 +769,8 @@
         }
 
         var pendingInitPayload = null
+        // Drive's 'init' arrived (it stops the repeated 'ready').
+        var initReceived = false
         var maybeStart = function () {
           if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
           // Bind OO identity from (selfUserId, selfDeviceId). Must happen
@@ -882,6 +913,7 @@
                     },
                     events: {
                       onAppReady: function () {
+                        ooAppReady = true
                         setStatus('editor: app ready')
                         // Apply kutup's editor-chrome rules (the legal
                         // notice lives in Kutup's header, not here).
@@ -1000,6 +1032,12 @@
               send(e.source, { type: 'pong' })
               return
             case 'init':
+              initReceived = true
+              if (ooConfigBuilt) {
+                // A repeated 'ready' can draw a second 'init': started already.
+                send(e.source, { type: 'init-ack' })
+                return
+              }
               // Stash the payload; actual start happens once selfDeviceId
               // arrives via 'oo-self' (myOOId/myUniqueOOId derive from it).
               pendingInitPayload = msg.payload || {}
@@ -1491,7 +1529,23 @@
         }, true)
 
         if (PARENT_ORIGIN) {
-          send(window.parent, { type: 'ready', docType: docType })
+          // Announce until Drive answers with 'init'. One message can go
+          // unheard: Drive re-subscribes its listener as its props change and
+          // may remount this frame, and a lost 'ready' left the editor on its
+          // loading skeleton for good (seen on reloads).
+          var announceReady = function () {
+            send(window.parent, { type: 'ready', docType: docType })
+          }
+          announceReady()
+          var readyAttempts = 0
+          var readyTimer = setInterval(function () {
+            readyAttempts += 1
+            if (initReceived || readyAttempts >= 40) {
+              clearInterval(readyTimer)
+              return
+            }
+            announceReady()
+          }, 250)
         } else {
           setStatus('not embedded by Kutup Drive')
         }
