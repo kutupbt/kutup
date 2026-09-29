@@ -200,7 +200,7 @@ jobs:
             https://account.localhost:38443/register >/dev/null
       - name: Run clean-browser recovery
         working-directory: tests/e2e
-        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts --project=chromium
+        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts specs/36-chat-local-groups.spec.ts --project=chromium
       - name: Collect sanitized backup diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single
