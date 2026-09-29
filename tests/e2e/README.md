@@ -150,13 +150,13 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - `fixtures/chat.ts`: Chat helpers (open, settings, conversations, messages,
   reactions, edits, groups, attachments, backup state).
 - `fixtures/auth.ts`: the old single-app bootstrap/login helpers, still used
-  by the specs listed below as not yet ported.
+  by specs 01–24 and 26–30 until they are ported.
 - `fixtures/stack.ts`: destructive fresh-stack fixture for isolated specs.
 - spec 25: resumable encrypted tus upload into Drive.
 - specs 01–24 and 26–30: onboarding, collaboration, office, whiteboard,
   download, admin, sharing, and trash regressions. They still target the old
   single-origin app and are being ported to the per-app hostnames.
-- spec 31 (not yet ported): local Chat, linked-device transcripts, Note to Self, active
+- spec 31: local Chat, linked-device transcripts, Note to Self, active
   installation review/rename/revoke, immutable numeric routing IDs, and
   durable IndexedDB reload.
 - spec 32: two-server Direct/MLS, governance, anonymous media, linked device,
@@ -164,4 +164,6 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 33: single-server automatic clean-browser Chat backup recovery and
   focused protected/unavailable media.
 - spec 34: complete two-server browser-loss recovery matrix.
-- spec 35: responsive-state and serious/critical axe gate (not yet ported).
+- spec 35: every app's sign-in and signed-in views at phone and desktop
+  widths, both themes: one `main`, no page overflow, no serious/critical axe
+  findings.
