@@ -81,22 +81,64 @@ export async function registerAccount(context: BrowserContext, account: Account)
   await page.goto(appUrl('account', '/register', account.server))
   await page.getByLabel('Email', { exact: true }).fill(account.email)
   await page.getByLabel('Username', { exact: true }).fill(account.username)
-  await page.getByLabel('New password', { exact: true }).fill(account.password)
-  await page.getByLabel('Repeat password', { exact: true }).fill(account.password)
+  const phrase = await finishNewKeys(page, account.password)
+  await page.close()
+  return phrase
+}
+
+/**
+ * The key wizard shared by registration and an admin-created account's
+ * first sign-in: a new password, the recovery phrase shown once, and its
+ * confirmation. Ends on the launcher with the session saved; returns the
+ * phrase, which stays in this process only.
+ */
+export async function finishNewKeys(page: Page, password: string): Promise<string> {
+  await page.getByLabel('New password', { exact: true }).fill(password)
+  await page.getByLabel('Repeat password', { exact: true }).fill(password)
   await submitThroughRateLimit(page, 'Continue', page.getByRole('heading', { name: 'Your recovery phrase' }))
-  const words = await page.locator('ol li span:last-child').allTextContents()
-  if (words.length !== 24 || words.some((word) => !/^[a-z]+$/.test(word.trim()))) {
+  const words = (await page.locator('ol li span:last-child').allTextContents()).map((word) => word.trim())
+  if (words.length !== 24 || words.some((word) => !/^[a-z]+$/.test(word))) {
     throw new Error(`failed to capture the recovery phrase (${words.length} words)`)
   }
   await page.getByRole('button', { name: 'I have saved my recovery phrase' }).click()
   for (const label of await page.locator('label').allTextContents()) {
     const n = Number(label.match(/Word (\d+)/)?.[1])
-    if (n) await page.getByLabel(`Word ${n}`, { exact: true }).fill(words[n - 1].trim())
+    if (n) await page.getByLabel(`Word ${n}`, { exact: true }).fill(words[n - 1])
   }
   await submitThroughRateLimit(page, 'Confirm and continue', page.getByRole('heading', { name: /Welcome/ }))
   await sessionSaved(page)
+  return words.join(' ')
+}
+
+/**
+ * The isolated test stack's break-glass administrator
+ * (tests/e2e/docker-compose.isolated.yml). Its first sign-in uses the
+ * bootstrap password and sets ADMIN_PASSWORD through the key wizard.
+ */
+export const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? 'admin@kutup.dev'
+const ADMIN_BOOTSTRAP_PASSWORD = process.env.E2E_BOOTSTRAP_PASSWORD ?? 'Bootstrap*Temporary123'
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*AdminLongPassword'
+
+/** Signs the context in as the administrator, finishing its setup once. */
+export async function signInAsAdmin(context: BrowserContext): Promise<void> {
+  const page = await context.newPage()
+  for (const password of [ADMIN_PASSWORD, ADMIN_BOOTSTRAP_PASSWORD]) {
+    await page.goto(appUrl('account', '/login'))
+    await page.getByLabel('Email', { exact: true }).fill(ADMIN_EMAIL)
+    await page.getByLabel('Password', { exact: true }).fill(password)
+    const welcome = page.getByRole('heading', { name: /Welcome/ })
+    const setup = page.getByRole('heading', { name: 'Finish setting up your account' })
+    const failed = page.getByRole('alert').filter({ hasText: 'Sign-in failed' })
+    await submitThroughRateLimit(page, 'Sign in', welcome.or(setup).or(failed).first())
+    if (await welcome.isVisible()) break
+    if (await setup.isVisible()) {
+      await finishNewKeys(page, ADMIN_PASSWORD)
+      break
+    }
+    if (password === ADMIN_BOOTSTRAP_PASSWORD) throw new Error('the test administrator cannot sign in')
+  }
+  await sessionSaved(page)
   await page.close()
-  return words.map((word) => word.trim()).join(' ')
 }
 
 /** Signs in through the account app; the context's apps then fork from it. */

@@ -21,3 +21,6 @@ services:
       RATE_LIMIT_REGISTER_PER_HOUR: 1000
       RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000
       RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
+      # The break-glass administrator for admin specs (fixtures/apps.ts,
+      # signInAsAdmin); its first sign-in replaces this temporary password.
+      ADMIN_ACCOUNT: admin@kutup.dev:admin:Bootstrap*Temporary123
