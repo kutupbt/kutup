@@ -4,7 +4,8 @@ import { resolveApiBase } from '@kutup/session/apiBase'
 import api from '@kutup/session/client'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
-import { uploadOne } from '../uploads/useUploadActions'
+import { uploadCreating } from '../uploads/useUploadActions'
+import { copyEmbedded, embeddingKind } from './embedded'
 import { sealedAt } from '@kutup/drive-core/keyring'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
@@ -74,7 +75,12 @@ export async function copyFile(
   progress: (sent: number, total: number) => void,
 ): Promise<void> {
   const blob = await readFile(source.folder, source.file, signal)
-  await uploadOne(dest, new File([blob], name, { type: source.file.mimeType }), signal, progress, source.file.media ?? undefined)
+  const created = await uploadCreating(dest, new File([blob], name, { type: source.file.mimeType }), signal, progress, source.file.media ?? undefined)
+  // A note's or whiteboard's pictures are its own: sealed anew for the copy.
+  if (embeddingKind(source.file.name)) {
+    signal.throwIfAborted()
+    await copyEmbedded(source, await blob.text(), dest, created)
+  }
 }
 
 /** Files (not folders) under `folder`, all levels — for progress totals. */

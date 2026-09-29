@@ -13,6 +13,7 @@ describe('base64', () => {
     for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + 7) & 0xff
     const encoded = toBase64(bytes)
     expect(encoded.length).toBe(Math.ceil(bytes.length / 3) * 4)
-    expect(fromBase64(encoded)).toEqual(bytes)
+    // Compared as one buffer: a deep compare of a million elements is slow.
+    expect(Buffer.from(fromBase64(encoded)).equals(Buffer.from(bytes))).toBe(true)
   })
 })

@@ -14,6 +14,7 @@ import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { folderLocation, type Folder } from '@kutup/drive-core/model'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
+import type { CreatedFile } from '../drive/embedded'
 import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
 import { uploads } from '@kutup/drive-ui/uploadStore'
 
@@ -23,7 +24,14 @@ import { uploads } from '@kutup/drive-ui/uploadStore'
  * a time into a Blob (which the browser may keep on disk), never whole in
  * memory.
  */
-async function uploadRemote(folder: Folder, shareId: string, file: File, media: MediaMetadataV1 | undefined, signal: AbortSignal, progress: (s: number, t: number) => void) {
+async function uploadRemote(
+  folder: Folder,
+  shareId: string,
+  file: File,
+  media: MediaMetadataV1 | undefined,
+  signal: AbortSignal,
+  progress: (s: number, t: number) => void,
+): Promise<CreatedFile> {
   if (!folder.key) throw new Error('folder is not open')
   const metadata: FileMetadataV1 = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
   if (media) metadata.media = media
@@ -50,6 +58,7 @@ async function uploadRemote(folder: Folder, shareId: string, file: File, media: 
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
   })
+  return { fileId: record.fileId, fileKey: record.fileKey, keyGeneration: record.keyGeneration }
 }
 
 /**
@@ -82,6 +91,26 @@ export async function uploadOne(
     media: details,
   })
   thumbnailAfterUpload(uploaded, file)
+  return uploaded
+}
+
+/**
+ * As `uploadOne`, for a copy: the new file's id and key wherever it went
+ * (here, or a folder on another server), so what belongs to it (its
+ * pictures) can be sealed for it too.
+ */
+export async function uploadCreating(
+  folder: Folder,
+  file: File,
+  signal: AbortSignal,
+  progress: (s: number, t: number) => void,
+  media: MediaMetadataV1 | undefined,
+): Promise<CreatedFile> {
+  if (!folder.key) throw new Error('folder is not open')
+  const location = folderLocation(folder)
+  if (location.kind === 'remote') return uploadRemote(folder, location.shareId, file, media, signal, progress)
+  const uploaded = await uploadOne(folder, file, signal, progress, media)
+  if (!uploaded) throw new Error('upload made no file')
   return uploaded
 }
 

@@ -459,8 +459,7 @@
       "unavailable": "Image unavailable",
       "tooLarge": "Images up to {{limit}} can be added.",
       "unsupported": "This kind of image can’t be added: use PNG, JPEG, GIF, WebP or AVIF.",
-      "failed": "The image could not be added. Try again.",
-      "remote": "Images can be added only to notes on this server."
+      "failed": "The image could not be added. Try again."
     },
     "outline": {
       "title": "Outline",

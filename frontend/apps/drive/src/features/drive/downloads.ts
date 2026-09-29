@@ -4,6 +4,8 @@ import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipD
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
+import { readFile } from './copy'
+import { embeddingKind, exportEmbedded, type ExportedFile } from './embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import { sealedAt } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
@@ -18,6 +20,11 @@ import { contentPath, fileLocation, folderLocation, type DriveFile, type Folder 
  */
 export async function downloadFile(folder: Folder, file: DriveFile): Promise<void> {
   if (!file.fileKey || !file.name) throw new Error('file is not open')
+  // A note or whiteboard with pictures of its own leaves with them.
+  if (embeddingKind(file.name)) {
+    const exported = await exportEmbedded(folder, file, await (await readFile(folder, file)).text())
+    if (exported) return saveExported(file, exported)
+  }
   // The save picker needs the click's user activation: ask for it first.
   const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
   try {
@@ -43,6 +50,54 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
 
 export { FsaRequiredError }
 
+/**
+ * A file with its pictures: one file (a whiteboard, pictures inline) is
+ * saved as itself; a note and its pictures as a ZIP named after the note.
+ */
+async function saveExported(file: DriveFile, exported: ExportedFile[]): Promise<void> {
+  if (exported.length === 1) {
+    const only = exported[0]
+    const sink = await openDownloadSink({ filename: file.name ?? only.path, mimeType: file.mimeType })
+    try {
+      await sink.write(only.bytes)
+      await sink.finalize()
+    } catch (err) {
+      await sink.abort().catch(() => {})
+      throw err
+    }
+    return
+  }
+  const archive = (file.name ?? 'note').replace(/\.[^.]+$/, '')
+  await downloadAsZip(
+    exported.map((e, i) => ({ id: `${file.id}-${i}`, keyGeneration: 1, name: e.path, size: e.bytes.length, fileKey: new Uint8Array(32), plain: e.bytes })),
+    archive,
+    await freshAccessToken(),
+    () => {},
+  )
+}
+
+/**
+ * A file's ZIP entries at `path`: its content, and for a note or whiteboard
+ * with pictures, the pictures too (beside it, as a single download has them).
+ */
+async function zipEntries(folder: Folder, file: DriveFile, path: string): Promise<ZipFile[]> {
+  if (embeddingKind(file.name)) {
+    const exported = await exportEmbedded(folder, file, await (await readFile(folder, file)).text())
+    if (exported) {
+      const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
+      return exported.map((e, i) => ({
+        id: `${file.id}-${i}`,
+        keyGeneration: 1,
+        name: i === 0 ? path : dir + e.path,
+        size: e.bytes.length,
+        fileKey: new Uint8Array(32),
+        plain: e.bytes,
+      }))
+    }
+  }
+  return [await zipEntry(folder, file, path)]
+}
+
 /** One ZIP entry: the file's current content (latest edit), at `path` inside the archive. */
 async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
   const location = folderLocation(folder)
@@ -65,7 +120,7 @@ async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<
 export async function downloadFolderZip(folder: Folder, onProgress: (done: number, total: number) => void): Promise<'empty' | 'done'> {
   const files = (await loadFolderFiles(folder)).filter((f) => f.fileKey && f.name)
   if (files.length === 0) return 'empty'
-  const zipFiles = await Promise.all(files.map((f) => zipEntry(folder, f, f.name!)))
+  const zipFiles = (await Promise.all(files.map((f) => zipEntries(folder, f, f.name!)))).flat()
   await downloadAsZip(zipFiles, folder.name ?? 'folder', await freshAccessToken(), (done, total) => onProgress(done, total))
   return 'done'
 }
@@ -94,13 +149,13 @@ export async function downloadSelectionZip(
   }
   for (const item of items) {
     if (item.file) {
-      if (item.file.fileKey && item.file.name) entries.push(await zipEntry(item.folder, item.file, unique(item.file.name)))
+      if (item.file.fileKey && item.file.name) entries.push(...(await zipEntries(item.folder, item.file, unique(item.file.name))))
       continue
     }
     if (!item.folder.key) continue
     const dir = unique(item.folder.name ?? 'folder')
     for (const f of await loadFolderFiles(item.folder)) {
-      if (f.fileKey && f.name) entries.push(await zipEntry(item.folder, f, `${dir}/${f.name}`))
+      if (f.fileKey && f.name) entries.push(...(await zipEntries(item.folder, f, `${dir}/${f.name}`)))
     }
   }
   if (entries.length === 0) return 'empty'

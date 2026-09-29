@@ -90,6 +90,21 @@ relays them home, with the same checks as local saves. The relayed calls:
 What a remote editor saves counts against the file owner's storage, as
 uploads into shared folders already do across servers.
 
+### Pictures in notes
+
+A note keeps its pasted pictures as per-file assets on its home server.
+A remote editor's browser stores and reads them through its own server, on
+the same base (`…/assets/:assetId`, `GET` and multipart `PUT`); the bridge
+relays them home over signed federation:
+
+- `POST /api/fed/drive/collab/assets/create` — the sealed envelope (base64);
+  needs the share's edit right, is validated as a local upload (the
+  envelope must be bound to this file, its current key generation and the
+  asset id), and counts against the owner's storage;
+- `GET /api/fed/drive/collab/files/:fileId/assets/:assetId` — the envelope,
+  signed; any live share of the file may read it. The key generation it was
+  sealed at is not sent: the browser tries the file's keys, newest first.
+
 ### Permissions
 
 - **Folder shares:** editing needs `can_upload`.
@@ -115,7 +130,8 @@ uploads into shared folders already do across servers.
 
 ## Scope of this step
 
-- Notes and place lists: live editing, saving and restoring.
+- Notes and place lists: live editing, saving and restoring; pictures pasted
+  into notes.
 - Office documents and whiteboards use the same relay and saves. They
   follow once their editors use the routed endpoints.
 

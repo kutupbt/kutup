@@ -27,7 +27,8 @@ clear_synthetic_chat_profiles() {
 }
 
 if [[ "${KUTUP_FEDERATION_SKIP_BUILD:-0}" != "1" ]]; then
-  compose build backend-a frontend
+  # One image serves both servers' web apps (frontend-b reuses it).
+  compose build backend-a frontend-a
 fi
 compose up --detach --wait
 # Nginx resolves Compose service names when its workers start. Recreating a

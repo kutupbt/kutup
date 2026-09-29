@@ -170,16 +170,17 @@ export default function TextCollabEditor({
   const livePreviewCompartment = useMemo(() => new Compartment(), [])
   const livePreviewRef = useRef<Omit<LivePreviewConfig, 'readOnly' | 'labels'> | null>(null)
   const livePreviewExtension = useRef<Extension | null>(null)
-  // The note's own images: stored and opened here (notes on this server).
+  // The note's own images: stored with the note, on its server (through this
+  // one's relay for a note on another server).
   const imageTarget = useMemo(
-    () => ({ fileId, fileKey, generation: keyGeneration, keyAt: fileKeyAt }),
+    () => ({ fileId, fileKey, generation: keyGeneration, keyAt: fileKeyAt, base }),
     // fileKeyAt's identity may churn; the key and generation decide.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileId, fileKey, keyGeneration],
+    [fileId, fileKey, keyGeneration, base],
   )
-  const images = useMemo(() => (base ? null : noteImageResolver(imageTarget)), [base, imageTarget])
-  useEffect(() => () => images?.dispose(), [images])
-  const resolveAsset = useMemo(() => (images ? (assetId: string) => images.resolve(assetId) : undefined), [images])
+  const images = useMemo(() => noteImageResolver(imageTarget), [imageTarget])
+  useEffect(() => () => images.dispose(), [images])
+  const resolveAsset = useMemo(() => (assetId: string) => images.resolve(assetId), [images])
 
   const [namingVersion, setNamingVersion] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -288,7 +289,7 @@ export default function TextCollabEditor({
   livePreviewRef.current = {
     resolveImage: (src) => {
       const asset = /^kutup:asset\/([A-Za-z0-9-]{1,100})$/.exec(src)
-      if (asset) return images ? images.resolve(asset[1]) : Promise.resolve(null)
+      if (asset) return images.resolve(asset[1])
       const linked = parseKutupHref(src)
       if (linked?.type === 'file') return resolveFileImage(linked.id)
       return Promise.resolve(/^https?:\/\//.test(src) ? src : null)
@@ -449,10 +450,6 @@ export default function TextCollabEditor({
         const pictures = files.filter((f) => f.type.startsWith('image/'))
         if (pictures.length === 0) return false
         event?.preventDefault()
-        if (base) {
-          toast.error(t('editor.image.remote'))
-          return true
-        }
         const text = ytextRef.current
         if (!text) return true
         const anchor = Y.createRelativePositionFromTypeIndex(text, Math.min(at, text.length))
@@ -976,7 +973,7 @@ export default function TextCollabEditor({
           view={() => viewRef.current}
           markdown={isMarkdown}
           readOnly={readOnly}
-          onPictures={isMarkdown && !readOnly && !base ? (files) => picturesRef.current?.(files) : undefined}
+          onPictures={isMarkdown && !readOnly ? (files) => picturesRef.current?.(files) : undefined}
         >
           <div
             ref={ref}

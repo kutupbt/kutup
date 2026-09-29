@@ -70,6 +70,10 @@ const MAX_EPHEMERAL: usize = 256;
 const MAX_PUSH_FAILURES: u32 = 8;
 /// The largest request carrying a version's sealed blob.
 pub const VERSION_BODY_LIMIT: usize = 48 * 1024 * 1024;
+/// A sealed asset envelope (a picture in a note or on a whiteboard).
+const MAX_ASSET_ENVELOPE: usize = kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES;
+/// An asset sent home: its envelope in base64, and the JSON around it.
+pub const ASSET_BODY_LIMIT: usize = MAX_ASSET_ENVELOPE / 3 * 4 + 64 * 1024;
 const MAX_VERSION_BLOB: usize = 32 * 1024 * 1024;
 const MAX_LOG_RESPONSE: usize = 64 * 1024 * 1024;
 const MAX_JSON_RESPONSE: usize = 4 * 1024 * 1024;
@@ -901,6 +905,91 @@ pub async fn versions_create(
         )
         .await?;
         signed_json(federation, &authenticated, StatusCode::CREATED, &created)
+    }
+    .await;
+    answer(federation, &authenticated, result)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateAssetBody {
+    file_id: Uuid,
+    asset_id: String,
+    /// The sealed asset envelope, base64.
+    blob: String,
+}
+
+/// `POST /api/fed/drive/collab/assets/create` — a picture pasted into a note
+/// (or placed on a whiteboard) by an editor on the calling server. Checked as
+/// a local upload; the file's owner pays, as for versions.
+pub async fn assets_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    let (federation, authenticated, parsed) = inbound::<CreateAssetBody>(
+        &state,
+        &headers,
+        "/api/fed/drive/collab/assets/create",
+        &body,
+    )
+    .await?;
+    let result = async {
+        let request = parsed?;
+        let access = remote_access(&state, &authenticated, &headers, request.file_id).await?;
+        if !access.can_write {
+            return Err(AppError::forbidden("this share does not allow editing"));
+        }
+        let blob = STANDARD
+            .decode(&request.blob)
+            .map_err(|_| AppError::bad_request("invalid blob"))?;
+        let owner: Uuid = sqlx::query_scalar(
+            "SELECT c.owner_user_id FROM files f JOIN collections c ON c.id = f.collection_id WHERE f.id = $1",
+        )
+        .bind(request.file_id)
+        .fetch_one(&state.pool)
+        .await?;
+        crate::handlers::file_assets::store_asset(&state, request.file_id, &request.asset_id, owner, blob).await?;
+        signed_json(federation, &authenticated, StatusCode::CREATED, &serde_json::json!({}))
+    }
+    .await;
+    answer(federation, &authenticated, result)
+}
+
+/// `GET /api/fed/drive/collab/files/{fileId}/assets/{assetId}` — one of a
+/// file's assets (its sealed envelope), signed. The key generation it was
+/// sealed at is not sent: the browser tries the file's keys, newest first.
+pub async fn asset_content(
+    State(state): State<AppState>,
+    Path((file_id, asset_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let federation = configured_stack(&state)?;
+    let path = format!("/api/fed/drive/collab/files/{file_id}/assets/{asset_id}");
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "GET",
+            &path,
+            None,
+            &[],
+            FederationFeature::DriveV1,
+        )
+        .await?;
+    let result = async {
+        let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
+        remote_access(&state, &authenticated, &headers, file_id).await?;
+        let (bytes, _) =
+            crate::handlers::file_assets::load_asset(&state, file_id, &asset_id).await?;
+        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&bytes).into();
+        federation.signed_stream_response(
+            &authenticated,
+            StatusCode::OK,
+            OCTET_STREAM_CONTENT_TYPE,
+            &content_digest_sha256_from_digest(&digest),
+            bytes.len() as u64,
+            Body::from(bytes),
+        )
     }
     .await;
     answer(federation, &authenticated, result)
@@ -1762,6 +1851,105 @@ async fn relay_version_create(
     Ok((StatusCode::CREATED, Json(created)).into_response())
 }
 
+/// A file's asset on another server, for this server's user.
+async fn relay_asset_download(
+    state: AppState,
+    user: AuthUser,
+    route: RemoteRoute,
+    asset_id: String,
+) -> AppResult<Response> {
+    let (target, _) = relayed_target(&state, &user, route).await?;
+    if !valid_relayed_asset_id(&asset_id) {
+        return Err(AppError::bad_request("invalid assetId"));
+    }
+    let response = configured_stack(&state)?
+        .send_streamed(
+            &target.domain,
+            drive_spec(
+                Method::GET,
+                format!(
+                    "/api/fed/drive/collab/files/{}/assets/{asset_id}",
+                    target.file_id
+                ),
+                JSON_CONTENT_TYPE.into(),
+                Vec::new(),
+                Some(&target.capability),
+                MAX_ASSET_ENVELOPE,
+            )?,
+        )
+        .await
+        .map_err(gateway_error)?;
+    Response::builder()
+        .status(response.status)
+        .header(header::CONTENT_TYPE, response.content_type)
+        .header(header::CONTENT_LENGTH, response.content_length)
+        .body(Body::from_stream(ReaderStream::new(response.file)))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// This server's user stores an asset on a file on another server (the
+/// multipart `file` part, as for local assets).
+async fn relay_asset_upload(
+    state: AppState,
+    user: AuthUser,
+    route: RemoteRoute,
+    asset_id: String,
+    mut multipart: Multipart,
+) -> AppResult<Response> {
+    let (target, _) = relayed_target(&state, &user, route).await?;
+    if !valid_relayed_asset_id(&asset_id) {
+        return Err(AppError::bad_request("invalid assetId"));
+    }
+    let mut blob: Option<Vec<u8>> = None;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::bad_request("invalid form"))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let mut value = Vec::new();
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|_| AppError::bad_request("invalid form"))?
+        {
+            if value.len() + chunk.len() > MAX_ASSET_ENVELOPE {
+                return Err(AppError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "asset envelope too large",
+                ));
+            }
+            value.extend_from_slice(&chunk);
+        }
+        blob = Some(value);
+    }
+    let blob = blob.ok_or_else(|| AppError::bad_request("missing file"))?;
+    let _: serde_json::Value = call_home(
+        &state,
+        &target,
+        "/api/fed/drive/collab/assets/create",
+        &CreateAssetBody {
+            file_id: target.file_id,
+            asset_id,
+            blob: STANDARD.encode(blob),
+        },
+        MAX_JSON_RESPONSE,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The same rule as local asset ids: short, no path separators.
+fn valid_relayed_asset_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RelayedPatch {
@@ -1890,4 +2078,34 @@ pub async fn file_claim_seed(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     relay_claim_seed(s, u, file_route(&id)?).await
+}
+pub async fn folder_asset_download(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path((sid, fid, aid)): Path<(String, String, String)>,
+) -> AppResult<Response> {
+    relay_asset_download(s, u, folder_route(&sid, &fid)?, aid).await
+}
+pub async fn file_asset_download(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path((id, aid)): Path<(String, String)>,
+) -> AppResult<Response> {
+    relay_asset_download(s, u, file_route(&id)?, aid).await
+}
+pub async fn folder_asset_upload(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path((sid, fid, aid)): Path<(String, String, String)>,
+    m: Multipart,
+) -> AppResult<Response> {
+    relay_asset_upload(s, u, folder_route(&sid, &fid)?, aid, m).await
+}
+pub async fn file_asset_upload(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path((id, aid)): Path<(String, String)>,
+    m: Multipart,
+) -> AppResult<Response> {
+    relay_asset_upload(s, u, file_route(&id)?, aid, m).await
 }

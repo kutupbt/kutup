@@ -1178,6 +1178,17 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/drive/collab/assets/create",
+            post(collab_federation::assets_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::ASSET_BODY_LIMIT))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/files/:fileId/assets/:assetId",
+            get(collab_federation::asset_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/collab/files/:fileId/versions/:vid",
             get(collab_federation::version_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1277,6 +1288,23 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/drive/federation/file-shares/:id/versions/:vid",
             patch(collab_federation::file_version_patch),
+        )
+        // Pictures in notes and on whiteboards of files on other servers.
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/assets/:assetId",
+            get(collab_federation::folder_asset_download)
+                .put(collab_federation::folder_asset_upload)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/assets/:assetId",
+            get(collab_federation::file_asset_download)
+                .put(collab_federation::file_asset_upload)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
         )
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/claim-seed",

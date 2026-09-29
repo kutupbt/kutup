@@ -47,8 +47,12 @@ export function checkLocales(opts: { en: Messages; tr: Messages; sourceDirs: str
       }
       if (!/\.tsx?$/.test(entry) || /\.test\.tsx?$/.test(entry)) continue
       const source = readFileSync(path, 'utf8')
-      for (const match of source.matchAll(/(?:\bt\(|\bkey: |\bi18nKey=\{?)['"]([A-Za-z0-9_.]+)['"]/g)) {
-        const key = match[1]
+      for (const match of source.matchAll(/(\bt\(|\bkey: |\bi18nKey=\{?)['"]([A-Za-z0-9_.]+)['"]/g)) {
+        const key = match[2]
+        // `key: '…'` names a message in a table (`key: 'editor.shortcuts.save'`),
+        // always dotted; an undotted one is something else's key (a keymap's
+        // `key: 'Enter'`).
+        if (match[1] === 'key: ' && !key.includes('.')) continue
         const found = en.has(key) || en.has(`${key}_one`) || en.has(`${key}_other`)
         if (!found) missing.push(`${entry}: ${key}`)
       }

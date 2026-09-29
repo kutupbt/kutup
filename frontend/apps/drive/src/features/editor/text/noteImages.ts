@@ -56,6 +56,8 @@ export interface NoteAssetTarget {
   generation: number
   /** Keys of older generations: an image stored before the note was re-keyed. */
   keyAt?: (generation: number) => Promise<Uint8Array>
+  /** A note on another server: its relay through this one (see `collabBase`). */
+  base?: string
 }
 
 /** Seals and stores one pasted or dropped image; resolves to its asset id. */
@@ -66,7 +68,7 @@ export async function storeNoteImage(target: NoteAssetTarget, file: File): Promi
   // The bytes must be the picture they say they are.
   if (imageTypeOf(bytes) === null) throw new NoteImageTypeError(file.type)
   const assetId = await assetIdOf(bytes)
-  await uploadAsset({ fileId: target.fileId, assetId, generation: target.generation }, bytes, target.fileKey)
+  await uploadAsset({ fileId: target.fileId, assetId, generation: target.generation }, bytes, target.fileKey, target.base)
   return assetId
 }
 
@@ -80,7 +82,7 @@ export function noteImageResolver(target: NoteAssetTarget) {
     resolve(assetId: string): Promise<string | null> {
       let hit = cache.get(assetId)
       if (!hit) {
-        hit = fetchAsset({ fileId: target.fileId, assetId, generation: target.generation }, target.fileKey, target.keyAt)
+        hit = fetchAsset({ fileId: target.fileId, assetId, generation: target.generation }, target.fileKey, target.keyAt, target.base)
           .then((bytes) => {
             const type = imageTypeOf(bytes)
             return type ? URL.createObjectURL(new Blob([bytes as BlobPart], { type })) : null

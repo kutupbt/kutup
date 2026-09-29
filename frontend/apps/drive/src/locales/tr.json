@@ -459,8 +459,7 @@
       "unavailable": "Görsel kullanılamıyor",
       "tooLarge": "En fazla {{limit}} boyutunda görseller eklenebilir.",
       "unsupported": "Bu tür görsel eklenemez: PNG, JPEG, GIF, WebP ya da AVIF kullan.",
-      "failed": "Görsel eklenemedi. Yeniden dene.",
-      "remote": "Görseller yalnızca bu sunucudaki notlara eklenebilir."
+      "failed": "Görsel eklenemedi. Yeniden dene."
     },
     "outline": {
       "title": "Ana hat",

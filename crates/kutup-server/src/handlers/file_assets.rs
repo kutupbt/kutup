@@ -101,9 +101,36 @@ pub async fn upload(
             tmp = Some((file, size));
         }
     }
-    let Some((tmp_file, size)) = tmp else {
+    let Some((tmp_file, _size)) = tmp else {
         return Err(AppError::bad_request("missing file"));
     };
+    let encoded = tokio::fs::read(tmp_file.path())
+        .await
+        .map_err(|_| AppError::internal("read asset upload"))?;
+    store_asset(&state, fid, &asset_id, user_id, encoded).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Stores one asset envelope for a file, charged to `payer` (the uploader
+/// here; the file's owner for an editor on another server). The caller has
+/// checked the right to write the file.
+pub(crate) async fn store_asset(
+    state: &AppState,
+    fid: Uuid,
+    asset_id: &str,
+    payer: Uuid,
+    encoded: Vec<u8>,
+) -> AppResult<()> {
+    if !valid_asset_id(asset_id) {
+        return Err(AppError::bad_request("invalid assetId"));
+    }
+    if encoded.len() > MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES {
+        return Err(AppError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "asset envelope too large",
+        ));
+    }
+    let size = encoded.len() as i64;
 
     // A stored asset must be the canonical purpose-specific envelope for this
     // exact live file, key generation and content-addressed asset id. The
@@ -117,25 +144,22 @@ pub async fn upload(
     .ok_or_else(|| AppError::not_found("not found"))?;
     let context = DriveEnvelopeContextV1::whiteboard_asset(
         &fid.to_string(),
-        &asset_id,
+        asset_id,
         u32::try_from(key_generation)
             .map_err(|_| AppError::bad_request("invalid asset key generation"))?,
     )
     .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
-    let encoded = tokio::fs::read(tmp_file.path())
-        .await
-        .map_err(|_| AppError::internal("read asset upload"))?;
     drive_envelope::validate(&encoded, context)
         .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
 
-    // Room first (locking the user's row), then the idempotent INSERT: a
+    // Room first (locking the payer's row), then the idempotent INSERT: a
     // concurrent first upload of the same id waits on the row and then finds
     // it taken.
     let mut tx = state.pool.begin().await?;
     // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
-    crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
+    crate::drive_writes::check_room(&mut tx, payer, collection_id, size, None)
         .await?
         .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
@@ -145,9 +169,9 @@ pub async fn upload(
            RETURNING size_bytes"#,
     )
     .bind(fid)
-    .bind(&asset_id)
+    .bind(asset_id)
     .bind(size)
-    .bind(user_id)
+    .bind(payer)
     .bind(key_generation)
     .fetch_optional(&mut *tx)
     .await?;
@@ -155,30 +179,62 @@ pub async fn upload(
     // changes nothing — neither the bytes (which would go uncharged, and
     // could replace someone else's) nor the accounting.
     if inserted.is_none() {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+        return Ok(());
     }
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
         .bind(size)
-        .bind(user_id)
+        .bind(payer)
         .execute(&mut *tx)
         .await?;
 
     // Stored before commit with the row lock held: a PUT failure rolls the
     // row back; a commit failure removes the object again (it is new, so
     // nobody else's).
-    let path = asset_storage_path(fid, &asset_id);
-    let body = ByteStream::from_path(tmp_file.path())
+    let path = asset_storage_path(fid, asset_id);
+    if state
+        .storage
+        .upload(&path, ByteStream::from(encoded), size)
         .await
-        .map_err(|_| AppError::internal("read upload"))?;
-    if state.storage.upload(&path, body, size).await.is_err() {
+        .is_err()
+    {
         return Err(AppError::internal("storage error"));
     }
-
     if tx.commit().await.is_err() {
         let _ = state.storage.delete(&path).await;
         return Err(AppError::internal("commit"));
     }
-    Ok(StatusCode::NO_CONTENT.into_response())
+    Ok(())
+}
+
+/// One stored asset envelope, whole, and the key generation it was sealed
+/// at. The caller has checked the right to read the file.
+pub(crate) async fn load_asset(
+    state: &AppState,
+    fid: Uuid,
+    asset_id: &str,
+) -> AppResult<(axum::body::Bytes, i32)> {
+    if !valid_asset_id(asset_id) {
+        return Err(AppError::bad_request("invalid assetId"));
+    }
+    let key_generation: i32 = sqlx::query_scalar(
+        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+    )
+    .bind(fid)
+    .bind(asset_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
+    let (object, _) = state
+        .storage
+        .get_object(&asset_storage_path(fid, asset_id))
+        .await
+        .map_err(|_| AppError::not_found("not found"))?;
+    let bytes = object
+        .collect()
+        .await
+        .map_err(|_| AppError::internal("read asset"))?
+        .into_bytes();
+    Ok((bytes, key_generation))
 }
 
 /// `GET /api/files/{fileId}/assets/{assetId}` — mirrors `Download`.

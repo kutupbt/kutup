@@ -43,7 +43,7 @@ RUN o=apps/office/public/onlyoffice \
     && test -s $o/dist/x2t/x2t.wasm \
     && test -s $o/templates/oodoc_base.js \
     && test -s $o/LICENSES/ONLYOFFICE-ADDITIONAL-TERMS.md \
-    && grep -Fx 'kutup-v9.4.0.131.2' $o/dist/v9/.version \
+    && grep -Fx 'kutup-v9.4.0.131.3' $o/dist/v9/.version \
     && grep -Fx 'kutup-v9.4.0.131.1' $o/dist/x2t/.version \
     && grep -Fx '2025.6.0' $o/templates/.version
 RUN pnpm run build \
