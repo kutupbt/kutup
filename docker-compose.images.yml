@@ -1,0 +1,19 @@
+# Runs Kutup from images built elsewhere instead of building on this machine
+# (scripts/publish-images.sh prints the two names to put in .env). Add it to
+# the other compose files:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --wait
+#
+# docs/self-hosting.md, "Running published images".
+
+services:
+  backend:
+    image: ${KUTUP_SERVER_IMAGE:?set KUTUP_SERVER_IMAGE to the server image, with its tag}
+    build: !reset null
+    pull_policy: missing
+
+  frontend:
+    image: ${KUTUP_WEB_IMAGE:?set KUTUP_WEB_IMAGE to the web image, with its tag}
+    build: !reset null
+    pull_policy: missing

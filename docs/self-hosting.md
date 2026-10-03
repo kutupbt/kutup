@@ -684,6 +684,39 @@ uses the map settings above.
 
 ---
 
+## Running published images
+
+Building Kutup compiles the Rust server and the browser WebAssembly, which
+needs several GiB of memory. A small server can run images built on another
+machine instead.
+
+On the build machine, logged in to the registry (`docker login ghcr.io`):
+
+```sh
+scripts/publish-images.sh
+```
+
+It builds the server and web images from the current commit, refuses a
+working tree with uncommitted changes, tags both with the commit, pushes
+them, and prints two lines to put in the server's `.env`:
+
+```
+KUTUP_SERVER_IMAGE=ghcr.io/kutupbt/kutup-server:<commit>
+KUTUP_WEB_IMAGE=ghcr.io/kutupbt/kutup-web:<commit>
+```
+
+`KUTUP_IMAGE_REGISTRY` changes where they go. On the server, add
+`docker-compose.images.yml` to the compose files; nothing is built there:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --wait
+```
+
+To update, publish from the new commit, change the two lines in `.env`, and
+run the same two commands. The server applies its database migrations when
+it starts.
+
 ## Using another S3 store
 
 Kutup's server needs only ordinary S3 requests: put, get, list, delete,
