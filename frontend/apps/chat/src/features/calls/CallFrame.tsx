@@ -5,8 +5,6 @@ import { Avatar } from '@kutup/ui/components/avatar'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
-import type { ConversationId } from '@kutup/chat-core/types'
-import { ConversationView } from '../thread/ConversationView'
 
 // What the one-to-one and the group call screens share: the frame (the
 // brand, the call's title and status, the stage, the controls) and the side
@@ -35,7 +33,7 @@ export function CallFrame({
   testId,
   statusTestId,
   people,
-  conversation,
+  chat,
   panel,
   onPanel,
   controls,
@@ -49,8 +47,8 @@ export function CallFrame({
   testId: string
   statusTestId: string
   people: CallPerson[]
-  /** The call's conversation, once there is something to chat in. */
-  conversation: ConversationId | null
+  /** The call's chat, once there is something to chat in. */
+  chat: ReactNode | null
   panel: CallPanel | null
   onPanel: (panel: CallPanel | null) => void
   controls: ReactNode
@@ -91,7 +89,7 @@ export function CallFrame({
               <PanelTab active={panel === 'people'} onClick={() => onPanel('people')} testId="chat-call-tab-people">
                 {t('chat.calls.peopleCount', { count: people.length })}
               </PanelTab>
-              {conversation ? (
+              {chat ? (
                 <PanelTab active={panel === 'chat'} onClick={() => onPanel('chat')} testId="chat-call-tab-chat">
                   {t('chat.calls.chatPanel')}
                 </PanelTab>
@@ -108,10 +106,8 @@ export function CallFrame({
                 <X />
               </Button>
             </div>
-            {panel === 'chat' && conversation ? (
-              <div className="min-h-0 flex-1">
-                <ConversationView conversation={conversation} embedded />
-              </div>
+            {panel === 'chat' && chat ? (
+              <div className="min-h-0 flex-1">{chat}</div>
             ) : (
               <ul className="min-h-0 flex-1 overflow-y-auto p-2" data-testid="chat-call-people">
                 {people.map((person) => (
@@ -165,11 +161,14 @@ export function PanelButtons({
   panel,
   onPanel,
   chat,
+  unread,
 }: {
   panel: CallPanel | null
   onPanel: (panel: CallPanel | null) => void
-  /** Whether the call has a conversation to chat in. */
+  /** Whether the call has a chat. */
   chat: boolean
+  /** Something was written that the person has not seen. */
+  unread?: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -189,7 +188,10 @@ export function PanelButtons({
           onClick={() => onPanel(panel === 'chat' ? null : 'chat')}
           testId="chat-call-chat-button"
         >
-          <MessageSquare />
+          <span className="relative">
+            <MessageSquare />
+            {unread ? <span className="absolute -right-1 -top-1 size-2.5 rounded-full bg-primary" data-testid="chat-call-chat-unread" /> : null}
+          </span>
         </RoundButton>
       ) : null}
     </>

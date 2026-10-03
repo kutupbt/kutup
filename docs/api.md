@@ -1747,34 +1747,47 @@ the host cannot be reached.
 
 ### POST /api/chat/call-links
 
-`{ "roomId", "nonce", "accessTokenHash" }` → `201` with
-`{ "roomId", "nonce", "createdAt" }`: register a call link
-([`chat-calls.md`](chat-calls.md) "Call links"). `roomId` and `nonce` are 32
+`{ "roomId", "nonce", "accessTokenHash", "info" }` → `201` with
+`{ "roomId", "nonce", "info", "createdAt" }`: register a meeting
+([`chat-calls.md`](chat-calls.md) "Meetings"). `roomId` and `nonce` are 32
 lowercase hex characters; `accessTokenHash` is the SHA-256 of the link's
-access token (standard base64). The link's secret never reaches the server.
-`404` when the server has no SFU, `409` when the link exists or the account
-already has 50.
+access token (standard base64); `info` is the sealed title and time (552
+bytes of standard base64). The link's secret never reaches the server.
+`404` when the server has no SFU, `409` when the meeting exists or the
+account already has 50.
 
 ### GET /api/chat/call-links
 
-→ `{ "links": [{ "roomId", "nonce", "createdAt" }] }`: the account's call
-links, newest first. Its clients derive each link again from the nonce.
+→ `{ "links": [{ "roomId", "nonce", "info", "createdAt" }] }`: the
+account's meetings, newest first. Its clients derive each link again from
+the nonce and open the info.
+
+### PUT /api/chat/call-links/:roomId/info
+
+`{ "info" }` → `204`: replace the meeting's sealed title and time. `404`
+when the account has no such meeting.
 
 ### DELETE /api/chat/call-links/:roomId
 
 → `204`: nobody can join through the link any more. `404` when the account
-has no such link.
+has no such meeting.
+
+### POST /api/chat/call-links/info
+
+**No authentication.** `{ "roomId", "accessToken" }` → `{ "info" }`: the
+meeting's sealed title and time, for whoever holds the link. `404` for an
+unknown room and for a wrong access token alike, `429` over 60 a minute per
+address (`RATE_LIMIT_CALL_LINK_PER_MIN`, shared with the token route).
 
 ### POST /api/chat/call-links/token
 
 **No authentication.** `{ "roomId", "accessToken", "participantId", "label" }`
 → `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
-for the link's room, for whoever holds the link. `accessToken` is 32 bytes
-of standard base64, `participantId` 32 lowercase hex characters, and
+for the meeting's room, for whoever holds the link. `accessToken` is 32
+bytes of standard base64, `participantId` 32 lowercase hex characters, and
 `label` the joiner's sealed name (168 bytes of standard base64), which the
-token carries to the other participants as metadata. `404` for an unknown
-room and for a wrong access token alike, `429` over 30 a minute per address
-(`RATE_LIMIT_CALL_LINK_PER_MIN`).
+token carries to the other participants as metadata. `404` and `429` as
+above.
 
 ### PUT /api/chat/push-subscription
 

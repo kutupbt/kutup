@@ -3782,6 +3782,52 @@ pub fn call_link_open_name(secret: String, sealed: String) -> std::result::Resul
         .map_err(chat_error)
 }
 
+#[wasm_bindgen(js_name = callLinkSealInfo)]
+pub fn call_link_seal_info(secret: String, info: JsValue) -> std::result::Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    let info: crate::call_link::CallLinkInfoV1 = from_transport(info).map_err(chat_error)?;
+    crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.seal_info(&info))
+        .map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkOpenInfo)]
+pub fn call_link_open_info(
+    secret: String,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    let info = crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.open_info(&sealed))
+        .map_err(chat_error)?;
+    to_output(&info)
+}
+
+#[wasm_bindgen(js_name = callLinkSealMessage)]
+pub fn call_link_seal_message(
+    secret: String,
+    message: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    let message: crate::call_link::CallLinkMessageV1 =
+        from_transport(message).map_err(chat_error)?;
+    crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.seal_message(&message))
+        .map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkOpenMessage)]
+pub fn call_link_open_message(
+    secret: String,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    let message = crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.open_message(&sealed))
+        .map_err(chat_error)?;
+    to_output(&message)
+}
+
 fn invite_link_input(
     link: JsValue,
 ) -> std::result::Result<kutup_chat_proto::MlsGroupInviteLinkV1, JsValue> {

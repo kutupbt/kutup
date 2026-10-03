@@ -50,7 +50,13 @@ export interface SfuRoomHandlers {
   disconnected(): void
   /** A frame did not decrypt: the keys may be behind. */
   decryptionFailed(): void
+  /** Bytes a participant sent to everyone in the room, outside the media. */
+  data?(identity: string, payload: Uint8Array): void
 }
+
+/** The topic of the room's data messages. */
+const DATA_TOPIC = 'kutup'
+
 
 export class SfuRoom {
   readonly keys = new FrameKeys()
@@ -82,6 +88,9 @@ export class SfuRoom {
     ]) {
       room.on(event, () => handlers.changed())
     }
+    room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+      if (participant && topic === DATA_TOPIC) handlers.data?.(participant.identity, payload)
+    })
     room.on(RoomEvent.Disconnected, () => handlers.disconnected())
     room.on(RoomEvent.EncryptionError, (error) => {
       console.warn('chat: a call frame did not decrypt', error)
@@ -129,6 +138,16 @@ export class SfuRoom {
   /** The screen is one more published track, encrypted like the others. */
   setScreen(on: boolean): Promise<unknown> {
     return this.room.localParticipant.setScreenShareEnabled(on, { audio: false })
+  }
+
+  /**
+   * Send bytes to everyone in the room, reliably. The SFU relays them as
+   * they are: the caller seals what must stay private.
+   */
+  send(payload: Uint8Array): Promise<void> {
+    const bytes = new Uint8Array(new ArrayBuffer(payload.byteLength))
+    bytes.set(payload)
+    return this.room.localParticipant.publishData(bytes, { reliable: true, topic: DATA_TOPIC })
   }
 
   participants(): SfuParticipant[] {

@@ -100,11 +100,11 @@ pub static FORK: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
-/// Joining a call through a link, which needs no account: 30 / minute / IP
-/// (`RATE_LIMIT_CALL_LINK_PER_MIN`).
+/// Opening and joining a call through a link, which need no account: 60 /
+/// minute / IP (`RATE_LIMIT_CALL_LINK_PER_MIN`).
 pub static CALL_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
-        env_limit("RATE_LIMIT_CALL_LINK_PER_MIN", 30) as usize,
+        env_limit("RATE_LIMIT_CALL_LINK_PER_MIN", 60) as usize,
         Duration::from_secs(60),
     )
 });

@@ -11,6 +11,7 @@ import { ChatJobs } from './app/ChatJobs'
 import { ChatShell } from './app/ChatShell'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { LinkCallRoute } from './features/callLinks/LinkCallRoute'
+import { MeetingsPage } from './features/callLinks/MeetingsPage'
 import { JoinLinkRoute } from './features/groupLink/JoinLinkRoute'
 import { SharePlaceRoute } from './features/location/SharePlaceRoute'
 import { NotFoundPage } from './NotFoundPage'
@@ -36,6 +37,7 @@ function SignedIn() {
           <Route element={<ChatShell />}>
             <Route index element={<ChatsPage />} />
             <Route path="/c/:key" element={<ChatsPage />} />
+            <Route path="/meetings" element={<MeetingsPage />} />
             <Route path="/join" element={<JoinLinkRoute />} />
             <Route path="/share-place" element={<SharePlaceRoute />} />
             <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />

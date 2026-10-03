@@ -17,9 +17,26 @@ export interface LinkCallParticipant extends Omit<SfuParticipant, 'label'> {
   name: string | null
 }
 
+/** A message written in the meeting, while this browser was in it. */
+export interface LinkCallMessage {
+  id: string
+  /** The SFU identity it came from. */
+  identity: string
+  own: boolean
+  /** The sender's chosen name when it was written; null when unknown. */
+  name: string | null
+  text: string
+  sentAtMs: number
+}
+
+/** Messages kept while in the meeting; older ones drop off. */
+const MAX_MESSAGES = 500
+
 export interface LinkCallState {
   phase: 'connecting' | 'active' | 'ended'
   participants: LinkCallParticipant[]
+  /** What was written since this browser joined. Kept nowhere else. */
+  messages: LinkCallMessage[]
   muted: boolean
   cameraOn: boolean
   screenOn: boolean
@@ -36,6 +53,8 @@ export class LinkCallController {
   /** Sealed label → opened name (null: does not open), so each opens once. */
   private readonly names = new Map<string, string | null>()
   private ownName = ''
+  private joinedAtMs = 0
+  private leftAtMs: number | null = null
 
   constructor(private readonly link: OpenCallLink) {}
 
@@ -60,7 +79,9 @@ export class LinkCallController {
   async join(name: string, withVideo: boolean): Promise<void> {
     if (this.state && this.state.phase !== 'ended') return
     this.ownName = name.trim()
-    this.set({ phase: 'connecting', participants: [], muted: false, cameraOn: withVideo, screenOn: false })
+    this.set({ phase: 'connecting', participants: [], messages: [], muted: false, cameraOn: withVideo, screenOn: false })
+    this.joinedAtMs = Date.now()
+    this.leftAtMs = null
     try {
       const wasm = await loadChatWasm()
       const label = wasm.callLinkSealName(this.link.secret, this.ownName)
@@ -72,6 +93,7 @@ export class LinkCallController {
         // One key for the whole call: a frame that does not decrypt was not
         // encrypted by a holder of this link.
         decryptionFailed: () => undefined,
+        data: (identity, payload) => void this.received(identity, payload),
       })
       this.room = room
       await room.keys.set(Uint8Array.from(atob(this.link.frameKey), (char) => char.charCodeAt(0)), 0)
@@ -117,8 +139,49 @@ export class LinkCallController {
     await this.refresh()
   }
 
+  /**
+   * Write a message to everyone in the meeting. It travels through the SFU
+   * sealed under a key from the link and is stored nowhere: someone who
+   * joins later does not see it.
+   */
+  async send(text: string): Promise<void> {
+    const room = this.room
+    const trimmed = text.trim()
+    if (!room || !this.state || this.state.phase !== 'active' || !trimmed) return
+    const wasm = await loadChatWasm()
+    const message = { id: hex(crypto.getRandomValues(new Uint8Array(16))), text: trimmed, sentAtMs: Date.now() }
+    const sealed = wasm.callLinkSealMessage(this.link.secret, message)
+    await room.send(new TextEncoder().encode(sealed))
+    this.append({ ...message, identity: room.localIdentity, own: true, name: this.ownName })
+  }
+
+  /** How long this browser has been (or was) in the meeting, and since when. */
+  get joined(): { atMs: number; seconds: number } {
+    const until = this.leftAtMs ?? Date.now()
+    return { atMs: this.joinedAtMs, seconds: Math.max(0, Math.round((until - this.joinedAtMs) / 1000)) }
+  }
+
   dispose(): void {
     void this.ended()
+  }
+
+  private async received(identity: string, payload: Uint8Array): Promise<void> {
+    const wasm = await loadChatWasm()
+    let message: { id: string; text: string; sentAtMs: number }
+    try {
+      message = wasm.callLinkOpenMessage(this.link.secret, new TextDecoder().decode(payload))
+    } catch {
+      // Not sealed by a holder of this link: not a message of this meeting.
+      return
+    }
+    const label = this.room?.participants().find((participant) => participant.identity === identity)?.label
+    this.append({ ...message, identity, own: false, name: label ? (this.names.get(label) ?? null) : null })
+  }
+
+  private append(message: LinkCallMessage): void {
+    const state = this.state
+    if (!state || state.messages.some((other) => other.id === message.id && other.identity === message.identity)) return
+    this.patch({ messages: [...state.messages, message].slice(-MAX_MESSAGES) })
   }
 
   private async refresh(): Promise<void> {
@@ -147,6 +210,7 @@ export class LinkCallController {
   private async ended(): Promise<void> {
     const state = this.state
     if (!state || state.phase === 'ended') return
+    this.leftAtMs = Date.now()
     this.patch({ phase: 'ended', participants: [] })
     const room = this.room
     this.room = null

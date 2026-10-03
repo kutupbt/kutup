@@ -747,6 +747,23 @@ export interface CallLinkKeys {
   frameKey: string
 }
 
+/** What a meeting is called and when it is, as its owner set them. */
+export interface CallLinkInfo {
+  title: string
+  /** When it is planned to start (Unix milliseconds), if it is scheduled. */
+  startsAtMs?: number
+  /** How long it is planned to last; only with a start. */
+  durationMinutes?: number
+}
+
+/** One message written during a meeting. */
+export interface CallLinkMessage {
+  /** 32 lowercase hex characters, chosen by the sender. */
+  id: string
+  text: string
+  sentAtMs: number
+}
+
 /** The call link functions of the chat WASM module. Secrets are standard base64. */
 export interface CallLinkCrypto {
   /** A fresh public nonce for a new link (32 lowercase hex characters). */
@@ -762,6 +779,12 @@ export interface CallLinkCrypto {
   callLinkSealName(secret: string, name: string): string
   /** The name a participant sealed; throws when it was not made with this link. */
   callLinkOpenName(secret: string, sealed: string): string
+  /** Seal the meeting's title and time for the host to keep. */
+  callLinkSealInfo(secret: string, info: CallLinkInfo): string
+  callLinkOpenInfo(secret: string, sealed: string): CallLinkInfo
+  /** Seal a message written during the meeting, for the others in it. */
+  callLinkSealMessage(secret: string, message: CallLinkMessage): string
+  callLinkOpenMessage(secret: string, sealed: string): CallLinkMessage
 }
 
 /** The link functions of the chat WASM module. */

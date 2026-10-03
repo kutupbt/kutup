@@ -158,70 +158,117 @@ message. The timeline shows each call's start once.
 **Group calls in the timeline:** the start notice, and the list preview
 ("Group call started" / "Group call ended").
 
-## Call links
+## Meetings
 
-A call link is a call anyone holding the link can join, with or without a
-Kutup account, as in Signal's call links or a meeting link. An account makes
-one in Chat ("New chat" → "Call links") and sends it however it likes. It
-needs the server's SFU (the capability `chat.callLinks`).
+A meeting is a call anyone holding its link can join, with or without a
+Kutup account, as in a Zoom or Google Meet link or Signal's call links. It
+is separate from the calls of a conversation on purpose:
+
+- A one-to-one or group call is keyed from its conversation's own
+  encryption. Only the conversation's members can derive the key, so nobody
+  can be let in by a link without weakening it.
+- A meeting belongs to no conversation. The link is the invitation, and
+  everything about the meeting derives from the link.
+
+An account makes meetings in Chat: "New meeting" in the sidebar (one to
+join right away), "Schedule" on the Meetings page (a title, and optionally a
+day, time and length), or "Start a meeting" in a conversation's menu, which
+makes one and sends its link there as a message. It needs the server's SFU
+(the capability `chat.callLinks`).
 
 **The link:** `https://<chat app>/call#<fragment>`, where the fragment is
 base64url (no padding) of `0x01 || secret (32 bytes)`. Browsers never send
 the fragment to a server. The page at `/call` sits outside the app's
-sign-in: it asks for a name and joins.
+sign-in: it shows the meeting's title and time, asks for a name and joins.
 
 **Keys:** from the secret, HKDF-SHA256 (salt `kutup/chat/call-link/v1`)
 derives:
 
 | Label | Value | Used for |
 | --- | --- | --- |
-| `room id` | 16 bytes, as 32 hex characters | the SFU room, and what the host files the link under |
-| `access token` | 32 bytes | presented to the host for an SFU token; the host stores only its SHA-256 |
+| `room id` | 16 bytes, as 32 hex characters | the SFU room, and what the host files the meeting under |
+| `access token` | 32 bytes | presented to the host for the details and an SFU token; the host stores only its SHA-256 |
 | `frame key` | 32 bytes | media frames are encrypted under it in the browser (key index 0) |
-| `name key` | 32 bytes | XChaCha20-Poly1305 over each participant's chosen name |
+| `name key` | 32 bytes | each participant's chosen name |
+| `info key` | 32 bytes | the meeting's title and time |
+| `chat key` | 32 bytes | messages written during the meeting |
 
-A sealed name is `nonce (24) || ciphertext` over `length (u32 BE) || name ||
-zeros`, always 128 bytes of plaintext (168 sealed), with the associated data
-`kutup/chat/call-link/v1/name 0x00 roomId`. A name is 1 to 124 bytes of
-UTF-8 without control characters. The Rust engine (`kutup-chat-core`
-`call_link.rs`) owns these formats, with a fixed test vector; the browser
-reaches it through WASM.
+A sealed value is `nonce (24) || XChaCha20-Poly1305(length (u32 BE) || body
+|| zeros)`, with the associated data
+`kutup/chat/call-link/v1/<name|info|message> 0x00 roomId`, so a value sealed
+for one purpose or meeting does not open as another:
 
-**The owner's links:** the owner's secret for a link is itself derived:
-HKDF-SHA256 over the account master key with the same salt and the info
-`owner secret 0x00 nonce`, where `nonce` is 16 random bytes the host stores
-with the link. Any of the owner's devices lists its links and derives each
-one again; the host never holds a secret. An account keeps at most 50.
+| Value | Body | Padded plaintext | Sealed |
+| --- | --- | --- | --- |
+| name | 1 to 124 bytes of UTF-8, no control characters | 128 bytes | 168 bytes |
+| info | JSON `{ title, startsAtMs?, durationMinutes? }` | 512 bytes | 552 bytes |
+| message | JSON `{ id, text, sentAtMs }`, text up to 4000 bytes | a multiple of 256 bytes | up to 4648 bytes |
 
-**The host stores**, per link: the room id, the nonce, the SHA-256 of the
-access token, the owner and the time. It offers:
+A title is 1 to 200 bytes; a length is 1 minute to 24 hours and needs a
+start. The Rust engine (`kutup-chat-core` `call_link.rs`) owns these
+formats, with a fixed test vector for the derivation; the browser reaches it
+through WASM.
 
-- to the owner: create, list and delete (`/api/chat/call-links`);
-- to anyone: `POST /api/chat/call-links/token` with the room id, the access
-  token, a random participant identity and the joiner's sealed name. It
-  answers with a 6-hour LiveKit token for that one room (join, publish,
-  subscribe; never room admin), carrying the sealed name as the
-  participant's metadata. A wrong token and an unknown room are answered
-  alike. The route needs no account, so it is limited to 30 a minute per
-  address (`RATE_LIMIT_CALL_LINK_PER_MIN`), and the SFU is never open to
-  rooms nobody registered.
+**The owner's meetings:** the owner's secret for a meeting is itself
+derived: HKDF-SHA256 over the account master key with the same salt and the
+info `owner secret 0x00 nonce`, where `nonce` is 16 random bytes the host
+stores with the meeting. Any of the owner's devices lists its meetings and
+derives each link again; the host never holds a secret. An account keeps at
+most 50.
 
-**In the call:** media goes through the host's SFU, each frame encrypted
-under the link's frame key, so the SFU forwards what it cannot read. The SFU
-sees each participant as a random identity and an opaque label; the others
-open the label with the name key. Screen sharing and the People panel work
-as in a group call. There is no chat panel: a link call has no conversation
-behind it.
+**The host stores**, per meeting: the room id, the nonce, the SHA-256 of
+the access token, the sealed info, the owner and the time it was made. It
+offers:
 
-**What a link is, and is not:**
-- The link is the whole capability. Whoever has it can join, hear and see
-  the call, and hand it on. There is no waiting room and no approval.
+- to the owner: create, list, replace the info and delete
+  (`/api/chat/call-links`);
+- to anyone presenting the access token, with no account:
+  - `POST /api/chat/call-links/info`: the sealed info;
+  - `POST /api/chat/call-links/token`: a 6-hour LiveKit token for that one
+    room (join, publish, subscribe; never room admin), carrying the joiner's
+    sealed name as the participant's metadata.
+
+  A wrong token and an unknown room are answered alike. These routes are
+  limited to 60 a minute per address (`RATE_LIMIT_CALL_LINK_PER_MIN`), and
+  the SFU is never open to rooms nobody registered.
+
+**In the meeting:** media goes through the host's SFU, each frame encrypted
+under the frame key, so the SFU forwards what it cannot read. The SFU sees
+each participant as a random identity and an opaque label; the others open
+the label with the name key. Screen sharing and the People panel work as in
+a group call.
+
+**Meeting chat:** the Chat panel of a meeting is the meeting's own, not a
+conversation. Each message is sealed under the chat key and sent to the
+room as an SFU data message; who wrote it is the participant it came from.
+It is stored nowhere: a browser shows what arrived while it was in the
+meeting, someone who joins later does not see earlier messages, and it is
+gone on leaving. The panel says so.
+
+**Scheduling:** a meeting's time is information for the people invited, not
+a lock. The host cannot read it, so the link works before and after it. A
+scheduled meeting offers a calendar file (`.ics`, one `VEVENT` in UTC with
+the title and the link), on the Meetings page and on the join page; Kutup
+keeps no calendar and sends no invitations or reminders.
+
+**History:** the Meetings page lists the account's meetings (those whose
+planned end is still ahead first) and, separately, the meetings this
+browser joined, with when and for how long. That second list lives only in
+the browser's storage (`kutup-meeting-history`, at most 30 entries, each
+with the link's fragment so it can be joined again): the server has no
+record of who joined what, the account's other devices do not see it, and
+it can be cleared.
+
+**What a meeting is, and is not:**
+- The link is the whole capability. Whoever has it can read the title and
+  time, join, see, hear and read the chat, and hand the link on. There is
+  no waiting room and no approval.
 - Names are what people typed. Nothing ties a name to an account, including
   for people who have one; the join page says so.
-- Deleting a link stops new joins. People already in the call stay until
-  they leave (their SFU token lasts up to six hours).
-- A link is one room: everyone who opens it while others are there is in
-  the same call.
+- Deleting a meeting stops new joins. People already in it stay until they
+  leave (their SFU token lasts up to six hours).
+- A meeting is one room: everyone who opens the link while others are there
+  is in the same call.
 
 ## The call view
 
@@ -237,6 +284,8 @@ screen, People, Chat, leave).
   the call. It is the conversation itself, not a separate call chat: what is
   written there stays in the history like any other message. Polls, places
   and stickers stay in the conversation proper.
+  In a meeting, which has no conversation, it is the meeting's own
+  temporary chat instead (see "Meetings").
 
 ## ICE servers
 
@@ -271,10 +320,11 @@ It never sees who the participants are, the group, or the media. Other
 servers see only the federated token request (room id and tag) from their
 accounts.
 
-For call links, the host additionally learns that a link exists, which
-account made it and when, and the network address of each joiner when it
-asks for a token. It never learns the link, the names people chose, or the
-media. Someone who gets the link learns all three.
+For meetings, the host additionally learns that a meeting exists, which
+account made it and when, when its sealed details change, and the network
+address of each joiner when it asks for the details or a token. It never
+learns the link, the title or time, the names people chose, the chat, or
+the media. Someone who gets the link learns all of them.
 
 
 - **Kutup servers:** they carry the signals as ordinary encrypted Direct

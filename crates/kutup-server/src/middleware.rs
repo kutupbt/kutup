@@ -158,7 +158,7 @@ pub async fn rate_limit_fork(
     limit(addr, &ratelimit::FORK, None, req, next).await
 }
 
-/// 30/min/IP — a call link's SFU token, which needs no account.
+/// 60/min/IP — a call link's info and SFU token, which need no account.
 pub async fn rate_limit_call_link(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

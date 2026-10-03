@@ -12,6 +12,7 @@ import { useNow } from '../../lib/useNow'
 import { getAlwaysRelayCalls, getNotifications } from '../../state/prefs'
 import { parseAccountAddress } from '@kutup/chat-core/identity'
 import type { ConversationId } from '@kutup/chat-core/types'
+import { ConversationView } from '../thread/ConversationView'
 import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from './CallFrame'
 import { CallController, canShareScreen, reportShareFailure, type CallState } from './callController'
 import { callController, setCallController, setGroupCallController, useCall } from './callStore'
@@ -159,7 +160,7 @@ function CallScreen({ call }: { call: CallState }) {
       testId="chat-call-screen"
       statusTestId="chat-call-status"
       people={people}
-      conversation={conversation}
+      chat={conversation ? <ConversationView conversation={conversation} embedded /> : null}
       panel={live ? panel : null}
       onPanel={setPanel}
       controls={

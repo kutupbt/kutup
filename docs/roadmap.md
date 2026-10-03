@@ -539,20 +539,40 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
-- **Call links: admission and moderation.** A call link is the whole
-  capability (`docs/chat-calls.md`, "Call links"): whoever has it joins.
-  Not built yet: a waiting room where the owner admits each joiner; removing
-  someone from the call and ending it for everyone (the server would have to
-  act on the SFU as the room's administrator, and the frame key would have
-  to change, since a removed person still holds the link); an expiry; and a
-  name for a link in the owner's list.
-- **Call links: joining as yourself.** Everyone in a link call shows the
-  name they typed, including people with accounts. A signed-in person could
+- **Meetings: decisions (2026-10-03).** Recorded here so the next round
+  starts from them (`docs/chat-calls.md`, "Meetings", has the design):
+  - Conversation calls and meetings stay separate. A one-to-one or group
+    call cannot be joined by link, because its key comes from the
+    conversation's own encryption; inviting an outsider is done by starting
+    a meeting from the conversation, which sends the link there.
+  - A meeting's chat is its own and temporary: seen by everyone in the
+    meeting, kept nowhere, gone on leaving, not shown to late joiners.
+    Keeping it would mean a server-held history, which was not wanted for
+    this round.
+  - A meeting's time is information, not a lock: the server cannot read
+    it, and the link works before and after.
+  - Calendar integration is a downloadable `.ics` file and nothing more.
+    Mail, Calendar and Contacts are planned as later pieces of Kutup;
+    recurring meetings, invitations by email and reminders belong to that
+    work and are deliberately not built into Chat.
+  - The list of meetings a person joined is kept in the browser only.
+  - A waiting room was put off to the next round (below).
+- **Meetings: admission and moderation (next).** The link is the whole
+  capability: whoever has it joins. Not built yet: a waiting room where the
+  owner admits each joiner; removing someone and ending the meeting for
+  everyone (the server would have to act on the SFU as the room's
+  administrator, and the keys would have to change, since a removed person
+  still holds the link); and an expiry.
+- **Meetings: joining as yourself.** Everyone in a meeting shows the name
+  they typed, including people with accounts. A signed-in person could
   instead join with a name the others can verify against their contact, and
   a link from another server could open inside their own Chat.
-- **Call links: chat in the call.** A link call has no conversation behind
-  it, so its call view has no Chat panel. Messages for the call's duration
-  would travel through the SFU, sealed under a key from the link.
+- **Meetings: history across devices.** The joined-meetings list is per
+  browser. For an account it could travel between its devices the way list
+  state does (hidden Note to Self records).
+- **Meetings with Calendar (after Mail, Calendar and Contacts).** Recurring
+  meetings, invitations sent by email, reminders, and picking invitees from
+  contacts.
 
 ### Files workspace follow-up
 

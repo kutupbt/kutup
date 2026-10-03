@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useChat } from '../../app/chatStore'
 import { groupTitle, personName } from '../../lib/names'
 import { canShareScreen, reportShareFailure } from './callController'
+import { ConversationView } from '../thread/ConversationView'
 import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from './CallFrame'
 import { CallStage, type StageParticipant } from './CallStage'
 import { groupCallController, useGroupCall } from './callStore'
@@ -65,7 +66,7 @@ function Screen({ call }: { call: GroupCallState }) {
       testId="chat-group-call-screen"
       statusTestId="chat-group-call-status"
       people={people}
-      conversation={{ kind: 'group', groupId: call.groupId }}
+      chat={<ConversationView conversation={{ kind: 'group', groupId: call.groupId }} embedded />}
       panel={call.phase === 'ended' ? null : panel}
       onPanel={setPanel}
       controls={

@@ -30,6 +30,8 @@ import { callController, groupCallController, useCall, useGroupCall } from '../c
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
+import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { useMeetings } from '../callLinks/useMeetings'
 import { openConversation } from '../../state/openConversation'
 import { useLinkPreviews, useTypingIndicators } from '../../state/prefs'
 import { useReadThrough } from '../../state/useAccountState'
@@ -169,6 +171,20 @@ export function ConversationView({
     } catch (error) {
       toast.error(chatErrorMessage(error, t))
     }
+  }
+  // A meeting made from here: its link goes into this conversation, where
+  // the people in it (and anyone they pass it to) can join from.
+  const meetings = useMeetings(false)
+  async function startMeeting() {
+    let url: string
+    try {
+      url = (await meetings.create.mutateAsync({ title: t('chat.meetings.defaultTitle') })).url
+    } catch (error) {
+      toast.error(apiErrorCode(error) === 'conflict' ? t('chat.meetings.tooMany') : t('chat.meetings.createFailed'))
+      return
+    }
+    // A failed send says so itself; the meeting stays in the Meetings list.
+    await actions.send(t('chat.meetings.invitation', { url })).catch(() => undefined)
   }
   const linkPreviewsOn = useLinkPreviews()
   const listActions = useListActions()
@@ -358,6 +374,12 @@ export function ConversationView({
               onDelete={() => setDeletingChat(true)}
               onMarkUnread={() => void navigate('/')}
             />
+            {chat.capabilities?.callLinks && !model.readOnly && !model.note ? (
+              <DropdownMenuItem onSelect={() => void startMeeting()} disabled={meetings.create.isPending} data-testid="chat-start-meeting">
+                <Video />
+                {t('chat.meetings.startHere')}
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setExporting(true)} data-testid="chat-export">
               <Download />

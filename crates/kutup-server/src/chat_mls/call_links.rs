@@ -7,13 +7,16 @@
 //! id, the SHA-256 of the access token and its owner, which is enough to:
 //!
 //! - admit a joiner: whoever presents the access token gets an SFU token for
-//!   that one room (no account needed, so the route is rate-limited by
+//!   that one room (no account needed, so the routes are rate-limited by
 //!   address and the SFU is never open to rooms nobody registered);
-//! - let the owner list and delete their links. Deleting stops new joins.
+//! - show a joiner what the meeting is called and when it is: the owner's
+//!   sealed info, handed to whoever presents the access token;
+//! - let the owner list, retitle, reschedule and delete their links. Deleting
+//!   stops new joins.
 //!
-//! It never learns the secret, the frame key, or who is in a call: the
-//! participant identity is random, and the name a participant chose arrives
-//! sealed under a key from the link.
+//! It never learns the secret, the frame key, the title or time, or who is
+//! in a call: the participant identity is random, and the name a participant
+//! chose arrives sealed under a key from the link.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -35,6 +38,8 @@ const MAX_LINKS_PER_ACCOUNT: i64 = 50;
 /// A sealed participant name: nonce (24) + padded name (128) + tag (16), as
 /// `kutup-chat-core` `call_link.rs` makes it.
 const SEALED_NAME_BYTES: usize = 168;
+/// A sealed meeting info: nonce (24) + padded info (512) + tag (16).
+const SEALED_INFO_BYTES: usize = 552;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,6 +51,31 @@ pub struct CreateCallLinkRequest {
     pub nonce: String,
     /// SHA-256 of the link's access token (standard base64, 32 bytes).
     pub access_token_hash: String,
+    /// The meeting's title and time, sealed under the link's info key
+    /// (standard base64, 552 bytes).
+    pub info: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateCallLinkInfoRequest {
+    /// The new sealed info (standard base64, 552 bytes).
+    pub info: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CallLinkInfoRequest {
+    pub room_id: String,
+    /// The link's access token (standard base64, 32 bytes).
+    pub access_token: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CallLinkInfoResponse {
+    /// The owner's sealed info (standard base64, 552 bytes).
+    pub info: String,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -53,6 +83,8 @@ pub struct CreateCallLinkRequest {
 pub struct CallLink {
     pub room_id: String,
     pub nonce: String,
+    /// Sealed; only holders of the link open it.
+    pub info: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String)]
     pub created_at: OffsetDateTime,
@@ -125,6 +157,7 @@ pub(crate) async fn create(
     hex32("roomId", &request.room_id)?;
     hex32("nonce", &request.nonce)?;
     let hash = base64_exact("accessTokenHash", &request.access_token_hash, 32)?;
+    let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
     let owner = owner(&auth)?;
     let mut tx = state.pool.begin().await?;
     // One account's creations in turn, so the count below holds.
@@ -145,8 +178,8 @@ pub(crate) async fn create(
         ));
     }
     let created: Option<OffsetDateTime> = sqlx::query_scalar(
-        "INSERT INTO chat_call_links (room_id, owner_user_id, nonce, access_token_hash)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO chat_call_links (room_id, owner_user_id, nonce, access_token_hash, info)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT DO NOTHING
          RETURNING created_at",
     )
@@ -154,6 +187,7 @@ pub(crate) async fn create(
     .bind(owner)
     .bind(&request.nonce)
     .bind(&hash)
+    .bind(&info)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(created_at) = created else {
@@ -165,6 +199,7 @@ pub(crate) async fn create(
         Json(CallLink {
             room_id: request.room_id,
             nonce: request.nonce,
+            info: request.info,
             created_at,
         }),
     ))
@@ -182,8 +217,8 @@ pub(crate) async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> AppResult<Json<CallLinkList>> {
-    let rows: Vec<(String, String, OffsetDateTime)> = sqlx::query_as(
-        "SELECT room_id, nonce, created_at FROM chat_call_links
+    let rows: Vec<(String, String, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
+        "SELECT room_id, nonce, info, created_at FROM chat_call_links
          WHERE owner_user_id = $1 ORDER BY created_at DESC, room_id",
     )
     .bind(owner(&auth)?)
@@ -192,9 +227,10 @@ pub(crate) async fn list(
     Ok(Json(CallLinkList {
         links: rows
             .into_iter()
-            .map(|(room_id, nonce, created_at)| CallLink {
+            .map(|(room_id, nonce, info, created_at)| CallLink {
                 room_id,
                 nonce,
+                info: STANDARD.encode(info),
                 created_at,
             })
             .collect(),
@@ -232,6 +268,88 @@ pub(crate) async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/chat/call-links/{roomId}/info",
+    tag = "chat",
+    operation_id = "updateChatCallLinkInfo",
+    params(("roomId" = String, Path, description = "The link's room id")),
+    request_body = UpdateCallLinkInfoRequest,
+    responses(
+        (status = 204, description = "The meeting's sealed title and time are replaced"),
+        (status = 404, description = "No such link of this account"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub(crate) async fn update_info(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(room_id): Path<String>,
+    Json(request): Json<UpdateCallLinkInfoRequest>,
+) -> AppResult<StatusCode> {
+    hex32("roomId", &room_id)?;
+    let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
+    let updated = sqlx::query(
+        "UPDATE chat_call_links SET info = $3 WHERE room_id = $1 AND owner_user_id = $2",
+    )
+    .bind(&room_id)
+    .bind(owner(&auth)?)
+    .bind(&info)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        return Err(AppError::not_found("call link not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The row of a link whose access token was presented. A wrong token and an
+/// unknown room are answered alike, and take alike.
+async fn admitted(state: &AppState, room_id: &str, access_token: &str) -> AppResult<Vec<u8>> {
+    hex32("roomId", room_id)?;
+    let presented = base64_exact("accessToken", access_token, 32)?;
+    let stored: Option<(Vec<u8>, Vec<u8>)> =
+        sqlx::query_as("SELECT access_token_hash, info FROM chat_call_links WHERE room_id = $1")
+            .bind(room_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let presented_hash: [u8; 32] = Sha256::digest(&presented).into();
+    let stored_hash: [u8; 32] = stored
+        .as_ref()
+        .and_then(|(hash, _)| hash.as_slice().try_into().ok())
+        .unwrap_or([0u8; 32]);
+    let matches = kutup_chat_proto::constant_time_capability_hash_eq(&presented_hash, &stored_hash);
+    match stored {
+        Some((_, info)) if matches => Ok(info),
+        _ => Err(AppError::not_found("this call link does not work")),
+    }
+}
+
+/// What the meeting is called and when it is, sealed, for whoever holds the
+/// link. No account (`middleware::rate_limit_call_link`).
+#[utoipa::path(
+    post,
+    path = "/api/chat/call-links/info",
+    tag = "chat",
+    operation_id = "getChatCallLinkInfo",
+    request_body = CallLinkInfoRequest,
+    responses(
+        (status = 200, description = "The link's sealed info", body = CallLinkInfoResponse),
+        (status = 404, description = "No such link, or the wrong access token"),
+        (status = 429, description = "Too many requests"),
+    )
+)]
+pub(crate) async fn info(
+    State(state): State<AppState>,
+    Json(request): Json<CallLinkInfoRequest>,
+) -> AppResult<Json<CallLinkInfoResponse>> {
+    let info = admitted(&state, &request.room_id, &request.access_token).await?;
+    Ok(Json(CallLinkInfoResponse {
+        info: STANDARD.encode(info),
+    }))
+}
+
 /// An SFU token for whoever holds the link. No account: the route is
 /// rate-limited by address (`middleware::rate_limit_call_link`), and a wrong
 /// token and an unknown room are answered alike.
@@ -252,25 +370,9 @@ pub(crate) async fn token(
     Json(request): Json<CallLinkTokenRequest>,
 ) -> AppResult<Json<GroupCallTokenResponse>> {
     require_sfu(&state)?;
-    hex32("roomId", &request.room_id)?;
     hex32("participantId", &request.participant_id)?;
-    let presented = base64_exact("accessToken", &request.access_token, 32)?;
     base64_exact("label", &request.label, SEALED_NAME_BYTES)?;
-    let stored: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT access_token_hash FROM chat_call_links WHERE room_id = $1")
-            .bind(&request.room_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let presented_hash: [u8; 32] = Sha256::digest(&presented).into();
-    // Compared even when the room is unknown, so both cases take alike.
-    let stored_hash: [u8; 32] = stored
-        .as_deref()
-        .and_then(|hash| hash.try_into().ok())
-        .unwrap_or([0u8; 32]);
-    let matches = kutup_chat_proto::constant_time_capability_hash_eq(&presented_hash, &stored_hash);
-    if stored.is_none() || !matches {
-        return Err(AppError::not_found("this call link does not work"));
-    }
+    admitted(&state, &request.room_id, &request.access_token).await?;
     let config = &state.config;
     Ok(Json(GroupCallTokenResponse {
         url: config.chat_sfu_url.clone(),

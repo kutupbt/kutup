@@ -1,7 +1,8 @@
-import { HardDrive, Images, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound } from 'lucide-react'
+import { HardDrive, Images, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound, Video } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
@@ -9,6 +10,8 @@ import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { useMeetings } from '../features/callLinks/useMeetings'
 import { CallHost } from '../features/calls/CallScreen'
 import { JoinGroupHost } from '../features/groupLink/JoinGroupDialog'
 import { SharedPlaceHost } from '../features/thread/ForwardDialog'
@@ -39,6 +42,23 @@ export function ChatShell() {
   const now = useNow(60_000)
   const [newChat, setNewChat] = useState(false)
   const openNewChat = useCallback(() => setNewChat(true), [])
+  // A meeting to join right away: made, its link copied, and shown in the list.
+  const meetings = useMeetings(false)
+  const navigate = useNavigate()
+  async function newMeeting() {
+    try {
+      const meeting = await meetings.create.mutateAsync({ title: t('chat.meetings.defaultTitle') })
+      try {
+        await navigator.clipboard.writeText(meeting.url)
+        toast.success(t('chat.meetings.startedCopied'))
+      } catch {
+        toast.message(t('chat.meetings.started'))
+      }
+      void navigate('/meetings')
+    } catch (error) {
+      toast.error(apiErrorCode(error) === 'conflict' ? t('chat.meetings.tooMany') : t('chat.meetings.createFailed'))
+    }
+  }
   // Muted chats stay out of the count; a chat marked unread counts one.
   const unread = useMemo(() => {
     const counts = unreadCounts(chat.snapshot.history, readThrough, now)
@@ -67,10 +87,24 @@ export function ChatShell() {
         />
       }
       primaryAction={
-        <Button variant="chrome" className="w-full justify-start border border-chrome-border" onClick={() => setNewChat(true)}>
-          <SquarePen />
-          {t('chat.newChat.action')}
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button variant="chrome" className="w-full justify-start border border-chrome-border" onClick={() => setNewChat(true)}>
+            <SquarePen />
+            {t('chat.newChat.action')}
+          </Button>
+          {chat.capabilities?.callLinks ? (
+            <Button
+              variant="chrome"
+              className="w-full justify-start border border-chrome-border"
+              onClick={() => void newMeeting()}
+              disabled={meetings.create.isPending}
+              data-testid="chat-new-meeting"
+            >
+              <Video />
+              {t('chat.meetings.new')}
+            </Button>
+          ) : null}
+        </div>
       }
       nav={
         <>
@@ -87,6 +121,7 @@ export function ChatShell() {
               ) : undefined
             }
           />
+          {chat.capabilities?.callLinks ? <SidebarNavLink to="/meetings" icon={<Video />} label={t('chat.nav.meetings')} /> : null}
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('chat.nav.settings')} />
         </>
       }
