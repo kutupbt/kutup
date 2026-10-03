@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, X } from 'lucide-react'
+import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, UserPlus, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
@@ -18,7 +18,7 @@ import { downloadFile, FsaRequiredError } from '../drive/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
-import { useSharedFiles } from '@kutup/drive-core/fileShares'
+import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
@@ -38,6 +38,7 @@ import { exportScene, thumbnailsOfDrawing, thumbnailsOfPicture } from '../thumbn
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 import RestoreConfirmDialog, { type RestoreChoice } from './versions/RestoreConfirmDialog'
+import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import VersionHistoryPanel from './versions/VersionHistoryPanel'
 import { chooseViewer } from './viewers/dispatch'
 import { useCursorColor } from './useCursorColor'
@@ -248,6 +249,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload}
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
+      shareRole={shareRole(liveFolder, liveFile, sharedFile)}
       mayRename={
         liveFolder.source === 'file'
           ? liveFolder.canUpload
@@ -327,6 +329,7 @@ function Workspace({
   keys,
   readOnly,
   notice,
+  shareRole: mayShare,
   mayRename,
   onRestored,
   onOutdated,
@@ -340,6 +343,8 @@ function Workspace({
   readOnly: boolean
   /** Why an editor opened read-only when that is not its share. */
   notice: string | null
+  /** How this account may share the file from here, if at all. */
+  shareRole: ShareRole | null
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
@@ -349,6 +354,7 @@ function Workspace({
   const download = useDownload(folder, file)
   const rename = useRenameFile()
   const [renaming, setRenaming] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const officeRef = useRef<OfficeEditorHandle | null>(null)
   const whiteboardRef = useRef<WhiteboardEditorHandle | null>(null)
   // OnlyOffice runs in a frame and reports its own Ctrl+S; WholeFileActions
@@ -465,6 +471,17 @@ function Workspace({
             />
           ) : null}
           {opened.kind === 'office' ? <EditorNotice /> : null}
+          {mayShare ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSharing(true)}
+              title={t('drive.actions.share')}
+              aria-label={t('drive.actions.share')}
+            >
+              <UserPlus />
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="icon"
@@ -491,6 +508,10 @@ function Workspace({
         error={rename.error}
         onClose={() => (setRenaming(false), rename.reset())}
         onSubmit={(next) => rename.mutate({ folder, file, name: next }, { onSuccess: () => setRenaming(false) })}
+      />
+      <FileShareDialog
+        target={sharing && mayShare ? { folder, file, role: mayShare } : null}
+        onClose={() => setSharing(false)}
       />
     </div>
   )
