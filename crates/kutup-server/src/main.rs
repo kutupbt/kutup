@@ -539,7 +539,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/auth/forks", post(session_routes::create_fork))
         .route(
             "/api/auth/forks/consume",
-            post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_login)),
+            post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_fork)),
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))

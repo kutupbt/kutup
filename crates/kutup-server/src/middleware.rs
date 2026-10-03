@@ -149,6 +149,15 @@ pub async fn rate_limit_login(
     limit(addr, &ratelimit::LOGIN, None, req, next).await
 }
 
+/// 120/min/IP — redeeming a session fork when an app opens.
+pub async fn rate_limit_fork(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::FORK, None, req, next).await
+}
+
 /// 20/min/IP — mirrors `PreflightRateLimit`.
 pub async fn rate_limit_preflight(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

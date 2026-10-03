@@ -89,6 +89,17 @@ pub static LOGIN: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Session hand-off to an app: 120 / minute / IP (`RATE_LIMIT_FORK_PER_MIN`).
+/// Every app a person opens redeems one fork, so a signed-in household
+/// spends several a minute; a fork is redeemed with a one-time random
+/// selector, not a credential, so this is a flood wall rather than a
+/// guessing budget and must not share the login allowance.
+pub static FORK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_FORK_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
 /// Login preflight: 20 / minute / IP (`RATE_LIMIT_PREFLIGHT_PER_MIN`).
 pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
