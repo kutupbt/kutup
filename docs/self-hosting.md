@@ -502,6 +502,11 @@ charged Chat bytes.
 
 ## Contacts-only sealed sender
 
+Without this, people can still message each other, but attachments, stickers,
+view-once media and voice notes work only in Note to Self and in groups: in a
+direct chat they travel by sealed delivery, and the app hides those controls
+on a server that does not offer it.
+
 Provision the trust root on a machine that is not the Kutup application server.
 The image contains an offline helper; copying that binary to the offline system
 does not require copying the server configuration or database:
@@ -520,9 +525,19 @@ kutup-sealed-sender-provision server-issue \
 
 Both secret files are created once with mode `0600`; the helper refuses to
 overwrite them or read an overly permissive root file. Keep the root offline.
-Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` and the exact
-contents of `kutup-sealed-online.key` as
-`CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The server validates the root chain,
+Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` (on one
+line; in `.env`, inside single quotes) and the exact contents of
+`kutup-sealed-online.key` as `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The
+policy's domain is the server's name: `FEDERATION_SERVER_NAME`, or
+`CHAT_SERVER_NAME` on a server that made its own identity. A server that
+cannot accept the two settings refuses to start, so try them first with a
+one-off container, which goes through the same start-up checks without
+touching the running server:
+
+```sh
+docker compose run --rm backend storage-check
+```
+ The server validates the root chain,
 certificate window, online public/private match, suite, and domain at startup.
 It advertises sealed sender only after the signed service policy is durable:
 
@@ -590,6 +605,79 @@ the users' account keys/recovery material; encryption is not a substitute for
 durable operator backups.
 
 ---
+
+## Database backups
+
+`scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
+machine, and stores it in the object store Kutup already uses (`S3_*` in
+`.env`), under `database-backups/`. It works with the bundled SeaweedFS and
+with an external store; with an external store the backups survive the loss
+of the server, which is the point.
+
+Set a passphrase in `.env` and **keep a copy of it somewhere else**. Without
+it the backups cannot be read, and it is lost with the server otherwise.
+
+```
+KUTUP_BACKUP_PASSPHRASE=<openssl rand -hex 32>
+# KUTUP_BACKUP_KEEP_DAYS=30
+# KUTUP_BACKUP_PREFIX=database-backups
+```
+
+```sh
+scripts/backup-postgres.sh                      # back up, then prune
+scripts/backup-postgres.sh --list               # what is stored
+scripts/backup-postgres.sh --fetch <name> kutup.dump   # download and decrypt
+```
+
+Backups older than `KUTUP_BACKUP_KEEP_DAYS` are removed after each run; the
+newest is never removed. To run it nightly with systemd, from the
+deployment's directory (here `/opt/kutup`):
+
+```ini
+# /etc/systemd/system/kutup-backup.service
+[Unit]
+Description=Back up the Kutup database to object storage
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kutup
+ExecStart=/opt/kutup/scripts/backup-postgres.sh
+
+# /etc/systemd/system/kutup-backup.timer
+[Unit]
+Description=Nightly Kutup database backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl daemon-reload && systemctl enable --now kutup-backup.timer
+journalctl -u kutup-backup.service      # each run's result
+```
+
+To restore onto a fresh server: set up `.env` with the same store, the same
+`JWT_SECRET` and server names, and the passphrase, then
+
+```sh
+docker compose up -d --wait postgres
+scripts/backup-postgres.sh --fetch <name> kutup.dump
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+docker compose up -d --wait
+```
+
+The dump holds accounts, key envelopes and object references; the files'
+ciphertext stays in the object store. A restore therefore returns to the
+moment of the dump: files deleted since then are listed but gone, and files
+added since then are in the store but no longer listed (`kutup-server
+orphan-sweep` finds those).
 
 ## Updating
 

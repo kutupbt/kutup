@@ -166,7 +166,7 @@
       "title": "“{{name}}” paylaş",
       "description": "Paylaştığınız kişiler bu klasörün anahtarının kendilerine mühürlenmiş bir kopyasını alır. Alt klasörler ayrıca paylaşılır.",
       "recipient": "E-posta ya da Kutup adresi",
-      "recipientHint": "Bu sunucudaki biri için e-posta, başka sunucudaki biri için kullanici@sunucu.",
+      "recipientHint": "Bu sunucudaki ya da başka sunucudaki biri için Kutup adresi (kullanici@sunucu) ya da bu sunucudaki birinin e-postası.",
       "canUpload": "Dosya ekleyebilir ve düzenleyebilir",
       "canUploadHint": "Bu olmadan yalnızca görüntüleyebilirler. Ekledikleri kendi depolama alanlarından düşer.",
       "quota": "Yükleme sınırı (GiB)",

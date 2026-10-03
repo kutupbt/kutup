@@ -217,7 +217,7 @@ security design, backend contract, and word-by-word confirmation flow.
 
 ### Backup / restore CLI
 
-Self-hosters need an easy way to back up + restore the full encrypted dataset (DB + S3 blobs). The Rust CLI exists (`crates/kutup-cli`); adding `kutup backup` / `kutup restore` subcommands is mostly tooling around `pg_dump` + `mc mirror`.
+The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in the object store and restores them (`docs/self-hosting.md`, "Database backups"). Still open: copying the object store's blobs elsewhere (a second copy of the ciphertext), a point-in-time-consistent pair of database and blobs, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
 
 ---
 
@@ -539,6 +539,14 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Direct-chat media without sealed sender says nothing.** Attachments,
+  stickers, view-once media and voice notes to another person travel by
+  sealed delivery, which a server offers only once its operator has
+  provisioned it (`docs/self-hosting.md`, "Contacts-only sealed sender").
+  On a server without it the composer simply has no attach, sticker or
+  microphone button in a direct chat (Note to Self and groups have them),
+  with no explanation. Either provision it automatically, as the server
+  identity and ordering key already are, or tell the person why.
 - **Screen sharing in calls.** A call carries the camera and microphone
   only; there is no way to share a screen or a window. Wanted for one-to-one
   calls (a second video track, or the camera's replaced, on the existing

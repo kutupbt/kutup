@@ -44,7 +44,7 @@
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",
     "recipient": "Email or Kutup address",
-    "recipientHint": "An email for someone on this server, or user@other-server (they get an invite link; they can edit too, through their server, if you allow it).",
+    "recipientHint": "A Kutup address (user@server) or, for someone on this server, their email. Someone on another server gets an invite link, and can edit too, through their server, if you allow it.",
     "canEdit": "Can edit",
     "canEditHint": "They can change it and save versions. Without this they can only view it. Only you can rename, move or delete it.",
     "canView": "Can view",

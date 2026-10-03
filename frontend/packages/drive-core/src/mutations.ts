@@ -216,10 +216,16 @@ export function useShareFolder() {
     const username = recipient.slice(0, at)
     const server = recipient.slice(at + 1).toLowerCase()
     if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-    const { data: remote } = await api.get<RemoteRecipient>(
-      `/drive/federation/users/${encodeURIComponent(username)}`,
-      { params: { server } },
-    )
+    let remote: RemoteRecipient
+    try {
+      remote = (
+        await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
+      ).data
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status
+      if (status === 404) throw new RecipientNotFound()
+      throw error
+    }
     const namedShareEnvelope = await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId)
     const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
       recipientUsername: username,
