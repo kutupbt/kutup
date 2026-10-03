@@ -166,6 +166,13 @@ browser matrix. It validates local links, referenced script/workflow/spec paths,
 changed-file whitespace, and Compose parsing. A mixed documentation-and-code
 change still runs the complete `CI` workflow as well as documentation checks.
 
+Pull requests run the unit, build and backup-lifecycle jobs. The two browser
+gates (clean-browser recovery and the two-server security gate) build the
+whole stack, so they run on pushes to `master` and on demand (Actions → CI →
+Run workflow, on any branch): run them locally before opening a pull request,
+with the commands above. They carry the image builds' Cargo caches between
+runs. Dependabot pull requests also skip the backup-lifecycle job.
+
 Changes confined to `.github/workflows/**` run the separate lightweight
 `Workflow validation` workflow. It exercises `actions/checkout@v7`,
 `pnpm/action-setup@v6`, `actions/setup-node@v7`, and

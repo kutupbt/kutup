@@ -587,6 +587,25 @@ epoch, and retry. The browser gate
 (`tests/e2e/specs/32-chat-two-server-security.spec.ts`) waits for the peer's
 commit before acting, as a person usually would.
 
+### Chat · two-server browser gate fails on GitHub's runners only
+
+Open since 2026-10-03. On GitHub's runners the two-server browser gate
+failed twice on the same commits that pass it locally (also pinned to two
+CPU cores, and against the SeaweedFS build CI pulls):
+
+- `32-chat-two-server-security`: after a group owner reloads Chat while a
+  "who may send" approval is pending, Chat stays on its "preparing" screen
+  for more than two minutes (the wait in `fixtures/chat.ts` `openChats`).
+- `34-chat-backup-two-server-recovery`: in a restored clean browser, a group
+  attachment does not appear within 45 seconds (once in two runs).
+
+Not yet known whether the app, the tests or the storage changes of that
+pull request are at fault; the same gate passed on GitHub for the commits
+just before it. Not yet tried locally: CI's sanitized-artifact mode
+(`KUTUP_E2E_SAFE_ARTIFACTS=1`), the one remaining difference. The sanitized
+output does not show how far Chat's start-up got; a start-up checkpoint in
+that output would make the next failure diagnosable.
+
 ### Federation polish
 
 Cross-server presence indicators in collab, outgoing Drive-share revocation,
