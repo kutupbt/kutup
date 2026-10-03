@@ -1,6 +1,8 @@
-import { CloudOff, RefreshCw } from 'lucide-react'
+import { CloudOff, MonitorX, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { requestLocalChatDeviceReset } from '@kutup/chat-core/local-store'
+import { useRequiredSession } from '@kutup/session/store'
 import { Button } from '@kutup/ui/components/button'
 import { useChat } from '../../app/chatStore'
 
@@ -15,6 +17,7 @@ const GRACE_MS = 3_000
 export function ConnectionBanner() {
   const { t } = useTranslation()
   const { connection, service } = useChat()
+  const session = useRequiredSession()
   const [shown, setShown] = useState(false)
 
   useEffect(() => {
@@ -26,6 +29,31 @@ export function ConnectionBanner() {
     return () => window.clearTimeout(timer)
   }, [connection])
 
+  // The server no longer knows this browser's Chat device. Nothing reconnects
+  // it, so say so at once and offer the one thing that helps.
+  if (connection === 'deviceRemoved') {
+    return (
+      <div role="alert" className="m-2 flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+        <div className="flex items-start gap-3">
+          <MonitorX className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">{t('chat.connection.deviceRemoved')}</p>
+            <p className="text-muted-foreground">{t('chat.connection.deviceRemovedBody')}</p>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          className="self-start"
+          onClick={() => {
+            requestLocalChatDeviceReset(session.userId)
+            window.location.reload()
+          }}
+        >
+          {t('chat.connection.setUpAgain')}
+        </Button>
+      </div>
+    )
+  }
   if (!shown || connection === 'connected') return null
   const offline = connection === 'offline'
   return (

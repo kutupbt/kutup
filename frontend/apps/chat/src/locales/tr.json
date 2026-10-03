@@ -557,7 +557,10 @@
       "offline": "Çevrimdışısınız",
       "connecting": "Yeniden bağlanılıyor…",
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
-      "retry": "Yeniden dene"
+      "retry": "Yeniden dene",
+      "deviceRemoved": "Bu tarayıcı artık Sohbet cihazlarınızdan biri değil",
+      "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı. Mesajlar buraya ulaşmıyor. Yeniden kurmak onu baştan kaydeder ve geçmişinizi şifreli yedekten geri yükler; bu tarayıcıdan gönderilmeyi bekleyen mesajlar kaybolur.",
+      "setUpAgain": "Yeniden kur"
     },
     "groupUpdates": {
       "nameChanged": "{{actor}} grubun adını “{{name}}” olarak değiştirdi.",

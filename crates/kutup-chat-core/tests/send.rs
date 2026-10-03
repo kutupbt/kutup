@@ -899,6 +899,46 @@ fn outbox_persists_across_failure_and_flush_resends() {
 }
 
 #[test]
+fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
+    let mut rng = test_rng();
+    let bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle.clone()], vec![bundle]]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+
+    // Two messages to Bob are queued; the server takes neither.
+    *server.fail_sends.borrow_mut() = 2;
+    for (send_id, text) in [("first", "one"), ("second", "two")] {
+        assert!(matches!(
+            block_on(alice.send(send_id, "bob", &ChatContent::text("t", 1, text), &mut rng)),
+            Err(ChatError::Transport(_))
+        ));
+    }
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 2);
+
+    // The server refuses once more. The pass reports the failure instead of
+    // returning it, and does not try the second message ahead of the first:
+    // had it, that one would have gone through and left a single entry.
+    *server.fail_sends.borrow_mut() = 1;
+    let flush = block_on(alice.flush_outbox_collecting_failures(&mut rng)).unwrap();
+    assert!(flush.delivered.is_empty());
+    assert_eq!(flush.failed.len(), 1);
+    assert_eq!(flush.failed[0].send_id, "first");
+    assert_eq!(flush.failed[0].peer, "bob");
+    assert!(matches!(flush.failed[0].error, ChatError::Transport(_)));
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 2);
+
+    // The server answers again: both go out, in order.
+    let flush = block_on(alice.flush_outbox_collecting_failures(&mut rng)).unwrap();
+    assert!(flush.failed.is_empty());
+    assert_eq!(flush.delivered.len(), 2);
+    assert!(flush.delivered.iter().all(|summary| summary.delivered));
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+}
+
+#[test]
 fn receipt_retry_failure_does_not_block_reconciliation_flush() {
     let mut rng = test_rng();
     let bob = device("bob", 1, &mut rng);

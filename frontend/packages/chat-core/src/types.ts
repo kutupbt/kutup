@@ -331,6 +331,8 @@ export interface ReceiveReport {
   undecodable: string[]
   errors: InboundFailure[]
   duplicates: string[]
+  /** Queued messages that could not be delivered on this pass. */
+  sendFailures?: Array<{ sendId: string; peer: string; error: string }>
 }
 
 export interface ReceivedChatMessage {
