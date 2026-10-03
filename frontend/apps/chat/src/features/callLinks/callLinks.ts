@@ -2,6 +2,7 @@ import type { CallLinkInfo, CallLinkKeys } from '@kutup/chat-core/types'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
+import { forgetHostToken, rememberHostToken } from './hostTokens'
 
 // Meetings (docs/chat-calls.md, "Meetings"): a call anyone holding the link
 // can join, with or without an account. Everything about one comes from the
@@ -25,12 +26,19 @@ export interface OwnedCallLink {
   createdAt: string
   url: string
   info: MeetingInfo
+  /** People who open the link wait until the owner lets them in. */
+  waitingRoom: boolean
+  /** Public; the owner's devices derive the meeting's secrets from it. */
+  nonce: string
+  /** The owner's proof of being the host (standard base64). */
+  hostToken: string
 }
 
 interface StoredLink {
   roomId: string
   nonce: string
   info: string
+  waitingRoom: boolean
   createdAt: string
 }
 
@@ -73,11 +81,21 @@ async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCa
   } catch {
     return null
   }
-  return { roomId: stored.roomId, createdAt: stored.createdAt, url: callLinkUrl(wasm.callLinkFragment(secret)), info }
+  const { hostToken } = wasm.callLinkHostToken(toBase64(masterKey), stored.nonce)
+  rememberHostToken(stored.roomId, hostToken)
+  return {
+    roomId: stored.roomId,
+    createdAt: stored.createdAt,
+    url: callLinkUrl(wasm.callLinkFragment(secret)),
+    info,
+    waitingRoom: stored.waitingRoom,
+    nonce: stored.nonce,
+    hostToken,
+  }
 }
 
 /** Make a meeting and register it with this server. */
-export async function createCallLink(masterKey: Uint8Array, info: MeetingInfo): Promise<OwnedCallLink> {
+export async function createCallLink(masterKey: Uint8Array, info: MeetingInfo, waitingRoom = false): Promise<OwnedCallLink> {
   const wasm = await loadChatWasm()
   const nonce = wasm.callLinkNonce()
   const secret = await ownerSecret(masterKey, nonce)
@@ -87,6 +105,8 @@ export async function createCallLink(masterKey: Uint8Array, info: MeetingInfo): 
     nonce,
     accessTokenHash: keys.accessTokenHash,
     info: wasm.callLinkSealInfo(secret, info),
+    hostTokenHash: wasm.callLinkHostToken(toBase64(masterKey), nonce).hostTokenHash,
+    waitingRoom,
   })
   const link = await owned(masterKey, data)
   if (!link) throw new Error('the server returned another meeting')
@@ -110,13 +130,22 @@ export async function updateCallLinkInfo(link: OwnedCallLink, info: MeetingInfo)
   return { ...link, info }
 }
 
+/** Turn one of the account's meetings' waiting room on or off. */
+export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink, enabled: boolean): Promise<OwnedCallLink> {
+  const wasm = await loadChatWasm()
+  const { hostTokenHash } = wasm.callLinkHostToken(toBase64(masterKey), link.nonce)
+  await api.put(`/chat/call-links/${link.roomId}/waiting-room`, { enabled, hostTokenHash })
+  return { ...link, waitingRoom: enabled }
+}
+
 /** Delete a meeting: nobody can join through its link any more. */
 export async function deleteCallLink(roomId: string): Promise<void> {
   await api.delete(`/chat/call-links/${roomId}`)
+  forgetHostToken(roomId)
 }
 
 /** Why the host refused, for the page to explain. */
-export type CallLinkRefusal = 'gone' | 'busy' | 'unavailable'
+export type CallLinkRefusal = 'gone' | 'busy' | 'unavailable' | 'turnedAway' | 'full'
 
 export class CallLinkRefused extends Error {
   constructor(readonly reason: CallLinkRefusal) {
@@ -124,11 +153,16 @@ export class CallLinkRefused extends Error {
   }
 }
 
+/** The meeting has a waiting room: knock instead of asking for a token. */
+export class WaitingRoomRequired extends Error {}
+/** The meeting has no waiting room (any more): ask for a token. */
+export class NoWaitingRoom extends Error {}
+
 /**
  * Ask the host as a holder of the link. No account is involved, so this
  * does not go through the signed-in API client.
  */
-async function asHolder<T>(path: string, body: Record<string, string>): Promise<T> {
+async function asHolder<T>(path: string, body: Record<string, unknown>, context: 'token' | 'knock' | 'other' = 'other'): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/chat/call-links/${path}`, {
@@ -140,24 +174,89 @@ async function asHolder<T>(path: string, body: Record<string, string>): Promise<
   } catch {
     throw new CallLinkRefused('unavailable')
   }
+  if (response.status === 403 && context === 'token') throw new WaitingRoomRequired()
+  if (response.status === 409 && context === 'knock') throw new NoWaitingRoom()
   if (response.status === 404) throw new CallLinkRefused('gone')
-  if (response.status === 429) throw new CallLinkRefused('busy')
+  if (response.status === 429) throw new CallLinkRefused(context === 'knock' ? 'full' : 'busy')
   if (!response.ok) throw new CallLinkRefused('unavailable')
-  return (await response.json()) as T
+  return (response.status === 204 ? undefined : await response.json()) as T
 }
 
-/** What the meeting is called and when it is, as its owner set them. */
-export async function fetchMeetingInfo(link: OpenCallLink): Promise<MeetingInfo> {
-  const { info } = await asHolder<{ info: string }>('info', { roomId: link.roomId, accessToken: link.accessToken })
+/** What the meeting is called and when it is, and whether joiners wait to be let in. */
+export async function fetchMeetingInfo(link: OpenCallLink): Promise<{ info: MeetingInfo; waitingRoom: boolean }> {
+  const { info, waitingRoom } = await asHolder<{ info: string; waitingRoom: boolean }>('info', {
+    roomId: link.roomId,
+    accessToken: link.accessToken,
+  })
   try {
-    return (await loadChatWasm()).callLinkOpenInfo(link.secret, info)
+    return { info: (await loadChatWasm()).callLinkOpenInfo(link.secret, info), waitingRoom }
   } catch {
     // Sealed by someone who does not hold this link: not a meeting to join.
     throw new CallLinkRefused('gone')
   }
 }
 
-/** An SFU token for the meeting's room. */
-export function callLinkToken(link: OpenCallLink, participantId: string, label: string): Promise<{ url: string; token: string }> {
-  return asHolder('token', { roomId: link.roomId, accessToken: link.accessToken, participantId, label })
+export interface SfuAccess {
+  url: string
+  token: string
+}
+
+/**
+ * An SFU token for the meeting's room. With a waiting room only the owner's
+ * host token gets one this way; anyone else is told to knock
+ * (`WaitingRoomRequired`).
+ */
+export function callLinkToken(link: OpenCallLink, participantId: string, label: string, hostToken?: string | null): Promise<SfuAccess> {
+  return asHolder(
+    'token',
+    { roomId: link.roomId, accessToken: link.accessToken, participantId, label, ...(hostToken ? { hostToken } : {}) },
+    'token',
+  )
+}
+
+/** A knock: what its knocker needs to ask how it went. */
+export interface Knock {
+  knockId: string
+  ticket: string
+}
+
+/** Ask to be let into a meeting with a waiting room. */
+export function knockMeeting(link: OpenCallLink, participantId: string, label: string): Promise<Knock> {
+  return asHolder('knock', { roomId: link.roomId, accessToken: link.accessToken, participantId, label }, 'knock')
+}
+
+export type KnockStatus = { status: 'waiting' } | { status: 'turnedAway' } | ({ status: 'admitted' } & SfuAccess)
+
+/** How a knock went. Asking also tells the host the knocker is still there. */
+export function knockStatus(link: OpenCallLink, knock: Knock): Promise<KnockStatus> {
+  return asHolder('knock/status', { roomId: link.roomId, accessToken: link.accessToken, ...knock })
+}
+
+/** Someone waiting to be let in, as the host sees them. */
+export interface WaitingPerson {
+  knockId: string
+  /** The name they chose; null when their label does not open. */
+  name: string | null
+}
+
+/** Who is waiting, oldest first, for the owner. */
+export async function waitingPeople(link: OpenCallLink, hostToken: string): Promise<WaitingPerson[]> {
+  const { knocks } = await asHolder<{ knocks: { knockId: string; label: string }[] }>('knocks', {
+    roomId: link.roomId,
+    accessToken: link.accessToken,
+    hostToken,
+  })
+  const wasm = await loadChatWasm()
+  return knocks.map(({ knockId, label }) => {
+    try {
+      return { knockId, name: wasm.callLinkOpenName(link.secret, label) }
+    } catch {
+      return { knockId, name: null }
+    }
+  })
+}
+
+/** Admit or turn away one person waiting, as the owner. */
+export function decideKnock(link: OpenCallLink, hostToken: string, knockId: string, admit: boolean): Promise<void> {
+  return asHolder('knocks/decide', { roomId: link.roomId, accessToken: link.accessToken, hostToken, knockId, admit })
 }

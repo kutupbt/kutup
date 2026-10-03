@@ -575,13 +575,16 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     recurring meetings, invitations by email and reminders belong to that
     work and are deliberately not built into Chat.
   - The list of meetings a person joined is kept in the browser only.
-  - A waiting room was put off to the next round (below).
-- **Meetings: admission and moderation (next).** The link is the whole
-  capability: whoever has it joins. Not built yet: a waiting room where the
-  owner admits each joiner; removing someone and ending the meeting for
-  everyone (the server would have to act on the SFU as the room's
-  administrator, and the keys would have to change, since a removed person
-  still holds the link); and an expiry.
+  - The waiting room is optional and off by default, because it needs its
+    host present: the owner admits people from inside the meeting, in a
+    browser where they are signed in to Chat.
+- **Meetings: moderation (next).** A waiting room decides who comes in. Not
+  built yet: removing someone and ending the meeting for everyone (the
+  server would have to act on the SFU as the room's administrator, and the
+  keys would have to change, since a removed person still holds the link
+  and a valid SFU token); an expiry for a meeting; co-hosts who can admit;
+  admitting from the Meetings page or a notification without being in the
+  meeting; and letting everyone waiting in at once.
 - **Meetings: joining as yourself.** Everyone in a meeting shows the name
   they typed, including people with accounts. A signed-in person could
   instead join with a name the others can verify against their contact, and

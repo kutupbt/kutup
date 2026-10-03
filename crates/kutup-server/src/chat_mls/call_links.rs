@@ -37,7 +37,7 @@ use crate::AppState;
 const MAX_LINKS_PER_ACCOUNT: i64 = 50;
 /// A sealed participant name: nonce (24) + padded name (128) + tag (16), as
 /// `kutup-chat-core` `call_link.rs` makes it.
-const SEALED_NAME_BYTES: usize = 168;
+pub(super) const SEALED_NAME_BYTES: usize = 168;
 /// A sealed meeting info: nonce (24) + padded info (512) + tag (16).
 const SEALED_INFO_BYTES: usize = 552;
 
@@ -54,6 +54,13 @@ pub struct CreateCallLinkRequest {
     /// The meeting's title and time, sealed under the link's info key
     /// (standard base64, 552 bytes).
     pub info: String,
+    /// SHA-256 of the owner's host token (standard base64, 32 bytes), which
+    /// only the owner's account can derive. Needed for a waiting room.
+    #[serde(default)]
+    pub host_token_hash: Option<String>,
+    /// Joiners wait until the owner admits them.
+    #[serde(default)]
+    pub waiting_room: bool,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -76,6 +83,8 @@ pub struct CallLinkInfoRequest {
 pub struct CallLinkInfoResponse {
     /// The owner's sealed info (standard base64, 552 bytes).
     pub info: String,
+    /// Joiners knock and wait for the owner to admit them.
+    pub waiting_room: bool,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -85,6 +94,7 @@ pub struct CallLink {
     pub nonce: String,
     /// Sealed; only holders of the link open it.
     pub info: String,
+    pub waiting_room: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String)]
     pub created_at: OffsetDateTime,
@@ -108,14 +118,18 @@ pub struct CallLinkTokenRequest {
     /// base64, 168 bytes). The SFU hands it to the other participants, who
     /// open it; this server and the SFU cannot.
     pub label: String,
+    /// The owner's host token (standard base64, 32 bytes): joins a meeting
+    /// with a waiting room without waiting.
+    #[serde(default)]
+    pub host_token: Option<String>,
 }
 
-fn hex32(name: &str, value: &str) -> AppResult<()> {
+pub(super) fn hex32(name: &str, value: &str) -> AppResult<()> {
     kutup_chat_proto::validate_room_id(value)
         .map_err(|_| AppError::bad_request(format!("{name} is 32 lowercase hex characters")))
 }
 
-fn base64_exact(name: &str, value: &str, bytes: usize) -> AppResult<Vec<u8>> {
+pub(super) fn base64_exact(name: &str, value: &str, bytes: usize) -> AppResult<Vec<u8>> {
     let decoded = STANDARD
         .decode(value)
         .ok()
@@ -123,11 +137,11 @@ fn base64_exact(name: &str, value: &str, bytes: usize) -> AppResult<Vec<u8>> {
     decoded.ok_or_else(|| AppError::bad_request(format!("{name} is {bytes} bytes of base64")))
 }
 
-fn owner(auth: &AuthUser) -> AppResult<Uuid> {
+pub(super) fn owner(auth: &AuthUser) -> AppResult<Uuid> {
     Uuid::parse_str(&auth.user_id).map_err(|_| AppError::internal("invalid user id"))
 }
 
-fn require_sfu(state: &AppState) -> AppResult<()> {
+pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
     if hosts_group_calls(state) {
         Ok(())
     } else {
@@ -158,6 +172,14 @@ pub(crate) async fn create(
     hex32("nonce", &request.nonce)?;
     let hash = base64_exact("accessTokenHash", &request.access_token_hash, 32)?;
     let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
+    let host_token_hash = request
+        .host_token_hash
+        .as_deref()
+        .map(|hash| base64_exact("hostTokenHash", hash, 32))
+        .transpose()?;
+    if request.waiting_room && host_token_hash.is_none() {
+        return Err(AppError::bad_request("a waiting room needs hostTokenHash"));
+    }
     let owner = owner(&auth)?;
     let mut tx = state.pool.begin().await?;
     // One account's creations in turn, so the count below holds.
@@ -178,8 +200,9 @@ pub(crate) async fn create(
         ));
     }
     let created: Option<OffsetDateTime> = sqlx::query_scalar(
-        "INSERT INTO chat_call_links (room_id, owner_user_id, nonce, access_token_hash, info)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO chat_call_links
+            (room_id, owner_user_id, nonce, access_token_hash, info, host_token_hash, waiting_room)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT DO NOTHING
          RETURNING created_at",
     )
@@ -188,6 +211,8 @@ pub(crate) async fn create(
     .bind(&request.nonce)
     .bind(&hash)
     .bind(&info)
+    .bind(&host_token_hash)
+    .bind(request.waiting_room)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(created_at) = created else {
@@ -200,6 +225,7 @@ pub(crate) async fn create(
             room_id: request.room_id,
             nonce: request.nonce,
             info: request.info,
+            waiting_room: request.waiting_room,
             created_at,
         }),
     ))
@@ -217,8 +243,8 @@ pub(crate) async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> AppResult<Json<CallLinkList>> {
-    let rows: Vec<(String, String, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
-        "SELECT room_id, nonce, info, created_at FROM chat_call_links
+    let rows: Vec<(String, String, Vec<u8>, bool, OffsetDateTime)> = sqlx::query_as(
+        "SELECT room_id, nonce, info, waiting_room, created_at FROM chat_call_links
          WHERE owner_user_id = $1 ORDER BY created_at DESC, room_id",
     )
     .bind(owner(&auth)?)
@@ -227,12 +253,15 @@ pub(crate) async fn list(
     Ok(Json(CallLinkList {
         links: rows
             .into_iter()
-            .map(|(room_id, nonce, info, created_at)| CallLink {
-                room_id,
-                nonce,
-                info: STANDARD.encode(info),
-                created_at,
-            })
+            .map(
+                |(room_id, nonce, info, waiting_room, created_at)| CallLink {
+                    room_id,
+                    nonce,
+                    info: STANDARD.encode(info),
+                    waiting_room,
+                    created_at,
+                },
+            )
             .collect(),
     }))
 }
@@ -304,24 +333,61 @@ pub(crate) async fn update_info(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The row of a link whose access token was presented. A wrong token and an
+/// What this server holds of a meeting, for someone who presented its
+/// access token.
+pub(super) struct Admitted {
+    pub info: Vec<u8>,
+    pub waiting_room: bool,
+    host_token_hash: Option<Vec<u8>>,
+}
+
+impl Admitted {
+    /// Whether `host_token` is the owner's (compared in constant time).
+    pub fn is_host(&self, host_token: Option<&str>) -> AppResult<bool> {
+        let Some(token) = host_token else {
+            return Ok(false);
+        };
+        let presented: [u8; 32] = Sha256::digest(base64_exact("hostToken", token, 32)?).into();
+        let stored: [u8; 32] = self
+            .host_token_hash
+            .as_deref()
+            .and_then(|hash| hash.try_into().ok())
+            .unwrap_or([0u8; 32]);
+        Ok(self.host_token_hash.is_some()
+            && kutup_chat_proto::constant_time_capability_hash_eq(&presented, &stored))
+    }
+}
+
+/// The meeting whose access token was presented. A wrong token and an
 /// unknown room are answered alike, and take alike.
-async fn admitted(state: &AppState, room_id: &str, access_token: &str) -> AppResult<Vec<u8>> {
+pub(super) async fn admitted(
+    state: &AppState,
+    room_id: &str,
+    access_token: &str,
+) -> AppResult<Admitted> {
     hex32("roomId", room_id)?;
     let presented = base64_exact("accessToken", access_token, 32)?;
-    let stored: Option<(Vec<u8>, Vec<u8>)> =
-        sqlx::query_as("SELECT access_token_hash, info FROM chat_call_links WHERE room_id = $1")
-            .bind(room_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    // access_token_hash, info, waiting_room, host_token_hash
+    type Row = (Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>);
+    let stored: Option<Row> = sqlx::query_as(
+        "SELECT access_token_hash, info, waiting_room, host_token_hash
+         FROM chat_call_links WHERE room_id = $1",
+    )
+    .bind(room_id)
+    .fetch_optional(&state.pool)
+    .await?;
     let presented_hash: [u8; 32] = Sha256::digest(&presented).into();
     let stored_hash: [u8; 32] = stored
         .as_ref()
-        .and_then(|(hash, _)| hash.as_slice().try_into().ok())
+        .and_then(|(hash, ..)| hash.as_slice().try_into().ok())
         .unwrap_or([0u8; 32]);
     let matches = kutup_chat_proto::constant_time_capability_hash_eq(&presented_hash, &stored_hash);
     match stored {
-        Some((_, info)) if matches => Ok(info),
+        Some((_, info, waiting_room, host_token_hash)) if matches => Ok(Admitted {
+            info,
+            waiting_room,
+            host_token_hash,
+        }),
         _ => Err(AppError::not_found("this call link does not work")),
     }
 }
@@ -344,9 +410,10 @@ pub(crate) async fn info(
     State(state): State<AppState>,
     Json(request): Json<CallLinkInfoRequest>,
 ) -> AppResult<Json<CallLinkInfoResponse>> {
-    let info = admitted(&state, &request.room_id, &request.access_token).await?;
+    let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
     Ok(Json(CallLinkInfoResponse {
-        info: STANDARD.encode(info),
+        info: STANDARD.encode(meeting.info),
+        waiting_room: meeting.waiting_room,
     }))
 }
 
@@ -361,6 +428,7 @@ pub(crate) async fn info(
     request_body = CallLinkTokenRequest,
     responses(
         (status = 200, description = "An SFU token for the link's room", body = GroupCallTokenResponse),
+        (status = 403, description = "The meeting has a waiting room: knock instead"),
         (status = 404, description = "No such link (deleted, or not this server's), or the wrong access token"),
         (status = 429, description = "Too many requests"),
     )
@@ -372,19 +440,41 @@ pub(crate) async fn token(
     require_sfu(&state)?;
     hex32("participantId", &request.participant_id)?;
     base64_exact("label", &request.label, SEALED_NAME_BYTES)?;
-    admitted(&state, &request.room_id, &request.access_token).await?;
+    let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
+    // With a waiting room, holding the link is not enough: only the owner
+    // comes straight in. Everyone else knocks (call_link_waiting.rs).
+    if meeting.waiting_room && !meeting.is_host(request.host_token.as_deref())? {
+        return Err(AppError::forbidden(
+            "this meeting has a waiting room: knock and wait to be admitted",
+        ));
+    }
+    Ok(Json(room_token(
+        &state,
+        &request.room_id,
+        &request.participant_id,
+        &request.label,
+    )?))
+}
+
+/// An SFU token for the meeting's room, carrying the joiner's sealed name.
+pub(super) fn room_token(
+    state: &AppState,
+    room_id: &str,
+    participant_id: &str,
+    label: &str,
+) -> AppResult<GroupCallTokenResponse> {
     let config = &state.config;
-    Ok(Json(GroupCallTokenResponse {
+    Ok(GroupCallTokenResponse {
         url: config.chat_sfu_url.clone(),
         token: livekit_token(
             &config.chat_sfu_api_key,
             &config.chat_sfu_api_secret,
-            &request.room_id,
-            &request.participant_id,
-            Some(&request.label),
+            room_id,
+            participant_id,
+            Some(label),
             OffsetDateTime::now_utc().unix_timestamp(),
         )?,
-    }))
+    })
 }
 
 #[cfg(test)]

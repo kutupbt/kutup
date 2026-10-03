@@ -3756,6 +3756,30 @@ pub fn call_link_owner_secret(
         .map_err(chat_error)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CallLinkHostOutput {
+    host_token: String,
+    host_token_hash: String,
+}
+
+/// The owner's host token for the meeting made with `nonce`, and the hash
+/// the server stores of it.
+#[wasm_bindgen(js_name = callLinkHostToken)]
+pub fn call_link_host_token(
+    master_key: String,
+    nonce: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    let token =
+        crate::call_link::owner_call_link_host_token(&master_key, &nonce).map_err(chat_error)?;
+    let hash = crate::call_link::call_link_token_hash(&token).map_err(chat_error)?;
+    to_output(&CallLinkHostOutput {
+        host_token: token.to_string(),
+        host_token_hash: hash,
+    })
+}
+
 #[wasm_bindgen(js_name = callLinkKeys)]
 pub fn call_link_keys(secret: String) -> std::result::Result<JsValue, JsValue> {
     let secret = zeroize::Zeroizing::new(secret);
