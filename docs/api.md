@@ -1791,6 +1791,50 @@ bytes of standard base64, `participantId` 32 lowercase hex characters, and
 token carries to the other participants as metadata. `404` and `429` as
 above.
 
+### PUT /api/chat/call-links/:roomId/waiting-room
+
+`{ "enabled", "hostTokenHash" }` → `204`: turn the meeting's waiting room on
+or off ([`chat-calls.md`](chat-calls.md) "The waiting room"). `hostTokenHash`
+is the SHA-256 of the owner's host token (standard base64, 32 bytes).
+Turning it off lets in everyone still waiting. `404` when the account has no
+such meeting. `POST /api/chat/call-links` takes the same two fields
+(`hostTokenHash`, `waitingRoom`) when a meeting is made, the list returns
+`waitingRoom`, and `POST /api/chat/call-links/info` returns it beside the
+sealed info.
+
+With a waiting room, `POST /api/chat/call-links/token` answers `403` unless
+its optional `hostToken` is the owner's.
+
+### POST /api/chat/call-links/knock
+
+**No authentication.** `{ "roomId", "accessToken", "participantId", "label" }`
+→ `201` with `{ "knockId", "ticket" }`: ask to be let in. `409` when the
+meeting has no waiting room, `429` when 50 people are already waiting or
+over 60 a minute per address.
+
+### POST /api/chat/call-links/knock/status
+
+**No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →
+`{ "status" }` (`waiting`, `turnedAway`) or
+`{ "status": "admitted", "url", "token" }` with the SFU token. Asking keeps
+the knock alive. `404` for a wrong ticket or a knock that is gone. This and
+the two routes below are limited to 600 a minute per address
+(`RATE_LIMIT_CALL_LINK_POLL_PER_MIN`).
+
+### POST /api/chat/call-links/knocks
+
+**No authentication; the owner's host token.**
+`{ "roomId", "accessToken", "hostToken" }` →
+`{ "knocks": [{ "knockId", "label", "createdAt" }] }`: who is waiting,
+oldest first, each with their sealed name. `404` for a wrong host token, as
+for an unknown room.
+
+### POST /api/chat/call-links/knocks/decide
+
+**No authentication; the owner's host token.**
+`{ "roomId", "accessToken", "hostToken", "knockId", "admit" }` → `204`. `404`
+when nobody is waiting under that knock.
+
 ### PUT /api/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device

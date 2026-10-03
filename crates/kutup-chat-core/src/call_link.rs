@@ -229,6 +229,41 @@ pub fn owner_call_link_secret(master_key: &str, nonce: &str) -> Result<Zeroizing
     Ok(Zeroizing::new(STANDARD.encode(secret.as_slice())))
 }
 
+/// The owner's proof of being a meeting's host (standard base64, 32 bytes),
+/// from the account master key and the meeting's nonce. Unlike the link's
+/// secret, nobody the link is shared with can compute it. The host stores
+/// only its SHA-256: presenting the token lets the owner into a meeting
+/// with a waiting room, and lets them admit the people waiting.
+pub fn owner_call_link_host_token(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
+    let invalid_key = || ChatError::Invalid("account master key is not 32 bytes of base64".into());
+    let master = Zeroizing::new(STANDARD.decode(master_key).map_err(|_| invalid_key())?);
+    if master.len() != 32 {
+        return Err(invalid_key());
+    }
+    let invalid_nonce =
+        || ChatError::Invalid("call link nonce is 32 lowercase hex characters".into());
+    let nonce_bytes = hex::decode(nonce).map_err(|_| invalid_nonce())?;
+    if nonce_bytes.len() != CALL_LINK_NONCE_BYTES || hex::encode(&nonce_bytes) != nonce {
+        return Err(invalid_nonce());
+    }
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), master.as_slice());
+    let mut info = b"host token\0".to_vec();
+    info.extend_from_slice(&nonce_bytes);
+    let mut token = Zeroizing::new([0u8; 32]);
+    expand(&hkdf, &info, token.as_mut_slice())?;
+    Ok(Zeroizing::new(STANDARD.encode(token.as_slice())))
+}
+
+/// What the host stores of a token: its SHA-256 (standard base64).
+pub fn call_link_token_hash(token: &str) -> Result<String> {
+    let invalid = || ChatError::Invalid("a call link token is 32 bytes of base64".into());
+    let bytes = Zeroizing::new(STANDARD.decode(token).map_err(|_| invalid())?);
+    if bytes.len() != 32 {
+        return Err(invalid());
+    }
+    Ok(STANDARD.encode(Sha256::digest(bytes.as_slice())))
+}
+
 impl CallLinkKeys {
     /// `secret` is 32 bytes of standard base64.
     pub fn derive(secret: &str) -> Result<Self> {
@@ -459,6 +494,44 @@ mod tests {
         let owner =
             owner_call_link_secret(&STANDARD.encode([0x11u8; 32]), &"ab".repeat(16)).unwrap();
         assert_eq!(*owner, "Yi4tqOY3XO7WfskbMqffnc1VxRDgPaCIToP6mL6c5xY=");
+        let host =
+            owner_call_link_host_token(&STANDARD.encode([0x11u8; 32]), &"ab".repeat(16)).unwrap();
+        assert_eq!(*host, "3ULq/fDt4/R/D8oA0NUYdLjT/g1KeYTp1s3K52qYbUs=");
+    }
+
+    #[test]
+    fn the_host_token_is_the_owners_alone() {
+        let master = STANDARD.encode([5u8; 32]);
+        let nonce = new_call_link_nonce();
+        let token = owner_call_link_host_token(&master, &nonce).unwrap();
+        assert_eq!(
+            *token,
+            *owner_call_link_host_token(&master, &nonce).unwrap()
+        );
+        assert_eq!(STANDARD.decode(token.as_str()).unwrap().len(), 32);
+        // Not the link's secret, nor anything a holder of the link derives.
+        let secret = owner_call_link_secret(&master, &nonce).unwrap();
+        let keys = CallLinkKeys::derive(&secret).unwrap();
+        assert_ne!(*token, *secret);
+        assert_ne!(*token, keys.access_token);
+        assert_ne!(
+            *token,
+            *owner_call_link_host_token(&master, &new_call_link_nonce()).unwrap()
+        );
+        assert_ne!(
+            *token,
+            *owner_call_link_host_token(&STANDARD.encode([6u8; 32]), &nonce).unwrap()
+        );
+        assert_eq!(
+            call_link_token_hash(&token).unwrap(),
+            STANDARD.encode(Sha256::digest(STANDARD.decode(token.as_str()).unwrap()))
+        );
+        assert_eq!(
+            call_link_token_hash(&keys.access_token).unwrap(),
+            keys.access_token_hash
+        );
+        assert!(call_link_token_hash("short").is_err());
+        assert!(owner_call_link_host_token(&master, "zz").is_err());
     }
 
     #[test]

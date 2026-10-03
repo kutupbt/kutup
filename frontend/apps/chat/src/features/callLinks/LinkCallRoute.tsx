@@ -1,6 +1,7 @@
-import { CalendarPlus, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Video, VideoOff } from 'lucide-react'
+import { CalendarPlus, DoorOpen, Loader2, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Video, VideoOff } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
@@ -13,6 +14,7 @@ import { CallStage, type StageParticipant } from '../calls/CallStage'
 import { LinkCallController, type LinkCallState } from '../calls/linkCallController'
 import { CallLinkRefused, fetchMeetingInfo, openCallLink, type CallLinkRefusal, type MeetingInfo, type OpenCallLink } from './callLinks'
 import { MAX_CALL_NAME_LENGTH, rememberCallName, rememberedCallName } from './callName'
+import { hostTokenFor } from './hostTokens'
 import { downloadMeetingIcs } from './ics'
 import { MeetingChat } from './MeetingChat'
 import { recordJoinedMeeting } from './meetingHistory'
@@ -60,11 +62,13 @@ export function LinkCallRoute() {
 
 function LinkCall({ link }: { link: OpenCallLink }) {
   const { t } = useTranslation()
-  const controller = useMemo(() => new LinkCallController(link), [link])
+  // The owner's proof of being the host, when they are signed in here.
+  const controller = useMemo(() => new LinkCallController(link, hostTokenFor(link.roomId)), [link])
   useEffect(() => () => controller.dispose(), [controller])
   const call = useSyncExternalStore(controller.subscribe, controller.current)
-  // What the meeting is called and when it is: asked once, before joining.
-  const [info, setInfo] = useState<MeetingInfo | CallLinkRefusal | null>(null)
+  // What the meeting is called, when it is and whether joiners wait to be
+  // let in: asked once, before joining.
+  const [info, setInfo] = useState<Meeting | CallLinkRefusal | null>(null)
   useEffect(() => {
     let current = true
     setInfo(null)
@@ -75,7 +79,7 @@ function LinkCall({ link }: { link: OpenCallLink }) {
       current = false
     }
   }, [link])
-  const title = typeof info === 'object' && info ? info.title : t('chat.meetings.defaultTitle')
+  const title = typeof info === 'object' && info ? info.info.title : t('chat.meetings.defaultTitle')
 
   // Each stay in the meeting goes into this browser's history when it ends.
   const active = call?.phase === 'active'
@@ -92,8 +96,34 @@ function LinkCall({ link }: { link: OpenCallLink }) {
   }, [active, call?.phase, controller, link, title])
 
   if (info === null) return <LoadingPanel label={t('common.loading')} />
+  if (call?.phase === 'waiting') return <Waiting controller={controller} title={title} />
   if (call && call.phase !== 'ended') return <InCall controller={controller} call={call} title={title} />
   return <JoinForm controller={controller} last={call} link={link} info={info} />
+}
+
+/** What the page learned of the meeting before joining. */
+interface Meeting {
+  info: MeetingInfo
+  waitingRoom: boolean
+}
+
+/** Knocked, and waiting for the host to let this browser in. */
+function Waiting({ controller, title }: { controller: LinkCallController; title: string }) {
+  const { t } = useTranslation()
+  return (
+    <main className="mx-auto flex min-h-svh w-full max-w-sm flex-col items-center justify-center gap-5 px-6 py-10 text-center" data-testid="chat-link-call-waiting">
+      <KutupLogo size={40} />
+      <h1 className="font-display text-2xl font-semibold tracking-tight">{title}</h1>
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+        {t('chat.meetings.waiting')}
+      </p>
+      <p className="text-sm text-muted-foreground">{t('chat.meetings.waitingDescription')}</p>
+      <Button type="button" variant="outline" onClick={() => void controller.leave()} data-testid="chat-link-call-waiting-cancel">
+        {t('common.cancel')}
+      </Button>
+    </main>
+  )
 }
 
 function JoinForm({
@@ -105,13 +135,15 @@ function JoinForm({
   controller: LinkCallController
   last: LinkCallState | null
   link: OpenCallLink
-  info: MeetingInfo | CallLinkRefusal
+  info: Meeting | CallLinkRefusal
 }) {
   const { t, i18n } = useTranslation()
   const [name, setName] = useState(rememberedCallName)
   const [joining, setJoining] = useState(false)
   const trimmed = name.trim()
-  const meeting = typeof info === 'object' ? info : null
+  const meeting = typeof info === 'object' ? info.info : null
+  // Whether pressing Join knocks: a waiting room, and not the owner.
+  const knocks = typeof info === 'object' && info.waitingRoom && !controller.isHost
   // The link itself was refused (deleted, say): nothing to join.
   const refused = typeof info === 'string' ? info : null
   const failure = last?.failure ?? refused
@@ -121,7 +153,7 @@ function JoinForm({
     setJoining(true)
     rememberCallName(trimmed)
     // The state says why a join failed; this page shows it below.
-    await controller.join(trimmed, withVideo).catch(() => undefined)
+    await controller.join(trimmed, withVideo, typeof info === 'object' && info.waitingRoom).catch(() => undefined)
     setJoining(false)
   }
 
@@ -148,6 +180,12 @@ function JoinForm({
           </p>
         ) : null}
         <p className="text-sm text-muted-foreground">{t('chat.callLinks.joinDescription')}</p>
+        {knocks ? (
+          <p className="flex items-center gap-2 text-sm font-medium" data-testid="chat-link-call-has-waiting-room">
+            <DoorOpen className="size-4" aria-hidden />
+            {t('chat.meetings.hasWaitingRoom')}
+          </p>
+        ) : null}
         {meeting?.startsAtMs !== undefined ? (
           <Button
             type="button"
@@ -165,7 +203,7 @@ function JoinForm({
         <div data-testid="chat-link-call-failure" data-reason={failure}>
           <Alert variant="error">{t(`chat.callLinks.failed.${failure}`)}</Alert>
         </div>
-      ) : last ? (
+      ) : last?.wasIn ? (
         <div data-testid="chat-link-call-left">
           <Alert variant="info">{t('chat.callLinks.left')}</Alert>
         </div>
@@ -188,11 +226,11 @@ function JoinForm({
           <div className="flex flex-col gap-2">
             <Button type="button" disabled={!trimmed || joining} onClick={() => void join(true)} data-testid="chat-link-call-join-video">
               <Video />
-              {t('chat.callLinks.joinWithVideo')}
+              {knocks ? t('chat.meetings.askWithVideo') : t('chat.callLinks.joinWithVideo')}
             </Button>
             <Button type="submit" variant="outline" disabled={!trimmed || joining} data-testid="chat-link-call-join">
               <Mic />
-              {t('chat.callLinks.joinWithVoice')}
+              {knocks ? t('chat.meetings.askWithVoice') : t('chat.callLinks.joinWithVoice')}
             </Button>
           </div>
         </form>
@@ -210,6 +248,14 @@ function InCall({ controller, call, title }: { controller: LinkCallController; c
     if (panel === 'chat') setSeen(call.messages.length)
   }, [panel, call.messages.length])
   const unread = panel !== 'chat' && call.messages.slice(seen).some((message) => !message.own)
+  async function decide(work: () => Promise<void>) {
+    try {
+      await work()
+    } catch {
+      // Already decided, or the person stopped waiting: the list catches up.
+      toast.error(t('chat.meetings.decideFailed'))
+    }
+  }
   const participants: StageParticipant[] = call.participants.map((participant) => {
     const name = participant.local ? t('chat.you') : (participant.name ?? t('chat.callLinks.unnamed'))
     return { ...participant, name, avatarName: participant.name ?? name }
@@ -267,6 +313,30 @@ function InCall({ controller, call, title }: { controller: LinkCallController; c
       }
     >
       <CallStage participants={participants} />
+      {call.waiting.length > 0 ? (
+        <aside
+          className="absolute right-3 top-3 z-10 w-72 max-w-[calc(100%-1.5rem)] space-y-2 rounded-xl border border-border bg-background p-3 text-foreground shadow-lg"
+          aria-label={t('chat.meetings.waitingTitle', { count: call.waiting.length })}
+          data-testid="chat-meeting-knocks"
+        >
+          <p className="text-sm font-semibold">{t('chat.meetings.waitingTitle', { count: call.waiting.length })}</p>
+          <ul className="max-h-60 space-y-2 overflow-y-auto">
+            {call.waiting.map((person) => (
+              <li key={person.knockId} className="space-y-1.5" data-testid="chat-meeting-knock" data-name={person.name ?? ''}>
+                <p className="truncate text-sm">{person.name ?? t('chat.callLinks.unnamed')}</p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => void decide(() => controller.admit(person.knockId))} data-testid="chat-meeting-admit">
+                    {t('chat.meetings.admit')}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void decide(() => controller.turnAway(person.knockId))} data-testid="chat-meeting-turn-away">
+                    {t('chat.meetings.turnAway')}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      ) : null}
     </CallFrame>
   )
 }

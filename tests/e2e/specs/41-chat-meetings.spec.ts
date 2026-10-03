@@ -38,8 +38,8 @@ test('someone without an account joins a scheduled meeting through its link', as
   test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
 
   // Schedule a meeting. What reaches the server is the room, a public
-  // nonce, the hash of the access token and the sealed details: never the
-  // link, the title or the time.
+  // nonce, the hashes of the access and host tokens, the sealed details and
+  // whether there is a waiting room: never the link, the title or the time.
   await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
   await expect(chat.getByTestId('chat-meetings-empty')).toBeVisible({ timeout: 30_000 })
   await chat.getByTestId('chat-meeting-schedule').click()
@@ -50,8 +50,9 @@ test('someone without an account joins a scheduled meeting through its link', as
   const registration = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/call-links')
   await chat.getByTestId('chat-meeting-save').click()
   const registeredBody = (await registration).postData() ?? ''
-  const registered = JSON.parse(registeredBody) as Record<string, string>
-  expect(Object.keys(registered).sort()).toEqual(['accessTokenHash', 'info', 'nonce', 'roomId'])
+  const registered = JSON.parse(registeredBody) as Record<string, unknown>
+  expect(Object.keys(registered).sort()).toEqual(['accessTokenHash', 'hostTokenHash', 'info', 'nonce', 'roomId', 'waitingRoom'])
+  expect(registered.waitingRoom).toBe(false)
   expect(registeredBody).not.toContain('Team sync')
 
   const row = chat.getByTestId('chat-meetings-upcoming').locator(`[data-testid="chat-meeting"][data-title="${title}"]`)
@@ -212,6 +213,103 @@ test('a meeting starts from the sidebar and from a conversation', async ({ brows
 
   await contextA.close()
   await contextB.close()
+})
+
+test('a meeting with a waiting room lets in only whom its owner admits', async ({ browser }) => {
+  test.slow()
+  const owner = newAccount('doorowner', PASSWORD)
+  const ownerContext = await browser.newContext()
+  await registerAccount(ownerContext, owner)
+  const chat = await openChat(ownerContext)
+  test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
+
+  // A meeting with a waiting room.
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await chat.getByTestId('chat-meeting-schedule').click()
+  const title = `Board ${Date.now()}`
+  await chat.getByTestId('chat-meeting-title').fill(title)
+  await chat.getByTestId('chat-meeting-timed').uncheck()
+  await chat.getByTestId('chat-meeting-waiting-room').check()
+  await chat.getByTestId('chat-meeting-save').click()
+  await expect(meeting(chat, title).getByTestId('chat-meeting-has-waiting-room')).toBeVisible({ timeout: 30_000 })
+  const url = (await meeting(chat, title).getByTestId('chat-meeting-url').textContent())!.trim()
+
+  // The owner, signed in on this browser, comes straight in.
+  const popup = ownerContext.waitForEvent('page')
+  await meeting(chat, title).getByTestId('chat-meeting-join').click()
+  const ownerCall = await popup
+  await expect(ownerCall.getByTestId('chat-link-call-has-waiting-room')).toHaveCount(0)
+  await join(ownerCall, 'Owner Ada', false)
+
+  // A guest holds the link, and that is not enough: the page says the host
+  // lets people in, and the server refuses an SFU token for the link alone.
+  const guestContext = await browser.newContext()
+  const guest = await guestContext.newPage()
+  let tokenRequest: { roomId: string; accessToken: string } | null = null
+  guest.on('request', (sent) => {
+    if (new URL(sent.url()).pathname === '/api/chat/call-links/info') tokenRequest = sent.postDataJSON() as typeof tokenRequest
+  })
+  await guest.goto(url)
+  await expect(guest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 60_000 })
+  expect(tokenRequest).not.toBeNull()
+  const direct = await guest.request.post(apiUrl('/chat/call-links/token'), {
+    data: { ...tokenRequest!, participantId: 'ab'.repeat(16), label: Buffer.alloc(168).toString('base64') },
+  })
+  expect(direct.status()).toBe(403)
+  const asHost = await guest.request.post(apiUrl('/chat/call-links/knocks'), {
+    data: { ...tokenRequest!, hostToken: Buffer.alloc(32, 7).toString('base64') },
+  })
+  expect(asHost.status()).toBe(404)
+
+  // The guest asks to join and waits; the owner sees them by name and lets
+  // them in.
+  await guest.getByTestId('chat-link-call-name').fill('Guest Gül')
+  await guest.getByTestId('chat-link-call-join').click()
+  await expect(guest.getByTestId('chat-link-call-waiting')).toBeVisible({ timeout: 30_000 })
+  const knock = ownerCall.locator('[data-testid="chat-meeting-knock"][data-name="Guest Gül"]')
+  await expect(knock).toBeVisible({ timeout: 30_000 })
+  await expect(tile(ownerCall, 'Guest Gül')).toHaveCount(0)
+  await knock.getByTestId('chat-meeting-admit').click()
+  await expect(guest.getByTestId('chat-link-call-screen')).toHaveAttribute('data-phase', 'active', { timeout: 60_000 })
+  await expect(tile(ownerCall, 'Guest Gül')).toBeVisible({ timeout: 60_000 })
+  await expect(ownerCall.getByTestId('chat-meeting-knocks')).toHaveCount(0, { timeout: 30_000 })
+
+  // Someone the owner turns away is told so, and is not in the meeting.
+  const strangerContext = await browser.newContext()
+  const stranger = await strangerContext.newPage()
+  await stranger.goto(url)
+  await expect(stranger.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await stranger.getByTestId('chat-link-call-name').fill('Stranger')
+  await stranger.getByTestId('chat-link-call-join').click()
+  const strangerKnock = ownerCall.locator('[data-testid="chat-meeting-knock"][data-name="Stranger"]')
+  await expect(strangerKnock).toBeVisible({ timeout: 30_000 })
+  await strangerKnock.getByTestId('chat-meeting-turn-away').click()
+  await expect(stranger.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'turnedAway', { timeout: 30_000 })
+  await expect(tile(ownerCall, 'Stranger')).toHaveCount(0)
+
+  // Someone who gives up waiting disappears from the owner's list.
+  await stranger.getByTestId('chat-link-call-join').click()
+  await expect(stranger.getByTestId('chat-link-call-waiting')).toBeVisible({ timeout: 30_000 })
+  await expect(ownerCall.locator('[data-testid="chat-meeting-knock"][data-name="Stranger"]')).toBeVisible({ timeout: 30_000 })
+  await stranger.getByTestId('chat-link-call-waiting-cancel').click()
+  await expect(stranger.getByTestId('chat-link-call-name')).toBeVisible()
+  await expect(stranger.getByTestId('chat-link-call-left')).toHaveCount(0)
+  await expect(ownerCall.getByTestId('chat-meeting-knocks')).toHaveCount(0, { timeout: 45_000 })
+
+  // Turning the waiting room off: the link alone lets people in again.
+  await meeting(chat, title).getByTestId('chat-meeting-edit').click()
+  await chat.getByTestId('chat-meeting-waiting-room').uncheck()
+  await chat.getByTestId('chat-meeting-save').click()
+  await expect(meeting(chat, title).getByTestId('chat-meeting-has-waiting-room')).toHaveCount(0, { timeout: 30_000 })
+  await stranger.reload()
+  await expect(stranger.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await expect(stranger.getByTestId('chat-link-call-has-waiting-room')).toHaveCount(0)
+  await join(stranger, 'Stranger', false)
+  await expect(tile(ownerCall, 'Stranger')).toBeVisible({ timeout: 60_000 })
+
+  await strangerContext.close()
+  await guestContext.close()
+  await ownerContext.close()
 })
 
 test('a changed or incomplete link is refused before anything is sent', async ({ browser }) => {

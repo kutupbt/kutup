@@ -167,6 +167,16 @@ pub async fn rate_limit_call_link(
     limit(addr, &ratelimit::CALL_LINK, None, req, next).await
 }
 
+/// 600/min/IP — a meeting's waiting room, which both sides ask about every
+/// few seconds.
+pub async fn rate_limit_call_link_poll(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::CALL_LINK_POLL, None, req, next).await
+}
+
 /// 20/min/IP — mirrors `PreflightRateLimit`.
 pub async fn rate_limit_preflight(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

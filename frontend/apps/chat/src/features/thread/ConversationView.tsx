@@ -178,7 +178,7 @@ export function ConversationView({
   async function startMeeting() {
     let url: string
     try {
-      url = (await meetings.create.mutateAsync({ title: t('chat.meetings.defaultTitle') })).url
+      url = (await meetings.create.mutateAsync({ info: { title: t('chat.meetings.defaultTitle') }, waitingRoom: false })).url
     } catch (error) {
       toast.error(apiErrorCode(error) === 'conflict' ? t('chat.meetings.tooMany') : t('chat.meetings.createFailed'))
       return

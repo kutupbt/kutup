@@ -1647,6 +1647,22 @@ describe('MlsConversationService', () => {
     })
   })
 
+  it('accepts a stock left short by a KeyPackage taken during the top-up', async () => {
+    // Someone added this device to a group between the count and the
+    // publication: 18 counted, two published, one taken, 19 left. Refusing
+    // that made Chat fail to open.
+    const { transport, service } = harness()
+    vi.mocked(transport.publishMlsKeyPackages).mockResolvedValueOnce({ deviceId: 7, available: 19 })
+    await expect(service.maintainKeyPackages(4)).resolves.toBe(19)
+  })
+
+  it('refuses a publication the server did not store', async () => {
+    const { transport, service } = harness()
+    vi.mocked(transport.mlsKeyPackageCount).mockResolvedValueOnce({ deviceId: 7, available: 0 })
+    vi.mocked(transport.publishMlsKeyPackages).mockResolvedValueOnce({ deviceId: 7, available: 0 })
+    await expect(service.maintainKeyPackages(4)).rejects.toThrow('MLS KeyPackage publication was not stored')
+  })
+
   it('adds and removes only the local account linked-device leaves', async () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => proposalId,
