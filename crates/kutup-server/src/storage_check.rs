@@ -8,8 +8,7 @@ use anyhow::{bail, ensure, Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
 use uuid::Uuid;
 
-use crate::handlers::tus::MIN_PART_SIZE;
-use crate::storage::{CompletedPart, StorageService};
+use crate::storage::{CompletedPart, MultipartUpload, StorageService, MIN_PART_SIZE};
 
 struct Report {
     failed: bool,
@@ -72,14 +71,11 @@ async fn version_ids(storage: &StorageService, key: &str) -> Result<Option<Strin
         read(storage, key).await? == bytes,
         "read back different bytes"
     );
-    Ok(Some(
-        if id.is_empty() {
-            "the bucket is not versioned; Kutup does not need it to be"
-        } else {
-            "the bucket is versioned; Kutup deletes every version itself"
-        }
-        .to_string(),
-    ))
+    // How thumbnails are removed: by the version their upload returned
+    // where the store can, otherwise as a plain object.
+    storage.delete_stored(key, &id).await?;
+    gone(storage, key).await?;
+    Ok(None)
 }
 
 async fn listing(
@@ -104,44 +100,47 @@ async fn listing(
     Ok(None)
 }
 
-/// A resumable upload: one multipart part per request the client sends.
-async fn multipart(storage: &StorageService, key: &str, sizes: &[usize]) -> Result<Option<String>> {
-    let upload = storage.create_multipart(key).await?;
-    let mut whole = Vec::new();
-    let mut parts = Vec::new();
-    for (index, size) in sizes.iter().enumerate() {
-        let bytes = pattern(*size, index as u8 + 10);
-        let sent = storage
-            .upload_part(
-                key,
-                &upload,
-                index as i32 + 1,
-                ByteStream::from(bytes.clone()),
-                bytes.len() as i64,
-            )
-            .await;
-        let etag = match sent {
-            Ok(etag) => etag,
+/// A resumable upload: the client's chunks, stored the way the server stores
+/// them (equal-sized parts, whatever sizes the chunks are).
+async fn resumable(
+    storage: &StorageService,
+    key: &str,
+    chunks: &[usize],
+) -> Result<Option<String>> {
+    let total: usize = chunks.iter().sum();
+    let upload_id = storage.create_multipart(key).await?;
+    let upload = MultipartUpload {
+        key,
+        upload_id: &upload_id,
+        total_bytes: total as i64,
+    };
+    let mut whole = Vec::with_capacity(total);
+    let mut parts: Vec<CompletedPart> = Vec::new();
+    let mut pending = Vec::new();
+    for (index, size) in chunks.iter().enumerate() {
+        let chunk = pattern(*size, index as u8 + 10);
+        let is_final = index == chunks.len() - 1;
+        pending = match storage
+            .append_equal_parts(upload, &mut parts, &pending, &chunk, is_final)
+            .await
+        {
+            Ok(pending) => pending,
             Err(e) => {
-                let _ = storage.abort_multipart(key, &upload).await;
+                let _ = storage.abort_multipart(key, &upload_id).await;
                 return Err(e);
             }
         };
-        parts.push(CompletedPart {
-            part_number: index as i32 + 1,
-            etag,
-        });
-        whole.extend_from_slice(&bytes);
+        whole.extend_from_slice(&chunk);
     }
-    if let Err(e) = storage.complete_multipart(key, &upload, &parts).await {
-        let _ = storage.abort_multipart(key, &upload).await;
+    if let Err(e) = storage.complete_multipart(key, &upload_id, &parts).await {
+        let _ = storage.abort_multipart(key, &upload_id).await;
         return Err(e);
     }
     ensure!(
         read(storage, key).await? == whole,
-        "the completed object is not the parts in order"
+        "the completed object is not the chunks in order"
     );
-    Ok(None)
+    Ok(Some(format!("{} parts", parts.len())))
 }
 
 async fn abort(storage: &StorageService, key: &str) -> Result<Option<String>> {
@@ -199,36 +198,30 @@ pub async fn run(storage: &StorageService) -> i32 {
     let mut report = Report { failed: false };
     println!("Checking the configured bucket under {prefix}");
 
-    let object = format!("{prefix}object");
     report.record(
         "store, read back and overwrite an object",
-        round_trip(storage, &object).await,
+        round_trip(storage, &format!("{prefix}object")).await,
     );
     report.record(
-        "store an object and note its version",
+        "store an object, then delete what was stored",
         version_ids(storage, &format!("{prefix}versioned")).await,
     );
     report.record(
         "list objects under a prefix",
-        listing(storage, &prefix, 2).await,
+        listing(storage, &prefix, 1).await,
     );
     report.record(
-        "resumable upload in equal parts",
-        multipart(
+        "resumable upload in several chunks",
+        resumable(
             storage,
-            &format!("{prefix}upload-equal"),
-            &[part, part, 1000],
+            &format!("{prefix}upload"),
+            &[part + 41, part + 17, part + 17, 1000],
         )
         .await,
     );
     report.record(
-        "resumable upload whose first part is larger (how Kutup's clients upload)",
-        multipart(
-            storage,
-            &format!("{prefix}upload-unequal"),
-            &[part + 24, part, 1000],
-        )
-        .await,
+        "resumable upload in one small chunk",
+        resumable(storage, &format!("{prefix}upload-small"), &[1000]).await,
     );
     report.record(
         "cancel a resumable upload",

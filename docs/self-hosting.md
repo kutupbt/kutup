@@ -693,6 +693,12 @@ every byte goes through the backend, so the bucket should stay private (no
 public access, no public custom domain). The bundled SeaweedFS is a default,
 not a requirement.
 
+Two differences between stores are handled by the server, so no client has
+to know which one is behind it: resumable uploads are stored as equal-sized
+parts (Cloudflare R2 refuses parts of different lengths), and objects are
+deleted by version only where the store supports that. Checked with
+`storage-check` against SeaweedFS and Cloudflare R2.
+
 To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
 Object Storage, MinIO, AWS S3, …):
 
