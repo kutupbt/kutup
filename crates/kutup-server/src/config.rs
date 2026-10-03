@@ -60,6 +60,10 @@ pub struct Config {
     pub federation_next_signing_key: String,
     /// Test-only HTTP/private-network escape hatch for the v2 stack.
     pub federation_test_allow_private: bool,
+    /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
+    /// the server reports no groups, refuses the group routes, and the apps
+    /// show direct chats only; groups made earlier stay stored, unreachable.
+    pub chat_groups: bool,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
     /// its users preview, never their messages.
@@ -276,6 +280,7 @@ impl Config {
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            chat_groups: get_env_bool("CHAT_GROUPS", true),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
             chat_web_push_hosts: get_env(

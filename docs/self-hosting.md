@@ -68,6 +68,11 @@ CHAT_SERVER_NAME=kutup.example.com
 CHAT_MAX_ACTIVE_DEVICES=10
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 
+# Group chats and group calls. Set to false for direct chats only: the server
+# then reports no groups and refuses the group routes, and the apps hide
+# them. Groups made earlier stay stored but cannot be opened.
+CHAT_GROUPS=true
+
 # Link previews: the server fetches public https pages (port 443, public
 # addresses only) for the sender's previews. It then sees the links its users
 # preview, never their messages. Set to false to turn previews off.

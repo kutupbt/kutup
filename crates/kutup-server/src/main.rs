@@ -170,9 +170,15 @@ async fn main() -> anyhow::Result<()> {
             .map(|federation| federation.server_name()),
         time::OffsetDateTime::now_utc(),
     )?;
-    let mls_ordering = chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
-        .await?
-        .map(Arc::new);
+    // Without the ordering service there are no groups: nothing is
+    // advertised and every group route answers "unavailable".
+    let mls_ordering = if config.chat_groups {
+        chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
+            .await?
+            .map(Arc::new)
+    } else {
+        None
+    };
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
             .feature_policies()
