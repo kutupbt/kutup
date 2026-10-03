@@ -18,4 +18,10 @@ describe('authErrorMessage', () => {
     expect(authErrorMessage(failed(429, 'slow down'), t, 'auth.errors.signInFailed')).toBe('t:auth.errors.locked')
     expect(authErrorMessage(new AxiosError('offline'), t, 'auth.errors.signInFailed')).toBe('t:auth.errors.network')
   })
+
+  it('names the taken field of a registration conflict', () => {
+    expect(authErrorMessage(failed(409, 'email already registered'), t, 'auth.errors.generic')).toBe('t:auth.errors.emailTaken')
+    expect(authErrorMessage(failed(409, 'username already taken'), t, 'auth.errors.generic')).toBe('t:auth.errors.usernameTaken')
+    expect(authErrorMessage(failed(409, 'something else'), t, 'auth.errors.generic')).toBe('t:auth.errors.generic')
+  })
 })

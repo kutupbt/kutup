@@ -49,6 +49,8 @@
       "signInFailed": "Giriş yapılamadı. E-postanızı ve parolanızı kontrol edin.",
       "totpFailed": "Kod geçersiz. Doğrulayıcı uygulamanızdaki güncel kodu girin.",
       "keyGenerationFailed": "Anahtarlarınız bu cihazda oluşturulamadı. Yeniden deneyin.",
+      "emailTaken": "Bu e-postanın zaten bir hesabı var. Giriş yapın ya da geri dönüp başka bir e-posta kullanın.",
+      "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
       "generic": "Bir şeyler ters gitti. Yeniden deneyin."
     },
     "strength": {

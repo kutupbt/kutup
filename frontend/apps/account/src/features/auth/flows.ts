@@ -164,16 +164,24 @@ function registrationBody(keys: RegistrationKeys) {
   }
 }
 
+/** Key sets whose account the server has already created. */
+const registered = new WeakSet<RegistrationKeys>()
+
 /**
  * Create the account, then sign in with the login key already in memory — no
- * second Argon2id run and no retyped password.
+ * second Argon2id run and no retyped password. Safe to call again with the
+ * same keys when the sign-in half failed (a rate limit, a lost connection):
+ * the account is created once, and a retry only signs in.
  */
 export async function registerAndSignIn(
   email: string,
   username: string,
   keys: RegistrationKeys,
 ): Promise<void> {
-  await api.post('/auth/register', { email, username, ...registrationBody(keys) })
+  if (!registered.has(keys)) {
+    await api.post('/auth/register', { email, username, ...registrationBody(keys) })
+    registered.add(keys)
+  }
   const { data } = await api.post<LoginResponse>('/auth/login', { email, loginKey: keys.loginKey })
   await activate(data, {
     userId: data.userId,

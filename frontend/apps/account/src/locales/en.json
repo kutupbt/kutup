@@ -49,6 +49,8 @@
       "signInFailed": "Sign-in failed. Check your email and password.",
       "totpFailed": "That code did not work. Enter the current code from your authenticator app.",
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
+      "emailTaken": "That email already has an account. Sign in instead, or go back and use another email.",
+      "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again."
     },
     "strength": {
