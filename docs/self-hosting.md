@@ -502,6 +502,11 @@ charged Chat bytes.
 
 ## Contacts-only sealed sender
 
+Without this, people can still message each other, but attachments, stickers,
+view-once media and voice notes work only in Note to Self and in groups: in a
+direct chat they travel by sealed delivery, and the app hides those controls
+on a server that does not offer it.
+
 Provision the trust root on a machine that is not the Kutup application server.
 The image contains an offline helper; copying that binary to the offline system
 does not require copying the server configuration or database:
@@ -520,9 +525,19 @@ kutup-sealed-sender-provision server-issue \
 
 Both secret files are created once with mode `0600`; the helper refuses to
 overwrite them or read an overly permissive root file. Keep the root offline.
-Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` and the exact
-contents of `kutup-sealed-online.key` as
-`CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The server validates the root chain,
+Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` (on one
+line; in `.env`, inside single quotes) and the exact contents of
+`kutup-sealed-online.key` as `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The
+policy's domain is the server's name: `FEDERATION_SERVER_NAME`, or
+`CHAT_SERVER_NAME` on a server that made its own identity. A server that
+cannot accept the two settings refuses to start, so try them first with a
+one-off container, which goes through the same start-up checks without
+touching the running server:
+
+```sh
+docker compose run --rm backend storage-check
+```
+ The server validates the root chain,
 certificate window, online public/private match, suite, and domain at startup.
 It advertises sealed sender only after the signed service policy is durable:
 

@@ -1059,13 +1059,29 @@ pub async fn update_me(
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
-/// `GET /api/users/by-email/:email` — mirrors `GetUserByEmail`.
+/// The username in `address` when it is an account address of this server
+/// (`username@<server name>`), which looks like an email address but is not
+/// one.
+fn local_account_username(address: &str, server_name: &str) -> Option<String> {
+    let (username, server) = address.trim().rsplit_once('@')?;
+    if username.is_empty() || !server.eq_ignore_ascii_case(server_name) {
+        return None;
+    }
+    Some(username.to_ascii_lowercase())
+}
+
+/// `GET /api/users/by-email/:email` — an account here, by the address a
+/// person would type to share with it: its account address
+/// (`username@<this server>`) or its email. The account address is tried
+/// first: usernames are unique and given by this server, while an email is
+/// whatever its owner typed, so an email must not be able to stand in for
+/// someone else's account address.
 #[utoipa::path(
     get,
     path = "/api/users/by-email/{email}",
     tag = "auth",
     security(("BearerAuth" = [])),
-    params(("email" = String, Path, description = "Target user's email")),
+    params(("email" = String, Path, description = "Target user's account address or email")),
     responses((status = 200, description = "User id + public key", body = UserLookupResponse))
 )]
 pub async fn get_user_by_email(
@@ -1073,13 +1089,26 @@ pub async fn get_user_by_email(
     _user: AuthUser,
     Path(email): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(Uuid, Option<String>, String, String, String)> = sqlx::query_as(
-        "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE email = $1 AND is_active = true",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
+    type Row = (Uuid, Option<String>, String, String, String);
+    let mut row: Option<Row> = None;
+    if let Some(username) = local_account_username(&email, &state.config.chat_server_name) {
+        row = sqlx::query_as(
+            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
+             FROM users WHERE username = $1 AND is_active = true",
+        )
+        .bind(&username)
+        .fetch_optional(&state.pool)
+        .await?;
+    }
+    if row.is_none() {
+        row = sqlx::query_as(
+            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
+             FROM users WHERE email = $1 AND is_active = true",
+        )
+        .bind(&email)
+        .fetch_optional(&state.pool)
+        .await?;
+    }
     let Some((id, username, public_key, incarnation_id, signing_public_key)) = row else {
         return Err(AppError::not_found("user not found"));
     };
@@ -1538,6 +1567,24 @@ fn deterministic_fake_account_envelope(email: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_account_address_of_this_server_is_told_from_an_email() {
+        let here = "kutup.example";
+        assert_eq!(
+            local_account_username("ada@kutup.example", here).as_deref(),
+            Some("ada")
+        );
+        assert_eq!(
+            local_account_username(" Ada@Kutup.Example ", here).as_deref(),
+            Some("ada")
+        );
+        // Another domain is an email address or another server's account.
+        assert_eq!(local_account_username("ada@mail.example", here), None);
+        assert_eq!(local_account_username("ada@sub.kutup.example", here), None);
+        assert_eq!(local_account_username("@kutup.example", here), None);
+        assert_eq!(local_account_username("ada", here), None);
+    }
 
     #[test]
     fn username_validation_matches_regex() {

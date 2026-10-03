@@ -474,10 +474,10 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 ### GET /api/users/by-email/:email
 
-Look up another local user's registered Drive identity (used when sharing a collection).
+Look up another local user's registered Drive identity (used when sharing a collection or a file).
 
 **Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
-**Param:** `:email` — URL-encoded email address
+**Param:** `:email` — the URL-encoded address a person would type: the account address on this server (`username@<server name>`) or the account's email. The account address is tried first, because usernames are unique and given by the server while an email is whatever its owner entered. `404` when neither matches.
 
 **Response:**
 ```json

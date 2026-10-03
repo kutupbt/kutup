@@ -165,6 +165,9 @@ async fn main() -> anyhow::Result<()> {
     }
     let sealed_sender = sealed_sender_service::SealedSenderService::from_config(
         &config,
+        federation
+            .as_deref()
+            .map(|federation| federation.server_name()),
         time::OffsetDateTime::now_utc(),
     )?;
     let mls_ordering = chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
