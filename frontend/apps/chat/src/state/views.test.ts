@@ -168,4 +168,3 @@ describe('foldPolls', () => {
     expect(foldPolls(history, SELF).get('p2')!.votes.size).toBe(0)
   })
 })
-

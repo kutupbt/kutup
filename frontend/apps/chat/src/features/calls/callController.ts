@@ -560,4 +560,3 @@ export function outcomeOf(
 function stopStream(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop()
 }
-

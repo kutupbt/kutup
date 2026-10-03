@@ -97,7 +97,7 @@ export function MapView({
 
   useEffect(() => {
     map?.jumpTo({ center: [center.lon, center.lat], zoom })
-     
+
   }, [center.lat, center.lon, zoom, map])
 
   const markerKey = markers.map((m) => `${m.id ?? ''}:${m.lat},${m.lon}:${m.label ?? ''}:${m.color ?? ''}`).join(';')

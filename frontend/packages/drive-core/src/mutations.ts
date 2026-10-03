@@ -276,4 +276,3 @@ export function useAcceptInvite() {
     return { kind: data.collectionKind, id: data.collectionKind === 'album' ? data.remoteCollectionId : data.id }
   })
 }
-

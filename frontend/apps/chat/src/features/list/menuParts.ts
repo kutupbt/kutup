@@ -37,4 +37,3 @@ export const CONTEXT_PARTS: MenuParts = {
   SubTrigger: ContextMenuSubTrigger,
   SubContent: ContextMenuSubContent,
 }
-
