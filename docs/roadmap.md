@@ -539,6 +539,16 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Screen sharing in calls.** A call carries the camera and microphone
+  only; there is no way to share a screen or a window. Wanted for one-to-one
+  calls (a second video track, or the camera's replaced, on the existing
+  peer connection) and for group calls (a screen-share track through the
+  SFU, encrypted with the call's frame key like the others). Needs a share
+  control, a layout that gives the shared screen the large tile, and a
+  clear "you are sharing" state. Browsers that cannot capture a screen
+  (most phones) should still be able to watch one. Design in
+  `docs/chat-calls.md` before building.
+
 ### Files workspace follow-up
 
 The Polar Workspace redesign now provides the responsive Files header,
