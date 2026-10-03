@@ -366,6 +366,77 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(restoredHistory[0].content.text).toBe('edited')
   })
 
+  it('accepts a device continuing a record another device moved on', async () => {
+    // A device numbers a change one past the record's state in its own
+    // store. After it merges the account's other devices (every start does),
+    // that state is the reduced one, so its next number jumps past its own
+    // previous one. Rejecting that made Chat refuse to open on every device.
+    const transport = new ScriptedTransport()
+    const sourceDatabase = `backup-merged-source:${crypto.randomUUID()}`
+    const restoredDatabase = `backup-merged-restored:${crypto.randomUUID()}`
+    databaseNames.push(sourceDatabase, restoredDatabase)
+    const original = historyEntry()
+    let history = [original]
+    const source = await open(transport, sourceDatabase, async () => history)
+    await source.settled()
+    for (const text of ['second', 'third', 'fourth']) {
+      history = [{ ...original, content: { ...original.content, body: { text }, text } }]
+      await source.flushNow()
+      await source.settled()
+    }
+    source.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(source), 1)
+    expect(transport.segments).toHaveLength(4)
+
+    // The same four mutations (1, 2, 3, 4) as the server would hold them had
+    // a second device made the middle two: this device wrote 1, merged the
+    // other device's 2 and 3, then wrote 4.
+    const [first, second, third, fourth] = transport.segments
+    Object.assign(second, { sourceDeviceId: 10, deviceSequence: 1, previousSegmentDigest: zeroDigest })
+    Object.assign(third, { sourceDeviceId: 10, deviceSequence: 2, previousSegmentDigest: second.ciphertextSha256 })
+    Object.assign(fourth, { deviceSequence: 2, previousSegmentDigest: first.ciphertextSha256 })
+
+    const restored = await open(transport, restoredDatabase, async () => [])
+    await restored.settled()
+    const restoredHistory = await restored.restoredHistoryAsync()
+    expect(restoredHistory).toHaveLength(1)
+    expect(restoredHistory[0].content.text).toBe('fourth')
+  })
+
+  it('rejects a mutation numbered past anything the record has reached', async () => {
+    const transport = new ScriptedTransport()
+    const sourceDatabase = `backup-gap-source:${crypto.randomUUID()}`
+    const restoredDatabase = `backup-gap-restored:${crypto.randomUUID()}`
+    databaseNames.push(sourceDatabase, restoredDatabase)
+    const original = historyEntry()
+    let history = [original]
+    const source = await open(transport, sourceDatabase, async () => history)
+    await source.settled()
+    for (const text of ['second', 'third']) {
+      history = [{ ...original, content: { ...original.content, body: { text }, text } }]
+      await source.flushNow()
+      await source.settled()
+    }
+    source.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(source), 1)
+    expect(transport.segments).toHaveLength(3)
+
+    // A second device writes mutation 3 while the record has only reached 1.
+    const [, second, third] = transport.segments
+    const sealed = (segment: typeof second) => ({
+      operationId: segment.operationId,
+      ciphertext: segment.ciphertext,
+      ciphertextBytes: segment.ciphertextBytes,
+      ciphertextSha256: segment.ciphertextSha256,
+    })
+    const [two, three] = [sealed(second), sealed(third)]
+    Object.assign(second, three, { sourceDeviceId: 10, deviceSequence: 1, previousSegmentDigest: zeroDigest })
+    Object.assign(third, two, { sourceDeviceId: 10, deviceSequence: 2, previousSegmentDigest: three.ciphertextSha256 })
+
+    await expect(open(transport, restoredDatabase, async () => []))
+      .rejects.toThrow('Chat backup record mutation sequence is invalid')
+  })
+
   it('waits for routine compaction when only superseded controls were removed', async () => {
     const transport = new ScriptedTransport()
     const database = `backup-control-prune:${crypto.randomUUID()}`

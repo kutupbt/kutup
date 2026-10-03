@@ -1329,25 +1329,34 @@ function applyRecords(
       continue
     }
 
-    // mutationSequence is local to the device that emitted the segment. It is
-    // therefore validated independently for every (record, source-device)
-    // chain: within a chain each mutation follows the previous one. A chain's
-    // first mutation either begins at one or continues a sequence the device
-    // had seen of the record. That sequence may be the current one (a first
-    // post-compaction mutation continues the base) or an earlier one: two of
-    // an account's devices that change the same record from the same state
-    // (both apply a group closing, both prune the same superseded control)
-    // each continue it, so the second chain starts at or below the first's
-    // latest mutation. The reduction below settles such concurrent chains
-    // deterministically; a tombstone only ever removes, and always wins it.
+    // mutationSequence counts a record's changes as the emitting device saw
+    // them, so it is validated per (record, source-device) chain against what
+    // that device can have seen. A device numbers a change one past the
+    // record's state in its own store, and that state is either its own last
+    // mutation or, once it has merged the account's other devices (every
+    // start does), the reduced one. So a mutation is past the device's own
+    // previous one and at most one past the highest sequence the record has
+    // reached on any chain:
+    //   - a chain starts at one, or continues a state the device had seen;
+    //   - two devices changing the record from the same state (both apply a
+    //     group closing, both prune the same superseded control) repeat a
+    //     number;
+    //   - a device whose record another device moved on jumps ahead to
+    //     continue the merged state, not its own older one.
+    // A device never repeats or goes back on its own number, and never skips
+    // past what exists. Tombstones are exempt: one only ever removes and
+    // always wins the reduction below, so neither a late tombstone nor a
+    // device's stale change to an already removed record can alter the result.
     const sourceSequences = sources.get(record.recordId) ?? new Map<number, number>()
-    const previousSourceSequence = sourceSequences.get(sourceDeviceId)
-    const validSequence = previousSourceSequence === undefined
-      ? record.mutationSequence === 1
-        || (current !== undefined
-          && record.mutationSequence <= current.mutationSequence + 1)
-        || (current !== undefined && record.tombstone)
-      : record.mutationSequence === previousSourceSequence + 1
+    const previousSourceSequence = sourceSequences.get(sourceDeviceId) ?? 0
+    const highestSequence = Math.max(
+      current?.mutationSequence ?? 0,
+      previousSourceSequence,
+      ...sourceSequences.values(),
+    )
+    const validSequence = (record.mutationSequence > previousSourceSequence
+        && record.mutationSequence <= highestSequence + 1)
+      || (current !== undefined && (record.tombstone || current.tombstone))
     if (!validSequence) {
       throw new Error('Chat backup record mutation sequence is invalid')
     }
