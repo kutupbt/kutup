@@ -3,8 +3,9 @@
 //! Ordering authorities retain only `MlsMembershipTransitionV1`. An
 //! authenticated active member stages one digest-bound delivery per affected
 //! participant server before requesting finalization. Ordinary account-roster
-//! changes still require an administrator; device synchronization may change
-//! only the submitter's own leaves.
+//! changes still require an administrator; device synchronization changes the
+//! submitter's own leaves, or brings another member's leaves in line with
+//! that member's signed manifest.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -575,19 +576,32 @@ async fn apply_local_snapshot(
         .copied()
         .collect::<BTreeSet<_>>();
     if action_type == MlsControlActionTypeV1::DeviceSync {
-        if !added_devices.is_empty() || !removed_devices.is_empty() {
-            let submitter = local_submitter.ok_or_else(|| {
-                AppError::forbidden(
-                    "MLS device changes must originate on the affected member server",
-                )
-            })?;
-            if added_devices
-                .iter()
-                .chain(&removed_devices)
-                .any(|(user_id, _)| *user_id != submitter)
-            {
+        // A member synchronizes its own leaves freely. Anyone else may only
+        // bring another account's leaves in line with that account's signed
+        // manifest: admit a device the manifest lists (every leaf of the next
+        // snapshot was checked against it above) and drop one it no longer
+        // lists. That is what lets a group recover when a member's only
+        // device was replaced: no device of that account is left to do it.
+        for (user_id, device_id) in &removed_devices {
+            if Some(*user_id) == local_submitter {
+                continue;
+            }
+            let still_manifest_bound: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM chat_mls_devices d
+                    JOIN chat_device_manifests m ON m.user_id = d.user_id
+                    WHERE d.user_id = $1 AND d.device_id = $2
+                      AND d.manifest_version = m.version
+                 )",
+            )
+            .bind(user_id)
+            .bind(*device_id as i32)
+            .fetch_one(&mut **tx)
+            .await?;
+            if still_manifest_bound {
                 return Err(AppError::bad_request(
-                    "MLS device synchronization may change only the submitter's device leaves",
+                    "MLS device synchronization may remove another account's leaf only once its signed manifest no longer lists it",
                 ));
             }
         }

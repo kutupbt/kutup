@@ -63,6 +63,9 @@ import { ChatAttachmentLedger } from './attachment-ledger'
 import {
   chatDeviceDatabaseName,
   completeRequestedLocalChatDeviceReset,
+  forgetReplacedLocalChatDevice,
+  rememberLocalChatDevice,
+  replacedLocalChatDevice,
 } from './local-store'
 import {
   ChatBackupCoordinator,
@@ -265,6 +268,8 @@ export class ChatService {
         service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }
       await service.initializeMls()
+      await service.revokeReplacedDevice(options.userId)
+      rememberLocalChatDevice(options.userId, service.deviceId)
       await service.reconcile()
       void service.maintainPrekeys()
       void service.connectSocket()
@@ -386,6 +391,28 @@ export class ChatService {
     await this.transport.renameDevice(deviceId, name)
     this.notifyPeers()
     return this.devices()
+  }
+
+  /**
+   * After "Repair this browser": the device this browser was no longer has
+   * any state anywhere, so it leaves the account's signed device list (and,
+   * through it, the account's groups). Never fatal: if it cannot be done now
+   * it is tried again on the next open, and Devices offers it by hand.
+   */
+  private async revokeReplacedDevice(userId: string): Promise<void> {
+    const replaced = replacedLocalChatDevice(userId)
+    if (replaced === null) return
+    if (replaced === this.deviceId) {
+      forgetReplacedLocalChatDevice(userId)
+      return
+    }
+    try {
+      const registered = (await this.devices()).some(device => device.deviceId === replaced)
+      if (registered) await this.revokeDevice(replaced)
+      forgetReplacedLocalChatDevice(userId)
+    } catch (error) {
+      console.warn('chat: could not revoke the device this browser replaced', error)
+    }
   }
 
   async revokeDevice(deviceId: number): Promise<ChatDevice[]> {
@@ -1571,6 +1598,7 @@ export class ChatService {
       const sequence = requireManifestSequence(manifest)
       await this.mls.maintainKeyPackages(sequence)
       await this.mls.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
+      await this.mls.reconcileMemberDevices()
     })
   }
 

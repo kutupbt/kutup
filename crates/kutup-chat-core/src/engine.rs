@@ -1051,6 +1051,32 @@ impl Engine {
         crate::verify_mls_ordering_policy_history_details(&history, domain)
     }
 
+    /// The device ids of `account`'s current signed manifest, authenticated
+    /// through the usual manifest trust path, when every one of them is an
+    /// MLS device; empty while any still lacks its MLS binding (a device that
+    /// has registered but not finished setting up). Members compare this
+    /// with a group's leaves to notice an account whose devices changed
+    /// while none of its own could tell the group. Nothing is claimed.
+    pub async fn verified_manifest_mls_device_ids(&mut self, account: &str) -> Result<Vec<u32>> {
+        let response = Rc::clone(&self.transport)
+            .fetch_manifest(account)
+            .await?
+            .ok_or_else(|| ChatError::Trust("account manifest is missing".into()))?;
+        let manifest = self
+            .accept_current_manifest_evidence(account, &response)
+            .await?;
+        if manifest.devices.iter().any(|device| device.mls.is_none()) {
+            return Ok(Vec::new());
+        }
+        let mut device_ids = manifest
+            .devices
+            .iter()
+            .map(|device| device.device_id)
+            .collect::<Vec<_>>();
+        device_ids.sort_unstable();
+        Ok(device_ids)
+    }
+
     /// Fetch capability-gated KeyPackages without authenticated browser
     /// context, then bind every package credential to a complete,
     /// account-manifest-verified current device manifest.

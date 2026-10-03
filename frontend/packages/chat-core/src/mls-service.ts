@@ -57,6 +57,11 @@ const MAX_CONTROL_HISTORY_PAGES = 1024
 const MAX_MLS_GROUP_ACCOUNTS = 256
 const MAX_MLS_DEVICES_PER_ACCOUNT = 10
 const MAX_MLS_GROUP_LEAVES = MAX_MLS_GROUP_ACCOUNTS * MAX_MLS_DEVICES_PER_ACCOUNT
+/**
+ * How long each member in turn waits before correcting a fellow member's
+ * devices itself, should the ones before it not have (offline, or dead too).
+ */
+const MEMBER_DEVICE_TURN_MS = 3 * 60 * 1000
 
 type CryptoLock = <T>(operation: () => Promise<T>) => Promise<T>
 
@@ -115,6 +120,10 @@ interface MlsKeyPackageCount {
 export class MlsConversationService {
   private readonly publishedCapabilityEpochs = new Map<string, string>()
   private readonly deferredOptionalSendIds = new Set<string>()
+  /** Mailbox envelopes already reported as unreadable (reported once each). */
+  private readonly unreadableApplicationEnvelopes = new Set<string>()
+  /** When each (conversation, account) device mismatch was first seen. */
+  private readonly memberDeviceMismatchSince = new Map<string, number>()
 
   constructor(
     private readonly client: WasmChatClientHandle,
@@ -431,6 +440,119 @@ export class MlsConversationService {
       const result = await this.publishPendingMembershipChange(prepared.control)
       await this.publishCurrentDeliveryCapability(result.conversation)
       finalized.push(result)
+    }
+    return finalized
+  }
+
+  /**
+   * Bring fellow members' leaves in line with their signed device manifests.
+   *
+   * An account synchronizes its own devices (`reconcileLinkedDevices`), but
+   * that needs one of its devices to still be in the group. When a member's
+   * only device is replaced (a new browser, "Repair this browser"), nobody
+   * of that account is left: the group keeps a dead leaf, which blocks every
+   * later change to it, and the new device stays outside. Any member can
+   * then commit the correction, because it is bound to the account's own
+   * signature: only devices the signed manifest lists are admitted, only
+   * leaves it no longer lists are dropped, and the member's server and every
+   * other member check the result against it.
+   *
+   * Members take turns so they do not race to commit the same correction:
+   * the first by address among the others acts at once, each next one only
+   * after the mismatch has outlasted its turn. Never throws: a failed
+   * attempt is retried on the next pass.
+   */
+  async reconcileMemberDevices(): Promise<FinalizedMlsMembershipChange[]> {
+    if (!this.selfAddress) return []
+    const self = canonicalAccountAddress(this.selfAddress)
+    const finalized: FinalizedMlsMembershipChange[] = []
+    const seen = new Set<string>()
+    for (const conversation of await this.conversations()) {
+      if (conversation.status !== 'active' || conversation.left) continue
+      const conversationId = conversation.request.genesis.conversationId
+      let groupId: Uint8Array
+      let groupDevices: MlsConversationDevice[]
+      try {
+        groupId = decodeCanonicalBase64(conversation.request.genesis.mlsGroupId, 16, 255)
+        const id = groupId
+        groupDevices = await this.withCryptoLock(() => this.client.mlsGroupDevices(id))
+        validateGroupDevices(groupDevices)
+      } catch (error) {
+        console.warn('chat: could not read a group\'s devices', error)
+        continue
+      }
+      const leavesOf = (account: string) => groupDevices
+        .filter(device => canonicalAccountAddress(device.address) === account)
+        .map(device => device.deviceId)
+      // A device that is not itself a leaf cannot commit anything.
+      if (!leavesOf(self).includes(this.deviceId)) continue
+      const roster = conversation.currentRoster
+        .map(member => canonicalAccountAddress(member.address))
+        .sort()
+      for (const member of conversation.currentRoster) {
+        const account = canonicalAccountAddress(member.address)
+        if (account === self) continue
+        const leaves = leavesOf(account)
+        if (leaves.length === 0) continue
+        const key = `${conversationId}:${account}`
+        try {
+          const desired = await this.withCryptoLock(() =>
+            this.client.verifiedManifestMlsDeviceIds(account))
+          // Empty: a device of theirs has not finished setting up yet.
+          if (desired.length === 0 || desired.length > 10) continue
+          const missing = desired.filter(deviceId => !leaves.includes(deviceId))
+          const removed = leaves
+            .filter(deviceId => !desired.includes(deviceId))
+            .sort((left, right) => left - right)
+          if (missing.length === 0 && removed.length === 0) continue
+          seen.add(key)
+          const since = this.memberDeviceMismatchSince.get(key) ?? Date.now()
+          this.memberDeviceMismatchSince.set(key, since)
+          const turn = roster.filter(other => other !== account).indexOf(self)
+          if (turn < 0 || Date.now() - since < turn * MEMBER_DEVICE_TURN_MS) continue
+
+          let additions: VerifiedMlsKeyPackage[] = []
+          if (missing.length > 0) {
+            const packages = await this.withCryptoLock(() =>
+              this.client.fetchVerifiedIdentifiedMlsKeyPackages(
+                requireCanonicalAddress(member.address),
+                conversationId,
+                String(conversation.request.genesis.incarnation),
+                String(Math.floor(Date.now() / 1000)),
+              ))
+            additions = packages.filter(keyPackage => missing.includes(keyPackage.wire.deviceId))
+            if (
+              additions.length !== missing.length
+              || new Set(additions.map(keyPackage => keyPackage.wire.deviceId)).size !== missing.length
+            ) {
+              throw new Error('KeyPackage claim did not cover every missing manifest device')
+            }
+            for (const addition of additions) validateVerifiedKeyPackage(addition, account)
+          }
+          const id = groupId
+          const prepared = await this.withCryptoLock(() =>
+            this.client.prepareMlsDeviceSync(
+              id,
+              requireBrowserCrypto().randomUUID(),
+              additions,
+              removed,
+              String(Math.floor(Date.now() / 1000)),
+              account,
+            ))
+          validatePendingMembershipChange(prepared.control, id)
+          const result = await this.publishPendingMembershipChange(prepared.control)
+          await this.publishCurrentDeliveryCapability(result.conversation)
+          finalized.push(result)
+          this.memberDeviceMismatchSince.delete(key)
+          // The group moved on an epoch: its other members wait for the next pass.
+          break
+        } catch (error) {
+          console.warn('chat: could not bring a member\'s devices up to date', error)
+        }
+      }
+    }
+    for (const key of [...this.memberDeviceMismatchSince.keys()]) {
+      if (!seen.has(key)) this.memberDeviceMismatchSince.delete(key)
     }
     return finalized
   }
@@ -1654,27 +1776,43 @@ export class MlsConversationService {
         continue
       }
       const envelope = decodeAnonymousEnvelope(mailbox.opaqueEnvelope)
-      const inspection = await this.withCryptoLock(() =>
-        this.client.inspectAnonymousMlsApplicationEnvelope(
-          recipient,
-          mailbox.sendId,
-          envelope,
-        ),
-      )
-      const sender = await this.withCryptoLock(() =>
-        this.client.resolveMlsSenderClaim(inspection.claimedSender),
-      )
-      const result = await this.withCryptoLock(() =>
-        this.client.applyAnonymousMlsApplicationEnvelope(
-          mailbox.id,
-          mailbox.cursor,
-          mailbox.sendId,
-          String(mailbox.serverTimestamp),
-          recipient,
-          envelope,
-          sender,
-        ),
-      )
+      // A message this device cannot read must not take Chat down with it.
+      // A device that replaced another receives the group's messages before
+      // the group has admitted it (they are addressed to the account's
+      // current devices, but encrypted for the group's leaves), and can
+      // never read those. The envelope stays in the mailbox, which keeps it
+      // for its retention period: a message that only arrived ahead of the
+      // change admitting this device is read on a later pass.
+      let result: AppliedInboundMlsApplication
+      try {
+        const inspection = await this.withCryptoLock(() =>
+          this.client.inspectAnonymousMlsApplicationEnvelope(
+            recipient,
+            mailbox.sendId,
+            envelope,
+          ),
+        )
+        const sender = await this.withCryptoLock(() =>
+          this.client.resolveMlsSenderClaim(inspection.claimedSender),
+        )
+        result = await this.withCryptoLock(() =>
+          this.client.applyAnonymousMlsApplicationEnvelope(
+            mailbox.id,
+            mailbox.cursor,
+            mailbox.sendId,
+            String(mailbox.serverTimestamp),
+            recipient,
+            envelope,
+            sender,
+          ),
+        )
+      } catch (error) {
+        if (!this.unreadableApplicationEnvelopes.has(mailbox.id)) {
+          this.unreadableApplicationEnvelopes.add(mailbox.id)
+          console.warn('chat: a group message could not be read on this device', error)
+        }
+        continue
+      }
       if (
         result.message.recordId !== `in:${mailbox.id}`
         || result.message.messageId !== mailbox.sendId

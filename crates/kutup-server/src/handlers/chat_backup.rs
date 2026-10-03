@@ -13,13 +13,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
-    ChatBackupBaseReceiptV1, ChatBackupManifestCommitReceiptV1, ChatBackupManifestV1,
-    ChatBackupMediaReconciliationReceiptV1, ChatBackupMediaReferenceV1, ChatBackupSegmentPageV1,
-    ChatBackupSegmentReceiptV1, ChatBackupSignerAuthorizationV1, ChatBackupStatusV1,
-    ChatBackupStorageUsageV1, ChatBackupWireSegmentV1, CommitChatBackupManifestRequestV1,
-    CopyChatBackupMediaRequestV1, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
-    StageChatBackupBaseRequestV1, UploadChatBackupMediaRequestV1,
-    MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES, MAX_CHAT_BACKUP_PAGE_SEGMENTS,
+    ChatBackupBaseReceiptV1, ChatBackupDeviceHeadV1, ChatBackupManifestCommitReceiptV1,
+    ChatBackupManifestV1, ChatBackupMediaReconciliationReceiptV1, ChatBackupMediaReferenceV1,
+    ChatBackupSegmentPageV1, ChatBackupSegmentReceiptV1, ChatBackupSignerAuthorizationV1,
+    ChatBackupStatusV1, ChatBackupStorageUsageV1, ChatBackupWireSegmentV1,
+    CommitChatBackupManifestRequestV1, CopyChatBackupMediaRequestV1, ProvisionChatBackupRequestV1,
+    ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
+    UploadChatBackupMediaRequestV1, MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES,
+    MAX_CHAT_BACKUP_PAGE_SEGMENTS,
 };
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
 use kutup_crypto::chat_backup::{
@@ -357,8 +358,16 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
             current_cursor: 0,
             latest_protected_at_unix: None,
             storage,
+            device_heads: Vec::new(),
         });
     };
+    let heads: Vec<(i32, i64, String)> = sqlx::query_as(
+        "SELECT source_device_id,last_device_sequence,last_segment_digest
+         FROM chat_backup_device_heads WHERE user_id=$1 ORDER BY source_device_id",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(ChatBackupStatusV1 {
         provisioned: true,
         root_envelope: Some(root_envelope),
@@ -378,6 +387,14 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         current_cursor: u64::try_from(cursor).unwrap_or_default(),
         latest_protected_at_unix: protected_at.map(|value| value.unix_timestamp()),
         storage,
+        device_heads: heads
+            .into_iter()
+            .map(|(device_id, sequence, digest)| ChatBackupDeviceHeadV1 {
+                device_id: u32::try_from(device_id).unwrap_or_default(),
+                sequence: u64::try_from(sequence).unwrap_or_default(),
+                digest,
+            })
+            .collect(),
     })
 }
 

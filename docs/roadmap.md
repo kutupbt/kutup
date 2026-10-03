@@ -217,7 +217,7 @@ security design, backend contract, and word-by-word confirmation flow.
 
 ### Backup / restore CLI
 
-Self-hosters need an easy way to back up + restore the full encrypted dataset (DB + S3 blobs). The Rust CLI exists (`crates/kutup-cli`); adding `kutup backup` / `kutup restore` subcommands is mostly tooling around `pg_dump` + `mc mirror`.
+The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in the object store and restores them (`docs/self-hosting.md`, "Database backups"). Still open: copying the object store's blobs elsewhere (a second copy of the ciphertext), a point-in-time-consistent pair of database and blobs, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
 
 ---
 
@@ -539,6 +539,25 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Group device repair: what is left.** A group now recovers when a
+  member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
+  Still open: it takes up to two minutes (the device check's period), plus
+  three per turn if the first member in line is away, during which the
+  replaced device sees the group read-only; a non-administrator cannot
+  repair a member who lives on another server; messages sent to the account
+  before its new device was admitted are lost to that device and linger in
+  its mailbox until they expire; and "Repair this browser" is still offered
+  when the server is only unreachable, where retrying is the right answer.
+  The server rule and the engine's cross-account path are covered by browser
+  tests (38) and TypeScript unit tests, not yet by Rust unit tests.
+- **Direct-chat media without sealed sender says nothing.** Attachments,
+  stickers, view-once media and voice notes to another person travel by
+  sealed delivery, which a server offers only once its operator has
+  provisioned it (`docs/self-hosting.md`, "Contacts-only sealed sender").
+  On a server without it the composer simply has no attach, sticker or
+  microphone button in a direct chat (Note to Self and groups have them),
+  with no explanation. Either provision it automatically, as the server
+  identity and ordering key already are, or tell the person why.
 - **Meetings: decisions (2026-10-03).** Recorded here so the next round
   starts from them (`docs/chat-calls.md`, "Meetings", has the design):
   - Conversation calls and meetings stay separate. A one-to-one or group

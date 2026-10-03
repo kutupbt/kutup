@@ -474,10 +474,10 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 ### GET /api/users/by-email/:email
 
-Look up another local user's registered Drive identity (used when sharing a collection).
+Look up another local user's registered Drive identity (used when sharing a collection or a file).
 
 **Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
-**Param:** `:email` — URL-encoded email address
+**Param:** `:email` — the URL-encoded address a person would type: the account address on this server (`username@<server name>`) or the account's email. The account address is tried first, because usernames are unique and given by the server while an email is whatever its owner entered. `404` when neither matches.
 
 **Response:**
 ```json
@@ -1551,7 +1551,9 @@ validates public bindings and signatures but never receives the root key.
 
 Return provisioning state, current signed manifest/cursor, latest
 server-acknowledged protected time, and dedicated Chat quota usage split into
-message history, administrator-retained delivery media, and history media.
+message history, administrator-retained delivery media, and history media. `deviceHeads` lists, per source device number, the sequence
+and digest of the last segment accepted from it: a device continues its
+number's chain from there (`docs/chat-backup.md`).
 
 ### POST /api/chat/backup/segments
 

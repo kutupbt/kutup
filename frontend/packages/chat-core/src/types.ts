@@ -1423,12 +1423,17 @@ export interface WasmChatClientHandle {
     groupInfo: MlsGroupInfo,
     nowSeconds: string,
   ): Promise<PreparedMlsMembershipChange>
+  /**
+   * `account` (canonical `user@server`) names a fellow member whose leaves
+   * are brought in line with their signed manifest; absent, this account's.
+   */
   prepareMlsDeviceSync(
     mlsGroupId: Uint8Array,
     proposalId: string,
     additions: unknown,
     removedDeviceIds: number[],
     nowSeconds: string,
+    account?: string,
   ): Promise<PreparedMlsMembershipChange>
   pendingMlsMembershipChanges(): Promise<PendingMlsMembershipChange[]>
   buildMlsMembershipCommitRequest(
@@ -1597,6 +1602,11 @@ export interface WasmChatClientHandle {
     incarnation: string,
     nowSeconds: string,
   ): Promise<VerifiedMlsKeyPackage[]>
+  /**
+   * The device ids of an account's current signed manifest, verified; empty
+   * while any of them is not yet an MLS device.
+   */
+  verifiedManifestMlsDeviceIds(account: string): Promise<number[]>
   processedMlsControlEnvelope(
     envelopeId: string,
   ): Promise<ProcessedMlsControlEnvelope | null>

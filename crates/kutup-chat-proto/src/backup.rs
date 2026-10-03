@@ -696,6 +696,24 @@ pub struct ChatBackupStatusV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_protected_at_unix: Option<i64>,
     pub storage: ChatBackupStorageUsageV1,
+    /// Where each source device's segment chain stands. A device continues
+    /// its number's chain from here: the browser's own bookkeeping can belong
+    /// to another device (a repaired browser keeps its backup database), and
+    /// a device number is given out again after a revocation.
+    /// Always present, so a client can tell "no chain yet" from a server
+    /// that does not report chains.
+    #[serde(default)]
+    pub device_heads: Vec<ChatBackupDeviceHeadV1>,
+}
+
+/// The last segment the server accepted from one source device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatBackupDeviceHeadV1 {
+    pub device_id: u32,
+    pub sequence: u64,
+    pub digest: String,
 }
 
 fn require_version(version: u16) -> Result<(), String> {

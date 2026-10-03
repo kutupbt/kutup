@@ -337,6 +337,7 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
             .prepare_device_sync(
                 group_id,
                 add_proposal_id,
+                None,
                 std::slice::from_ref(&verified_second),
                 &[],
                 now + 1,
@@ -383,6 +384,7 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
                 .prepare_device_sync(
                     group_id,
                     add_proposal_id,
+                    None,
                     std::slice::from_ref(&verified_second),
                     &[],
                     now + 1,
@@ -467,7 +469,7 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         );
 
         let removal = first
-            .prepare_device_sync(group_id, Uuid::from_u128(0x93), &[], &[2], now + 2)
+            .prepare_device_sync(group_id, Uuid::from_u128(0x93), None, &[], &[2], now + 2)
             .await
             .unwrap();
         assert_eq!(
