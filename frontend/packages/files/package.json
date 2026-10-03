@@ -15,7 +15,7 @@
     "@kutup/crypto": "workspace:*",
     "@kutup/session": "workspace:*",
     "exifreader": "^4.46.0",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "libheif-js": "^1.23.2",
     "pdfjs-dist": "6.3.289",
     "tus-js-client": "^4"
