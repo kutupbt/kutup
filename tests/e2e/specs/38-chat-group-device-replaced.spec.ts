@@ -76,9 +76,11 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await send(pageA, before)
   await expect(message(pageB, before)).toBeVisible({ timeout: 45_000 })
 
-  // Chat cannot open (the server is unreachable for a moment), and Bob
-  // takes the repair it offers.
-  await pageB.route('**/api/chat/messages*', (route) => route.fulfill({ status: 502, body: '' }))
+  // Chat cannot open on this browser's state (the server answers, but no
+  // longer knows what the browser asks about), and Bob takes the repair it
+  // offers. A server that is merely unreachable offers none
+  // (40-chat-open-failures).
+  await pageB.route('**/api/chat/messages*', (route) => route.fulfill({ status: 404, body: '' }))
   await pageB.reload()
   await expect(pageB.getByText('Chat could not open')).toBeVisible({ timeout: 90_000 })
   await pageB.getByRole('button', { name: 'Repair this browser' }).click()
