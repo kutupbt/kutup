@@ -428,7 +428,7 @@ integration remain tracked in [`roadmap.md`](roadmap.md).
 
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
 
-- The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to SeaweedFS; the tus.io path uploads ≥5 MiB S3 multipart chunks, so neither buffers the whole file in memory.
+- The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to the object store; the tus.io path stores each chunk as S3 multipart parts of one equal size (5 MiB, more for uploads past 10,000 parts), keeping what does not fill a part in the upload's row until the next chunk, so neither buffers the whole file in memory and stores that refuse unequal parts (Cloudflare R2) work.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Drive/general storage and Chat storage have separate administrator-controlled

@@ -323,14 +323,7 @@ pub async fn delete(
             continue;
         };
         let path = thumbnail_storage_path(fid, variant);
-        let _ = if version_id.is_empty() {
-            state.storage.delete(&path).await
-        } else {
-            state
-                .storage
-                .delete_object_version(&path, &version_id)
-                .await
-        };
+        let _ = state.storage.delete_stored(&path, &version_id).await;
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }

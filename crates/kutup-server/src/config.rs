@@ -260,7 +260,9 @@ impl Config {
             server_url: get_env("SERVER_URL", "http://kutup.local"),
             allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
-            seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
+            // Set but blank turns the probe off (a store other than SeaweedFS).
+            seaweedfs_master_url: std::env::var("SEAWEEDFS_MASTER_URL")
+                .unwrap_or_else(|_| "http://seaweedfs-master:9333".to_string()),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
             chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),

@@ -7,7 +7,6 @@
 use std::io::ErrorKind;
 use std::str::FromStr as _;
 
-use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -37,7 +36,7 @@ use super::tus::{
 use super::{octet_stream_response, trusted_uuid};
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
-use crate::storage::CompletedPart;
+use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -462,13 +461,14 @@ pub async fn patch_upload(
         String,
         String,
         serde_json::Value,
+        Vec<u8>,
     );
     let mut transaction = match state.pool.begin().await {
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
     let row: Option<UploadRow> = sqlx::query_as(
-        "SELECT attachment_id,suite,total_bytes,received_bytes,retrieval_token_hash,storage_path,s3_upload_id,s3_part_etags
+        "SELECT attachment_id,suite,total_bytes,received_bytes,retrieval_token_hash,storage_path,s3_upload_id,s3_part_etags,pending_bytes
          FROM chat_media_uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
@@ -486,6 +486,7 @@ pub async fn patch_upload(
         storage_path,
         s3_upload_id,
         parts_json,
+        pending,
     )) = row
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
@@ -527,28 +528,32 @@ pub async fn patch_upload(
     if !is_final && chunk_len < MIN_PART_SIZE {
         return tus_text(StatusCode::BAD_REQUEST, "non-final part is below 5 MiB");
     }
-    let part_number = parts.len() as i32 + 1;
-    let etag = match state
+    // Equal-sized parts, with the remainder kept in the row (storage.rs).
+    let pending = match state
         .storage
-        .upload_part(
-            &storage_path,
-            &s3_upload_id,
-            part_number,
-            ByteStream::from(body.to_vec()),
-            chunk_len,
+        .append_equal_parts(
+            MultipartUpload {
+                key: &storage_path,
+                upload_id: &s3_upload_id,
+                total_bytes: total,
+            },
+            &mut parts,
+            &pending,
+            &body,
+            is_final,
         )
         .await
     {
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "storage upload part"),
     };
-    parts.push(CompletedPart { part_number, etag });
     let parts_json = serde_json::to_value(&parts).unwrap_or_default();
     if sqlx::query(
-        "UPDATE chat_media_uploads SET received_bytes=$1,s3_part_etags=$2,updated_at=NOW() WHERE id=$3",
+        "UPDATE chat_media_uploads SET received_bytes=$1,s3_part_etags=$2,pending_bytes=$3,updated_at=NOW() WHERE id=$4",
     )
     .bind(new_received)
     .bind(parts_json)
+    .bind(&pending)
     .bind(upload_id)
     .execute(&mut *transaction)
     .await

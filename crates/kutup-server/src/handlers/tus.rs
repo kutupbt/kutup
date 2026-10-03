@@ -21,7 +21,6 @@
 //! `Tus-Resumable` header, matching Fiber's `c.SendString` — so responses are built
 //! directly here rather than via `AppError` (whose body is `{"error": …}` JSON).
 
-use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -34,7 +33,7 @@ use uuid::Uuid;
 use crate::drive_writes::Room;
 use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_prefix};
 use crate::middleware::AuthUser;
-use crate::storage::CompletedPart;
+use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
 /// The protocol version we advertise + require. Clients send `Tus-Resumable: 1.0.0` on
@@ -42,7 +41,7 @@ use crate::AppState;
 pub(crate) const TUS_VERSION: &str = "1.0.0";
 
 /// S3's lower bound on every multipart part except the last (5 MiB). Mirrors `minPartSize`.
-pub(crate) const MIN_PART_SIZE: i64 = 5 * 1024 * 1024;
+pub(crate) use crate::storage::MIN_PART_SIZE;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -501,11 +500,12 @@ pub async fn patch(
         String,            // storage_path
         String,            // s3_upload_id
         serde_json::Value, // s3_part_etags
+        Vec<u8>,           // pending_bytes
     );
     let row: Option<UploadRow> = sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-                storage_path, s3_upload_id, s3_part_etags \
+                storage_path, s3_upload_id, s3_part_etags, pending_bytes \
          FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
@@ -526,6 +526,7 @@ pub async fn patch(
         storage_path,
         s3_upload_id,
         part_etags_json,
+        pending,
     )) = row
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
@@ -559,7 +560,6 @@ pub async fn patch(
         Ok(p) => p,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "corrupt part etags"),
     };
-    let next_part = parts.len() as i32 + 1;
     let is_final_part = received_bytes + chunk_len == total_bytes;
     if !is_final_part && chunk_len < MIN_PART_SIZE {
         return (
@@ -570,19 +570,24 @@ pub async fn patch(
             .into_response();
     }
 
-    // Stream the chunk to S3 as one multipart part.
-    let etag = match state
+    // Store the chunk as equal-sized parts; what does not fill one waits in
+    // the row for the next chunk.
+    let pending = match state
         .storage
-        .upload_part(
-            &storage_path,
-            &s3_upload_id,
-            next_part,
-            ByteStream::from(body.to_vec()),
-            chunk_len,
+        .append_equal_parts(
+            MultipartUpload {
+                key: &storage_path,
+                upload_id: &s3_upload_id,
+                total_bytes,
+            },
+            &mut parts,
+            &pending,
+            &body,
+            is_final_part,
         )
         .await
     {
-        Ok(e) => e,
+        Ok(pending) => pending,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -592,18 +597,15 @@ pub async fn patch(
                 .into_response()
         }
     };
-    parts.push(CompletedPart {
-        part_number: next_part,
-        etag,
-    });
     let parts_json = serde_json::to_value(&parts).unwrap_or(serde_json::Value::Null);
     let new_received = received_bytes + chunk_len;
 
     if sqlx::query(
-        "UPDATE uploads SET received_bytes=$1, s3_part_etags=$2, updated_at=NOW() WHERE id=$3",
+        "UPDATE uploads SET received_bytes=$1, s3_part_etags=$2, pending_bytes=$3, updated_at=NOW() WHERE id=$4",
     )
     .bind(new_received)
     .bind(&parts_json)
+    .bind(&pending)
     .bind(upload_id)
     .execute(&mut *tx)
     .await

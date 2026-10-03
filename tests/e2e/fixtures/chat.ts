@@ -22,8 +22,9 @@ export async function openChat(
 /** The sidebar's conversation list. */
 export async function openChats(page: Page): Promise<void> {
   // After a reload Chat starts again (keys, mailbox, history) before its
-  // navigation appears.
-  await page.getByRole('link', { name: /^Chats/ }).click({ timeout: 60_000 })
+  // navigation appears: the same start-up openChat allows 120 s for. With
+  // four Chat clients on a two-core CI runner, 60 s was not always enough.
+  await page.getByRole('link', { name: /^Chats/ }).click({ timeout: 120_000 })
   await expect(page.getByRole('region', { name: 'Conversations' })).toBeVisible({ timeout: 60_000 })
 }
 

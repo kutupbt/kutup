@@ -41,7 +41,9 @@ POSTGRES_PASSWORD=<strong-random-password>
 #   openssl rand -hex 64
 JWT_SECRET=<64-byte-hex-string>
 
-# SeaweedFS S3 credentials — injected into every bundled service by Compose
+# Object storage credentials — the bundled SeaweedFS's by default, injected
+# into every bundled service by Compose. For another S3 store see "Using
+# another S3 store" below.
 S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
@@ -90,7 +92,8 @@ CHAT_WEB_PUSH=true
 # CHAT_TURN_REALM=turn.example.com
 
 # Group calls: a LiveKit SFU (`docker compose --profile sfu up`). Browsers
-# connect to CHAT_SFU_URL (wss:, proxied by TLS to the SFU's port 7880); UDP
+# connect to CHAT_SFU_URL; the bundled nginx serves the SFU at
+# wss://sfu.<domain>, which needs DNS and a place on the certificate. UDP
 # 50000-60000 and TCP 7881 must be reachable. Frames are end-to-end
 # encrypted, so the SFU forwards what it cannot read. Without these, accounts
 # here can join group calls other servers host but not start one.
@@ -298,7 +301,35 @@ renewing or replacing them, reload Nginx:
 docker compose exec nginx nginx -s reload
 ```
 
-### Using Certbot (Let's Encrypt)
+### Automatic certificates
+
+`docker-compose.acme.yml` adds a small companion that gets a Let's Encrypt
+certificate for the app hostnames, renews it, and has Nginx pick each new
+one up without a restart. It needs:
+
+- `KUTUP_BASE_DOMAIN` in `.env` (the certificate covers `account`, `drive`,
+  `chat`, `photos`, `maps` and `office` under it; `KUTUP_ACME_DOMAINS`, a
+  comma-separated list, names other hostnames instead, and
+  `KUTUP_ACME_EXTRA_DOMAINS` adds names beside them, such as the group-call
+  SFU's `sfu.<domain>`);
+- each of those hostnames pointing at this machine;
+- ports 80 and 443 reachable from the internet. Let's Encrypt proves
+  ownership by fetching a file over port 80, so no DNS credentials are kept
+  on the server.
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
+```
+
+The overlay publishes Nginx on 80 and 443. On the very first start Nginx
+serves a self-signed certificate for the few seconds until the real one
+arrives. `KUTUP_ACME_EMAIL` (optional) is where Let's Encrypt sends expiry
+warnings; `KUTUP_ACME_STAGING=1` gets untrusted test certificates for trying
+a setup out. Follow it with `docker compose ... logs acme`; a failed check is
+tried again every 15 minutes. The certificate and Let's Encrypt account live
+in the `acme_state` volume and `nginx/certs/`.
+
+### Using Certbot (Let's Encrypt) by hand
 
 Obtain the initial certificate before starting the Compose Nginx, or stop it so
 Certbot's standalone listener can own ports 80/443. Copy the live material into
@@ -681,6 +712,80 @@ uses the map settings above.
 - **Updates:** Keep Docker images and the application updated.
 
 ---
+
+## Running published images
+
+Building Kutup compiles the Rust server and the browser WebAssembly, which
+needs several GiB of memory. A small server can run images built on another
+machine instead.
+
+On the build machine, logged in to the registry (`docker login ghcr.io`):
+
+```sh
+scripts/publish-images.sh
+```
+
+It builds the server and web images from the current commit, refuses a
+working tree with uncommitted changes, tags both with the commit, pushes
+them, and prints two lines to put in the server's `.env`:
+
+```
+KUTUP_SERVER_IMAGE=ghcr.io/kutupbt/kutup-server:<commit>
+KUTUP_WEB_IMAGE=ghcr.io/kutupbt/kutup-web:<commit>
+```
+
+`KUTUP_IMAGE_REGISTRY` changes where they go. On the server, add
+`docker-compose.images.yml` to the compose files; nothing is built there:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --wait
+```
+
+To update, publish from the new commit, change the two lines in `.env`, and
+run the same two commands. The server applies its database migrations when
+it starts.
+
+## Using another S3 store
+
+Kutup's server needs only ordinary S3 requests: put, get, list, delete,
+batch delete and multipart upload. It does not need bucket versioning,
+lifecycle rules or presigned URLs, and browsers never talk to the store —
+every byte goes through the backend, so the bucket should stay private (no
+public access, no public custom domain). The bundled SeaweedFS is a default,
+not a requirement.
+
+Two differences between stores are handled by the server, so no client has
+to know which one is behind it: resumable uploads are stored as equal-sized
+parts (Cloudflare R2 refuses parts of different lengths), and objects are
+deleted by version only where the store supports that. Checked with
+`storage-check` against SeaweedFS and Cloudflare R2.
+
+To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
+Object Storage, MinIO, AWS S3, …):
+
+1. Create a private bucket and an access key that can read, write, list and
+   delete in it.
+2. In `.env`, set `S3_ENDPOINT` to the store's S3 API address and
+   `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` and `S3_REGION` to its values
+   (R2's region is `auto`). The server addresses the bucket path-style
+   (`<endpoint>/<bucket>/<key>`).
+3. Check the store once, before any data depends on it:
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml run --rm backend storage-check
+   ```
+   It runs every kind of request the server makes, under its own
+   `kutup-storage-check/` prefix, removes what it wrote, and prints one line
+   per check. It exits non-zero if the store cannot do something Kutup needs.
+4. Start the stack with both files, which leaves the SeaweedFS services out:
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml up -d --build --wait
+   ```
+
+The admin page cannot ask such a store for its capacity; set
+`STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup
+steps above do not apply: the store's durability is the provider's, and the
+PostgreSQL backup is still yours to take.
 
 ## SeaweedFS bucket versioning and lifecycle
 

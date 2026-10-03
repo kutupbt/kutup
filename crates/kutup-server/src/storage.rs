@@ -1,5 +1,6 @@
-//! S3 (SeaweedFS) storage service — mirrors `backend/services/storage.go`
-//! (`aws-sdk-go-v2` → `aws-sdk-s3`).
+//! S3 storage service — mirrors `backend/services/storage.go`
+//! (`aws-sdk-go-v2` → `aws-sdk-s3`). Any S3-compatible store works, not only the
+//! bundled SeaweedFS; `kutup-server storage-check` (storage_check.rs) tests one.
 //!
 //! Path-style addressing + a static-credentials provider, exactly like the Go
 //! `NewStorage`. Covers the object get/put/delete + prefix-wipe paths (files/versions/
@@ -9,7 +10,9 @@
 //! public-share downloads stream through the backend like every other download).
 
 use anyhow::{Context, Result};
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::config::{
+    BehaviorVersion, Credentials, Region, RequestChecksumCalculation, ResponseChecksumValidation,
+};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     CompletedMultipartUpload, CompletedPart as S3CompletedPart, Delete, ObjectIdentifier,
@@ -37,6 +40,42 @@ pub struct CompletedPart {
     pub etag: String,
 }
 
+/// S3's smallest multipart part, other than the last.
+pub const MIN_PART_SIZE: i64 = 5 * 1024 * 1024;
+/// S3's most parts in one multipart upload.
+const MAX_PARTS: i64 = 10_000;
+
+/// The size every part but the last has in an upload of `total_bytes`: 5 MiB,
+/// or the next whole MiB that keeps the upload within S3's 10,000 parts.
+/// Fixed by the total, so every request of one upload cuts the same way.
+pub fn equal_part_size(total_bytes: i64) -> i64 {
+    const MIB: i64 = 1024 * 1024;
+    let needed = (total_bytes.max(0) + MAX_PARTS - 1) / MAX_PARTS;
+    MIN_PART_SIZE.max((needed + MIB - 1) / MIB * MIB)
+}
+
+/// How `available` bytes are stored: the lengths of the parts to upload now
+/// and how many bytes wait for the next request. Every part is `part_size`
+/// long except, when the upload is ending, a shorter last one.
+fn cut_parts(available: usize, part_size: usize, is_final: bool) -> (Vec<usize>, usize) {
+    let mut lengths = vec![part_size; available / part_size];
+    let rest = available % part_size;
+    if is_final && rest > 0 {
+        lengths.push(rest);
+        return (lengths, 0);
+    }
+    (lengths, rest)
+}
+
+/// A multipart upload in progress: where it lands, the store's id for it,
+/// and the size the client declared.
+#[derive(Clone, Copy)]
+pub struct MultipartUpload<'a> {
+    pub key: &'a str,
+    pub upload_id: &'a str,
+    pub total_bytes: i64,
+}
+
 /// Wraps the S3 client + target bucket — mirrors `StorageService`.
 #[derive(Clone)]
 pub struct StorageService {
@@ -60,6 +99,11 @@ impl StorageService {
             .credentials_provider(creds)
             .endpoint_url(endpoint)
             .force_path_style(true) // SeaweedFS requires path-style
+            // Checksums only where S3 itself demands one: the SDK's default
+            // adds CRC trailers to every upload, which several
+            // S3-compatible stores reject.
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+            .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
             .build();
         StorageService {
             client: Client::from_conf(conf),
@@ -128,6 +172,17 @@ impl StorageService {
             .await
             .context("s3 delete version")?;
         Ok(())
+    }
+
+    /// Removes an object whose upload returned `version_id`: that exact
+    /// version where the store deletes by version, otherwise the object.
+    /// Some stores (Cloudflare R2) return a version id for every upload and
+    /// then refuse to delete by it.
+    pub async fn delete_stored(&self, key: &str, version_id: &str) -> Result<()> {
+        if !version_id.is_empty() && self.delete_object_version(key, version_id).await.is_ok() {
+            return Ok(());
+        }
+        self.delete(key).await
     }
 
     /// Lists one page (≤1000 keys) under `prefix`, returning the objects + the continuation
@@ -406,6 +461,46 @@ impl StorageService {
             .with_context(|| format!("s3 upload part {part_number}: empty etag"))
     }
 
+    /// Adds a client's chunk to a multipart upload as equal-sized parts,
+    /// whatever size the chunk is: some stores (Cloudflare R2) refuse an
+    /// upload whose parts, other than the last, differ in length. `pending`
+    /// is what earlier chunks left over; the returned bytes are what this one
+    /// leaves (empty when `is_final`). New parts are appended to `parts`.
+    /// On an error nothing the caller holds has changed, and a retry sends
+    /// the same part numbers again.
+    pub async fn append_equal_parts(
+        &self,
+        upload: MultipartUpload<'_>,
+        parts: &mut Vec<CompletedPart>,
+        pending: &[u8],
+        chunk: &[u8],
+        is_final: bool,
+    ) -> Result<Vec<u8>> {
+        let mut bytes = Vec::with_capacity(pending.len() + chunk.len());
+        bytes.extend_from_slice(pending);
+        bytes.extend_from_slice(chunk);
+        let part_size = equal_part_size(upload.total_bytes) as usize;
+        let (lengths, rest) = cut_parts(bytes.len(), part_size, is_final);
+        let mut added = Vec::with_capacity(lengths.len());
+        let mut offset = 0;
+        for length in lengths {
+            let part_number = (parts.len() + added.len()) as i32 + 1;
+            let etag = self
+                .upload_part(
+                    upload.key,
+                    upload.upload_id,
+                    part_number,
+                    ByteStream::from(bytes[offset..offset + length].to_vec()),
+                    length as i64,
+                )
+                .await?;
+            added.push(CompletedPart { part_number, etag });
+            offset += length;
+        }
+        parts.extend(added);
+        Ok(bytes[bytes.len() - rest..].to_vec())
+    }
+
     /// Finalises the multipart upload, producing one object at `key` — mirrors
     /// `CompleteMultipart`. Parts must be in `part_number` order.
     pub async fn complete_multipart(
@@ -450,5 +545,53 @@ impl StorageService {
             .await
             .context("s3 abort multipart")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIB: i64 = 1024 * 1024;
+
+    #[test]
+    fn part_size_is_five_mib_until_ten_thousand_parts_would_not_fit() {
+        assert_eq!(equal_part_size(0), 5 * MIB);
+        assert_eq!(equal_part_size(1), 5 * MIB);
+        assert_eq!(equal_part_size(10_000 * 5 * MIB), 5 * MIB);
+        assert_eq!(equal_part_size(10_000 * 5 * MIB + 1), 6 * MIB);
+        let tib = 1024 * 1024 * MIB;
+        let part = equal_part_size(tib);
+        assert!((tib + part - 1) / part <= 10_000);
+    }
+
+    #[test]
+    fn chunks_of_any_size_become_equal_parts() {
+        let part = 5 * MIB as usize;
+        // How Kutup's clients upload: a first chunk 24 bytes longer, then
+        // chunks of 5 MiB + 17, then a short last one.
+        let chunks = [part + 17 + 24, part + 17, part + 17, 1000];
+        let mut pending = 0;
+        let mut stored = Vec::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let (lengths, rest) = cut_parts(pending + chunk, part, index == chunks.len() - 1);
+            stored.extend(lengths);
+            pending = rest;
+        }
+        assert_eq!(pending, 0);
+        assert_eq!(stored.iter().sum::<usize>(), chunks.iter().sum::<usize>());
+        let (last, others) = stored.split_last().unwrap();
+        assert!(others.iter().all(|length| *length == part));
+        assert_eq!(*last, 24 + 3 * 17 + 1000);
+    }
+
+    #[test]
+    fn cutting_keeps_what_does_not_fill_a_part() {
+        assert_eq!(cut_parts(0, 10, false), (vec![], 0));
+        assert_eq!(cut_parts(9, 10, false), (vec![], 9));
+        assert_eq!(cut_parts(25, 10, false), (vec![10, 10], 5));
+        assert_eq!(cut_parts(25, 10, true), (vec![10, 10, 5], 0));
+        assert_eq!(cut_parts(20, 10, true), (vec![10, 10], 0));
+        assert_eq!(cut_parts(3, 10, true), (vec![3], 0));
     }
 }
