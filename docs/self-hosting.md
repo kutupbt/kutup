@@ -41,7 +41,9 @@ POSTGRES_PASSWORD=<strong-random-password>
 #   openssl rand -hex 64
 JWT_SECRET=<64-byte-hex-string>
 
-# SeaweedFS S3 credentials — injected into every bundled service by Compose
+# Object storage credentials — the bundled SeaweedFS's by default, injected
+# into every bundled service by Compose. For another S3 store see "Using
+# another S3 store" below.
 S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
@@ -681,6 +683,41 @@ uses the map settings above.
 - **Updates:** Keep Docker images and the application updated.
 
 ---
+
+## Using another S3 store
+
+Kutup's server needs only ordinary S3 requests: put, get, list, delete,
+batch delete and multipart upload. It does not need bucket versioning,
+lifecycle rules or presigned URLs, and browsers never talk to the store —
+every byte goes through the backend, so the bucket should stay private (no
+public access, no public custom domain). The bundled SeaweedFS is a default,
+not a requirement.
+
+To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
+Object Storage, MinIO, AWS S3, …):
+
+1. Create a private bucket and an access key that can read, write, list and
+   delete in it.
+2. In `.env`, set `S3_ENDPOINT` to the store's S3 API address and
+   `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` and `S3_REGION` to its values
+   (R2's region is `auto`). The server addresses the bucket path-style
+   (`<endpoint>/<bucket>/<key>`).
+3. Check the store once, before any data depends on it:
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml run --rm backend storage-check
+   ```
+   It runs every kind of request the server makes, under its own
+   `kutup-storage-check/` prefix, removes what it wrote, and prints one line
+   per check. It exits non-zero if the store cannot do something Kutup needs.
+4. Start the stack with both files, which leaves the SeaweedFS services out:
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml up -d --build --wait
+   ```
+
+The admin page cannot ask such a store for its capacity; set
+`STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup
+steps above do not apply: the store's durability is the provider's, and the
+PostgreSQL backup is still yours to take.
 
 ## SeaweedFS bucket versioning and lifecycle
 

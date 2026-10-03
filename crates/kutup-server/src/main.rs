@@ -40,6 +40,7 @@ mod sessions;
 mod site_settings;
 mod ssrf;
 mod storage;
+mod storage_check;
 mod storage_probe;
 mod telemetry;
 mod totp;
@@ -252,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
             "MLS ordering policy rotation requires federation, policy JSON, and a control signer"
         );
     }
-    // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
+    // The S3-compatible object store (bundled SeaweedFS, or any other: docs/self-hosting.md).
     let storage = storage::StorageService::new(
         &config.s3_endpoint,
         &config.s3_access_key,
@@ -264,6 +265,9 @@ async fn main() -> anyhow::Result<()> {
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
     // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
     // completion and exits.
+    if args.len() > 1 && args[1] == "storage-check" {
+        std::process::exit(storage_check::run(&storage).await);
+    }
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
         std::process::exit(code);

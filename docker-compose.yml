@@ -76,7 +76,8 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
-      S3_ENDPOINT: http://seaweedfs-s3:8333
+      # The bundled SeaweedFS; docker-compose.external-s3.yml points this at another store.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs-s3:8333}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kutup}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-kutup_dev_s3_secret}
       S3_BUCKET: ${S3_BUCKET:-kutup-files}

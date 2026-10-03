@@ -1,0 +1,37 @@
+# Runs Kutup on an S3-compatible store you already have (Cloudflare R2,
+# Backblaze B2, Hetzner Object Storage, MinIO, AWS S3, …) instead of the
+# bundled SeaweedFS. Use it together with the main file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml up -d --wait
+#
+# Set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET and S3_REGION in
+# .env, create the bucket at the provider, and check it once before first use
+# (docs/self-hosting.md, "Using another S3 store"):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external-s3.yml run --rm backend storage-check
+
+services:
+  backend:
+    environment:
+      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT to the store's S3 API address}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      # No SeaweedFS to ask for capacity: the admin page shows
+      # STORAGE_TOTAL_BYTES when that is set.
+      SEAWEEDFS_MASTER_URL: ""
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+
+  # The bundled store stays out unless asked for by profile.
+  seaweedfs-master:
+    profiles: [bundled-storage]
+  seaweedfs-volume:
+    profiles: [bundled-storage]
+  seaweedfs-filer:
+    profiles: [bundled-storage]
+  seaweedfs-s3:
+    profiles: [bundled-storage]
+  seaweedfs-init:
+    profiles: [bundled-storage]

@@ -1,5 +1,6 @@
-//! S3 (SeaweedFS) storage service — mirrors `backend/services/storage.go`
-//! (`aws-sdk-go-v2` → `aws-sdk-s3`).
+//! S3 storage service — mirrors `backend/services/storage.go`
+//! (`aws-sdk-go-v2` → `aws-sdk-s3`). Any S3-compatible store works, not only the
+//! bundled SeaweedFS; `kutup-server storage-check` (storage_check.rs) tests one.
 //!
 //! Path-style addressing + a static-credentials provider, exactly like the Go
 //! `NewStorage`. Covers the object get/put/delete + prefix-wipe paths (files/versions/
@@ -9,7 +10,9 @@
 //! public-share downloads stream through the backend like every other download).
 
 use anyhow::{Context, Result};
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::config::{
+    BehaviorVersion, Credentials, Region, RequestChecksumCalculation, ResponseChecksumValidation,
+};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     CompletedMultipartUpload, CompletedPart as S3CompletedPart, Delete, ObjectIdentifier,
@@ -60,6 +63,11 @@ impl StorageService {
             .credentials_provider(creds)
             .endpoint_url(endpoint)
             .force_path_style(true) // SeaweedFS requires path-style
+            // Checksums only where S3 itself demands one: the SDK's default
+            // adds CRC trailers to every upload, which several
+            // S3-compatible stores reject.
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+            .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
             .build();
         StorageService {
             client: Client::from_conf(conf),
