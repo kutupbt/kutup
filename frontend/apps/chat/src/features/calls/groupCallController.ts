@@ -36,6 +36,8 @@ export interface GroupCallParticipant {
   local: boolean
   audio: MediaStreamTrack | null
   video: MediaStreamTrack | null
+  /** The screen this participant is sharing, beside the camera. */
+  screen: MediaStreamTrack | null
   muted: boolean
   speaking: boolean
 }
@@ -47,6 +49,8 @@ export interface GroupCallState {
   participants: GroupCallParticipant[]
   muted: boolean
   cameraOn: boolean
+  /** This participant is sharing its screen. */
+  screenOn: boolean
   failed?: boolean
 }
 
@@ -118,7 +122,7 @@ export class GroupCallController {
     if (await this.inCallElsewhere()) throw new Error('already in a call')
     this.reset()
     await this.holdInCall()
-    this.set({ groupId, call, phase: 'connecting', participants: [], muted: false, cameraOn: withVideo })
+    this.set({ groupId, call, phase: 'connecting', participants: [], muted: false, cameraOn: withVideo, screenOn: false })
     try {
       const tagKey = await hmacKey(call.secret)
       this.tags = await memberTags(tagKey, this.roster(groupId))
@@ -139,6 +143,8 @@ export class GroupCallController {
       for (const event of [
         RoomEvent.ParticipantConnected,
         RoomEvent.ParticipantDisconnected,
+        RoomEvent.TrackPublished,
+        RoomEvent.TrackUnpublished,
         RoomEvent.TrackSubscribed,
         RoomEvent.TrackUnsubscribed,
         RoomEvent.TrackMuted,
@@ -147,7 +153,10 @@ export class GroupCallController {
         RoomEvent.LocalTrackUnpublished,
         RoomEvent.ActiveSpeakersChanged,
       ]) {
-        room.on(event, () => this.refreshParticipants())
+        room.on(event, () => {
+          this.syncScreen()
+          this.refreshParticipants()
+        })
       }
       room.on(RoomEvent.Disconnected, () => void this.ended(false))
       room.on(RoomEvent.EncryptionError, (error) => {
@@ -193,6 +202,27 @@ export class GroupCallController {
     await room.localParticipant.setCameraEnabled(!state.cameraOn)
     this.patch({ cameraOn: !state.cameraOn })
     this.refreshParticipants()
+  }
+
+  /**
+   * Share this screen (a window, a tab) beside the camera, or stop sharing.
+   * It is one more published track, so its frames are encrypted like the
+   * others.
+   */
+  async toggleScreen(): Promise<void> {
+    const room = this.room
+    const state = this.state
+    if (!room || !state) return
+    await room.localParticipant.setScreenShareEnabled(!state.screenOn, { audio: false })
+    this.syncScreen()
+  }
+
+  /** Follow what is published: the browser's own "Stop sharing" ends it too. */
+  private syncScreen(): void {
+    const room = this.room
+    if (!room || !this.state) return
+    const screenOn = room.localParticipant.isScreenShareEnabled
+    if (screenOn !== this.state.screenOn) this.patch({ screenOn })
   }
 
   dispose(): void {
@@ -242,12 +272,14 @@ export class GroupCallController {
     const describe = (participant: Participant, local: boolean): GroupCallParticipant => {
       const audio = participant.getTrackPublication(Track.Source.Microphone)
       const video = participant.getTrackPublication(Track.Source.Camera)
+      const screen = participant.getTrackPublication(Track.Source.ScreenShare)
       return {
         identity: participant.identity,
         address: local ? this.account : (this.tags.get(participant.identity.slice(0, 24)) ?? null),
         local,
         audio: local ? null : (audio?.track?.mediaStreamTrack ?? null),
         video: video && !video.isMuted ? (video.track?.mediaStreamTrack ?? null) : null,
+        screen: screen && !screen.isMuted ? (screen.track?.mediaStreamTrack ?? null) : null,
         muted: !audio || audio.isMuted,
         speaking: speaking.has(participant.identity),
       }

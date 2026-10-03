@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import { canonicalAccountAddress, parseAccountAddress } from '@kutup/chat-core/identity'
 import type { ChatService } from '@kutup/chat-core/service'
 import type {
@@ -35,6 +36,8 @@ export interface CallState {
   connectedAtMs?: number
   muted: boolean
   cameraOn: boolean
+  /** This side is sending its screen on the video line, in place of the camera. */
+  screenOn: boolean
   localStream: MediaStream | null
   remoteStream: MediaStream | null
   /** Why it ended, for the last screen. */
@@ -75,6 +78,8 @@ export class CallController {
   private releaseInCall: (() => void) | null = null
   private releaseDesk: (() => void) | null = null
   private isDesk = false
+  /** The camera was on when screen sharing began; stopping brings it back. */
+  private cameraBeforeScreen = false
   private readonly unsubscribe: () => void
 
   constructor(
@@ -134,6 +139,7 @@ export class CallController {
       startedAtMs: Date.now(),
       muted: false,
       cameraOn: media === 'video',
+      screenOn: false,
       localStream: null,
       remoteStream: null,
     })
@@ -216,24 +222,74 @@ export class CallController {
 
   async toggleCamera(): Promise<void> {
     const state = this.state
-    const pc = this.pc
-    if (!state?.localStream || !pc) return
-    const sender = pc.getTransceivers().find((transceiver) => transceiver.receiver.track.kind === 'video')?.sender
-    if (!sender) return
+    const sender = this.videoSender()
+    if (!state?.localStream || !sender) return
     if (state.cameraOn) {
-      for (const track of state.localStream.getVideoTracks()) {
-        track.stop()
-        state.localStream.removeTrack(track)
-      }
-      await sender.replaceTrack(null)
-      this.set({ cameraOn: false, localStream: new MediaStream(state.localStream.getTracks()) })
+      await this.sendVideo(null, { cameraOn: false })
       return
     }
+    // The one video line carries the camera or the screen, not both.
+    this.cameraBeforeScreen = false
     const camera = await navigator.mediaDevices.getUserMedia({ video: true })
     const track = camera.getVideoTracks()[0]
     if (!track) return
+    if (this.state?.callId !== state.callId || this.state.phase === 'ended') {
+      track.stop()
+      return
+    }
+    await this.sendVideo(track, { cameraOn: true, screenOn: false })
+  }
+
+  /**
+   * Share this screen (a window, a tab) in place of the camera, or stop
+   * sharing. The video line is negotiated from the start, so this is a track
+   * swap too. Stopping brings the camera back if it was on before.
+   */
+  async toggleScreen(): Promise<void> {
+    const state = this.state
+    if (!state?.localStream || !this.videoSender()) return
+    if (state.screenOn) {
+      await this.stopScreen(state.callId)
+      return
+    }
+    const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+    const track = display.getVideoTracks()[0]
+    if (!track) return
+    if (this.state?.callId !== state.callId || this.state.phase === 'ended') {
+      track.stop()
+      return
+    }
+    this.cameraBeforeScreen = this.state.cameraOn
+    // The browser's own "Stop sharing" control ends the track.
+    track.addEventListener('ended', () => void this.stopScreen(state.callId))
+    await this.sendVideo(track, { cameraOn: false, screenOn: true })
+  }
+
+  private async stopScreen(callId: string): Promise<void> {
+    const state = this.state
+    if (!state || state.callId !== callId || !state.screenOn || state.phase === 'ended') return
+    await this.sendVideo(null, { screenOn: false })
+    if (!this.cameraBeforeScreen) return
+    this.cameraBeforeScreen = false
+    await this.toggleCamera().catch((error: unknown) => console.warn('chat: could not turn the camera back on', error))
+  }
+
+  private videoSender(): RTCRtpSender | undefined {
+    return this.pc?.getTransceivers().find((transceiver) => transceiver.receiver.track.kind === 'video')?.sender
+  }
+
+  /** Put `track` (or nothing) on the video line, replacing what was sent. */
+  private async sendVideo(track: MediaStreamTrack | null, patch: Partial<CallState>): Promise<void> {
+    const state = this.state
+    const sender = this.videoSender()
+    if (!state?.localStream || !sender) {
+      track?.stop()
+      return
+    }
+    for (const previous of state.localStream.getVideoTracks()) previous.stop()
     await sender.replaceTrack(track)
-    this.set({ cameraOn: true, localStream: new MediaStream([...state.localStream.getTracks(), track]) })
+    const audio = state.localStream.getAudioTracks()
+    this.set({ ...patch, localStream: new MediaStream(track ? [...audio, track] : audio) })
   }
 
   dispose(): void {
@@ -336,6 +392,7 @@ export class CallController {
       startedAtMs: sentAt,
       muted: false,
       cameraOn: false,
+      screenOn: false,
       localStream: null,
       remoteStream: null,
     })
@@ -497,6 +554,7 @@ export class CallController {
     this.pendingLocal = []
     this.pendingRemote = []
     this.remoteOffer = null
+    this.cameraBeforeScreen = false
     this.releaseInCall?.()
     this.releaseInCall = null
   }
@@ -559,4 +617,19 @@ export function outcomeOf(
 
 function stopStream(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop()
+}
+
+/** Whether this browser can capture a screen (most phones cannot). */
+export function canShareScreen(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
+}
+
+/**
+ * Tell the person their screen could not be shared. Closing the browser's
+ * picker without choosing is not a failure.
+ */
+export function reportShareFailure(error: unknown, message: string): void {
+  if (error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'AbortError')) return
+  console.warn('chat: screen sharing did not start', error)
+  toast.error(message)
 }

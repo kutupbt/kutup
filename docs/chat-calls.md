@@ -61,6 +61,15 @@ Several tabs of one browser share a device:
 - Both sides always negotiate a video line in both directions. Turning the
   camera on during a voice call is then a track swap, not a new offer.
 
+**Screen sharing:**
+- Either side can send its screen (a window, a tab) in place of its camera.
+  It rides the video line that is already negotiated, so starting and
+  stopping are track swaps too, and it is encrypted like the camera.
+- Stopping brings the camera back if it was on before. The browser's own
+  "Stop sharing" control stops it the same way.
+- The control shows only where the browser can capture a screen; most phone
+  browsers cannot, and they still see a screen shared with them.
+
 **Timeouts:**
 - A call rings for 60 s.
 - A dropped connection gets 10 s to recover before the call counts as
@@ -131,6 +140,11 @@ hours. `groupCall` is refused as Direct content.
 - Members compute the tags of the group's roster to name the tiles. The SFU
   cannot, without the secret.
 
+**Screen sharing:** a participant can publish its screen beside its
+camera. It is one more track through the SFU, with its frames encrypted
+under the same key as the others. While someone shares, the screen takes the
+stage and the participants move to a strip beside it.
+
 **Ringing:** in groups of up to 16 members, a start less than 45 s old rings
 the other members, with Join, Join with video and Decline, a ringtone, and
 a notification when the tab is hidden. One tab per account rings (the call
@@ -143,6 +157,21 @@ message. The timeline shows each call's start once.
 
 **Group calls in the timeline:** the start notice, and the list preview
 ("Group call started" / "Group call ended").
+
+## The call view
+
+Both kinds of call open the same view over the app: the Kutup Chat mark, the
+call's title and status, the video, and the controls (microphone, camera,
+screen, People, Chat, leave).
+
+- **People** lists who is in the call, with each one's camera, microphone
+  and screen-sharing state. In a one-to-one call the other side's microphone
+  state is not shown: it is not signalled.
+- **Chat** opens the call's own conversation beside the video (over it on a
+  phone), so messages and attachments can be read and sent without leaving
+  the call. It is the conversation itself, not a separate call chat: what is
+  written there stays in the history like any other message. Polls, places
+  and stickers stay in the conversation proper.
 
 ## ICE servers
 

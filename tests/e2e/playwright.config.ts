@@ -67,7 +67,13 @@ export default defineConfig({
 function browserArgs(): string[] {
   const origins = allOrigins().map((origin) => new URL(origin))
   const foreign = origins.filter((url) => url.hostname !== 'localhost' && !url.hostname.endsWith('.localhost'))
-  const args: string[] = []
+  // Calls: a synthetic camera, microphone and screen, granted without a
+  // prompt, so call specs run headless.
+  const args: string[] = [
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
+    '--auto-select-desktop-capture-source=Entire screen',
+  ]
   // A local stack's self-signed certificate: Playwright's ignoreHTTPSErrors
   // does not cover service-worker scripts, which ONLYOFFICE registers.
   if (process.env.E2E_TRUST_LOCAL_CERT === '1') args.push('--ignore-certificate-errors')

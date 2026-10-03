@@ -184,6 +184,12 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 35: every app's sign-in and signed-in views at phone and desktop
   widths, both themes: one `main`, no page overflow, no serious/critical axe
   findings.
+- spec 38: calls with a synthetic camera, microphone and screen: a
+  one-to-one video call and a group call, each with the People panel, the
+  conversation's chat beside the video, and screen sharing. The group call
+  needs an SFU reachable from this machine (`docker compose --profile sfu`,
+  with `CHAT_SFU_URL=wss://sfu.localhost:<port>` and a certificate that
+  names `sfu.localhost`) and skips on a stack without one.
 - spec 36: a group chat on a server with no federation settings.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.
