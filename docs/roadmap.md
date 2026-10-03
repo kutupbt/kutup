@@ -539,6 +539,17 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Group device repair: what is left.** A group now recovers when a
+  member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
+  Still open: it takes up to two minutes (the device check's period), plus
+  three per turn if the first member in line is away, during which the
+  replaced device sees the group read-only; a non-administrator cannot
+  repair a member who lives on another server; messages sent to the account
+  before its new device was admitted are lost to that device and linger in
+  its mailbox until they expire; and "Repair this browser" is still offered
+  when the server is only unreachable, where retrying is the right answer.
+  The server rule and the engine's cross-account path are covered by browser
+  tests (38) and TypeScript unit tests, not yet by Rust unit tests.
 - **Direct-chat media without sealed sender says nothing.** Attachments,
   stickers, view-once media and voice notes to another person travel by
   sealed delivery, which a server offers only once its operator has

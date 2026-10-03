@@ -79,6 +79,14 @@ class ScriptedTransport implements ChatBackupTransport {
   stagedBase?: Uint8Array
   private cursor = 0
 
+  /** Behave like the server: report each device's chain and enforce it. */
+  enforceDeviceChains = false
+
+  private deviceHead(deviceId: number) {
+    const last = this.segments.filter(segment => segment.sourceDeviceId === deviceId).at(-1)
+    return { sequence: last?.deviceSequence ?? 0, digest: last?.ciphertextSha256 ?? zeroDigest }
+  }
+
   async status(): Promise<BackupStatusResponse> {
     if (this.statusOverride) return structuredClone(this.statusOverride)
     return {
@@ -89,6 +97,12 @@ class ScriptedTransport implements ChatBackupTransport {
       currentCursor: this.cursor,
       latestProtectedAtUnix: this.cursor > 0 ? 1_700_000_100 : undefined,
       storage: storage(),
+      ...(this.enforceDeviceChains
+        ? {
+            deviceHeads: [...new Set(this.segments.map(segment => segment.sourceDeviceId))]
+              .map(deviceId => ({ deviceId, ...this.deviceHead(deviceId) })),
+          }
+        : {}),
     }
   }
 
@@ -98,7 +112,18 @@ class ScriptedTransport implements ChatBackupTransport {
 
   async appendSegment(request: Parameters<ChatBackupTransport['appendSegment']>[0]) {
     this.appendRequests.push(structuredClone(request))
-    const existing = this.segments.find(segment => segment.operationId === request.operationId)
+    // The test runtime hands every coordinator the same ids, so an operation
+    // is the same one only when it is also the same device and sequence.
+    const existing = this.segments.find(segment =>
+      segment.operationId === request.operationId
+      && segment.sourceDeviceId === request.sourceDeviceId
+      && segment.deviceSequence === request.deviceSequence)
+    if (!existing && this.enforceDeviceChains) {
+      const head = this.deviceHead(request.sourceDeviceId)
+      if (request.deviceSequence !== head.sequence + 1 || request.previousSegmentDigest !== head.digest) {
+        throw Object.assign(new Error('backup device segment chain is not contiguous'), { response: { status: 409 } })
+      }
+    }
     if (!existing) {
       this.cursor += 1
       this.segments.push({
@@ -111,7 +136,10 @@ class ScriptedTransport implements ChatBackupTransport {
       this.ambiguousOnce = false
       throw new Error('connection closed after commit')
     }
-    const committed = this.segments.find(segment => segment.operationId === request.operationId)!
+    const committed = this.segments.find(segment =>
+      segment.operationId === request.operationId
+      && segment.sourceDeviceId === request.sourceDeviceId
+      && segment.deviceSequence === request.deviceSequence)!
     return { cursor: committed.cursor, acknowledgedAtUnix: committed.acknowledgedAtUnix }
   }
 
@@ -472,6 +500,58 @@ describe('ChatBackupCoordinator durable retry', () => {
     history = []
     await expect(coordinator.flushNow()).resolves.toBeUndefined()
     expect(stages).toBe(3)
+  })
+
+  it('starts its own chain when a repaired browser keeps the old device\'s bookkeeping', async () => {
+    // "Repair this browser" keeps the backup database and registers a new
+    // device. Continuing the old device's sequence under the new number is
+    // refused by the server on every upload.
+    const transport = new ScriptedTransport()
+    transport.enforceDeviceChains = true
+    const database = `backup-repaired:${crypto.randomUUID()}`
+    databaseNames.push(database)
+    let history = [historyEntry()]
+    const before = await open(transport, database, async () => history, undefined, 1)
+    await before.settled()
+    before.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(before), 1)
+    expect(transport.segments.map(segment => [segment.sourceDeviceId, segment.deviceSequence])).toEqual([[1, 1]])
+
+    const edited = historyEntry()
+    history = [{ ...edited, content: { ...edited.content, body: { text: 'after repair' }, text: 'after repair' } }]
+    const repaired = await open(transport, database, async () => history, undefined, 2)
+    await repaired.settled()
+    expect(transport.segments.map(segment => [segment.sourceDeviceId, segment.deviceSequence]))
+      .toEqual([[1, 1], [2, 1]])
+    expect(transport.segments[1].previousSegmentDigest).toBe(zeroDigest)
+    expect(repaired.view().state).toBe('protected')
+  })
+
+  it('continues the server\'s chain when a device number is given out again', async () => {
+    const transport = new ScriptedTransport()
+    transport.enforceDeviceChains = true
+    const first = `backup-number-first:${crypto.randomUUID()}`
+    const second = `backup-number-second:${crypto.randomUUID()}`
+    databaseNames.push(first, second)
+    const earlier = await open(transport, first, async () => [historyEntry()], undefined, 1)
+    await earlier.settled()
+    earlier.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(earlier), 1)
+
+    // A new browser, with nothing of its own, is given number 1 again.
+    const edited = historyEntry()
+    const later = await open(
+      transport,
+      second,
+      async () => [{ ...edited, content: { ...edited.content, body: { text: 'new device' }, text: 'new device' } }],
+      undefined,
+      1,
+    )
+    await later.settled()
+    expect(transport.segments.map(segment => [segment.sourceDeviceId, segment.deviceSequence]))
+      .toEqual([[1, 1], [1, 2]])
+    expect(transport.segments[1].previousSegmentDigest).toBe(transport.segments[0].ciphertextSha256)
+    expect(later.view().state).toBe('protected')
   })
 
   it('rejects an exact duplicate record repeated by the same device chain', async () => {

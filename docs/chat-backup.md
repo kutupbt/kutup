@@ -97,6 +97,14 @@ final tags, and noncanonical record sequences fail closed.
 4. The homeserver validates the public format, active source device, exact
    sequence/predecessor, manifest binding, length, digest, idempotency, and
    quota before assigning the next account cursor.
+   The chain is per device number, and the status response reports where
+   each stands (`deviceHeads`). On opening, a browser checks that what it
+   holds continues its device's chain and otherwise starts over from the
+   server's position (its queue is dropped, history is restored in full, and
+   what the backup lacks is queued again). Its bookkeeping can be another
+   device's: "Repair this browser" keeps the backup database while the
+   device gets a new number, and a number is given out again after a
+   revocation.
 5. Only the matching server acknowledgement removes the local pending entry and
    advances **Latest protected**. Ambiguous responses retry the same identity;
    changed content under an existing operation ID is a conflict.

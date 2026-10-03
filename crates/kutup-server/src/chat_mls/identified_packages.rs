@@ -73,11 +73,34 @@ pub(crate) async fn get_identified_key_packages(
     .fetch_optional(&state.pool)
     .await?;
     let self_device_sync = request.recipient == requester;
+    // Any active member may bring a fellow member's leaves in line with that
+    // member's signed manifest (a device replaced while the account had no
+    // other device in the group; chat_mls/membership.rs), so it may claim
+    // packages for an account that is already an active member here.
+    let fellow_member_device_sync = may_claim_membership_packages.is_some()
+        && request.recipient.server.as_deref() == Some(federation.server_name())
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM chat_mls_local_members m
+                JOIN users u ON u.id = m.user_id
+                WHERE m.conversation_id = $1 AND m.incarnation = $2
+                  AND u.username = $3 AND u.is_active = true
+                  AND m.removed_epoch IS NULL AND m.membership_status = 'active'
+             )",
+        )
+        .bind(request.conversation_id)
+        .bind(incarnation)
+        .bind(&request.recipient.username)
+        .fetch_one(&state.pool)
+        .await?;
     if may_claim_membership_packages.is_none()
-        || (may_claim_membership_packages != Some(true) && !self_device_sync)
+        || (may_claim_membership_packages != Some(true)
+            && !self_device_sync
+            && !fellow_member_device_sync)
     {
         return Err(AppError::forbidden(
-            "identified MLS KeyPackage claims require an administrator or the active member's own account",
+            "identified MLS KeyPackage claims require an administrator, the active member's own account, or a fellow active member",
         ));
     }
 

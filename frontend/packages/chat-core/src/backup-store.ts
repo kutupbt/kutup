@@ -176,6 +176,27 @@ export async function replaceRestoredRecords<T>(
   await transactionDone(transaction)
 }
 
+/**
+ * Start this browser's segment chain again from the server's position for
+ * its device: the queue is dropped, and the next open restores from the
+ * server in full, after which what is not in the backup is queued anew.
+ */
+export async function resetBackupDeviceChain(
+  db: IDBDatabase,
+  sequence: number,
+  digest: string,
+  now = Date.now(),
+): Promise<void> {
+  const state = await loadBackupState(db, now)
+  state.deviceSequence = sequence
+  state.lastSegmentDigest = digest
+  state.restoredCursor = 0
+  const transaction = db.transaction(['meta', 'outbox'], 'readwrite')
+  transaction.objectStore('outbox').clear()
+  transaction.objectStore('meta').put(state)
+  await transactionDone(transaction)
+}
+
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)

@@ -531,11 +531,37 @@ manifest, and waits for an already-enrolled device to author one ordered
 reconnects or regains focus, and every two minutes while open, so a new
 device joins the account's groups within minutes.
 
-`DeviceSync` is a typed membership action that may be initiated by any active
-member only for that member's own canonical account. Its private transition
-must preserve the account roster and every role, add exactly the current
-manifest devices missing from the group, remove exactly the group devices no
-longer present in that manifest, and never remove the initiating leaf. The
+`DeviceSync` is a typed membership action that any active member may
+initiate, for its own canonical account or to bring a fellow member's leaves
+in line with that member's signed manifest. Its private transition must
+preserve the account roster and every role, add exactly the current manifest
+devices of the one account missing from the group, remove exactly the group
+devices no longer present in that manifest, and never remove the initiating
+leaf.
+
+The second form exists because an account's own devices cannot always do it.
+When a member's only device is replaced (a new browser with the old one
+revoked, or "Repair this browser"), no device of that account is left in the
+group: the group would keep a dead leaf, which the server refuses in every
+later snapshot, freezing all changes to the group, and the new device would
+stay outside. Any member may then commit the correction, because it is bound
+to the account's own signature and grants nothing the account did not sign:
+
+- the destination server admits a leaf only if the account's current signed
+  manifest lists that device, and lets anyone but the account itself remove a
+  leaf only once the manifest no longer lists it;
+- every member verifies each credential in the resulting group against the
+  account's signed manifest, as for any Commit;
+- a fellow member may claim identified KeyPackages for an account only when
+  that account is already an active member of the conversation on this
+  server. For a member on another server this claim still needs an
+  administrator or owner, or a member on that server.
+
+Members take turns so they do not race: the first by address among the
+others corrects at once, each next one after the mismatch has outlasted its
+turn (three minutes each). Each member's browser reads fellow members'
+signed manifests on the same schedule as its own (on open, reconnect, focus,
+and every two minutes); reading a manifest claims nothing. The
 single OpenMLS Commit and any new-device Welcomes advance one epoch. The
 destination-private delivery carries the complete exact local-device snapshot;
 the server atomically stores append-only leaf history, active-leaf state,
@@ -545,13 +571,26 @@ leaf.
 
 On Chat startup and manifest change, the browser compares each active local
 group with the account-manifest-verified signed device set. It claims identified
-KeyPackages only for its own missing devices and submits the exact add/remove
-transition. A new installation may auto-install a `DeviceSync` Welcome only
+KeyPackages only for devices missing from the group and submits the exact
+add/remove transition. A new installation may auto-install a `DeviceSync` Welcome only
 when its account is already active on the destination server, no account
 invitation is pending, and the complete authenticated control history,
 GroupId, epoch, manifest device roster, and Welcome claims agree. It never
 accepts an invitation, grants an owner role, or clones another device's state
 as part of this flow.
+
+A device that replaced another can receive group messages before the group
+has admitted it: application messages are addressed to an account's current
+devices but encrypted for the group's leaves. It cannot read those. They do
+not stop Chat from opening; they stay in the mailbox for its retention
+period, and one that only arrived ahead of the change admitting the device
+is read on a later pass.
+
+"Repair this browser" discards the browser's device state and registers a
+new device. The browser remembers which device it was (the number is not a
+secret) and, once the new device is registered, revokes the old one, which
+removes it from the signed manifest and, through the correction above, from
+the account's groups.
 
 Application messages authenticate only the actual sender leaf against that
 exact device in the current manifest. Welcome, Commit, recovery, and roster

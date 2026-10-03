@@ -37,12 +37,20 @@ impl MlsClient {
         Ok(devices)
     }
 
-    /// Stage one unchanged-account-roster Commit that adds and/or removes only
-    /// this account's manifest-bound device leaves.
+    /// Stage one unchanged-account-roster Commit that adds and/or removes
+    /// device leaves of one account in the roster: this device's own account,
+    /// or `account` (canonical `user@server`) when a fellow member's leaves
+    /// must be brought in line with that member's signed manifest. The
+    /// second case is how a group recovers when a member's only device was
+    /// replaced: no device of that account is left to do it. The caller
+    /// passes manifest-verified additions and removes only leaves the
+    /// manifest no longer lists; the member's server and every other member
+    /// check the result against that manifest.
     pub async fn prepare_device_sync(
         &self,
         mls_group_id: &[u8],
         proposal_id: Uuid,
+        account: Option<&str>,
         additions: &[VerifiedMlsKeyPackage],
         removed_device_ids: &[u32],
         created_at_seconds: i64,
@@ -150,50 +158,63 @@ impl MlsClient {
                 "MLS device synchronization requires a current account member".into(),
             ));
         }
-        if removed_device_ids.binary_search(&local_device_id).is_ok() {
+        let target_address = account.unwrap_or(&local_address).to_owned();
+        if !conversation
+            .current_roster
+            .iter()
+            .any(|member| member.address.canonical() == target_address)
+        {
+            return Err(ChatError::Trust(
+                "MLS device synchronization targets an account outside the roster".into(),
+            ));
+        }
+        if target_address == local_address
+            && removed_device_ids.binary_search(&local_device_id).is_ok()
+        {
             return Err(ChatError::Trust(
                 "an MLS device cannot remove its own active leaf".into(),
             ));
         }
-        let current_local_ids = current_devices
+        let current_target_ids = current_devices
             .iter()
-            .filter_map(|(address, device_id, _)| (address == &local_address).then_some(*device_id))
+            .filter_map(|(address, device_id, _)| {
+                (address == &target_address).then_some(*device_id)
+            })
             .collect::<BTreeSet<_>>();
         if removed_device_ids
             .iter()
-            .any(|device_id| !current_local_ids.contains(device_id))
+            .any(|device_id| !current_target_ids.contains(device_id))
         {
             return Err(ChatError::Trust(
-                "MLS device synchronization removes an absent local leaf".into(),
+                "MLS device synchronization removes an absent leaf".into(),
             ));
         }
         let mut added_ids = BTreeSet::new();
         for addition in additions {
             let (address, device_id) =
                 parse_device_credential_identity(&addition.credential.credential_identity)?;
-            if address != local_address
+            if address != target_address
                 || addition.wire.device_id != device_id
-                || current_local_ids.contains(&device_id)
+                || current_target_ids.contains(&device_id)
                 || !added_ids.insert(device_id)
             {
                 return Err(ChatError::Trust(
-                    "MLS device synchronization may add only new leaves for the local account"
-                        .into(),
+                    "MLS device synchronization may add only new leaves for the one account".into(),
                 ));
             }
         }
-        let remaining = current_local_ids
+        let remaining = current_target_ids
             .len()
             .saturating_sub(removed_device_ids.len())
             .saturating_add(added_ids.len());
         if remaining == 0 || remaining > MAX_MLS_DEVICES_PER_ACCOUNT {
             return Err(ChatError::Trust(
-                "MLS device synchronization must retain 1-10 local leaves".into(),
+                "MLS device synchronization must retain 1-10 leaves of the account".into(),
             ));
         }
         let removed_identities = removed_device_ids
             .iter()
-            .map(|device_id| format!("{local_address}#{device_id}"))
+            .map(|device_id| format!("{target_address}#{device_id}"))
             .collect::<Vec<_>>();
         let next_private_control = MlsPrivateControlStateV1 {
             protocol_version: MLS_PROTOCOL_VERSION,

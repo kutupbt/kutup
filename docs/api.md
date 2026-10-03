@@ -1551,7 +1551,9 @@ validates public bindings and signatures but never receives the root key.
 
 Return provisioning state, current signed manifest/cursor, latest
 server-acknowledged protected time, and dedicated Chat quota usage split into
-message history, administrator-retained delivery media, and history media.
+message history, administrator-retained delivery media, and history media. `deviceHeads` lists, per source device number, the sequence
+and digest of the last segment accepted from it: a device continues its
+number's chain from there (`docs/chat-backup.md`).
 
 ### POST /api/chat/backup/segments
 
