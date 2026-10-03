@@ -132,6 +132,9 @@ jobs:
 
   chat-backup-integration:
     name: Chat backup lifecycle (Postgres and SeaweedFS)
+    # A dependency bump gets the unit and build checks; the stack-level gates
+    # run when it reaches master.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -148,6 +151,10 @@ jobs:
 
   chat-backup-browser:
     name: Clean-browser Chat backup recovery
+    # The browser gates build the whole stack and take the longest. They run
+    # on master and on demand (Actions → CI → Run workflow, on any branch);
+    # before a pull request they are run locally (docs/contributing.md).
+    if: github.event_name != 'pull_request'
     needs:
       - rust-workspace
       - web
@@ -187,6 +194,33 @@ jobs:
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
             -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:maps.localhost,DNS:photos.localhost,IP:127.0.0.1
+      # The image builds keep Cargo's registry and target directories in
+      # BuildKit cache mounts, which a fresh runner starts without. Carry
+      # them between runs so only changed crates compile. Never fatal: a
+      # cache problem costs time, not the gate.
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: image-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/kutup-chat-core/Cargo.lock', 'Dockerfile.server', 'frontend/Dockerfile') }}
+          restore-keys: |
+            image-build-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" },
+              "ci-docker-cache/browser-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-browser-cargo-registry" },
+              "ci-docker-cache/browser-git": { "target": "/usr/local/cargo/git", "id": "kutup-browser-cargo-git" },
+              "ci-docker-cache/browser-target": { "target": "/src/target", "id": "kutup-browser-root-target" },
+              "ci-docker-cache/browser-chat-target": { "target": "/src/crates/kutup-chat-core/target", "id": "kutup-browser-chat-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
       - name: Start the single-server stack
         run: docker compose up --detach --build --wait
       - name: Wait for the browser application route
@@ -218,6 +252,10 @@ jobs:
 
   chat-security-e2e:
     name: Two-server browser security
+    # The browser gates build the whole stack and take the longest. They run
+    # on master and on demand (Actions → CI → Run workflow, on any branch);
+    # before a pull request they are run locally (docs/contributing.md).
+    if: github.event_name != 'pull_request'
     needs:
       - format-and-fuzz
       - rust-workspace
@@ -250,6 +288,33 @@ jobs:
         run: npx --prefix tests/e2e playwright install --with-deps chromium
       - name: Verify Docker Compose
         run: docker compose version
+      # The image builds keep Cargo's registry and target directories in
+      # BuildKit cache mounts, which a fresh runner starts without. Carry
+      # them between runs so only changed crates compile. Never fatal: a
+      # cache problem costs time, not the gate.
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: image-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/kutup-chat-core/Cargo.lock', 'Dockerfile.server', 'frontend/Dockerfile') }}
+          restore-keys: |
+            image-build-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" },
+              "ci-docker-cache/browser-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-browser-cargo-registry" },
+              "ci-docker-cache/browser-git": { "target": "/usr/local/cargo/git", "id": "kutup-browser-cargo-git" },
+              "ci-docker-cache/browser-target": { "target": "/src/target", "id": "kutup-browser-root-target" },
+              "ci-docker-cache/browser-chat-target": { "target": "/src/crates/kutup-chat-core/target", "id": "kutup-browser-chat-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
       - name: Run two-server federation and browser gate
         run: scripts/test-chat-federation.sh
       - name: Upload browser failure artifacts
