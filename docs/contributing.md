@@ -69,6 +69,33 @@ blobs.
 
 > You need to expose the SeaweedFS S3 port to the host. Add `ports: ["8333:8333"]` to the `seaweedfs-s3` service in `docker-compose.yml` temporarily for local dev.
 
+**Full Chat locally.** Without further configuration the server makes its
+own identity and group ordering key, so direct messages and MLS groups work
+among local accounts. Sealed sender (and with it attachments to other people)
+needs an offline root and is not made automatically. To test everything on
+one machine:
+
+- federation identity (optional; needed to talk to a second local server):
+  `FEDERATION_SERVER_NAME` equal to `CHAT_SERVER_NAME`
+  (e.g. `kutup.localhost`), `FEDERATION_SIGNING_KEY=$(openssl rand -base64 32)`,
+  `SERVER_URL=http://kutup.localhost`, and, because the name is private,
+  `FEDERATION_TEST_ALLOW_PRIVATE=true` with `APP_ENV=test`. A database whose
+  server already made its own identity keeps it (see `docs/self-hosting.md`);
+- sealed sender: generate a throw-away root and policy for that name with
+  `cargo run -p kutup-server --bin kutup-sealed-sender-provision -- root-generate root.key`
+  and `… server-issue --domain kutup.localhost --root-key root.key
+  --online-key online.key --certificate-id 1001 --activates-at 0
+  --expires-at 4102444800 > policy.json`, then set
+  `CHAT_SEALED_SENDER_POLICY` to the compact JSON and
+  `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY` to the contents of `online.key`;
+- MLS groups: nothing to set. To pin a custom policy, set
+  `CHAT_MLS_CONTROL_SIGNING_KEY` and `CHAT_MLS_ORDERING_POLICY`, e.g. the test
+  pair in `docker-compose.chat-federation.yml` with `canonicalDomain` changed
+  to your name.
+
+JSON values need single quotes when the file is sourced by a shell.
+`GET /api/auth/settings` → `chat` shows what is advertised.
+
 ### Database migrations
 
 Migrations live in `crates/kutup-server/migrations/` (`<N>_<name>.up.sql` / `.down.sql` —
@@ -185,6 +212,29 @@ pnpm dev
 
 Vite starts on `http://localhost:5173`. The `vite.config.ts` includes a proxy rule that forwards `/api` requests to the backend at `http://localhost:3000`, so you can develop against a running backend without CORS issues.
 
+### Two local servers (federation)
+
+Sharing across servers (Drive folders and files, Photos albums, Chat) can
+be tried natively with two servers. Federation discovery connects to
+`http://<server name>/.well-known/kutup/federation.json` on port 80, so a
+reverse proxy on port 80 routes by host name to each server's `PORT`:
+
+- **Servers:** for each, a database and bucket of its own, and
+  `PORT=3101` (then `3102`), `FEDERATION_SERVER_NAME` and
+  `CHAT_SERVER_NAME` set to the same name (`fa.localhost`, `fb.localhost`),
+  `SERVER_URL=http://fa.localhost`, a `FEDERATION_SIGNING_KEY` from
+  `openssl rand -base64 32`, `FEDERATION_TEST_ALLOW_PRIVATE=true` (only with
+  `APP_ENV=test`), and `KUTUP_<APP>_URL` for its apps (below).
+- **Proxy:** e.g. `docker run --network host` with an nginx `server` block
+  per name, `proxy_pass http://127.0.0.1:3101` and so on.
+- **Apps:** each server's apps run on their own origins:
+  `KUTUP_DEV_DOMAIN=fa.localhost KUTUP_DEV_PORT_OFFSET=200
+  KUTUP_API_TARGET=http://localhost:3101 pnpm -C apps/photos dev` serves
+  `http://photos.fa.localhost:5378`.
+- **Admission:** an admin of each server opens the feature to other servers
+  (Account → Admin → Federation, or `PUT /api/admin/federation` with
+  `{"globalEnabled": true, "feature": "drive", "mode": "open", "minimumTrust": "tofu"}`).
+
 ### Building for production
 
 ```sh
@@ -242,10 +292,7 @@ kutup/
 │   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
 │   ├── public/onlyoffice/   # Bridge source; verified assets overlay during Docker builds
 │   └── vite.config.ts       # Dev server proxy config
-├── src-tauri/                # Tauri desktop shell; experimental mobile targets remain available
-│   ├── src/lib.rs           # Plugin setup + OS-keychain vault commands (vault_set/get/delete)
-│   ├── tauri.conf.json      # Bundle id (dev.kutup.client), mainBinaryName (kutup-client), targets, scopes
-│   └── capabilities/        # Tauri permission capabilities (default.json + desktop.json)
+├── brand/                    # Logo sources (kutup-mark.svg/.png); see TRADEMARK.md
 ├── nginx/nginx.conf          # Production Nginx config
 ├── docs/                     # Start at docs/README.md
 ├── tests/e2e/                # Single- and two-server Playwright gates
@@ -259,7 +306,7 @@ kutup/
 
 ### Orphan-blob sweep
 
-Periodic admin task that walks SeaweedFS for blobs whose containing `files.id` row no longer exists (PUT-then-crash leftovers, residual snapshot blobs from before quota tracking, etc.) and deletes them.
+Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. It recognises every key shape Drive writes — `{user}/{folder}/{file}` (uploads), `fed/{share}/{folder}/{file}` (federated uploads) and `files/{file}/…` (versions, assets, thumbnails) — and never touches anything else (Chat's keys included).
 
 Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
 
@@ -283,7 +330,7 @@ docker compose exec backend ./kutup-server orphan-sweep --delete
 | `--delete` | `false` | Without this, the command is a dry-run. |
 | `--age-floor` | `24h` | Skip blobs younger than this. The 24h default absorbs in-flight uploads; lower it only for testing. |
 | `--page-sleep` | `200ms` | Sleep between S3 LIST pages. |
-| `--prefix` | `files/` | S3 key prefix to walk. |
+| `--prefix` | *(whole bucket)* | Limit the walk to one key prefix, e.g. `files/`. |
 
 **Reading the summary log:**
 
@@ -292,7 +339,7 @@ orphan-sweep summary: pages=N keys=N orphans=N skipped-age=N skipped-shape=N del
 ```
 
 - `skipped-age` should be > 0 on a healthy bucket (the in-flight upload window). If it's 0 every run, the age floor isn't engaging — investigate before relying on the result.
-- `skipped-shape` counts keys outside the `files/<UUID>/...` shape; the sweep never deletes these.
+- `skipped-shape` counts keys that are not Drive's (Chat media and backups, anything foreign); the sweep never deletes these.
 - `bytes-reclaimed` is the projected (dry-run) or actual (`--delete`) byte savings.
 
 The sweep does **not** persist progress — a crash mid-run means rerunning from scratch. Acceptable at current scale; revisit if the bucket grows past ~500K objects.

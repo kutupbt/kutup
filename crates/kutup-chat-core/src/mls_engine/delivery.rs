@@ -24,7 +24,7 @@ use zeroize::Zeroize;
 
 use super::{ensure_v1_group, validate_group_id, ChatError, MlsClient, Result};
 
-const PAD_BLOCK_BYTES: usize = 1024;
+const PAD_BLOCK_BYTES: usize = kutup_chat_proto::MLS_PADDING_BLOCK_BYTES as usize;
 const MAX_ANONYMOUS_REQUEST_BYTES: usize = 1024 * 1024;
 const HPKE_TAG_BYTES: usize = 16;
 const X25519_ENCAPSULATED_KEY_BYTES: usize = 32;
@@ -313,8 +313,15 @@ mod tests {
     #[test]
     fn padding_is_bounded_and_strict() {
         let padded = pad_payload(b"MLS", 2).unwrap();
-        assert_eq!(padded.len(), PAD_BLOCK_BYTES);
+        assert_eq!(padded.len(), 160, "Signal's 160-byte step");
         assert_eq!(unpad_payload(&padded).unwrap(), b"MLS");
+        // Header and ciphertext past one block take the next whole block.
+        let longer = vec![7u8; 160];
+        assert_eq!(pad_payload(&longer, 2).unwrap().len(), 320);
+        assert_eq!(
+            unpad_payload(&pad_payload(&longer, 2).unwrap()).unwrap(),
+            longer
+        );
         let mut malformed = padded;
         *malformed.last_mut().unwrap() = 1;
         assert!(matches!(

@@ -15,14 +15,37 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
 use crate::error::AppError;
-use crate::{jwt, ratelimit, AppState};
+use uuid::Uuid;
 
-/// An authenticated caller — mirrors what `authMW.Required()` puts in `c.Locals`.
+use crate::{jwt, ratelimit, sessions, AppState};
+
+/// An authenticated caller: a valid access token whose server-side session is still
+/// live (not revoked, not expired, user active). `is_admin` comes from the database,
+/// not the token, so a demotion applies at once.
 pub struct AuthUser {
     pub user_id: String,
-    /// Read by `AdminUser` and the admin handlers (server slice 7).
-    #[allow(dead_code)]
     pub is_admin: bool,
+    pub session: sessions::LiveSession,
+}
+
+/// Validates an access token and its session — the one path every authenticated
+/// entry point uses (REST extractor, collab and chat WebSocket upgrades).
+pub async fn authenticate_access_token(
+    state: &AppState,
+    token: &str,
+) -> Result<AuthUser, AppError> {
+    let (user_id, session_id) = jwt::validate_access_token(token, &state.config.jwt_secret)
+        .map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let user_uuid =
+        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let session_uuid =
+        Uuid::parse_str(&session_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let session = sessions::live(&state.pool, session_uuid, user_uuid).await?;
+    Ok(AuthUser {
+        user_id,
+        is_admin: session.is_admin,
+        session,
+    })
 }
 
 #[axum::async_trait]
@@ -34,11 +57,7 @@ impl FromRequestParts<AppState> for AuthUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
-        // validate_access_token rejects setup/pre-auth tokens (non-empty subject), exactly
-        // as Required() does before trusting an access token.
-        let (user_id, is_admin) = jwt::validate_access_token(&token, &state.config.jwt_secret)
-            .map_err(|_| AppError::unauthorized("unauthorized"))?;
-        Ok(AuthUser { user_id, is_admin })
+        authenticate_access_token(state, &token).await
     }
 }
 
@@ -130,6 +149,15 @@ pub async fn rate_limit_login(
     limit(addr, &ratelimit::LOGIN, None, req, next).await
 }
 
+/// 120/min/IP — redeeming a session fork when an app opens.
+pub async fn rate_limit_fork(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::FORK, None, req, next).await
+}
+
 /// 20/min/IP — mirrors `PreflightRateLimit`.
 pub async fn rate_limit_preflight(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -187,6 +215,15 @@ pub async fn rate_limit_fed_users(
         next,
     )
     .await
+}
+
+/// 30/min/IP — `/api/users/by-email/{email}`.
+pub async fn rate_limit_user_lookup(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::USER_LOOKUP, None, req, next).await
 }
 
 /// 10/hr/IP — `/api/auth/register`.

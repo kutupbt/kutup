@@ -4,13 +4,16 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const modulePath = new URL(
-  '../frontend/public/crypto-wasm/kutup_crypto_wasm.js',
+  '../frontend/wasm/crypto-wasm/kutup_crypto_wasm.js',
   import.meta.url,
 )
-const wasmPath = `${root}/frontend/public/crypto-wasm/kutup_crypto_wasm_bg.wasm`
+const wasmPath = `${root}/frontend/wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm`
 const crypto = await import(modulePath)
 const wasm = await readFile(wasmPath)
 await crypto.default({ module_or_path: wasm })
+const vectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
+)
 
 const keys = crypto.deriveAccountProtectionKeys(
   'correct horse battery staple',
@@ -106,36 +109,55 @@ assert.throws(
   /authentication failed/,
 )
 
-const driveFileBlob = crypto.prepareDriveFileBlob(
-  Buffer.alloc(32, 0x42).toString('base64'),
-  '11111111-1111-4111-8111-111111111111',
-  '22222222-2222-4222-8222-222222222222',
-  7,
-)
+// A link to one file: purpose 11, epoch = the file key's generation.
+{
+  const fileKey = Buffer.alloc(32, 0x55).toString('base64')
+  const linkKey = Buffer.alloc(32, 0x66).toString('base64')
+  const file = '11111111-1111-4111-8111-111111111111'
+  const owner = '22222222-2222-4222-8222-222222222222'
+  const wrapped = crypto.sealDriveEnvelope(fileKey, linkKey, 11, 3, 1n, file, owner)
+  assert.equal(crypto.openDriveEnvelope(wrapped, linkKey, 11, 3, 1n, file, owner), fileKey)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 11, 4, 1n, file, owner), /authentication failed/)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 5, 3, 1n, file, owner), /authentication failed/)
+}
+
+// A photo in an album: purpose 12, epoch = the album's epoch, revision = the generation.
+{
+  const fileKey = Buffer.alloc(32, 0x55).toString('base64')
+  const albumKey = Buffer.alloc(32, 0x77).toString('base64')
+  const file = '11111111-1111-4111-8111-111111111111'
+  const album = '22222222-2222-4222-8222-222222222222'
+  const wrapped = crypto.sealDriveEnvelope(fileKey, albumKey, 12, 2, 3n, file, album)
+  assert.equal(crypto.openDriveEnvelope(wrapped, albumKey, 12, 2, 3n, file, album), fileKey)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 12, 1, 3n, file, album), /authentication failed/)
+  assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 3, 2, 3n, file, album), /authentication failed/)
+}
+
+// File blobs are bound to the file and the file key's generation, not a folder.
+const blobVector = vectors.driveFileBlob
+const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)
 assert.deepEqual(driveFileBlob, {
-  objectHeader: 'S1VUUERCMQAAAQEAAAAABxEREREREUERgREREREREREiIiIiIiJCIoIiIiIiIiIi',
-  streamKey: 'oh2pAz4XSGfBLgZy6N0Nrhys73xJjj+eh4RTpAqjttg=',
+  objectHeader: blobVector.objectHeader,
+  streamKey: blobVector.derivedStreamKey,
 })
 assert.equal(
   crypto.openDriveFileBlobHeader(
     driveFileBlob.objectHeader,
-    Buffer.alloc(32, 0x42).toString('base64'),
-    '11111111-1111-4111-8111-111111111111',
-    '22222222-2222-4222-8222-222222222222',
-    7,
+    blobVector.fileKey,
+    blobVector.fileId,
+    blobVector.generation,
   ),
   driveFileBlob.streamKey,
 )
-assert.throws(
-  () => crypto.openDriveFileBlobHeader(
-    driveFileBlob.objectHeader,
-    Buffer.alloc(32, 0x42).toString('base64'),
-    '33333333-3333-4333-8333-333333333333',
-    '22222222-2222-4222-8222-222222222222',
-    7,
-  ),
-  /context does not match/,
-)
+for (const [fileId, generation] of [
+  ['33333333-3333-4333-8333-333333333333', blobVector.generation],
+  [blobVector.fileId, blobVector.generation + 1],
+]) {
+  assert.throws(
+    () => crypto.openDriveFileBlobHeader(driveFileBlob.objectHeader, blobVector.fileKey, fileId, generation),
+    /context does not match/,
+  )
+}
 
 const identityMaster = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const collectionKey = Buffer.alloc(32, 0x33).toString('base64')
@@ -384,5 +406,199 @@ const backupMedia = crypto.prepareChatBackupMedia(
 assert.match(backupMedia.mediaId, /^[0-9a-f]{64}$/)
 assert.equal(backupMedia.paddedPlaintextBytes >= 10_000, true)
 assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
+
+// Local-state envelopes: session-fork payloads (2) and persisted web
+// sessions (3) open to the canonical Rust vectors, fail closed on the wrong
+// purpose or profile, and the CLI-only purpose is refused.
+const localState = vectors.localState
+for (const [vector, purpose] of [
+  [localState.sessionFork, 2],
+  [localState.webSession, 3],
+]) {
+  assert.equal(
+    crypto.openLocalState(vector.envelope, localState.key, purpose, vector.profile),
+    vector.plaintext,
+  )
+  const resealed = crypto.sealLocalState(vector.plaintext, localState.key, purpose, vector.profile)
+  assert.notEqual(resealed, vector.envelope, 'nonce must be random')
+  assert.equal(
+    crypto.openLocalState(resealed, localState.key, purpose, vector.profile),
+    vector.plaintext,
+  )
+}
+assert.throws(() =>
+  crypto.openLocalState(localState.sessionFork.envelope, localState.key, 2, 'web-chat'),
+)
+assert.throws(() =>
+  crypto.openLocalState(localState.sessionFork.envelope, localState.key, 3, 'web-drive'),
+)
+assert.throws(
+  () => crypto.sealLocalState(localState.sessionFork.plaintext, localState.key, 1, 'default'),
+  /not available to web clients/,
+)
+
+// Thumbnails: the canonical envelope opens to the vector's picture, only as
+// its own variant, file and key generation; a fresh seal round-trips; the
+// generic envelope export refuses the purposes that have typed exports.
+const thumb = vectors.thumbnail
+assert.deepEqual(
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation),
+  { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
+)
+assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.generation))
+assert.throws(() =>
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.generation),
+)
+const resealedThumb = crypto.sealThumbnail(
+  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation,
+)
+assert.notEqual(resealedThumb, thumb.envelope, 'nonce must be random')
+assert.equal(
+  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation).image,
+  thumb.image,
+)
+assert.throws(
+  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
+  /format/,
+)
+for (const purpose of [6, 7, 8, 10]) {
+  assert.throws(
+    () => crypto.sealDriveEnvelope(thumb.image, thumb.fileKey, purpose, 1, 1n, thumb.fileId, thumb.fileId),
+    /typed export/,
+  )
+}
+
+// A rotated folder's keyring: the current key unlocks every older one
+// through the signed chain; an older key (a removed member's) does not.
+const ring = vectors.collectionKeyring
+const ringChain = ring.chain.map((link) => ({
+  epoch: link.epoch,
+  epochStatement: link.statement,
+  previousKeyEnvelope: link.previousKeyEnvelope ?? undefined,
+}))
+assert.deepEqual(
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  ring.keys,
+)
+assert.throws(() =>
+  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+)
+assert.throws(() =>
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+    ringChain[0],
+    ringChain[2],
+  ]),
+)
+const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerUserId, 3)
+assert.deepEqual(
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+    ringChain[0],
+    ringChain[1],
+    { ...ringChain[2], previousKeyEnvelope: resealedPrevious },
+  ]),
+  ring.keys,
+)
+
+// A file's key chain: the current key reaches every older generation; an
+// older key (a removed member's) opens nothing newer.
+const fileRing = vectors.fileKeyring
+const fileGeneration = fileRing.keys.length
+fileRing.keys.forEach((key, index) => {
+  assert.equal(
+    crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, fileRing.chain, index + 1),
+    key,
+  )
+})
+assert.throws(() => crypto.fileKeyAt(fileRing.keys[1], fileRing.fileId, fileGeneration, fileRing.chain, 1))
+assert.throws(() => crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, fileRing.chain.slice(1), 2))
+const resealedFileKey = crypto.sealPreviousFileKey(fileRing.keys[1], fileRing.keys[2], fileRing.fileId, 3)
+assert.equal(
+  crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, [
+    fileRing.chain[0],
+    { ...fileRing.chain[1], previousKeyEnvelope: resealedFileKey },
+  ], 1),
+  fileRing.keys[0],
+)
+
+// A single-file share opens only as a file share, for its file and generation.
+{
+  const owner = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 1).toString('base64'))
+  const reader = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 2).toString('base64'))
+  const fileId = '22222222-2222-4222-8222-222222222222'
+  const sealed = crypto.sealFileShareEnvelope(
+    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
+    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  )
+  const open = (file, generation) => crypto.openFileShareEnvelope(
+    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    file, generation, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  )
+  assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
+  assert.throws(() => open(fileId, 3))
+  assert.throws(() => crypto.openNamedShareEnvelope(
+    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+  ))
+}
+
+// A live-location update: the canonical bytes open, a fresh seal round-trips,
+// and another stream's id or a tampered byte opens nothing.
+const live = vectors.liveLocation
+assert.deepEqual(crypto.liveLocationOpen(live.key, live.streamId, live.envelope), { counter: live.counter, ...live.point })
+const liveSealed = crypto.liveLocationSeal(live.key, live.streamId, 8, 40.99, 29.02, 5, 1790000000123)
+assert.deepEqual(crypto.liveLocationOpen(live.key, live.streamId, liveSealed), { counter: 8, lat: 40.99, lon: 29.02, accuracyM: 5, atMs: 1790000000123 })
+assert.throws(() => crypto.liveLocationOpen(live.key, '00'.repeat(16), live.envelope))
+assert.throws(() => crypto.liveLocationSeal(live.key, live.streamId, 0, 1, 1, 1, 1))
+
+// Whiteboard assets and collaboration frames sit under the file key.
+const assetVector = vectors.asset
+assert.equal(
+  crypto.openWhiteboardAsset(assetVector.envelope, assetVector.fileKey, assetVector.fileId, assetVector.assetId, assetVector.generation),
+  assetVector.plaintext,
+)
+assert.throws(() =>
+  crypto.openWhiteboardAsset(assetVector.envelope, assetVector.fileKey, assetVector.fileId, assetVector.assetId, assetVector.generation + 1),
+)
+const frameVector = vectors.collabFrame
+const openedFrame = crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration)
+assert.equal(openedFrame.plaintext, frameVector.plaintext)
+assert.equal(openedFrame.keyGeneration, frameVector.keyGeneration)
+assert.equal(crypto.collabFrameKeyGeneration(frameVector.frame), frameVector.keyGeneration)
+assert.throws(() =>
+  crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
+)
+
+const metadataVector = vectors.fileMetadata
+for (const { input, output } of metadataVector.canonical) {
+  assert.equal(crypto.canonicalFileMetadata(input), output)
+  assert.equal(crypto.canonicalFileMetadata(output), output)
+}
+for (const bad of metadataVector.invalid) {
+  assert.throws(() => crypto.canonicalFileMetadata(bad))
+}
+const contentHasher = new crypto.ContentHasher()
+for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
+assert.equal(contentHasher.finish(), metadataVector.contentHash.hash)
+assert.throws(() => contentHasher.finish())
+
+const libraryVector = vectors.photosLibrary
+assert.equal(crypto.photosLibraryKey(libraryVector.masterKey), libraryVector.libraryKey)
+const firstLibrary = crypto.openPhotosLibrary(libraryVector.first.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined)
+assert.equal(firstLibrary, libraryVector.first.plaintext)
+assert.equal(crypto.photosLibraryDigest(libraryVector.first.envelope), libraryVector.first.digest)
+assert.equal(
+  crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 2, libraryVector.first.digest),
+  libraryVector.second.plaintext,
+)
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined))
+const resealed = crypto.sealPhotosLibrary(
+  JSON.stringify({ favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [] }),
+  libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
+)
+assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
+assert.equal(
+  crypto.openPhotosLibrary(resealed.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
+  '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
+)
 
 console.log('crypto WASM canonical vectors passed')

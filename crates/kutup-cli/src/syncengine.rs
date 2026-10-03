@@ -221,6 +221,8 @@ struct RemoteDir {
     collection_id: String,
     key_epoch: u32,
     key: Vec<u8>,
+    /// Older keys too, for files stored before the folder rotated.
+    keys: crate::keyring::Keyring,
 }
 
 struct RemoteEntry {
@@ -252,6 +254,7 @@ pub fn sync(
         .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let root_key =
         decrypt_collection_key(root_col, &master_key, sess).context("decrypt collection key")?;
+    let root_keys = crate::keyring::Keyring::load(client, root_col, &root_key, &master_key)?;
 
     let mut children: BTreeMap<&str, Vec<&crate::api::Collection>> = BTreeMap::new();
     for c in &cols {
@@ -267,6 +270,7 @@ pub fn sync(
             collection_id: collection_id.to_string(),
             key_epoch: root_col.key_epoch,
             key: root_key,
+            keys: root_keys,
         },
     );
     // Walk down, mapping decrypted sub-collection names to rel dirs.
@@ -275,6 +279,10 @@ pub fn sync(
         for sub in children.get(col_id.as_str()).into_iter().flatten() {
             let Ok(key) = decrypt_collection_key(sub, &master_key, sess) else {
                 result.errors.push(format!("decrypt folder key {}", sub.id));
+                continue;
+            };
+            let Ok(keys) = crate::keyring::Keyring::load(client, sub, &key, &master_key) else {
+                result.errors.push(format!("folder key history {}", sub.id));
                 continue;
             };
             let name = match crate::collection_crypto::open_name(sub, &key) {
@@ -300,6 +308,7 @@ pub fn sync(
                     collection_id: sub.id.clone(),
                     key_epoch: sub.key_epoch,
                     key,
+                    keys,
                 },
             );
         }
@@ -341,7 +350,7 @@ pub fn sync(
             }
         };
         for f in files {
-            let (name, _) = decrypt_file_meta(&f, &dir.key);
+            let (name, _) = decrypt_file_meta(&f, &dir.keys);
             if name.is_empty() || name == "[encrypted]" {
                 if name == "[encrypted]" {
                     result
@@ -444,6 +453,7 @@ pub fn sync(
                                     collection_id: id,
                                     key_epoch: 1,
                                     key: key.to_vec(),
+                                    keys: crate::keyring::Keyring::current_only(&key, 1),
                                 },
                             );
                         }
@@ -572,7 +582,7 @@ fn execute_file_action(
                 .get(&entry.rel_dir)
                 .context("remote dir vanished")?;
             let dest = root.join(rel);
-            pull_to(client, entry, &dir.key, &dest)?;
+            pull_to(client, entry, &dir.keys, &dest)?;
             record_base(store, pair, rel, &dest, entry, client)?;
         }
         FileAction::PushNew | FileAction::PushUpdate { .. } => {
@@ -632,7 +642,7 @@ fn execute_file_action(
             let dir = remote_dirs
                 .get(&entry.rel_dir)
                 .context("remote dir vanished")?;
-            pull_to(client, entry, &dir.key, &root.join(&copy))?;
+            pull_to(client, entry, &dir.keys, &root.join(&copy))?;
             // Mark the base conflicted: remote side = current (stops the
             // conflict from re-firing), local side = dirty sentinel (the
             // canonical name pushes and wins remotely next pass).
@@ -661,7 +671,7 @@ fn execute_file_action(
                 .context("remote dir vanished")?;
             let abs = root.join(rel);
             let tmp = temp_path(&abs);
-            download_decrypt(client, entry, &dir.key, &tmp)?;
+            download_decrypt(client, entry, &dir.keys, &tmp)?;
             let same = files_equal(&abs, &tmp).unwrap_or(false);
             if same {
                 let _ = std::fs::remove_file(&tmp);
@@ -719,9 +729,14 @@ fn execute_file_action(
 
 // --- helpers ---
 
-fn pull_to(client: &Client, entry: &RemoteEntry, dir_key: &[u8], dest: &Path) -> Result<()> {
+fn pull_to(
+    client: &Client,
+    entry: &RemoteEntry,
+    dir_keys: &crate::keyring::Keyring,
+    dest: &Path,
+) -> Result<()> {
     let tmp = temp_path(dest);
-    download_decrypt(client, entry, dir_key, &tmp)?;
+    download_decrypt(client, entry, dir_keys, &tmp)?;
     std::fs::rename(&tmp, dest).context("rename into place")?;
     Ok(())
 }
@@ -730,15 +745,18 @@ fn pull_to(client: &Client, entry: &RemoteEntry, dir_key: &[u8], dest: &Path) ->
 fn download_decrypt(
     client: &Client,
     entry: &RemoteEntry,
-    dir_key: &[u8],
+    dir_keys: &crate::keyring::Keyring,
     tmp: &Path,
 ) -> Result<()> {
     let f = &entry.file;
-    let file_key = crate::file_crypto::open_key(f, dir_key).context("decrypt file key")?;
-    let (stream, _) = client.latest_encrypted_stream(&f.id)?;
+    let file_key = crate::file_crypto::open_key(f, dir_keys).context("decrypt file key")?;
+    // What the file holds now (its latest whole-file version, else the
+    // upload), sealed at its own key generation.
+    let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
+    let stream = client.download_file_stream(&f.id)?;
     let mut out = std::fs::File::create(tmp).context("create temp file")?;
-    let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, f.key_epoch)?;
-    match stream_download(stream, &file_key, blob_context, &mut out, |_| {}) {
+    let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
+    match stream_download(stream, &content_key, blob_context, &mut out, |_| {}) {
         Ok(_) => Ok(()),
         Err(e) => {
             drop(out);

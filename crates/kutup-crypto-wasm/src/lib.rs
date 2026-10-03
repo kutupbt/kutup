@@ -21,6 +21,8 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
+use kutup_crypto::local_state::{self, LocalStatePurpose};
+use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
 use serde::Serialize;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -95,7 +97,7 @@ struct ChatAttachmentLedgerHeaderView {
 #[serde(rename_all = "camelCase")]
 struct OpenedCollabFrameView {
     kind: u8,
-    key_epoch: u32,
+    key_generation: u32,
     doc_key_id: u32,
     sender_device_id: String,
     sequence: String,
@@ -124,6 +126,50 @@ fn chat_backup_context(
         backup_incarnation_id: *backup.as_bytes(),
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
     })
+}
+
+/// The local-state purposes a web page may use. `CliSession` stays CLI-only.
+fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
+    match LocalStatePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))? {
+        p @ (LocalStatePurpose::SessionFork | LocalStatePurpose::WebSession) => Ok(p),
+        LocalStatePurpose::CliSession => Err(js_error(
+            "local-state purpose is not available to web clients",
+        )),
+    }
+}
+
+/// Seal a session-fork payload (purpose 2) or a persisted web session (3).
+/// Returns the canonical base64 envelope; the nonce is random.
+#[wasm_bindgen(js_name = sealLocalState)]
+pub fn seal_local_state(
+    plaintext_base64: &str,
+    key_base64: &str,
+    purpose: u8,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let purpose = web_local_state_purpose(purpose)?;
+    let plaintext = decode_canonical_base64(plaintext_base64, "local-state plaintext")?;
+    let key = decode_canonical_base64(key_base64, "local-state key")?;
+    let envelope = local_state::seal(&plaintext, &key, purpose, profile)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// Open an envelope sealed by `sealLocalState` (or the Rust equivalent);
+/// fails closed on a wrong key, purpose or profile.
+#[wasm_bindgen(js_name = openLocalState)]
+pub fn open_local_state(
+    envelope_base64: &str,
+    key_base64: &str,
+    purpose: u8,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let purpose = web_local_state_purpose(purpose)?;
+    let envelope = decode_canonical_base64(envelope_base64, "local-state envelope")?;
+    let key = decode_canonical_base64(key_base64, "local-state key")?;
+    let plaintext = local_state::open(&envelope, &key, purpose, profile)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
 }
 
 #[wasm_bindgen(js_name = createChatBackupSignerAuthorization)]
@@ -578,6 +624,22 @@ pub fn open_account_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+/// The purposes whose context is two plain UUIDs. Whiteboard assets and
+/// thumbnails derive their parent id and have typed exports
+/// (`sealWhiteboardAsset`, `sealThumbnail`); the generic path refuses them so
+/// their bindings cannot be bypassed.
+fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
+    match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
+        DriveEnvelopePurpose::WhiteboardAsset
+        | DriveEnvelopePurpose::Thumbnail
+        | DriveEnvelopePurpose::PreviousCollectionKey
+        | DriveEnvelopePurpose::PreviousFileKey => Err(js_error(
+            "this Drive envelope purpose has its own typed export",
+        )),
+        purpose => Ok(purpose),
+    }
+}
+
 #[wasm_bindgen(js_name = sealDriveEnvelope)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_drive_envelope(
@@ -592,7 +654,7 @@ pub fn seal_drive_envelope(
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let root_key = decode_canonical_base64(root_key_base64, "root key")?;
     let context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))?,
+        generic_drive_purpose(purpose)?,
         epoch,
         revision,
         object_id,
@@ -616,8 +678,7 @@ pub fn open_drive_envelope(
 ) -> Result<String, JsValue> {
     let root_key = decode_canonical_base64(root_key_base64, "root key")?;
     let context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::try_from(expected_purpose)
-            .map_err(|error| js_error(&error.to_string()))?,
+        generic_drive_purpose(expected_purpose)?,
         expected_epoch,
         expected_revision,
         expected_object_id,
@@ -632,51 +693,120 @@ pub fn open_drive_envelope(
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]
 pub fn seal_whiteboard_asset(
     plaintext_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     file_id: &str,
-    collection_id: &str,
     asset_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "whiteboard asset")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let context = DriveEnvelopeContextV1::whiteboard_asset(file_id, collection_id, asset_id, epoch)
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let context = DriveEnvelopeContextV1::whiteboard_asset(file_id, asset_id, generation)
         .map_err(|error| js_error(&error.to_string()))?;
-    drive_envelope::seal_b64(&plaintext, &collection_key, context)
+    drive_envelope::seal_b64(&plaintext, &file_key, context)
         .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = openWhiteboardAsset)]
 pub fn open_whiteboard_asset(
     envelope_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
     expected_asset_id: &str,
-    expected_epoch: u32,
+    expected_generation: u32,
 ) -> Result<String, JsValue> {
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let context = DriveEnvelopeContextV1::whiteboard_asset(
         expected_file_id,
-        expected_collection_id,
         expected_asset_id,
-        expected_epoch,
+        expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = drive_envelope::open_b64(envelope_base64, &collection_key, context)
+    let plaintext = drive_envelope::open_b64(envelope_base64, &file_key, context)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
+}
+
+/// A thumbnail as JavaScript sees it; `image` is canonical base64.
+#[derive(Serialize)]
+struct ThumbnailView {
+    format: u8,
+    width: u16,
+    height: u16,
+    image: String,
+}
+
+fn thumbnail_variant(value: &str) -> Result<ThumbnailVariant, JsValue> {
+    ThumbnailVariant::try_from(value).map_err(|error| js_error(&error.to_string()))
+}
+
+/// Frame, pad and seal a thumbnail under the file key
+/// (docs/plans/drive-thumbnails.md). `format`: 1 JPEG, 2 WebP, 3 PNG.
+#[wasm_bindgen(js_name = sealThumbnail)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_thumbnail(
+    image_base64: &str,
+    format: u8,
+    width: u16,
+    height: u16,
+    variant: &str,
+    file_key_base64: &str,
+    file_id: &str,
+    generation: u32,
+) -> Result<String, JsValue> {
+    let thumbnail = Thumbnail {
+        format: ThumbnailFormat::try_from(format).map_err(|error| js_error(&error.to_string()))?,
+        width,
+        height,
+        image: decode_canonical_base64(image_base64, "thumbnail image")?,
+    };
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let envelope = thumbnail::seal(
+        &thumbnail,
+        thumbnail_variant(variant)?,
+        &file_key,
+        file_id,
+        generation,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// Open a thumbnail of exactly this file, variant and key generation.
+#[wasm_bindgen(js_name = openThumbnail)]
+pub fn open_thumbnail(
+    envelope_base64: &str,
+    variant: &str,
+    file_key_base64: &str,
+    expected_file_id: &str,
+    expected_generation: u32,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let opened = thumbnail::open(
+        &envelope,
+        thumbnail_variant(variant)?,
+        &file_key,
+        expected_file_id,
+        expected_generation,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ThumbnailView {
+        format: opened.format as u8,
+        width: opened.width,
+        height: opened.height,
+        image: STANDARD.encode(opened.image),
+    })
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = prepareDriveFileBlob)]
 pub fn prepare_drive_file_blob(
     file_key_base64: &str,
     file_id: &str,
-    collection_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<JsValue, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let context = DriveFileBlobContextV1::new(file_id, collection_id, epoch)
+    let context = DriveFileBlobContextV1::new(file_id, generation)
         .map_err(|error| js_error(&error.to_string()))?;
     let object_header = drive_object::file_blob_header(context);
     let stream_key = drive_object::derive_file_blob_key(&file_key, context)
@@ -693,14 +823,12 @@ pub fn open_drive_file_blob_header(
     object_header_base64: &str,
     file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
-    expected_epoch: u32,
+    expected_generation: u32,
 ) -> Result<String, JsValue> {
     let object_header = decode_canonical_base64(object_header_base64, "object header")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let expected =
-        DriveFileBlobContextV1::new(expected_file_id, expected_collection_id, expected_epoch)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let expected = DriveFileBlobContextV1::new(expected_file_id, expected_generation)
+        .map_err(|error| js_error(&error.to_string()))?;
     drive_object::validate_file_blob_header(&object_header, expected)
         .map_err(|error| js_error(&error.to_string()))?;
     let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
@@ -849,17 +977,16 @@ pub fn decode_chat_attachment_ledger_entry(entry_base64: &str) -> Result<JsValue
 #[allow(clippy::too_many_arguments)]
 pub fn seal_collab_frame(
     plaintext_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     kind: u8,
-    key_epoch: u32,
+    key_generation: u32,
     doc_key_id: u32,
     file_id: &str,
-    collection_id: &str,
     sender_device_id: &str,
     sequence: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "collaboration plaintext")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let sender_device_id = sender_device_id
         .parse::<u64>()
         .map_err(|_| js_error("sender device id must be canonical u64"))?;
@@ -868,15 +995,14 @@ pub fn seal_collab_frame(
         .map_err(|_| js_error("sequence must be canonical u64"))?;
     let context = CollabFrameContextV1::new(
         kind,
-        key_epoch,
+        key_generation,
         doc_key_id,
         file_id,
-        collection_id,
         sender_device_id,
         sequence,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    envelope::seal_unsigned(&plaintext, &collection_key, context)
+    envelope::seal_unsigned(&plaintext, &file_key, context)
         .map(|packed| STANDARD.encode(packed))
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -904,30 +1030,35 @@ pub fn attach_collab_frame_signature(
 #[wasm_bindgen(js_name = openCollabFrame)]
 pub fn open_collab_frame(
     frame_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
-    expected_key_epoch: u32,
+    expected_key_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let (parsed, plaintext) = envelope::open(
-        &frame,
-        &collection_key,
-        expected_file_id,
-        expected_collection_id,
-        expected_key_epoch,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let (parsed, plaintext) =
+        envelope::open(&frame, &file_key, expected_file_id, expected_key_generation)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&OpenedCollabFrameView {
         kind: parsed.kind,
-        key_epoch: parsed.key_epoch,
+        key_generation: parsed.key_generation,
         doc_key_id: parsed.doc_key_id,
         sender_device_id: parsed.sender_device_id.to_string(),
         sequence: parsed.sequence.to_string(),
         plaintext: STANDARD.encode(plaintext),
     })
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
+}
+
+/// The file-key generation a frame names in its public header, so a
+/// client replaying older log frames can pick that generation's key.
+/// Opening still checks it (`openCollabFrame` with the same generation).
+#[wasm_bindgen(js_name = collabFrameKeyGeneration)]
+pub fn collab_frame_key_generation(frame_base64: &str) -> Result<u32, JsValue> {
+    let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
+    envelope::Frame::unpack(&frame)
+        .map(|parsed| parsed.key_generation)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = createCollectionEpochStatement)]
@@ -997,6 +1128,126 @@ pub fn verify_collection_epoch_statement(
         .and_then(|()| statement.verify_collection_key(&collection_key))
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(statement.statement_hash())
+}
+
+/// The previous epoch's folder key sealed under this epoch's, for the
+/// rotation record (docs/plans/drive-share-revocation.md).
+#[wasm_bindgen(js_name = sealPreviousCollectionKey)]
+pub fn seal_previous_collection_key(
+    previous_key_base64: &str,
+    key_base64: &str,
+    collection_id: &str,
+    owner_user_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let previous = decode_canonical_base64(previous_key_base64, "previous collection key")?;
+    let key = decode_canonical_base64(key_base64, "collection key")?;
+    kutup_crypto::collection_keyring::seal_previous_key(
+        &previous,
+        &key,
+        collection_id,
+        owner_user_id,
+        epoch,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpochLinkJson {
+    epoch: u32,
+    epoch_statement: String,
+    previous_key_envelope: Option<String>,
+}
+
+/// Every key of a folder, oldest first, as an array of base64 strings, from
+/// its current key and complete signed history (`chain`: the
+/// `GET /api/collections/{id}/epochs` array). Fails unless every statement
+/// is the owner's, chained, and every key matches its commitment.
+#[wasm_bindgen(js_name = unlockCollectionKeyring)]
+pub fn unlock_collection_keyring(
+    current_key_base64: &str,
+    collection_id: &str,
+    owner_user_id: &str,
+    owner_authority_public_key_base64: &str,
+    chain: JsValue,
+) -> Result<JsValue, JsValue> {
+    let current = decode_canonical_base64(current_key_base64, "collection key")?;
+    let authority =
+        decode_canonical_base64(owner_authority_public_key_base64, "authority public key")?;
+    let links: Vec<EpochLinkJson> = serde_wasm_bindgen::from_value(chain)
+        .map_err(|error| js_error(&format!("collection key history: {error}")))?;
+    let chain: Vec<kutup_crypto::collection_keyring::EpochLinkV1> = links
+        .into_iter()
+        .map(|link| kutup_crypto::collection_keyring::EpochLinkV1 {
+            epoch: link.epoch,
+            statement: link.epoch_statement,
+            previous_key_envelope: link.previous_key_envelope,
+        })
+        .collect();
+    let keys = kutup_crypto::collection_keyring::unlock(
+        &current,
+        collection_id,
+        owner_user_id,
+        &authority,
+        &chain,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(
+        &keys
+            .iter()
+            .map(|key| STANDARD.encode(key.as_slice()))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The file key of `generation − 1` sealed under that of `generation`, for a
+/// re-key (docs/plans/drive-move.md).
+#[wasm_bindgen(js_name = sealPreviousFileKey)]
+pub fn seal_previous_file_key(
+    previous_key_base64: &str,
+    key_base64: &str,
+    file_id: &str,
+    generation: u32,
+) -> Result<String, JsValue> {
+    let previous = decode_canonical_base64(previous_key_base64, "previous file key")?;
+    let key = decode_canonical_base64(key_base64, "file key")?;
+    kutup_crypto::file_keyring::seal_previous_key(&previous, &key, file_id, generation)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileKeyLinkJson {
+    generation: u32,
+    previous_key_envelope: String,
+}
+
+/// The file key of generation `wanted`, base64, from the current key of
+/// `generation` and the file's history (`chain`: the listing's
+/// `keyHistory`, generations 2 to `generation` in order).
+#[wasm_bindgen(js_name = fileKeyAt)]
+pub fn file_key_at(
+    current_key_base64: &str,
+    file_id: &str,
+    generation: u32,
+    chain: JsValue,
+    wanted: u32,
+) -> Result<String, JsValue> {
+    let current = decode_canonical_base64(current_key_base64, "file key")?;
+    let links: Vec<FileKeyLinkJson> = serde_wasm_bindgen::from_value(chain)
+        .map_err(|error| js_error(&format!("file key history: {error}")))?;
+    let chain: Vec<kutup_crypto::file_keyring::FileKeyLinkV1> = links
+        .into_iter()
+        .map(|link| kutup_crypto::file_keyring::FileKeyLinkV1 {
+            generation: link.generation,
+            previous_key_envelope: link.previous_key_envelope,
+        })
+        .collect();
+    kutup_crypto::file_keyring::key_at(&current, file_id, generation, &chain, wanted)
+        .map(|key| STANDARD.encode(key.as_slice()))
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = sealNamedShareEnvelope)]
@@ -1076,6 +1327,236 @@ pub fn open_named_share_envelope(
     Ok(STANDARD.encode(collection_key))
 }
 
+/// A single file's key for someone it is shared with
+/// (docs/plans/drive-file-sharing.md), sealed to them and signed by the owner.
+#[wasm_bindgen(js_name = sealFileShareEnvelope)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_file_share_envelope(
+    file_key_base64: &str,
+    sender_master_key_base64: &str,
+    recipient_hpke_public_key_base64: &str,
+    file_id: &str,
+    generation: u32,
+    sender_account: &str,
+    sender_incarnation_id: &str,
+    recipient_account: &str,
+    recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
+    let sender_master_key: [u8; 32] = sender_master_key
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let recipient_public_key = decode_canonical_base64(
+        recipient_hpke_public_key_base64,
+        "recipient HPKE public key",
+    )?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::named_share::FileShareEnvelopeV1::seal(
+        &file_key,
+        file_id,
+        generation,
+        sender_account,
+        sender_incarnation_id,
+        sender_identity.drive_signing_key(),
+        recipient_account,
+        recipient_incarnation_id,
+        &recipient_public_key,
+    )
+    .and_then(|envelope| envelope.encode_b64())
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[wasm_bindgen(js_name = openFileShareEnvelope)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_file_share_envelope(
+    envelope_base64: &str,
+    sender_signing_public_key_base64: &str,
+    recipient_hpke_private_key_base64: &str,
+    expected_file_id: &str,
+    expected_generation: u32,
+    expected_sender_account: &str,
+    expected_sender_incarnation_id: &str,
+    expected_recipient_account: &str,
+    expected_recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let sender_signing_public_key = decode_canonical_base64(
+        sender_signing_public_key_base64,
+        "sender signing public key",
+    )?;
+    let recipient_private_key = decode_canonical_base64(
+        recipient_hpke_private_key_base64,
+        "recipient HPKE private key",
+    )?;
+    let envelope = kutup_crypto::named_share::FileShareEnvelopeV1::decode_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let file_key = envelope
+        .open(
+            expected_file_id,
+            expected_generation,
+            expected_sender_account,
+            expected_sender_incarnation_id,
+            &sender_signing_public_key,
+            expected_recipient_account,
+            expected_recipient_incarnation_id,
+            &recipient_private_key,
+        )
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(file_key))
+}
+
+/// Your profile key for someone you share Drive folders with
+/// (docs/plans/unified-profile.md), sealed to them and signed by you.
+#[wasm_bindgen(js_name = sealProfileKeyEnvelope)]
+pub fn seal_profile_key_envelope(
+    profile_key_base64: &str,
+    sender_master_key_base64: &str,
+    recipient_hpke_public_key_base64: &str,
+    sender_account: &str,
+    sender_incarnation_id: &str,
+    recipient_account: &str,
+    recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
+    let sender_master_key: [u8; 32] =
+        decode_canonical_base64(sender_master_key_base64, "master key")?
+            .try_into()
+            .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let recipient_public_key = decode_canonical_base64(
+        recipient_hpke_public_key_base64,
+        "recipient HPKE public key",
+    )?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
+        &profile_key,
+        &kutup_crypto::profile_key_share::ProfileKeyParties {
+            sender_account,
+            sender_incarnation_id,
+            recipient_account,
+            recipient_incarnation_id,
+        },
+        sender_identity.drive_signing_key(),
+        &recipient_public_key,
+    )
+    .and_then(|envelope| envelope.encode_b64())
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Someone's profile key, after checking it is from them, to you.
+#[wasm_bindgen(js_name = openProfileKeyEnvelope)]
+pub fn open_profile_key_envelope(
+    envelope_base64: &str,
+    sender_signing_public_key_base64: &str,
+    recipient_hpke_private_key_base64: &str,
+    expected_sender_account: &str,
+    expected_sender_incarnation_id: &str,
+    expected_recipient_account: &str,
+    expected_recipient_incarnation_id: &str,
+) -> Result<String, JsValue> {
+    let sender_signing_public_key = decode_canonical_base64(
+        sender_signing_public_key_base64,
+        "sender signing public key",
+    )?;
+    let recipient_private_key = decode_canonical_base64(
+        recipient_hpke_private_key_base64,
+        "recipient HPKE private key",
+    )?;
+    let envelope =
+        kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::decode_b64(envelope_base64)
+            .map_err(|error| js_error(&error.to_string()))?;
+    let key = envelope
+        .open(
+            &kutup_crypto::profile_key_share::ProfileKeyParties {
+                sender_account: expected_sender_account,
+                sender_incarnation_id: expected_sender_incarnation_id,
+                recipient_account: expected_recipient_account,
+                recipient_incarnation_id: expected_recipient_incarnation_id,
+            },
+            &sender_signing_public_key,
+            &recipient_private_key,
+        )
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(key))
+}
+
+fn live_location_inputs(
+    key_base64: &str,
+    stream_id_hex: &str,
+) -> Result<(Vec<u8>, Vec<u8>), JsValue> {
+    let key = decode_canonical_base64(key_base64, "live location key")?;
+    let stream_id = hex::decode(stream_id_hex)
+        .ok()
+        .filter(|bytes| hex::encode(bytes) == stream_id_hex)
+        .ok_or_else(|| js_error("live location stream id must be lowercase hex"))?;
+    Ok((key, stream_id))
+}
+
+fn whole_number(value: f64, field: &str) -> Result<u64, JsValue> {
+    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
+        return Err(js_error(&format!(
+            "{field} must be a positive whole number"
+        )));
+    }
+    Ok(value as u64)
+}
+
+/// Seal update number `counter` of a live-location stream
+/// (docs/plans/maps.md); standard base64 of the 88-byte update.
+#[wasm_bindgen(js_name = liveLocationSeal)]
+pub fn live_location_seal(
+    key_base64: &str,
+    stream_id_hex: &str,
+    counter: f64,
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: f64,
+) -> Result<String, JsValue> {
+    let (key, stream_id) = live_location_inputs(key_base64, stream_id_hex)?;
+    let point = kutup_crypto::live_location::LiveLocationPoint {
+        lat,
+        lon,
+        accuracy_m,
+        at_ms: whole_number(at_ms, "time")?,
+    };
+    kutup_crypto::live_location::seal(&key, &stream_id, whole_number(counter, "counter")?, &point)
+        .map(|sealed| STANDARD.encode(sealed))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationUpdateJson {
+    counter: f64,
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: f64,
+}
+
+/// Open a live-location update: `{counter, lat, lon, accuracyM, atMs}`.
+#[wasm_bindgen(js_name = liveLocationOpen)]
+pub fn live_location_open(
+    key_base64: &str,
+    stream_id_hex: &str,
+    envelope_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let (key, stream_id) = live_location_inputs(key_base64, stream_id_hex)?;
+    let envelope = decode_canonical_base64(envelope_base64, "live location update")?;
+    let (counter, point) = kutup_crypto::live_location::open(&key, &stream_id, &envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&LiveLocationUpdateJson {
+        counter: counter as f64,
+        lat: point.lat,
+        lon: point.lon,
+        accuracy_m: point.accuracy_m,
+        at_ms: point.at_ms as f64,
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
 fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue> {
     let decoded = STANDARD
         .decode(value)
@@ -1088,4 +1569,167 @@ fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue>
 
 fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
+}
+
+/// A Drive file's metadata (name, type, size, photo details), checked and
+/// written canonically (docs/plans/photos.md): JSON text in, the exact JSON
+/// text to seal out. Opening metadata runs it through here too, so every
+/// client refuses the same things.
+#[wasm_bindgen(js_name = canonicalFileMetadata)]
+pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
+    let metadata = kutup_crypto::file_metadata::decode(json.as_bytes())
+        .map_err(|error| js_error(&error.to_string()))?;
+    let bytes = kutup_crypto::file_metadata::encode(&metadata)
+        .map_err(|error| js_error(&error.to_string()))?;
+    String::from_utf8(bytes).map_err(|_| js_error("file metadata is not UTF-8"))
+}
+
+/// A photo's content hash, fed chunk by chunk as the file is read.
+#[wasm_bindgen(js_name = ContentHasher)]
+pub struct ContentHasherJs(Option<kutup_crypto::file_metadata::ContentHasher>);
+
+#[wasm_bindgen(js_class = ContentHasher)]
+impl ContentHasherJs {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self(Some(kutup_crypto::file_metadata::ContentHasher::new()))
+    }
+
+    pub fn update(&mut self, chunk: &[u8]) -> Result<(), JsValue> {
+        self.0
+            .as_mut()
+            .ok_or_else(|| js_error("content hash already finished"))?
+            .update(chunk);
+        Ok(())
+    }
+
+    /// Canonical base64 of the SHA-256; the hasher is spent.
+    pub fn finish(&mut self) -> Result<String, JsValue> {
+        self.0
+            .take()
+            .map(|hasher| hasher.finish())
+            .ok_or_else(|| js_error("content hash already finished"))
+    }
+}
+
+impl Default for ContentHasherJs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The Photos library record's key (docs/plans/photos.md), from the master key.
+#[wasm_bindgen(js_name = photosLibraryKey)]
+pub fn photos_library_key(master_key_base64: &str) -> Result<String, JsValue> {
+    let master = decode_canonical_base64(master_key_base64, "master key")?;
+    kutup_crypto::photos_library::derive_photos_library_key(&master)
+        .map(|key| STANDARD.encode(key.as_slice()))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+fn photos_library_context(
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<kutup_crypto::photos_library::PhotosLibraryContextV1, JsValue> {
+    kutup_crypto::photos_library::PhotosLibraryContextV1::new(
+        account_incarnation_id,
+        whole_number(revision, "revision")?,
+        previous_digest.as_deref(),
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+struct SealedPhotosLibrary {
+    envelope: String,
+    digest: String,
+}
+
+/// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
+/// order here) as `revision`, after the record whose digest is given (none
+/// for revision 1). Returns `{ envelope, digest }`.
+#[wasm_bindgen(js_name = sealPhotosLibrary)]
+pub fn seal_photos_library(
+    library_json: &str,
+    key_base64: &str,
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::photos_library;
+    let library: photos_library::PhotosLibraryV1 =
+        serde_json::from_str(library_json).map_err(|_| js_error("Photos library is not valid"))?;
+    let library = library
+        .canonicalize()
+        .map_err(|error| js_error(&error.to_string()))?;
+    let plaintext =
+        photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
+    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
+    let envelope = photos_library::seal(&plaintext, &key, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let digest =
+        photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&SealedPhotosLibrary {
+        envelope: STANDARD.encode(envelope),
+        digest,
+    })
+    .map_err(|_| js_error("encode sealed library"))
+}
+
+/// Open a library record as exactly the revision expected; its JSON text.
+#[wasm_bindgen(js_name = openPhotosLibrary)]
+pub fn open_photos_library(
+    envelope_base64: &str,
+    key_base64: &str,
+    account_incarnation_id: &str,
+    revision: f64,
+    previous_digest: Option<String>,
+) -> Result<String, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
+    let plaintext = photos_library::open(&envelope, &key, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let library =
+        photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
+    serde_json::to_string(&library).map_err(|_| js_error("encode library"))
+}
+
+/// A record's digest (its successor's predecessor), lowercase hex.
+#[wasm_bindgen(js_name = photosLibraryDigest)]
+pub fn photos_library_digest(envelope_base64: &str) -> Result<String, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryHeaderJson {
+    account_incarnation_id: String,
+    revision: f64,
+    /// Absent for revision 1.
+    previous_digest: Option<String>,
+}
+
+/// A library record's public header: whose, which revision, after which one.
+#[wasm_bindgen(js_name = inspectPhotosLibrary)]
+pub fn inspect_photos_library(envelope_base64: &str) -> Result<JsValue, JsValue> {
+    use kutup_crypto::photos_library;
+    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let header =
+        photos_library::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&PhotosLibraryHeaderJson {
+        account_incarnation_id: hex::encode(header.account_incarnation_id),
+        revision: header.revision as f64,
+        previous_digest: (header.revision > 1)
+            .then(|| hex::encode(header.previous_envelope_digest)),
+    })
+    .map_err(|_| js_error("encode header"))
 }

@@ -25,7 +25,7 @@ What makes it different from "encrypted Dropbox" clones is the second word in th
 Self-hosted by design. One authenticated federation stack carries encrypted Drive shares and Chat between Kutup servers without giving either backend the protected plaintext.
 
 > **Release status:** Kutup is pre-production and has not published its first
-> stable `v*` or `desktop-v*` release. The implementation and test gates are
+> stable `v*` release. The implementation and test gates are
 > production-oriented, but operators should review the remaining release
 > blockers in [`docs/roadmap.md`](docs/roadmap.md) before serving real users.
 
@@ -53,6 +53,8 @@ Nested collections, drag-and-drop upload, public share links, per-user folder sh
 <img src="docs/screenshots/02-notes-editor.png" alt="Notes editor" width="800" />
 
 CodeMirror 6 + Yjs CRDT for `.md`, `.txt`, and 20+ code formats (Go, TS, Rust, Python, C/C++, Java, Shell, …). Multi-user cursors, selection presence, awareness color picked by the user. Every edit is a Yjs binary update wrapped in an AEAD envelope — the server gets opaque ciphertext.
+
+Markdown notes have Edit, Split and Read views with GFM, KaTeX math, Mermaid diagrams, Obsidian's `==highlights==` and callouts (`> [!tip] Title`). In Edit mode a Markdown note reads like the note, as in Obsidian's live preview: away from the cursor the marks hide, bullets become dots, tasks clickable checkboxes, quotes a bar, rules a line, pictures show and Kutup links become chips; the line being edited shows its Markdown (source mode, from the command palette, shows plain Markdown throughout). Notes wrap at a reading width with no line numbers; lists, task lists and quotes continue on Enter (and end on an empty item); Ctrl/⌘+B, I, K and Shift+C format bold, italic, links and inline code; an Outline panel lists the headings and jumps to them; Ctrl/⌘+P opens a command palette of everything a note can do and Ctrl/⌘+O a quick switcher to any file or folder; sections, lists and code blocks fold; focus mode (Ctrl/⌘+Shift+F) hides everything but the note; a right-click menu (after Obsidian's) adds links, formats, turns lines into headings, lists, tasks or quotes, inserts tables, code and math blocks, rules and pictures, and cuts, copies and pastes (as plain text too). Pasting from a web page, Google Docs or Word brings Markdown (headings, lists, tables, links, emphasis) rather than flat text, and pasting a URL over selected text makes it a link (Ctrl/⌘+Shift+V pastes plain text). Pictures pasted or dropped into a note are stored inside it, encrypted under the note's key, and shown in the preview (notes on other servers too, relayed); copies carry them, sealed anew, and a download bundles them (a note as a ZIP with an assets/ folder, a whiteboard as Excalidraw's own format). Typing `[[` links any file or folder in your Drive (`![[` shows a picture): the link is `kutup:file/<id>` or `kutup:folder/<id>`, so renames and moves keep it; the preview shows it as a chip with the item's icon and current name that opens it where it belongs, and a reader who cannot see the item gets a No access chip (a link grants nothing). Code is highlighted as you type, fenced blocks included, and in the preview. Preview code blocks have a copy button and take the fence options docs sites use (GitHub ignores them): ```` ```python title="greet.py" showLineNumbers {2,4-6} ```` gives a file-name bar, numbered lines and highlighted lines.
 
 ### Office docs — fully client-side
 
@@ -205,9 +207,16 @@ kutup trash ls
 kutup trash restore <id>
 kutup trash empty --yes
 
-# Rename a file or a folder (names are E2EE metadata; content untouched).
+# Rename or move a file or a folder (names are E2EE metadata; content is
+# never re-uploaded). Moving a file re-seals only its key for the destination
+# (a file whose folder removed someone gets a new key first); moving a folder
+# changes nothing encrypted. Moves stay among one owner's folders on this
+# server — across owners or servers, download and upload instead.
 kutup mv <file-id> "new name.txt"
+kutup mv <file-id> --to <folder-id>
 kutup mv <folder-id> "New folder name" --folder
+kutup mv <folder-id> --folder --to <parent-folder-id>
+kutup mv <folder-id> --folder --root
 
 # List versions. Restore is currently safe for CLI/sync-created files;
 # live-collaboration snapshots need the web client's derived content-key path.
@@ -302,6 +311,6 @@ Where code, schemas, or protocol details were copied or closely adapted, the rel
 
 **AGPL-3.0-only** — Copyright (c) 2026 Alperen Albayrak. See [LICENSE](LICENSE).
 
-The OnlyOffice subtree under `frontend/public/onlyoffice/` and the kutup ↔ OnlyOffice bridge in `frontend/src/components/editors/office/` are licensed AGPL-3.0-or-later (so they can link the OnlyOffice client). Full license boundary: [frontend/public/onlyoffice/LICENSE.md](frontend/public/onlyoffice/LICENSE.md).
+The OnlyOffice subtree under `frontend/apps/office/public/onlyoffice/` and the kutup ↔ OnlyOffice bridge in `frontend/apps/drive/src/features/editor/office/` are licensed AGPL-3.0-or-later (so they can link the OnlyOffice client). Full license boundary: [frontend/apps/office/public/onlyoffice/LICENSE.md](frontend/apps/office/public/onlyoffice/LICENSE.md).
 
 The **kutup name, the three-diamond logo, and other brand assets** are not granted by the AGPL — see [TRADEMARK.md](TRADEMARK.md) for what's OK without asking (articles, integration references, screenshots) and what needs permission (selling merch, distributing forks under our name).

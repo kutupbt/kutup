@@ -15,6 +15,7 @@ pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod public;
+pub mod sessions;
 pub mod sharing;
 pub mod trash;
 pub mod tus;
@@ -92,13 +93,22 @@ impl Client {
             std::env::var("KUTUP_INSECURE_TLS").as_deref(),
             Ok("1") | Ok("true")
         );
+        // Every request says it is the CLI: sign-in creates a `cli` session whose
+        // refresh token comes back in the body (web apps use a cookie instead).
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-kutup-client",
+            reqwest::header::HeaderValue::from_static("cli"),
+        );
         let http = HttpClient::builder()
+            .default_headers(headers.clone())
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(insecure)
             .build()
             .expect("build http client");
         let upload = HttpClient::builder()
+            .default_headers(headers)
             .timeout(None) // per-phase only; large bodies must not hit a total deadline
             .connect_timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(insecure)
@@ -139,11 +149,11 @@ impl Client {
         self.auth(self.upload.request(method, self.url(path)))
     }
 
-    fn get(&self, path: &str) -> Result<Response> {
+    pub(crate) fn get(&self, path: &str) -> Result<Response> {
         Ok(self.request(Method::GET, path).send()?)
     }
 
-    fn post_json<B: Serialize>(&self, path: &str, body: &B) -> Result<Response> {
+    pub(crate) fn post_json<B: Serialize>(&self, path: &str, body: &B) -> Result<Response> {
         Ok(self
             .request(Method::POST, path)
             .header(CONTENT_TYPE, "application/json")
@@ -312,7 +322,7 @@ impl Client {
 }
 
 /// Decodes a JSON response, surfacing HTTP >= 400 as an [`ApiError`].
-fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
+pub(crate) fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
     if resp.status().as_u16() >= 400 {
         return Err(api_error(resp));
     }
@@ -320,7 +330,7 @@ fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
 }
 
 /// Checks a no-body response for HTTP >= 400.
-fn check_ok(resp: Response) -> Result<()> {
+pub(crate) fn check_ok(resp: Response) -> Result<()> {
     if resp.status().as_u16() >= 400 {
         return Err(api_error(resp));
     }

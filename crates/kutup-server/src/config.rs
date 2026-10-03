@@ -60,6 +60,37 @@ pub struct Config {
     pub federation_next_signing_key: String,
     /// Test-only HTTP/private-network escape hatch for the v2 stack.
     pub federation_test_allow_private: bool,
+    /// Fetch pages for Chat link previews on behalf of this server's users
+    /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
+    /// its users preview, never their messages.
+    pub chat_link_previews: bool,
+    /// Wake Chat devices whose browser is closed through Web Push
+    /// (`CHAT_WEB_PUSH`, default on). Pushes are empty: the server cannot
+    /// say what arrived.
+    pub chat_web_push: bool,
+    /// Push services the server sends to (`CHAT_WEB_PUSH_HOSTS`): exact
+    /// hosts, or `.suffix` for a domain's subdomains.
+    pub chat_web_push_hosts: String,
+    /// The VAPID contact (`CHAT_WEB_PUSH_SUBJECT`): a `mailto:` or `https:`
+    /// URL push services may use to reach the operator.
+    pub chat_web_push_subject: String,
+    /// Where the map relay keeps its tile cache (`MAPS_CACHE_DIR`;
+    /// docs/plans/maps.md). Its size is an administrator setting.
+    pub maps_cache_dir: String,
+    /// STUN servers for Chat calls (`CHAT_STUN_URLS`, comma list).
+    pub chat_stun_urls: String,
+    /// TURN relays for Chat calls (`CHAT_TURN_URLS`, comma list of
+    /// `turn:`/`turns:` URLs) and their coturn `static-auth-secret`
+    /// (`CHAT_TURN_SECRET`). Without both, calls connect only directly.
+    pub chat_turn_urls: String,
+    pub chat_turn_secret: String,
+    /// The LiveKit SFU for group calls this server hosts: the WebSocket URL
+    /// browsers connect to (`CHAT_SFU_URL`) and its API key and secret
+    /// (`CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET`). Without them, accounts
+    /// here can join group calls other servers host but not start one.
+    pub chat_sfu_url: String,
+    pub chat_sfu_api_key: String,
+    pub chat_sfu_api_secret: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -71,6 +102,96 @@ pub struct Config {
     pub chat_mls_ordering_policy: String,
     /// Base64 raw 32-byte Ed25519 seed used only for MLS control-log votes.
     pub chat_mls_control_signing_key: String,
+    /// Where each web app lives. Published by `/api/auth/settings` and enforced
+    /// for session forks (a fork for `web-drive` is only consumable from `drive`).
+    pub apps: AppOrigins,
+}
+
+/// The origins of the Kutup web apps (scheme://host[:port], no path).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct AppOrigins {
+    pub account: String,
+    pub drive: String,
+    pub chat: String,
+    /// The keyless OnlyOffice sandbox; embedded by drive, holds no session.
+    pub office: String,
+    /// The Maps app (docs/plans/maps.md).
+    pub maps: String,
+    /// The Photos app (docs/plans/photos.md).
+    pub photos: String,
+}
+
+impl AppOrigins {
+    /// The origin a forked child session must be consumed from.
+    pub fn for_client(&self, client: crate::sessions::ClientType) -> Option<&str> {
+        use crate::sessions::ClientType;
+        match client {
+            ClientType::WebAccount => Some(&self.account),
+            ClientType::WebDrive => Some(&self.drive),
+            ClientType::WebChat => Some(&self.chat),
+            ClientType::WebMaps => Some(&self.maps),
+            ClientType::WebPhotos => Some(&self.photos),
+            ClientType::Cli => None,
+        }
+    }
+}
+
+fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
+    let url = url::Url::parse(value).map_err(|e| format!("{name} is not a URL: {e}"))?;
+    let origin = url.origin();
+    if !origin.is_tuple() || !matches!(url.scheme(), "https" | "http") {
+        return Err(format!("{name} must be an http(s) origin"));
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("{name} must be a bare origin without a path"));
+    }
+    Ok(origin.ascii_serialization())
+}
+
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS,PHOTOS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
+/// (`http://<app>.localhost:<port>`) and production refuses to start.
+pub fn resolve_app_origins(
+    env: impl Fn(&str) -> Option<String>,
+    app_env: &str,
+) -> Result<AppOrigins, String> {
+    let base = env("KUTUP_BASE_DOMAIN").filter(|v| !v.is_empty());
+    let pick = |app: &str, var: &str, dev_port: u16| -> Result<String, String> {
+        if let Some(explicit) = env(var).filter(|v| !v.is_empty()) {
+            return canonical_origin(var, &explicit);
+        }
+        if let Some(domain) = &base {
+            return canonical_origin("KUTUP_BASE_DOMAIN", &format!("https://{app}.{domain}"));
+        }
+        if app_env != "production" {
+            return Ok(format!("http://{app}.localhost:{dev_port}"));
+        }
+        Err(format!("set KUTUP_BASE_DOMAIN or {var} in production"))
+    };
+    let origins = AppOrigins {
+        account: pick("account", "KUTUP_ACCOUNT_URL", 5173)?,
+        drive: pick("drive", "KUTUP_DRIVE_URL", 5174)?,
+        chat: pick("chat", "KUTUP_CHAT_URL", 5175)?,
+        office: pick("office", "KUTUP_OFFICE_URL", 5176)?,
+        maps: pick("maps", "KUTUP_MAPS_URL", 5177)?,
+        photos: pick("photos", "KUTUP_PHOTOS_URL", 5178)?,
+    };
+    let all = [
+        &origins.account,
+        &origins.drive,
+        &origins.chat,
+        &origins.office,
+        &origins.maps,
+        &origins.photos,
+    ];
+    for (i, a) in all.iter().enumerate() {
+        if all[i + 1..].contains(a) {
+            return Err(format!(
+                "each Kutup app needs its own origin; {a} is used twice"
+            ));
+        }
+    }
+    Ok(origins)
 }
 
 impl Config {
@@ -124,6 +245,7 @@ impl Config {
                 "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
             );
         }
+        let app_env_for_apps = app_env.clone();
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -136,10 +258,7 @@ impl Config {
             admin_account: get_env("ADMIN_ACCOUNT", ""),
             break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
-            allowed_origins: get_env(
-                "ALLOWED_ORIGINS",
-                "https://localhost:38443,tauri://localhost,http://tauri.localhost",
-            ),
+            allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
@@ -155,6 +274,20 @@ impl Config {
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
+            chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
+            chat_web_push_hosts: get_env(
+                "CHAT_WEB_PUSH_HOSTS",
+                crate::web_push::DEFAULT_PUSH_HOSTS,
+            ),
+            chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
+            maps_cache_dir: get_env("MAPS_CACHE_DIR", ""),
+            chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
+            chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
+            chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
+            chat_sfu_url: get_env("CHAT_SFU_URL", ""),
+            chat_sfu_api_key: get_env("CHAT_SFU_API_KEY", ""),
+            chat_sfu_api_secret: get_env("CHAT_SFU_API_SECRET", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",
@@ -162,6 +295,8 @@ impl Config {
             ),
             chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
             chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
+            apps: resolve_app_origins(|k| std::env::var(k).ok(), &app_env_for_apps)
+                .unwrap_or_else(|error| panic!("app origins: {error}")),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
@@ -210,5 +345,81 @@ fn get_env_bool(key: &str, fallback: bool) -> bool {
             _ => fallback,
         },
         _ => fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| map.get(k).cloned()
+    }
+
+    #[test]
+    fn base_domain_derives_https_subdomains() {
+        let o = resolve_app_origins(env(&[("KUTUP_BASE_DOMAIN", "example.org")]), "production")
+            .unwrap();
+        assert_eq!(o.account, "https://account.example.org");
+        assert_eq!(o.drive, "https://drive.example.org");
+        assert_eq!(o.chat, "https://chat.example.org");
+        assert_eq!(o.office, "https://office.example.org");
+        assert_eq!(o.maps, "https://maps.example.org");
+        assert_eq!(o.photos, "https://photos.example.org");
+    }
+
+    #[test]
+    fn explicit_urls_win_and_are_canonicalised() {
+        let o = resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_DRIVE_URL", "https://Files.Example.org/"),
+            ]),
+            "production",
+        )
+        .unwrap();
+        assert_eq!(o.drive, "https://files.example.org");
+        assert_eq!(o.chat, "https://chat.example.org");
+    }
+
+    #[test]
+    fn development_falls_back_to_the_vite_dev_hosts() {
+        let o = resolve_app_origins(env(&[]), "development").unwrap();
+        assert_eq!(o.account, "http://account.localhost:5173");
+        assert_eq!(o.drive, "http://drive.localhost:5174");
+        assert_eq!(o.chat, "http://chat.localhost:5175");
+        assert_eq!(o.office, "http://office.localhost:5176");
+        assert_eq!(o.maps, "http://maps.localhost:5177");
+        assert_eq!(o.photos, "http://photos.localhost:5178");
+    }
+
+    #[test]
+    fn production_requires_configuration() {
+        assert!(resolve_app_origins(env(&[]), "production").is_err());
+    }
+
+    #[test]
+    fn paths_and_shared_origins_are_rejected() {
+        assert!(resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_DRIVE_URL", "https://x.org/drive")
+            ]),
+            "production",
+        )
+        .is_err());
+        assert!(resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_CHAT_URL", "https://drive.example.org"),
+            ]),
+            "production",
+        )
+        .is_err());
     }
 }

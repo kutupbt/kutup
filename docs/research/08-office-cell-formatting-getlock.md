@@ -3,7 +3,7 @@
 **Status:** resolved after this investigation. Commit `6286891` fixed the
 second-direction stall and cell-level formatting after `d0917ad` implemented
 the shared lock state machine. Cross-tab XLSX formatting regression coverage
-lives in `tests/e2e/specs/14-office-xlsx-formatting.spec.ts`.
+lives in `tests/e2e/specs/13-office-formatting.spec.ts`.
 
 **Date:** 2026-05-07. Two failed attempts in the same session
 (commits not landed; reverted to keep baseline working).

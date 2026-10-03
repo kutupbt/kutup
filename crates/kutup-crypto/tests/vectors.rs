@@ -11,7 +11,9 @@ use kutup_crypto::{
     drive_object::{self, DriveFileBlobContextV1},
     envelope,
     identity::AccountIdentityKeysV1,
-    kdf, stream,
+    kdf,
+    local_state::{self, LocalStatePurpose},
+    stream,
 };
 
 fn b64(s: &str) -> Vec<u8> {
@@ -35,8 +37,101 @@ struct CryptoVectors {
     drive_file_blob: DriveFileBlobVec,
     stream: Vec<StreamVec>,
     asset: AssetVec,
+    thumbnail: ThumbnailVec,
+    #[serde(rename = "collectionKeyring")]
+    collection_keyring: KeyringVec,
+    #[serde(rename = "fileKeyring")]
+    file_keyring: FileKeyringVec,
+    #[serde(rename = "liveLocation")]
+    live_location: LiveLocationVec,
+    #[serde(rename = "fileMetadata")]
+    file_metadata: FileMetadataVec,
+    #[serde(rename = "photosLibrary")]
+    photos_library: PhotosLibraryVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
+    #[serde(rename = "localState")]
+    local_state: LocalStateVecs,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileMetadataVec {
+    canonical: Vec<FileMetadataCase>,
+    invalid: Vec<String>,
+    content_hash: ContentHashVec,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryVec {
+    master_key: String,
+    library_key: String,
+    account_incarnation_id: String,
+    first: PhotosLibraryRecordVec,
+    second: PhotosLibraryRecordVec,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PhotosLibraryRecordVec {
+    revision: u64,
+    #[serde(default)]
+    previous_digest: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+    plaintext: String,
+    nonce: String,
+    envelope: String,
+}
+
+#[derive(Deserialize)]
+struct FileMetadataCase {
+    input: String,
+    output: String,
+}
+
+#[derive(Deserialize)]
+struct ContentHashVec {
+    chunks: Vec<String>,
+    hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationVec {
+    key: String,
+    stream_id: String,
+    counter: u64,
+    nonce: String,
+    point: LiveLocationPointVec,
+    envelope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveLocationPointVec {
+    lat: f64,
+    lon: f64,
+    accuracy_m: u32,
+    at_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct LocalStateVecs {
+    key: String,
+    #[serde(rename = "sessionFork")]
+    session_fork: LocalStateVec,
+    #[serde(rename = "webSession")]
+    web_session: LocalStateVec,
+}
+
+#[derive(Deserialize)]
+struct LocalStateVec {
+    profile: String,
+    nonce: String,
+    plaintext: String,
+    envelope: String,
 }
 
 #[derive(Deserialize)]
@@ -105,9 +200,7 @@ struct DriveFileBlobVec {
     file_key: String,
     #[serde(rename = "fileId")]
     file_id: String,
-    #[serde(rename = "collectionId")]
-    collection_id: String,
-    epoch: u32,
+    generation: u32,
     #[serde(rename = "objectHeader")]
     object_header: String,
     #[serde(rename = "derivedStreamKey")]
@@ -121,36 +214,76 @@ struct StreamVec {
 }
 #[derive(Deserialize)]
 struct AssetVec {
-    #[serde(rename = "collectionKey")]
-    collection_key: String,
+    #[serde(rename = "fileKey")]
+    file_key: String,
     #[serde(rename = "fileId")]
     file_id: String,
-    #[serde(rename = "collectionId")]
-    collection_id: String,
     #[serde(rename = "assetId")]
     asset_id: String,
-    epoch: u32,
+    generation: u32,
     nonce: String,
     plaintext: String,
     envelope: String,
 }
 #[derive(Deserialize)]
+struct ThumbnailVec {
+    #[serde(rename = "fileKey")]
+    file_key: String,
+    #[serde(rename = "fileId")]
+    file_id: String,
+    generation: u32,
+    variant: String,
+    nonce: String,
+    format: String,
+    width: u16,
+    height: u16,
+    image: String,
+    envelope: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyringVec {
+    collection_id: String,
+    owner_user_id: String,
+    authority_public_key: String,
+    keys: Vec<String>,
+    chain: Vec<KeyringLinkVec>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyringLinkVec {
+    epoch: u32,
+    statement: String,
+    previous_key_envelope: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileKeyringVec {
+    file_id: String,
+    keys: Vec<String>,
+    chain: Vec<FileKeyLinkVec>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileKeyLinkVec {
+    generation: u32,
+    previous_key_envelope: String,
+}
+#[derive(Deserialize)]
 struct CollabFrameVec {
-    #[serde(rename = "collectionKey")]
-    collection_key: String,
+    #[serde(rename = "fileKey")]
+    file_key: String,
     #[serde(rename = "signingSeed")]
     signing_seed: String,
     #[serde(rename = "signingPublicKey")]
     signing_public_key: String,
     kind: u8,
-    #[serde(rename = "keyEpoch")]
-    key_epoch: u32,
+    #[serde(rename = "keyGeneration")]
+    key_generation: u32,
     #[serde(rename = "docKeyId")]
     doc_key_id: u32,
     #[serde(rename = "fileId")]
     file_id: String,
-    #[serde(rename = "collectionId")]
-    collection_id: String,
     #[serde(rename = "senderDeviceId")]
     sender_device_id: u64,
     sequence: u64,
@@ -272,8 +405,7 @@ fn drive_envelope_vector() {
 #[test]
 fn drive_file_blob_header_and_key_vector() {
     let vector = load_crypto().drive_file_blob;
-    let context =
-        DriveFileBlobContextV1::new(&vector.file_id, &vector.collection_id, vector.epoch).unwrap();
+    let context = DriveFileBlobContextV1::new(&vector.file_id, vector.generation).unwrap();
     assert_eq!(
         drive_object::file_blob_header(context).as_slice(),
         b64(&vector.object_header)
@@ -298,16 +430,11 @@ fn stream_decrypts_go_output() {
 #[test]
 fn whiteboard_asset_matches_canonical_vector() {
     let v = load_crypto().asset;
-    let context = DriveEnvelopeContextV1::whiteboard_asset(
-        &v.file_id,
-        &v.collection_id,
-        &v.asset_id,
-        v.epoch,
-    )
-    .unwrap();
+    let context =
+        DriveEnvelopeContextV1::whiteboard_asset(&v.file_id, &v.asset_id, v.generation).unwrap();
     let envelope = drive_envelope::seal_with_nonce(
         &b64(&v.plaintext),
-        &b64(&v.collection_key),
+        &b64(&v.file_key),
         context,
         &b64(&v.nonce),
     )
@@ -316,10 +443,9 @@ fn whiteboard_asset_matches_canonical_vector() {
     let dec = asset::decrypt_asset(
         &envelope,
         &v.file_id,
-        &v.collection_id,
         &v.asset_id,
-        v.epoch,
-        &b64(&v.collection_key),
+        v.generation,
+        &b64(&v.file_key),
     )
     .unwrap();
     assert_eq!(dec, b64(&v.plaintext), "asset plaintext mismatch");
@@ -356,26 +482,18 @@ fn stream_tamper_fails() {
 
 #[test]
 fn asset_tamper_and_aad_fail() {
-    let master = [0xCDu8; 32];
+    let file_key = [0xCDu8; 32];
     let file_id = "11111111-1111-4111-8111-111111111111";
-    let collection_id = "22222222-2222-4222-8222-222222222222";
     let other_file_id = "33333333-3333-4333-8333-333333333333";
-    let other_collection_id = "44444444-4444-4444-8444-444444444444";
-    let blob =
-        asset::encrypt_asset(b"payload", file_id, collection_id, "asset", 1, &master).unwrap();
-    assert!(asset::decrypt_asset(&blob, file_id, collection_id, "other", 1, &master).is_err());
-    assert!(
-        asset::decrypt_asset(&blob, other_file_id, collection_id, "asset", 1, &master).is_err()
-    );
-    assert!(
-        asset::decrypt_asset(&blob, file_id, other_collection_id, "asset", 1, &master).is_err()
-    );
-    assert!(asset::decrypt_asset(&blob, file_id, collection_id, "asset", 2, &master).is_err());
+    let blob = asset::encrypt_asset(b"payload", file_id, "asset", 1, &file_key).unwrap();
+    assert!(asset::decrypt_asset(&blob, file_id, "other", 1, &file_key).is_err());
+    assert!(asset::decrypt_asset(&blob, other_file_id, "asset", 1, &file_key).is_err());
+    assert!(asset::decrypt_asset(&blob, file_id, "asset", 2, &file_key).is_err());
     // Tampered ciphertext fails.
     let mut bad = blob.clone();
     let n = bad.len();
     bad[n - 1] ^= 0xff;
-    assert!(asset::decrypt_asset(&bad, file_id, collection_id, "asset", 1, &master).is_err());
+    assert!(asset::decrypt_asset(&bad, file_id, "asset", 1, &file_key).is_err());
 }
 
 // --- envelope -------------------------------------------------------------
@@ -385,17 +503,16 @@ fn collaboration_frame_matches_canonical_vector() {
     let v = load_crypto().collab_frame;
     let context = envelope::CollabFrameContextV1::new(
         v.kind,
-        v.key_epoch,
+        v.key_generation,
         v.doc_key_id,
         &v.file_id,
-        &v.collection_id,
         v.sender_device_id,
         v.sequence,
     )
     .unwrap();
     let unsigned = envelope::seal_unsigned_with_nonce(
         &b64(&v.plaintext),
-        &b64(&v.collection_key),
+        &b64(&v.file_key),
         context,
         &b64(&v.nonce),
     )
@@ -407,18 +524,326 @@ fn collaboration_frame_matches_canonical_vector() {
     .unwrap();
     assert_eq!(signed, b64(&v.frame));
     envelope::verify(&signed, &b64(&v.signing_public_key)).unwrap();
-    let (parsed, plaintext) = envelope::open(
-        &signed,
-        &b64(&v.collection_key),
-        &v.file_id,
-        &v.collection_id,
-        v.key_epoch,
-    )
-    .unwrap();
+    let (parsed, plaintext) =
+        envelope::open(&signed, &b64(&v.file_key), &v.file_id, v.key_generation).unwrap();
     assert_eq!(parsed.context(), context);
     assert_eq!(plaintext, b64(&v.plaintext));
 
     let mut tampered = signed;
     tampered[100] ^= 0x01;
     assert!(envelope::verify(&tampered, &b64(&v.signing_public_key)).is_err());
+}
+
+#[test]
+fn local_state_fork_and_web_session_match_canonical_vectors() {
+    let v = load_crypto().local_state;
+    let key = b64(&v.key);
+    for (vec, purpose) in [
+        (&v.session_fork, LocalStatePurpose::SessionFork),
+        (&v.web_session, LocalStatePurpose::WebSession),
+    ] {
+        let nonce: [u8; 24] = b64(&vec.nonce).try_into().expect("24-byte nonce");
+        let sealed =
+            local_state::seal_with_nonce(&b64(&vec.plaintext), &key, purpose, &vec.profile, &nonce)
+                .unwrap();
+        assert_eq!(sealed, b64(&vec.envelope), "{purpose:?} envelope mismatch");
+        let opened = local_state::open(&sealed, &key, purpose, &vec.profile).unwrap();
+        assert_eq!(opened, b64(&vec.plaintext));
+    }
+}
+
+#[test]
+fn local_state_payloads_are_bound_to_purpose_and_profile() {
+    let v = load_crypto().local_state;
+    let key = b64(&v.key);
+    let fork = b64(&v.session_fork.envelope);
+    // A fork payload minted for drive opens neither as chat's nor as a
+    // persisted web session.
+    assert!(local_state::open(&fork, &key, LocalStatePurpose::SessionFork, "web-chat").is_err());
+    assert!(local_state::open(&fork, &key, LocalStatePurpose::WebSession, "web-drive").is_err());
+    let mut tampered = fork.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 1;
+    assert!(
+        local_state::open(&tampered, &key, LocalStatePurpose::SessionFork, "web-drive").is_err()
+    );
+}
+
+#[test]
+fn thumbnail_matches_canonical_vector() {
+    use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
+    let v = load_crypto().thumbnail;
+    let variant = ThumbnailVariant::try_from(v.variant.as_str()).unwrap();
+    assert_eq!(v.format, "jpeg");
+    let expected = Thumbnail {
+        format: ThumbnailFormat::Jpeg,
+        width: v.width,
+        height: v.height,
+        image: b64(&v.image),
+    };
+    let envelope = thumbnail::seal_with_nonce(
+        &expected,
+        variant,
+        &b64(&v.file_key),
+        &v.file_id,
+        v.generation,
+        &b64(&v.nonce),
+    )
+    .unwrap();
+    assert_eq!(envelope, b64(&v.envelope));
+    thumbnail::validate(&envelope, variant, &v.file_id, v.generation).unwrap();
+    let opened = thumbnail::open(
+        &envelope,
+        variant,
+        &b64(&v.file_key),
+        &v.file_id,
+        v.generation,
+    )
+    .unwrap();
+    assert_eq!(opened, expected);
+    assert!(thumbnail::open(
+        &envelope,
+        ThumbnailVariant::Large,
+        &b64(&v.file_key),
+        &v.file_id,
+        v.generation
+    )
+    .is_err());
+}
+
+#[test]
+fn collection_keyring_matches_canonical_vector() {
+    use kutup_crypto::collection_keyring::{self, EpochLinkV1};
+    let v = load_crypto().collection_keyring;
+    let chain: Vec<EpochLinkV1> = v
+        .chain
+        .iter()
+        .map(|l| EpochLinkV1 {
+            epoch: l.epoch,
+            statement: l.statement.clone(),
+            previous_key_envelope: l.previous_key_envelope.clone(),
+        })
+        .collect();
+    let current = b64(v.keys.last().unwrap());
+    let keys = collection_keyring::unlock(
+        &current,
+        &v.collection_id,
+        &v.owner_user_id,
+        &b64(&v.authority_public_key),
+        &chain,
+    )
+    .unwrap();
+    assert_eq!(keys.len(), v.keys.len());
+    for (got, want) in keys.iter().zip(&v.keys) {
+        assert_eq!(got.as_slice(), b64(want).as_slice());
+    }
+    // An earlier key (a removed member's) does not unlock the history.
+    assert!(collection_keyring::unlock(
+        &b64(&v.keys[1]),
+        &v.collection_id,
+        &v.owner_user_id,
+        &b64(&v.authority_public_key),
+        &chain,
+    )
+    .is_err());
+}
+
+#[test]
+fn file_keyring_matches_canonical_vector() {
+    use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
+    let v = load_crypto().file_keyring;
+    let chain: Vec<FileKeyLinkV1> = v
+        .chain
+        .iter()
+        .map(|l| FileKeyLinkV1 {
+            generation: l.generation,
+            previous_key_envelope: l.previous_key_envelope.clone(),
+        })
+        .collect();
+    let generation = v.keys.len() as u32;
+    let current = b64(v.keys.last().unwrap());
+    for (index, want) in v.keys.iter().enumerate() {
+        let key = file_keyring::key_at(&current, &v.file_id, generation, &chain, index as u32 + 1)
+            .unwrap();
+        assert_eq!(key.as_slice(), b64(want).as_slice());
+    }
+    // An earlier key (a removed member's) does not open the newer links.
+    assert!(file_keyring::key_at(&b64(&v.keys[1]), &v.file_id, generation, &chain, 1).is_err());
+}
+
+/// Prints the vectors that bind Drive file objects to their file and key
+/// generation, for `tests/vectors/crypto.json`:
+/// `cargo test -p kutup-crypto --test vectors print_file_bound_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_file_bound_vectors() {
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let file_id = "11111111-1111-4111-8111-111111111111";
+
+    let file_key = [0x42u8; 32];
+    let context = DriveFileBlobContextV1::new(file_id, 7).unwrap();
+    let blob = serde_json::json!({
+        "fileKey": e(&file_key),
+        "fileId": file_id,
+        "generation": 7,
+        "objectHeader": e(&drive_object::file_blob_header(context)),
+        "derivedStreamKey": e(drive_object::derive_file_blob_key(&file_key, context).unwrap().as_slice()),
+    });
+
+    let asset_key = [0x41u8; 32];
+    let asset_plain = b"data:image/png;base64,iVBORw0KGgo=";
+    let asset_nonce = [0x44u8; 24];
+    let asset = serde_json::json!({
+        "fileKey": e(&asset_key),
+        "fileId": file_id,
+        "assetId": "asset-abc",
+        "generation": 3,
+        "nonce": e(&asset_nonce),
+        "plaintext": e(asset_plain),
+        "envelope": e(&drive_envelope::seal_with_nonce(
+            asset_plain,
+            &asset_key,
+            DriveEnvelopeContextV1::whiteboard_asset(file_id, "asset-abc", 3).unwrap(),
+            &asset_nonce,
+        ).unwrap()),
+    });
+
+    let keys = [[0x71u8; 32], [0x72u8; 32], [0x73u8; 32]];
+    let chain: Vec<_> = (2..=3u32)
+        .map(|generation| {
+            serde_json::json!({
+                "generation": generation,
+                "previousKeyEnvelope": e(&drive_envelope::seal_with_nonce(
+                    &keys[generation as usize - 2],
+                    &keys[generation as usize - 1],
+                    DriveEnvelopeContextV1::previous_file_key(file_id, generation).unwrap(),
+                    &[0x50u8 + generation as u8; 24],
+                ).unwrap()),
+            })
+        })
+        .collect();
+    let keyring = serde_json::json!({
+        "fileId": file_id,
+        "keys": keys.iter().map(|k| e(k)).collect::<Vec<_>>(),
+        "chain": chain,
+    });
+
+    let frame_key = [0x41u8; 32];
+    let seed = [0x55u8; 32];
+    let plaintext = b"canonical collaboration update";
+    let nonce = [0x66u8; 24];
+    let context = envelope::CollabFrameContextV1::new(1, 3, 7, file_id, 42, 9).unwrap();
+    let unsigned =
+        envelope::seal_unsigned_with_nonce(plaintext, &frame_key, context, &nonce).unwrap();
+    let signed = envelope::sign(&envelope::Frame::unpack(&unsigned).unwrap(), &seed).unwrap();
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    let frame = serde_json::json!({
+        "fileKey": e(&frame_key),
+        "signingSeed": e(&seed),
+        "signingPublicKey": e(&public),
+        "kind": 1,
+        "keyGeneration": 3,
+        "docKeyId": 7,
+        "fileId": file_id,
+        "senderDeviceId": 42,
+        "sequence": 9,
+        "nonce": e(&nonce),
+        "plaintext": e(plaintext),
+        "frame": e(&signed),
+    });
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "driveFileBlob": blob,
+            "asset": asset,
+            "fileKeyring": keyring,
+            "collabFrame": frame,
+        })
+    );
+}
+
+#[test]
+fn live_location_update_matches_canonical_vector() {
+    use kutup_crypto::live_location::{self, LiveLocationPoint};
+    let v = load_crypto().live_location;
+    let key = b64(&v.key);
+    let stream_id = hex::decode(&v.stream_id).expect("hex stream id");
+    let nonce: [u8; 24] = b64(&v.nonce).try_into().expect("24-byte nonce");
+    let point = LiveLocationPoint {
+        lat: v.point.lat,
+        lon: v.point.lon,
+        accuracy_m: v.point.accuracy_m,
+        at_ms: v.point.at_ms,
+    };
+    let envelope = b64(&v.envelope);
+    assert_eq!(
+        live_location::seal_with_nonce(&key, &stream_id, v.counter, &point, &nonce).unwrap(),
+        envelope
+    );
+    assert_eq!(
+        live_location::open(&key, &stream_id, &envelope).unwrap(),
+        (v.counter, point)
+    );
+    assert_eq!(live_location::counter_of(&envelope).unwrap(), v.counter);
+}
+
+#[test]
+fn file_metadata_matches_canonical_vector() {
+    use kutup_crypto::file_metadata::{self, ContentHasher};
+    let v = load_crypto().file_metadata;
+    for case in &v.canonical {
+        let parsed = file_metadata::decode(case.input.as_bytes()).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&file_metadata::encode(&parsed).unwrap()).unwrap(),
+            case.output
+        );
+        assert_eq!(
+            file_metadata::decode(case.output.as_bytes()).unwrap(),
+            parsed
+        );
+    }
+    for bad in &v.invalid {
+        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+    }
+    let mut hasher = ContentHasher::new();
+    for chunk in &v.content_hash.chunks {
+        hasher.update(&b64(chunk));
+    }
+    assert_eq!(hasher.finish(), v.content_hash.hash);
+}
+
+#[test]
+fn photos_library_matches_canonical_vector() {
+    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    let v = load_crypto().photos_library;
+    let key = photos_library::derive_photos_library_key(&b64(&v.master_key)).unwrap();
+    assert_eq!(key.to_vec(), b64(&v.library_key));
+    for record in [&v.first, &v.second] {
+        let context = PhotosLibraryContextV1::new(
+            &v.account_incarnation_id,
+            record.revision,
+            record.previous_digest.as_deref(),
+        )
+        .unwrap();
+        let sealed = photos_library::seal_with_nonce(
+            record.plaintext.as_bytes(),
+            key.as_slice(),
+            context,
+            &b64(&record.nonce),
+        )
+        .unwrap();
+        assert_eq!(sealed, b64(&record.envelope));
+        assert_eq!(photos_library::inspect(&sealed).unwrap(), context);
+        let opened = photos_library::open(&sealed, key.as_slice(), context).unwrap();
+        assert_eq!(opened, record.plaintext.as_bytes());
+        photos_library::decode_library(&opened).unwrap();
+    }
+    assert_eq!(
+        photos_library::envelope_digest(&b64(&v.first.envelope)).unwrap(),
+        v.first.digest.clone().unwrap()
+    );
+    assert_eq!(v.second.previous_digest, v.first.digest);
 }

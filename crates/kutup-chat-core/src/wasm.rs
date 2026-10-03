@@ -85,6 +85,24 @@ export interface KutupChatContentView {
   receipt?: unknown;
   typing?: unknown;
   disappearingTimer?: unknown;
+  conversationState?: unknown;
+  readPosition?: unknown;
+  deleteForMe?: unknown;
+  viewOnceOpened?: unknown;
+  stickerSaved?: unknown;
+  stickerRemoved?: unknown;
+  sticker?: unknown;
+  groupUpdate?: unknown;
+  poll?: unknown;
+  location?: unknown;
+  liveLocation?: unknown;
+  liveLocationStop?: unknown;
+  pollVote?: unknown;
+  pollTerminate?: unknown;
+  mentions?: unknown;
+  linkPreview?: unknown;
+  forwarded?: boolean;
+  viewOnce?: boolean;
   expiresAfterSeconds?: number;
   expiresAtMs?: number;
 }
@@ -701,20 +719,55 @@ impl WasmChatClient {
         creator: JsValue,
         authority_policies: JsValue,
         created_at_seconds: String,
+        group_info: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("invalid MLS conversation id"))?;
         let creator: AccountAddress = from_transport(creator).map_err(chat_error)?;
         let authority_policies: Vec<kutup_chat_proto::MlsOrderingServicePolicyV1> =
             from_transport(authority_policies).map_err(chat_error)?;
+        let group_info: Option<kutup_chat_proto::MlsGroupInfoV1> =
+            if group_info.is_null() || group_info.is_undefined() {
+                None
+            } else {
+                Some(from_transport(group_info).map_err(chat_error)?)
+            };
         let prepared = self
             .mls_client()
-            .prepare_group_genesis(
+            .prepare_group_genesis_with_info(
                 conversation_id,
                 &mls_group_id,
                 creator,
                 &authority_policies,
                 parse_i64_string("MLS genesis clock", &created_at_seconds)?,
+                group_info,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    /// Stage a change of the group's name, description or picture; it is
+    /// then published like a membership change.
+    #[wasm_bindgen(js_name = prepareMlsGroupInfoChange)]
+    pub async fn prepare_mls_group_info_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        group_info: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id =
+            uuid::Uuid::parse_str(&proposal_id).map_err(|_| js_error("invalid MLS proposal id"))?;
+        let group_info: kutup_chat_proto::MlsGroupInfoV1 =
+            from_transport(group_info).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_group_info_change(
+                &mls_group_id,
+                proposal_id,
+                group_info,
+                parse_i64_string("MLS control clock", &now_seconds)?,
             )
             .await
             .map_err(chat_error)?;
@@ -1073,6 +1126,24 @@ impl WasmChatClient {
         let entry = self
             .mls_client()
             .create_owner_approval_request_message(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    /// Ask to leave the group; `null` when this device already left.
+    #[wasm_bindgen(js_name = requestMlsLeave)]
+    pub async fn request_mls_leave(
+        &self,
+        mls_group_id: Vec<u8>,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .request_leave(
+                &mls_group_id,
+                parse_i64_string("MLS leave clock", &now_seconds)?,
+            )
             .await
             .map_err(chat_error)?;
         to_output(&entry)
@@ -1811,9 +1882,11 @@ impl WasmChatClient {
         created_at_ms: String,
         reply_to: Option<String>,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let extras = parse_extras(extras)?;
         let entry = self
             .mls_client()
             .create_expiring_text_reply_application_message(
@@ -1825,6 +1898,7 @@ impl WasmChatClient {
                 &text,
                 reply_to.as_deref(),
                 expires_after_seconds,
+                &extras,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -1844,9 +1918,11 @@ impl WasmChatClient {
         descriptor: JsValue,
         created_at_ms: String,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let extras = parse_extras(extras)?;
         let descriptor: ChatAttachmentDescriptorV1 =
             from_transport(descriptor).map_err(chat_error)?;
         let entry = self
@@ -1859,11 +1935,72 @@ impl WasmChatClient {
                 &sent_at,
                 descriptor,
                 expires_after_seconds,
+                &extras,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
             .map_err(chat_error)?;
         to_output(&entry)
+    }
+
+    /// A poll, a vote in one, or its end, in a group.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsPollContent)]
+    pub async fn create_mls_poll_content(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+        created_at_ms: String,
+        expires_after_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let body: serde_json::Value = from_transport(body).map_err(chat_error)?;
+        let entry = self
+            .mls_client()
+            .create_structured_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+                |seq| {
+                    build_poll_content(&kind, &send_id, &sent_at, seq, &body, expires_after_seconds)
+                },
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    /// The frame key of a group call in the group's current epoch.
+    #[wasm_bindgen(js_name = exportMlsCallKey)]
+    pub async fn export_mls_call_key(
+        &self,
+        mls_group_id: Vec<u8>,
+        call_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let call_id = uuid::Uuid::parse_str(&call_id)
+            .map_err(|_| js_error("group call id must be a UUID"))?;
+        let (epoch, key) = self
+            .mls_client()
+            .export_call_key(&mls_group_id, call_id)
+            .await
+            .map_err(chat_error)?;
+        #[derive(Serialize)]
+        struct CallKey {
+            epoch: String,
+            key: Vec<u8>,
+        }
+        to_output(&CallKey {
+            epoch: epoch.to_string(),
+            key,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2279,7 +2416,9 @@ impl WasmChatClient {
         text: String,
         reply_to: Option<String>,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
+        let extras = parse_extras(extras)?;
         let mut rng = OsRng.unwrap_err();
         let seq = self
             .engine
@@ -2289,6 +2428,7 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         let mut content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
             .with_reply_to(reply_to.as_deref())
+            .and_then(|content| content.with_extras(&extras))
             .map_err(|error| js_error(&error))?;
         if let Some(seconds) = expires_after_seconds {
             content = content
@@ -2311,9 +2451,11 @@ impl WasmChatClient {
         sent_at: String,
         descriptor: JsValue,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let descriptor: ChatAttachmentDescriptorV1 =
             from_transport(descriptor).map_err(chat_error)?;
+        let extras = parse_extras(extras)?;
         let mut rng = OsRng.unwrap_err();
         let seq = self
             .engine
@@ -2322,12 +2464,44 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         let mut content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
+            .and_then(|content| content.with_extras(&extras))
             .map_err(|error| js_error(&error))?;
         if let Some(seconds) = expires_after_seconds {
             content = content
                 .with_disappearing_after(seconds)
                 .map_err(|error| js_error(&error))?;
         }
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// A poll, a vote in one, or its end (`kind` = `poll` | `pollVote` |
+    /// `pollTerminate`), in a Direct chat or Note to Self.
+    #[wasm_bindgen(js_name = sendPollContent)]
+    pub async fn send_poll_content(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+        expires_after_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let body: serde_json::Value = from_transport(body).map_err(chat_error)?;
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content =
+            build_poll_content(&kind, &send_id, &sent_at, seq, &body, expires_after_seconds)
+                .map_err(|error| js_error(&error))?;
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
@@ -2454,6 +2628,52 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    /// Send one call signal (offer, answer, ICE, hang-up, busy) to `peer`'s
+    /// devices; like typing it is never history nor a transcript.
+    #[wasm_bindgen(js_name = sendCallSignal)]
+    pub async fn send_call_signal(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        signal: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let signal: kutup_chat_proto::CallSignalV1 = from_transport(signal).map_err(chat_error)?;
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::call_with_id(&send_id, sent_at, seq, &signal)
+            .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// Put a call into `peer`'s timeline on this device (writing it again
+    /// for the same call replaces it).
+    #[wasm_bindgen(js_name = recordCallLog)]
+    pub async fn record_call_log(
+        &mut self,
+        peer: String,
+        body: JsValue,
+    ) -> std::result::Result<(), JsValue> {
+        let body: kutup_chat_proto::CallLogBody = from_transport(body).map_err(chat_error)?;
+        let content = ChatContent::call_log_with_id(body.call_id.to_string(), now_rfc3339(), &body)
+            .map_err(|error| js_error(&error))?;
+        self.engine
+            .session_mut()
+            .record_local_notice(&peer, &content)
+            .await
+            .map_err(chat_error)
+    }
+
     #[wasm_bindgen(js_name = sendDisappearingTimer)]
     pub async fn send_disappearing_timer(
         &mut self,
@@ -2475,6 +2695,78 @@ impl WasmChatClient {
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// Sends a same-account control (`conversationState`, `readPosition` or
+    /// `deleteForMe`) to this account's other devices through Note to Self.
+    #[wasm_bindgen(js_name = sendAccountControl)]
+    pub async fn send_account_control(
+        &mut self,
+        send_id: String,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = match kind.as_str() {
+            kutup_chat_proto::content::kind::CONVERSATION_STATE => {
+                ChatContent::conversation_state_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
+            kutup_chat_proto::content::kind::READ_POSITION => ChatContent::read_position_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            kutup_chat_proto::content::kind::DELETE_FOR_ME => ChatContent::delete_for_me_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            kutup_chat_proto::content::kind::STICKER_SAVED => ChatContent::sticker_saved_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            kutup_chat_proto::content::kind::STICKER_REMOVED => {
+                ChatContent::sticker_removed_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
+            kutup_chat_proto::content::kind::VIEW_ONCE_OPENED => {
+                ChatContent::view_once_opened_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
+            _ => return Err(js_error("unknown same-account control")),
+        }
+        .map_err(|error| js_error(&error))?;
+        let local_account = self.engine.session().user().to_owned();
+        let summary = self
+            .engine
+            .send(&send_id, &local_account, &content, &mut rng)
             .await
             .map_err(chat_error)?;
         to_output(&SendSummaryView::from(summary))
@@ -2622,6 +2914,26 @@ impl WasmChatClient {
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
+        // Group messages still going out show as sent-but-undelivered, with
+        // the id their delivered row will have.
+        let delivered_ids: std::collections::HashSet<String> =
+            history.iter().map(|entry| entry.id.clone()).collect();
+        for entry in self
+            .mls_client()
+            .pending_application_messages()
+            .await
+            .map_err(chat_error)?
+        {
+            if entry.content.is_empty()
+                || delivered_ids.contains(&entry.send_id)
+                || is_invisible_control(&entry.content).map_err(chat_error)?
+            {
+                continue;
+            }
+            let mut pending = HistoryEntry::mls_pending(entry).map_err(chat_error)?;
+            pending.apply_disappearing_deadline(&expiry_starts);
+            history.push(pending);
+        }
         for message in imported {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
@@ -2686,12 +2998,26 @@ impl WasmChatClient {
         to_output(&profiles)
     }
 
+    /// Take a newer profile revision from the server (the account app edits
+    /// the profile) and tell contacts when it changed.
+    #[wasm_bindgen(js_name = refreshProfile)]
+    pub async fn refresh_profile(&mut self) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let user = self.engine.session().user().to_string();
+        self.engine
+            .initialize_profile(&self.profile_wrapping_key, &user, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setProfile)]
     pub async fn set_profile(
         &mut self,
         display_name: String,
         avatar: Option<String>,
         avatar_content_type: Option<String>,
+        about: Option<String>,
     ) -> std::result::Result<JsValue, JsValue> {
         let avatar = avatar
             .map(|value| STANDARD.decode(value).map_err(ChatError::from))
@@ -2704,6 +3030,7 @@ impl WasmChatClient {
                 &display_name,
                 avatar,
                 avatar_content_type,
+                about,
                 &self.profile_wrapping_key,
                 &now_rfc3339(),
                 &mut rng,
@@ -2880,6 +3207,8 @@ struct ProfileView {
     avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     avatar_content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
     revision: String,
 }
 
@@ -2889,6 +3218,7 @@ impl From<crate::LocalProfile> for ProfileView {
             display_name: profile.display_name,
             avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
             avatar_content_type: profile.avatar_content_type,
+            about: profile.about,
             revision: profile.revision.to_string(),
         }
     }
@@ -2903,6 +3233,8 @@ struct PeerProfileView {
     avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     avatar_content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
     revision: String,
 }
 
@@ -2913,6 +3245,7 @@ impl PeerProfileView {
             display_name: profile.display_name?,
             avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
             avatar_content_type: profile.avatar_content_type,
+            about: profile.about,
             revision: profile.revision.to_string(),
         })
     }
@@ -3012,7 +3345,49 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     typing: Option<kutup_chat_proto::TypingBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    call: Option<kutup_chat_proto::CallSignalV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_log: Option<kutup_chat_proto::CallLogBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_call: Option<kutup_chat_proto::GroupCallBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_state: Option<kutup_chat_proto::ConversationStateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_position: Option<kutup_chat_proto::ReadPositionBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_for_me: Option<kutup_chat_proto::DeleteForMeBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view_once_opened: Option<kutup_chat_proto::ViewOnceOpenedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sticker_saved: Option<kutup_chat_proto::StickerSavedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sticker_removed: Option<kutup_chat_proto::StickerRemovedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sticker: Option<kutup_chat_proto::StickerMarkV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_update: Option<kutup_chat_proto::GroupUpdateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll: Option<kutup_chat_proto::PollBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<kutup_chat_proto::LocationBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_location: Option<kutup_chat_proto::LiveLocationBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_location_stop: Option<kutup_chat_proto::LiveLocationStopBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll_vote: Option<kutup_chat_proto::PollVoteBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll_terminate: Option<kutup_chat_proto::PollTerminateBody>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<kutup_chat_proto::MentionV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_preview: Option<kutup_chat_proto::LinkPreviewV1>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    forwarded: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    view_once: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_after_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3027,7 +3402,24 @@ impl From<ChatContent> for ContentView {
         let mutation = content.as_message_mutation();
         let receipt = content.as_receipt();
         let typing = content.as_typing();
+        let call = content.as_call();
+        let call_log = content.as_call_log();
+        let group_call = content.as_group_call();
         let disappearing_timer = content.as_disappearing_timer();
+        let conversation_state = content.as_conversation_state();
+        let read_position = content.as_read_position();
+        let delete_for_me = content.as_delete_for_me();
+        let view_once_opened = content.as_view_once_opened();
+        let sticker_saved = content.as_sticker_saved();
+        let sticker_removed = content.as_sticker_removed();
+        let group_update = content.as_group_update();
+        let extras = content.extras().unwrap_or_default();
+        let poll = content.as_poll();
+        let location = content.as_location();
+        let live_location = content.as_live_location();
+        let live_location_stop = content.as_live_location_stop();
+        let poll_vote = content.as_poll_vote();
+        let poll_terminate = content.as_poll_terminate();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
@@ -3043,7 +3435,28 @@ impl From<ChatContent> for ContentView {
             mutation,
             receipt,
             typing,
+            call,
+            call_log,
+            group_call,
             disappearing_timer,
+            conversation_state,
+            read_position,
+            delete_for_me,
+            view_once_opened,
+            sticker_saved,
+            sticker_removed,
+            sticker: extras.sticker.clone(),
+            group_update,
+            poll,
+            location,
+            live_location,
+            live_location_stop,
+            poll_vote,
+            poll_terminate,
+            mentions: extras.mentions,
+            link_preview: extras.link_preview,
+            forwarded: extras.forwarded,
+            view_once: extras.view_once,
             expires_after_seconds,
             expires_at_ms: None,
         }
@@ -3146,6 +3559,27 @@ impl HistoryEntry {
         })
     }
 
+    /// A group message this device is still delivering.
+    fn mls_pending(entry: crate::MlsOutboxEntry) -> Result<Self> {
+        let content = serde_json::from_slice::<ChatContent>(&entry.content)
+            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let group_id = uuid::Uuid::from_bytes(entry.conversation_id).to_string();
+        Ok(Self {
+            id: entry.send_id,
+            conversation: ConversationId::Group {
+                group_id: group_id.clone(),
+            },
+            peer: group_id,
+            direction: "outgoing",
+            sender_device_id: None,
+            cursor: None,
+            timestamp_ms: entry.created_at,
+            delivered: false,
+            deduplicated: false,
+            content: content.into(),
+        })
+    }
+
     fn mls(message: crate::MlsHistoryMessage) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&message.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
@@ -3219,6 +3653,7 @@ fn is_contact_control(bytes: &[u8]) -> Result<bool> {
         kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::CALL
             | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }
@@ -3232,6 +3667,7 @@ fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
             | kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::CALL
             | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }
@@ -3262,6 +3698,269 @@ impl From<InboundEnvelope> for InboundEnvelopeView {
     }
 }
 
+/// Group invite links (docs/chat-invite-links.md): the link's secret stays
+/// in the browser; these derive and seal what its host keeps.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteLinkKeysOutput {
+    link_id: String,
+    manage_token: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteLinkFragmentOutput {
+    secret: String,
+    host: String,
+}
+
+fn invite_link_input(
+    link: JsValue,
+) -> std::result::Result<kutup_chat_proto::MlsGroupInviteLinkV1, JsValue> {
+    from_transport(link).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkNew)]
+pub fn invite_link_new(
+    host: String,
+    approval_required: bool,
+) -> std::result::Result<JsValue, JsValue> {
+    let link = kutup_chat_proto::MlsGroupInviteLinkV1 {
+        secret: crate::invite_link::new_invite_link_secret(),
+        host,
+        approval_required,
+    };
+    link.validate().map_err(|error| js_error(&error))?;
+    to_output(&link)
+}
+
+#[wasm_bindgen(js_name = inviteLinkKeys)]
+pub fn invite_link_keys(link: JsValue) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&InviteLinkKeysOutput {
+        link_id: keys.link_id.clone(),
+        manage_token: keys.manage_token.clone(),
+    })
+}
+
+#[wasm_bindgen(js_name = inviteLinkFragment)]
+pub fn invite_link_fragment_js(link: JsValue) -> std::result::Result<String, JsValue> {
+    crate::invite_link::invite_link_fragment(&invite_link_input(link)?).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkParse)]
+pub fn invite_link_parse(fragment: String) -> std::result::Result<JsValue, JsValue> {
+    let (secret, host) =
+        crate::invite_link::parse_invite_link_fragment(&fragment).map_err(chat_error)?;
+    to_output(&InviteLinkFragmentOutput { secret, host })
+}
+
+#[wasm_bindgen(js_name = inviteLinkSealPreview)]
+pub fn invite_link_seal_preview(
+    link: JsValue,
+    preview: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    let preview: kutup_chat_proto::InviteLinkPreviewV1 =
+        from_transport(preview).map_err(chat_error)?;
+    keys.seal_preview(&preview).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkOpenPreview)]
+pub fn invite_link_open_preview(
+    link: JsValue,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&keys.open_preview(&sealed).map_err(chat_error)?)
+}
+
+#[wasm_bindgen(js_name = inviteLinkSealRequest)]
+pub fn invite_link_seal_request(
+    link: JsValue,
+    request: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    let request: kutup_chat_proto::InviteJoinRequestV1 =
+        from_transport(request).map_err(chat_error)?;
+    keys.seal_request(&request).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkOpenRequest)]
+pub fn invite_link_open_request(
+    link: JsValue,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&keys.open_request(&sealed).map_err(chat_error)?)
+}
+
+#[wasm_bindgen(js_name = inviteStatusToken)]
+pub fn invite_status_token() -> String {
+    crate::invite_link::new_invite_status_token()
+}
+
+/// The account's profile for the account app (docs/plans/unified-profile.md):
+/// open it, and seal the next revision, from the master key alone.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileView {
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_content_type: Option<String>,
+    revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileInput {
+    display_name: String,
+    #[serde(default)]
+    about: Option<String>,
+    /// Standard base64.
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    avatar_content_type: Option<String>,
+}
+
+fn master_key_input(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
+    master_key
+        .try_into()
+        .map_err(|_| js_error("the account master key is 32 bytes"))
+}
+
+#[wasm_bindgen(js_name = accountProfileOpen)]
+pub fn account_profile_open(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: kutup_chat_proto::PutChatProfileRequest =
+        from_transport(current).map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+        .map_err(chat_error)?;
+    to_output(&AccountProfileView {
+        display_name: profile.display_name,
+        about: profile.about,
+        avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+        avatar_content_type: profile.avatar_content_type,
+        revision: profile.revision.to_string(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileLookup {
+    /// Standard base64 of the 32-byte profile key.
+    key: String,
+    version: String,
+    /// Standard base64; sent as the access header when fetching.
+    access_key: String,
+}
+
+fn profile_lookup_of(key: &[u8]) -> std::result::Result<ProfileLookup, JsValue> {
+    Ok(ProfileLookup {
+        key: STANDARD.encode(key),
+        version: crate::profile::profile_version(key).map_err(chat_error)?,
+        access_key: STANDARD.encode(crate::profile::profile_access_key(key).map_err(chat_error)?),
+    })
+}
+
+/// The account's own profile key (to give to the people it shares files
+/// with), opened from the master key.
+#[wasm_bindgen(js_name = accountProfileKey)]
+pub fn account_profile_key(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: kutup_chat_proto::PutChatProfileRequest =
+        from_transport(current).map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+        .map_err(chat_error)?;
+    to_output(&profile_lookup_of(&profile.key)?)
+}
+
+/// Where to fetch someone's profile, from their profile key.
+#[wasm_bindgen(js_name = profileLookup)]
+pub fn profile_lookup(key: String) -> std::result::Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    to_output(&profile_lookup_of(&key)?)
+}
+
+/// Open someone's fetched profile with their profile key.
+#[wasm_bindgen(js_name = profileOpenPeer)]
+pub fn profile_open_peer(
+    peer: String,
+    encrypted: JsValue,
+    key: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    let encrypted: kutup_chat_proto::ChatProfileResponse =
+        from_transport(encrypted).map_err(chat_error)?;
+    let profile = crate::profile::open_peer_profile(peer, &encrypted, &key).map_err(chat_error)?;
+    to_output(&AccountProfileView {
+        display_name: profile.display_name.unwrap_or_default(),
+        about: profile.about,
+        avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+        avatar_content_type: profile.avatar_content_type,
+        revision: profile.revision.to_string(),
+    })
+}
+
+#[wasm_bindgen(js_name = accountProfileSeal)]
+pub fn account_profile_seal(
+    master_key: Vec<u8>,
+    current: JsValue,
+    update: JsValue,
+    account: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = master_key_input(master_key)?;
+    let current: Option<kutup_chat_proto::PutChatProfileRequest> =
+        if current.is_null() || current.is_undefined() {
+            None
+        } else {
+            Some(from_transport(current).map_err(chat_error)?)
+        };
+    let update: AccountProfileInput = from_transport(update).map_err(chat_error)?;
+    let avatar = update
+        .avatar
+        .map(|value| STANDARD.decode(value).map_err(ChatError::from))
+        .transpose()
+        .map_err(chat_error)?;
+    let mut rng = OsRng.unwrap_err();
+    let upload = crate::profile::seal_account_profile(
+        &master_key,
+        current.as_ref(),
+        crate::profile::AccountProfileUpdate {
+            display_name: update.display_name,
+            avatar,
+            avatar_content_type: update.avatar_content_type,
+            about: update.about,
+        },
+        &account,
+        &mut rng,
+    )
+    .map_err(chat_error)?;
+    to_output(&upload)
+}
+
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
     serde_wasm_bindgen::to_value(value)
         .map_err(|error| ChatError::Transport(format!("encode transport request: {error}")))
@@ -3289,6 +3988,86 @@ fn parse_i64_string(label: &str, value: &str) -> std::result::Result<i64, JsValu
         )));
     }
     Ok(parsed)
+}
+
+/// Builds structured content (polls, a place, a group call) from its JSON
+/// body by kind; only a poll itself and a place may disappear.
+fn build_poll_content(
+    kind: &str,
+    send_id: &str,
+    sent_at: &str,
+    seq: u64,
+    body: &serde_json::Value,
+    expires_after_seconds: Option<u32>,
+) -> std::result::Result<ChatContent, String> {
+    let decode = |what: &str| format!("Chat {what} body is malformed");
+    let content = match kind {
+        kutup_chat_proto::content::kind::POLL => ChatContent::poll_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll"))?,
+        )?,
+        kutup_chat_proto::content::kind::POLL_VOTE => ChatContent::poll_vote_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll vote"))?,
+        )?,
+        kutup_chat_proto::content::kind::POLL_TERMINATE => ChatContent::poll_terminate_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll end"))?,
+        )?,
+        kutup_chat_proto::content::kind::LOCATION => ChatContent::location_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("location"))?,
+        )?,
+        kutup_chat_proto::content::kind::LIVE_LOCATION => ChatContent::live_location_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("live location"))?,
+        )?,
+        kutup_chat_proto::content::kind::LIVE_LOCATION_STOP => {
+            ChatContent::live_location_stop_with_id(
+                send_id,
+                sent_at,
+                seq,
+                &serde_json::from_value(body.clone()).map_err(|_| decode("live location stop"))?,
+            )?
+        }
+        kutup_chat_proto::content::kind::GROUP_CALL => ChatContent::group_call_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("group call"))?,
+        )?,
+        _ => return Err("unknown Chat structured content".into()),
+    };
+    match expires_after_seconds {
+        Some(seconds)
+            if kind == kutup_chat_proto::content::kind::POLL
+                || kind == kutup_chat_proto::content::kind::LOCATION
+                || kind == kutup_chat_proto::content::kind::LIVE_LOCATION =>
+        {
+            content.with_disappearing_after(seconds)
+        }
+        _ => Ok(content),
+    }
+}
+
+/// Optional extras of a visible message; absent means none.
+fn parse_extras(
+    value: JsValue,
+) -> std::result::Result<kutup_chat_proto::VisibleMessageExtrasV1, JsValue> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(Default::default());
+    }
+    from_transport(value).map_err(chat_error)
 }
 
 fn from_transport<T: DeserializeOwned>(value: JsValue) -> Result<T> {

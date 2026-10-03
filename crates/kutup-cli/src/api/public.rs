@@ -21,6 +21,9 @@ pub struct PublicShare {
     pub collection_key_epoch: u32,
     #[serde(default)]
     pub owner_user_id: String,
+    /// Signs the folder's key history.
+    #[serde(default)]
+    pub owner_authority_public_key: String,
     #[serde(default)]
     pub expires_at: Option<String>,
 }

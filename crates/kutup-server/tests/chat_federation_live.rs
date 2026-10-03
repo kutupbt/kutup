@@ -20,8 +20,10 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
+use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
@@ -85,6 +87,7 @@ fn publish_direct_delivery_capability(
             kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
         ),
         avatar: None,
+        about: None,
         wrapped_key: opaque_profile_envelope(
             account,
             &version,
@@ -440,7 +443,14 @@ fn upload_chat_media(
 }
 
 fn client() -> Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    // Sign in as an API client: refresh tokens come back in the body.
+    headers.insert(
+        "x-kutup-client",
+        reqwest::header::HeaderValue::from_static("cli"),
+    );
     Client::builder()
+        .default_headers(headers)
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap()
@@ -993,13 +1003,28 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     .unwrap();
     let public_link_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, public_link_context).unwrap();
+    let public_link_id = uuid::Uuid::new_v4().to_string();
     let public_link = json_response(
         c.post(format!("{a}/api/share/"))
             .bearer_auth(alice_token)
             .json(&json!({
+                "id": public_link_id,
                 "shareType": "collection",
                 "targetId": collection_id,
                 "collectionKeyEnvelope": public_link_envelope,
+                "ownerLinkKeyEnvelope": drive_envelope::seal_b64(
+                    &link_key,
+                    &alice_master,
+                    DriveEnvelopeContextV1::new(
+                        DriveEnvelopePurpose::PublicLinkKey,
+                        1,
+                        1,
+                        &public_link_id,
+                        owner_user_id,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
             }))
             .send()
             .unwrap(),
@@ -1178,6 +1203,15 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .verify_collection_key(&collection_key)
         .unwrap();
     assert_eq!(accepted_epoch.statement_hash(), epoch_statement_hash);
+    drive_profile_key_exchange(
+        c,
+        a,
+        b,
+        alice_token,
+        bob_token,
+        &alice_identity,
+        &bob_identity,
+    );
     assert_eq!(
         drive_envelope::open_b64(
             incoming[0]["nameEnvelope"].as_str().unwrap(),
@@ -1213,34 +1247,20 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     let file_key_envelope = drive_envelope::seal_b64(
         &file_key,
         &collection_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            1,
-            1,
-            &proposed_file_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_key(&proposed_file_id, &collection_id, 1, 1).unwrap(),
     )
     .unwrap();
     let metadata_plaintext = br#"{"name":"federated.txt","mimeType":"text/plain","size":31}"#;
     let metadata_envelope = drive_envelope::seal_b64(
         metadata_plaintext,
         &file_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            1,
-            1,
-            &proposed_file_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_metadata(&proposed_file_id, 1, 1).unwrap(),
     )
     .unwrap();
     let ciphertext = drive_object::encrypt_file_blob(
         plaintext,
         &file_key,
-        DriveFileBlobContextV1::new(&proposed_file_id, &collection_id, 1).unwrap(),
+        DriveFileBlobContextV1::new(&proposed_file_id, 1).unwrap(),
     )
     .unwrap();
     let upload_body = drive_upload_body(
@@ -1275,27 +1295,13 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     let blob_relocation_file_key = drive_envelope::seal_b64(
         &file_key,
         &collection_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            1,
-            1,
-            &blob_relocation_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_key(&blob_relocation_id, &collection_id, 1, 1).unwrap(),
     )
     .unwrap();
     let blob_relocation_metadata = drive_envelope::seal_b64(
         metadata_plaintext,
         &file_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            1,
-            1,
-            &blob_relocation_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_metadata(&blob_relocation_id, 1, 1).unwrap(),
     )
     .unwrap();
     let relocated_blob = drive_upload_body(
@@ -1331,14 +1337,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         drive_envelope::open_b64(
             files[0]["fileKeyEnvelope"].as_str().unwrap(),
             &collection_key,
-            DriveEnvelopeContextV1::new(
-                DriveEnvelopePurpose::FileKey,
-                1,
-                1,
-                file_id,
-                &collection_id,
-            )
-            .unwrap(),
+            DriveEnvelopeContextV1::file_key(file_id, &collection_id, 1, 1).unwrap(),
         )
         .unwrap(),
         file_key,
@@ -1347,14 +1346,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         drive_envelope::open_b64(
             files[0]["metadataEnvelope"].as_str().unwrap(),
             &file_key,
-            DriveEnvelopeContextV1::new(
-                DriveEnvelopePurpose::FileMetadata,
-                1,
-                1,
-                file_id,
-                &collection_id,
-            )
-            .unwrap(),
+            DriveEnvelopeContextV1::file_metadata(file_id, 1, 1).unwrap(),
         )
         .unwrap(),
         metadata_plaintext,
@@ -1380,6 +1372,203 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     };
     assert_eq!(delete().status().as_u16(), 204);
     assert_eq!(delete().status().as_u16(), 204);
+
+    // --- Rotation (docs/plans/drive-share-revocation.md): the owner moves
+    // the folder to a new key and keeps Bob; Bob's server follows it only
+    // along the signed history. Then the owner removes Bob. ---
+    let rotation_ctx = |purpose, epoch, revision| {
+        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_user_id)
+            .unwrap()
+    };
+    let access = json_response(
+        c.get(format!("{a}/api/collections/{collection_id}/access"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "folder access",
+    );
+    let fed_share = &access["federatedShares"][0];
+    let fed_share_id = fed_share["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        fed_share["recipientIncarnationId"],
+        bob_identity.incarnation_id()
+    );
+    let name_revision = json_response(
+        c.get(format!("{a}/api/collections/{collection_id}"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "read folder",
+    )["nameRevision"]
+        .as_u64()
+        .unwrap();
+    let bob_share_at = |key: &[u8; 32], epoch: u32| {
+        NamedShareEnvelopeV1::seal(
+            key,
+            &collection_id,
+            epoch,
+            "alicefed@a.test",
+            &alice_identity.incarnation_id(),
+            alice_identity.drive_signing_key(),
+            "bobfed@b.test",
+            &bob_identity.incarnation_id(),
+            &bob_identity.drive_hpke_public_key(),
+        )
+        .unwrap()
+        .encode_b64()
+        .unwrap()
+    };
+    let rotation = |epoch: u32,
+                    previous_key: &[u8; 32],
+                    key: &[u8; 32],
+                    previous_hash: &str,
+                    revision: u64,
+                    keep_bob: bool|
+     -> (CollectionEpochStatementV1, u16) {
+        let statement = CollectionEpochStatementV1::create(
+            &collection_id,
+            owner_user_id,
+            epoch,
+            Some(previous_hash),
+            key,
+            alice_identity.authority_signing_key(),
+        )
+        .unwrap();
+        let status = c
+            .post(format!("{a}/api/collections/{collection_id}/rotate"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "fromEpoch": epoch - 1,
+                "epochStatement": statement.encode_b64(),
+                "ownerKeyEnvelope": drive_envelope::seal_b64(key, &alice_master,
+                    rotation_ctx(DriveEnvelopePurpose::CollectionKey, epoch, 1)).unwrap(),
+                "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
+                    previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
+                "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,
+                    rotation_ctx(DriveEnvelopePurpose::CollectionName, epoch, revision)).unwrap(),
+                "publicLinks": [{
+                    "id": public_link_id,
+                    "collectionKeyEnvelope": drive_envelope::seal_b64(key, &link_key,
+                        rotation_ctx(DriveEnvelopePurpose::PublicLinkCollectionKey, epoch, 1)).unwrap(),
+                }],
+                "federatedShares": if keep_bob {
+                    json!([{ "id": fed_share_id, "namedShareEnvelope": bob_share_at(key, epoch) }])
+                } else {
+                    json!([])
+                },
+                "removed": { "federatedShares": if keep_bob { json!([]) } else { json!([fed_share_id]) } },
+            }))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16();
+        (statement, status)
+    };
+    let key2 = [0x52; 32];
+    let (statement2, status) = rotation(
+        2,
+        &collection_key,
+        &key2,
+        &epoch_statement_hash,
+        name_revision + 1,
+        true,
+    );
+    assert_eq!(status, 200, "rotate keeping the federated recipient");
+
+    // Bob's server follows: the refreshed share opens to the new key.
+    let refreshed = json_response(
+        c.post(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "refresh federated share",
+    );
+    assert_eq!(refreshed["keyEpoch"], 2);
+    assert_eq!(refreshed["epochStatementHash"], statement2.statement_hash());
+    let opened =
+        NamedShareEnvelopeV1::decode_b64(refreshed["namedShareEnvelope"].as_str().unwrap())
+            .unwrap()
+            .open(
+                &collection_id,
+                2,
+                "alicefed@a.test",
+                &alice_identity.incarnation_id(),
+                &alice_identity.drive_signing_public_key(),
+                "bobfed@b.test",
+                &bob_identity.incarnation_id(),
+                bob_identity.drive_hpke_private_key(),
+            )
+            .unwrap();
+    assert_eq!(opened.as_slice(), key2.as_slice());
+    // And its history, relayed from the owner's server, unlocks the old key.
+    let chain = json_response(
+        c.get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/epochs"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "federated folder key history",
+    );
+    let links: Vec<kutup_crypto::collection_keyring::EpochLinkV1> = chain
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| kutup_crypto::collection_keyring::EpochLinkV1 {
+            epoch: l["epoch"].as_u64().unwrap() as u32,
+            statement: l["epochStatement"].as_str().unwrap().to_string(),
+            previous_key_envelope: l["previousKeyEnvelope"].as_str().map(str::to_string),
+        })
+        .collect();
+    let keys = kutup_crypto::collection_keyring::unlock(
+        &key2,
+        &collection_id,
+        owner_user_id,
+        &alice_identity.authority_public_key(),
+        &links,
+    )
+    .unwrap();
+    assert_eq!(keys[0].as_slice(), collection_key.as_slice());
+
+    // The owner removes Bob: his server can no longer follow or list.
+    let key3 = [0x53; 32];
+    let (_, status) = rotation(
+        3,
+        &key2,
+        &key3,
+        &statement2.statement_hash(),
+        name_revision + 2,
+        false,
+    );
+    assert_eq!(status, 200, "rotate removing the federated recipient");
+    let refresh_after = c
+        .post(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16();
+    assert!(
+        refresh_after >= 400,
+        "a removed recipient cannot refresh ({refresh_after})"
+    );
+    let list_after = c
+        .get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16();
+    assert!(
+        list_after >= 400,
+        "a removed recipient cannot list ({list_after})"
+    );
 
     let raw_url_share = c
         .post(format!(
@@ -1420,6 +1609,225 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
             "legacy route {legacy} must be absent"
         );
     }
+}
+
+/// People who share a folder across servers hand each other their profile
+/// keys (docs/plans/unified-profile.md): each way, only between them, and
+/// only as themselves.
+fn drive_profile_key_exchange(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    alice: &AccountIdentityKeysV1,
+    bob: &AccountIdentityKeysV1,
+) {
+    let alice_to_bob = ProfileKeyParties {
+        sender_account: "alicefed@a.test",
+        sender_incarnation_id: &alice.incarnation_id(),
+        recipient_account: "bobfed@b.test",
+        recipient_incarnation_id: &bob.incarnation_id(),
+    };
+    let bob_to_alice = ProfileKeyParties {
+        sender_account: "bobfed@b.test",
+        sender_incarnation_id: &bob.incarnation_id(),
+        recipient_account: "alicefed@a.test",
+        recipient_incarnation_id: &alice.incarnation_id(),
+    };
+    let alice_key = [0x61; 32];
+    let bob_key = [0x62; 32];
+    let alice_version = "a1".repeat(32);
+    let bob_version = "b2".repeat(32);
+    let seal = |key: &[u8; 32],
+                parties: &ProfileKeyParties<'_>,
+                from: &AccountIdentityKeysV1,
+                to: &AccountIdentityKeysV1| {
+        ProfileKeyEnvelopeV1::seal(
+            key,
+            parties,
+            from.drive_signing_key(),
+            &to.drive_hpke_public_key(),
+        )
+        .unwrap()
+        .encode_b64()
+        .unwrap()
+    };
+    let put = |base: &str, token: &str, recipient: &str, envelope: &str, version: &str| {
+        c.put(format!("{base}/api/drive/profile-keys"))
+            .bearer_auth(token)
+            .json(&json!({"recipientAccount": recipient, "envelope": envelope, "profileVersion": version}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    let person = |base: &str, token: &str, account: &str| -> Value {
+        let people = json_response(
+            c.get(format!("{base}/api/drive/people"))
+                .bearer_auth(token)
+                .send()
+                .unwrap(),
+            "list Drive people",
+        );
+        people["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["account"] == account)
+            .cloned()
+            .unwrap_or_else(|| panic!("{account} is not among the people shared with: {people}"))
+    };
+
+    // Owner to member, across servers.
+    let alice_envelope = seal(&alice_key, &alice_to_bob, alice, bob);
+    assert_eq!(
+        put(
+            a,
+            alice_token,
+            "bobfed@b.test",
+            &alice_envelope,
+            &alice_version
+        ),
+        204
+    );
+    let bob_sees = person(b, bob_token, "alicefed@a.test");
+    assert_eq!(bob_sees["local"], false);
+    let received =
+        ProfileKeyEnvelopeV1::decode_b64(bob_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        received
+            .open(
+                &alice_to_bob,
+                &alice.drive_signing_public_key(),
+                bob.drive_hpke_private_key()
+            )
+            .unwrap(),
+        alice_key
+    );
+    assert_eq!(
+        person(a, alice_token, "bobfed@b.test")["sentProfileVersion"],
+        alice_version
+    );
+
+    // Member to owner.
+    let bob_envelope = seal(&bob_key, &bob_to_alice, bob, alice);
+    assert_eq!(
+        put(b, bob_token, "alicefed@a.test", &bob_envelope, &bob_version),
+        204
+    );
+    let alice_sees = person(a, alice_token, "bobfed@b.test");
+    let received =
+        ProfileKeyEnvelopeV1::decode_b64(alice_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        received
+            .open(
+                &bob_to_alice,
+                &bob.drive_signing_public_key(),
+                alice.drive_hpke_private_key()
+            )
+            .unwrap(),
+        bob_key
+    );
+
+    // Not to someone they share nothing with, and never in someone else's name.
+    let stranger = ProfileKeyParties {
+        recipient_account: "nobody@b.test",
+        ..alice_to_bob
+    };
+    assert_eq!(
+        put(
+            a,
+            alice_token,
+            "nobody@b.test",
+            &seal(&alice_key, &stranger, alice, bob),
+            &alice_version
+        ),
+        404
+    );
+    let forged = seal(&bob_key, &bob_to_alice, bob, alice);
+    assert_eq!(
+        put(a, alice_token, "bobfed@b.test", &forged, &alice_version),
+        400
+    );
+}
+
+/// A live-location stream on A, read by an account of B through its own
+/// server (docs/plans/maps.md): only with the read capability, only the
+/// latest update, never an older one in place of a newer one.
+fn live_location_across_servers(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+    use kutup_crypto::live_location::{self, LiveLocationPoint};
+    let stream_id = "0102030405060708090a0b0c0d0e0f10";
+    let key = [0x42u8; 32];
+    let write = STANDARD.encode([0x57u8; 32]);
+    let read = STANDARD.encode([0x52u8; 32]);
+    let expires = OffsetDateTime::now_utc().unix_timestamp() * 1000 + 3_600_000;
+    assert_eq!(
+        c.post(format!("{a}/api/live-locations"))
+            .bearer_auth(alice_token)
+            .json(&json!({"streamId": stream_id, "writeSecret": write, "readCapability": read, "expiresAtMs": expires}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        201
+    );
+    let point = |lat: f64| LiveLocationPoint {
+        lat,
+        lon: 29.0,
+        accuracy_m: 10,
+        at_ms: 1_790_000_000_000,
+    };
+    let put = |counter: u64, lat: f64, secret: &str| {
+        let update =
+            live_location::seal(&key, &hex::decode(stream_id).unwrap(), counter, &point(lat))
+                .unwrap();
+        c.put(format!("{a}/api/live-locations/{stream_id}"))
+            .bearer_auth(alice_token)
+            .header("x-kutup-live-write", secret)
+            .json(&json!({"update": STANDARD.encode(update)}))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    assert_eq!(put(1, 41.0, &write), 204);
+    assert_eq!(put(1, 42.0, &write), 409, "not newer");
+    assert_eq!(
+        put(2, 42.0, &STANDARD.encode([1u8; 32])),
+        404,
+        "wrong write secret"
+    );
+    let read_from_b = |capability: &str| {
+        c.get(format!("{b}/api/live-locations/{stream_id}?server=a.test"))
+            .bearer_auth(bob_token)
+            .header("x-kutup-live-read", capability)
+            .send()
+            .unwrap()
+    };
+    let response = read_from_b(&read);
+    assert_eq!(response.status().as_u16(), 200);
+    let body: Value = response.json().unwrap();
+    let update = STANDARD.decode(body["update"].as_str().unwrap()).unwrap();
+    let (counter, got) =
+        live_location::open(&key, &hex::decode(stream_id).unwrap(), &update).unwrap();
+    assert_eq!((counter, got.lat), (1, 41.0));
+    assert_eq!(
+        read_from_b(&STANDARD.encode([9u8; 32])).status().as_u16(),
+        404,
+        "wrong read capability"
+    );
+    assert_eq!(
+        c.delete(format!("{a}/api/live-locations/{stream_id}"))
+            .bearer_auth(alice_token)
+            .header("x-kutup-live-write", &write)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        204
+    );
+    assert_eq!(read_from_b(&read).status().as_u16(), 404, "ended");
 }
 
 fn setup_phase(c: &Client, a: &str, b: &str) {
@@ -1503,15 +1911,17 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let (bob_token, bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     drive_round_trip(c, a, b, &alice_token, &bob_token);
+    live_location_across_servers(c, a, b, &alice_token, &bob_token);
 
     // Drive is deliberately the first feature to contact B. Capture the one
     // shared identity pin before Chat uses the same federation stack.
     let after_drive = federation_control_plane(c, a, &admin_a, "control plane after Drive");
     assert_eq!(after_drive["operational"]["peerTotal"], 1);
-    assert_eq!(after_drive["operational"]["driveOutgoingShares"], 1);
+    // The round trip ends by removing Bob: no outgoing Drive share remains.
+    assert_eq!(after_drive["operational"]["driveOutgoingShares"], 0);
     let drive_peer = federation_peer(&after_drive, "b.test");
     assert_eq!(drive_peer["trust"], "tofu");
-    assert_eq!(drive_peer["diagnostics"]["driveOutgoingShares"], 1);
+    assert_eq!(drive_peer["diagnostics"]["driveOutgoingShares"], 0);
     let shared_fingerprint = drive_peer["fingerprint"].as_str().unwrap().to_owned();
     let shared_first_seen = drive_peer["firstSeenAt"].as_str().unwrap().to_owned();
     let drive_evidence = json_response(
@@ -1790,7 +2200,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled federation capabilities",
     );
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
-    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], false);
+    // Groups among local accounts outlive a closed federation: admission
+    // decides only which other servers members may come from.
+    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], true);
     let disabled_mls_status = json_response(
         c.get(format!("{a}/api/admin/chat/mls/status"))
             .bearer_auth(&admin_a)
@@ -1799,7 +2211,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled MLS administrative status",
     );
     assert_eq!(disabled_mls_status["enabled"], true);
-    assert_eq!(disabled_mls_status["advertised"], false);
+    assert_eq!(disabled_mls_status["advertised"], true);
     json_response(
         drive_remote_user(c, a, &alice_token),
         "Drive remains enabled while Chat is disabled",
@@ -2104,6 +2516,156 @@ fn browser_setup_phase(c: &Client, a: &str, b: &str) {
     let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
+    // Drive too, for sharing folders and files across the two servers.
+    update_feature_mode(c, a, &admin_a, "drive", "open");
+    update_feature_mode(c, b, &admin_b, "drive", "open");
+}
+
+/// Group call tokens and group invite links across servers: an account of B
+/// reaches a call and a link mailbox hosted on A through its own server.
+fn calls_phase(c: &Client, a: &str, b: &str) {
+    let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
+    let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
+    update_federation_mode(c, a, &admin_a, "open");
+    update_federation_mode(c, b, &admin_b, "open");
+    update_feature_mode(c, a, &admin_a, "chat", "open");
+    update_feature_mode(c, b, &admin_b, "chat", "open");
+    let settings_a = json_response(
+        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        "A settings",
+    );
+    let settings_b = json_response(
+        c.get(format!("{b}/api/auth/settings")).send().unwrap(),
+        "B settings",
+    );
+    assert_eq!(
+        settings_a["chat"]["groupCalls"], true,
+        "A hosts group calls"
+    );
+    assert_eq!(settings_b["chat"]["groupCalls"], false, "B has no SFU");
+    let (cara, _) = register_account(c, a, "calls-cara@example.test", "callscara");
+    let (dora, _) = register_account(c, b, "calls-dora@example.test", "callsdora");
+
+    // A call hosted on A, joined by an account of B: B forwards, A mints.
+    let room = "0123456789abcdef0123456789abcdef";
+    let tag = "fedcba9876543210fedcba9876543210";
+    let token_request = |base: &str, token: &str, host: &str, room: &str| {
+        c.post(format!("{base}/api/chat/group-calls/token"))
+            .bearer_auth(token)
+            .json(&json!({"host": host, "roomId": room, "participantId": tag}))
+            .send()
+            .unwrap()
+    };
+    let answer = json_response(
+        token_request(b, &dora, "a.test", room),
+        "federated call token",
+    );
+    assert_eq!(answer["url"], "ws://sfu.a.test");
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.required_spec_claims.clear();
+    let claims = jsonwebtoken::decode::<Value>(
+        answer["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(b"federation-sfu-secret-at-least-32-characters"),
+        &validation,
+    )
+    .unwrap()
+    .claims;
+    assert_eq!(claims["iss"], "federation-sfu-key");
+    assert_eq!(claims["sub"], tag);
+    assert_eq!(claims["video"]["room"], room);
+    assert_eq!(claims["video"]["roomJoin"], true);
+    // The host's own account gets one directly.
+    assert_eq!(
+        json_response(token_request(a, &cara, "a.test", room), "local call token")["url"],
+        "ws://sfu.a.test"
+    );
+    // B hosts no calls, whoever asks; a malformed room is refused.
+    assert_eq!(
+        token_request(b, &dora, "b.test", room).status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        token_request(a, &cara, "b.test", room).status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        token_request(b, &dora, "a.test", "NOT-A-ROOM").status(),
+        StatusCode::BAD_REQUEST
+    );
+    println!("GROUP CALL TOKENS ACROSS SERVERS VERIFIED");
+
+    // A group link hosted on A, used from B.
+    let token32 = |byte: u8| b64(&[byte; 32]);
+    let link_id = token32(11);
+    let manage = token32(12);
+    let sealed = |byte: u8, len: usize| b64(&vec![byte; len]);
+    let call = |base: &str, token: &str, operation: Value| {
+        c.post(format!("{base}/api/chat/invite-links"))
+            .bearer_auth(token)
+            .json(&json!({"host": "a.test", "operation": operation}))
+            .send()
+            .unwrap()
+    };
+    json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "put", "linkId": link_id, "manageToken": manage, "preview": sealed(1, 4136)}),
+        ),
+        "put link mailbox on A",
+    );
+    let preview = json_response(
+        call(b, &dora, json!({"op": "preview", "linkId": link_id})),
+        "preview through B",
+    );
+    assert_eq!(preview["preview"], sealed(1, 4136));
+    let requested = json_response(
+        call(
+            b,
+            &dora,
+            json!({"op": "request", "linkId": link_id, "request": sealed(2, 296), "statusToken": token32(13)}),
+        ),
+        "request through B",
+    );
+    let request_id = requested["requestId"].as_str().unwrap().to_owned();
+    let requests = json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "requests", "linkId": link_id, "manageToken": manage}),
+        ),
+        "requests on A",
+    );
+    assert_eq!(requests["requests"][0]["originDomain"], "b.test");
+    assert_eq!(requests["requests"][0]["requestId"], request_id);
+    // A wrong manage token reads nothing.
+    assert_eq!(
+        call(
+            b,
+            &dora,
+            json!({"op": "requests", "linkId": link_id, "manageToken": token32(99)})
+        )
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "decide", "linkId": link_id, "manageToken": manage, "requestId": request_id, "approve": true}),
+        ),
+        "approve on A",
+    );
+    let status = json_response(
+        call(
+            b,
+            &dora,
+            json!({"op": "status", "linkId": link_id, "requestId": request_id, "statusToken": token32(13)}),
+        ),
+        "status through B",
+    );
+    assert_eq!(status["status"], "approved");
+    println!("GROUP LINKS ACROSS SERVERS VERIFIED");
 }
 
 fn queue_phase(c: &Client, a: &str) {
@@ -2241,6 +2803,7 @@ fn chat_federation_live() {
         "browser-setup" => browser_setup_phase(&c, &a, &b),
         "queue" => queue_phase(&c, &a),
         "verify-retry" => verify_retry_phase(&c, &a, &b),
+        "calls" => calls_phase(&c, &a, &b),
         _ => panic!("unknown KUTUP_FEDERATION_PHASE: {phase}"),
     }
 }

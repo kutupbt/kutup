@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
 use crate::error::{CryptoError, Result};
+use crate::thumbnail::{ThumbnailVariant, MAX_THUMBNAIL_PLAINTEXT_BYTES};
 
 const MAGIC: &[u8; 8] = b"KUTPDE1\0";
 const HEADER_LEN: usize = 8 + 2 + 1 + 1 + 4 + 8 + 16 + 16 + 24 + 4;
@@ -23,10 +24,17 @@ const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
-const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v1\0";
+const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
+const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;
+
+/// The complete envelope for a thumbnail of `variant`: what the server
+/// accepts on upload, checked before it reads the body.
+pub const fn max_thumbnail_envelope_bytes(variant: ThumbnailVariant) -> usize {
+    HEADER_LEN + variant.max_plaintext_bytes() + TAG_LEN
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -37,6 +45,31 @@ pub enum DriveEnvelopePurpose {
     FileMetadata = 4,
     PublicLinkCollectionKey = 5,
     WhiteboardAsset = 6,
+    /// A file's preview picture (`crate::thumbnail`), under the file key.
+    Thumbnail = 7,
+    /// The key of epoch `e − 1` sealed under the key of epoch `e` (the
+    /// context's epoch): object = collection, parent = owner. Holders of
+    /// the current key walk down to every older one
+    /// (docs/plans/drive-share-revocation.md).
+    PreviousCollectionKey = 8,
+    /// A public link's key, sealed for the folder owner under their master
+    /// key: object = link id, parent = owner, epoch 1. Lets the owner list,
+    /// copy and re-wrap the link.
+    PublicLinkKey = 9,
+    /// A file key of generation `g − 1` sealed under the key of generation
+    /// `g` (the context's epoch): object = parent = file. Holders of the
+    /// current file key walk down to every older one, in whichever folder
+    /// the file is (docs/plans/drive-move.md).
+    PreviousFileKey = 10,
+    /// A file's key of generation `g` (the context's epoch), sealed under a
+    /// public link's key: object = file, parent = owner. A link to one file
+    /// (docs/plans/drive-file-sharing.md, slice 3); a new generation needs a
+    /// new wrap.
+    PublicLinkFileKey = 11,
+    /// A photo's file key, sealed under an album's key (docs/plans/photos.md):
+    /// object = file, parent = album, epoch = the album's key epoch, revision
+    /// = the file key's generation. An album holds references, not files.
+    AlbumFileKey = 12,
 }
 
 impl DriveEnvelopePurpose {
@@ -46,10 +79,19 @@ impl DriveEnvelopePurpose {
 
     fn validate_plaintext_len(self, len: usize) -> Result<()> {
         let valid = match self {
-            Self::CollectionKey | Self::FileKey | Self::PublicLinkCollectionKey => len == KEY_LEN,
+            Self::CollectionKey
+            | Self::FileKey
+            | Self::PublicLinkCollectionKey
+            | Self::PreviousCollectionKey
+            | Self::PublicLinkKey
+            | Self::PreviousFileKey
+            | Self::PublicLinkFileKey
+            | Self::AlbumFileKey => len == KEY_LEN,
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
+            // The per-variant cap is the container's to enforce; this is the largest.
+            Self::Thumbnail => (1..=MAX_THUMBNAIL_PLAINTEXT_BYTES).contains(&len),
         };
         if !valid {
             return Err(CryptoError::InvalidInput(format!(
@@ -72,6 +114,12 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             4 => Ok(Self::FileMetadata),
             5 => Ok(Self::PublicLinkCollectionKey),
             6 => Ok(Self::WhiteboardAsset),
+            7 => Ok(Self::Thumbnail),
+            8 => Ok(Self::PreviousCollectionKey),
+            9 => Ok(Self::PublicLinkKey),
+            10 => Ok(Self::PreviousFileKey),
+            11 => Ok(Self::PublicLinkFileKey),
+            12 => Ok(Self::AlbumFileKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -110,15 +158,87 @@ impl DriveEnvelopeContextV1 {
         })
     }
 
-    pub fn whiteboard_asset(
+    /// A file's key, sealed under its folder's key at `folder_epoch`. The
+    /// only file object that names the folder: a move re-seals this alone.
+    /// The revision carries the file key's generation.
+    pub fn file_key(
         file_id: &str,
         collection_id: &str,
-        asset_id: &str,
-        epoch: u32,
+        folder_epoch: u32,
+        generation: u32,
     ) -> Result<Self> {
-        if epoch == 0 {
+        Self::new(
+            DriveEnvelopePurpose::FileKey,
+            folder_epoch,
+            u64::from(generation),
+            file_id,
+            collection_id,
+        )
+    }
+
+    /// A file's metadata, under the file key of `generation`. Bound to the
+    /// file alone (object = parent = file).
+    pub fn file_metadata(file_id: &str, generation: u32, revision: u64) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::FileMetadata,
+            generation,
+            revision,
+            file_id,
+            file_id,
+        )
+    }
+
+    /// The file key of `generation − 1`, sealed under that of `generation`.
+    pub fn previous_file_key(file_id: &str, generation: u32) -> Result<Self> {
+        if generation < 2 {
             return Err(CryptoError::InvalidInput(
-                "Drive whiteboard asset epoch must be non-zero".into(),
+                "file key generation 1 has no previous key".into(),
+            ));
+        }
+        Self::new(
+            DriveEnvelopePurpose::PreviousFileKey,
+            generation,
+            1,
+            file_id,
+            file_id,
+        )
+    }
+
+    /// A file's key of `generation`, under a public link's key: bound to the
+    /// file, its owner and the generation.
+    pub fn public_link_file_key(file_id: &str, owner_id: &str, generation: u32) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkFileKey,
+            generation,
+            1,
+            file_id,
+            owner_id,
+        )
+    }
+
+    /// A photo's file key of `generation`, under an album's key at
+    /// `album_epoch`: bound to the file, the album, the epoch and generation.
+    pub fn album_file_key(
+        file_id: &str,
+        album_id: &str,
+        album_epoch: u32,
+        generation: u32,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::AlbumFileKey,
+            album_epoch,
+            u64::from(generation),
+            file_id,
+            album_id,
+        )
+    }
+
+    /// A whiteboard's embedded file, under the file key of `generation`.
+    /// The asset id takes the parent slot as a derived id.
+    pub fn whiteboard_asset(file_id: &str, asset_id: &str, generation: u32) -> Result<Self> {
+        if generation == 0 {
+            return Err(CryptoError::InvalidInput(
+                "Drive whiteboard asset key generation must be non-zero".into(),
             ));
         }
         if asset_id.is_empty()
@@ -132,16 +252,41 @@ impl DriveEnvelopeContextV1 {
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "whiteboard file")?;
-        let collection_id = parse_canonical_uuid(collection_id, "whiteboard collection")?;
         let mut digest = Sha256::new();
         digest.update(WHITEBOARD_ASSET_BINDING_LABEL);
-        digest.update(collection_id);
         digest.update((asset_id.len() as u16).to_be_bytes());
         digest.update(asset_id.as_bytes());
         let digest = digest.finalize();
         Ok(Self {
             purpose: DriveEnvelopePurpose::WhiteboardAsset,
-            epoch,
+            epoch: generation,
+            revision: 1,
+            object_id: file_id,
+            parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
+        })
+    }
+}
+
+impl DriveEnvelopeContextV1 {
+    /// A file's thumbnail. Bound to the file and its key generation; the variant
+    /// takes the parent slot as a derived id (as whiteboard assets do), so a
+    /// small preview never opens as a large one. The revision is fixed at 1:
+    /// without signed file revisions it could not protect freshness anyway
+    /// (docs/plans/drive-thumbnails.md, "Security notes").
+    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, generation: u32) -> Result<Self> {
+        if generation == 0 {
+            return Err(CryptoError::InvalidInput(
+                "Drive thumbnail key generation must be non-zero".into(),
+            ));
+        }
+        let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
+        let mut digest = Sha256::new();
+        digest.update(THUMBNAIL_BINDING_LABEL);
+        digest.update(variant.as_str().as_bytes());
+        let digest = digest.finalize();
+        Ok(Self {
+            purpose: DriveEnvelopePurpose::Thumbnail,
+            epoch: generation,
             revision: 1,
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
@@ -416,5 +561,58 @@ mod tests {
                 .as_str(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_file_link_opens_only_for_its_file_owner_and_generation() {
+        let file = "11111111-1111-4111-8111-111111111111";
+        let owner = "22222222-2222-4222-8222-222222222222";
+        let other = "33333333-3333-4333-8333-333333333333";
+        let (file_key, link_key) = ([0x55; 32], [0x66; 32]);
+        let scope = DriveEnvelopeContextV1::public_link_file_key(file, owner, 3).unwrap();
+        assert_eq!(scope.purpose, DriveEnvelopePurpose::PublicLinkFileKey);
+        let sealed = seal_b64(&file_key, &link_key, scope).unwrap();
+        assert_eq!(open_b64(&sealed, &link_key, scope).unwrap(), file_key);
+        for wrong in [
+            DriveEnvelopeContextV1::public_link_file_key(file, owner, 4).unwrap(),
+            DriveEnvelopeContextV1::public_link_file_key(other, owner, 3).unwrap(),
+            DriveEnvelopeContextV1::public_link_file_key(file, other, 3).unwrap(),
+            // A folder link's wrap is a different thing.
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::PublicLinkCollectionKey,
+                3,
+                1,
+                file,
+                owner,
+            )
+            .unwrap(),
+        ] {
+            assert!(open_b64(&sealed, &link_key, wrong).is_err());
+        }
+        // Only a key fits.
+        assert!(seal_b64(b"short", &link_key, scope).is_err());
+    }
+
+    #[test]
+    fn an_album_opens_a_photo_only_as_itself() {
+        let file = "11111111-1111-4111-8111-111111111111";
+        let album = "22222222-2222-4222-8222-222222222222";
+        let other = "33333333-3333-4333-8333-333333333333";
+        let (file_key, album_key) = ([0x55; 32], [0x77; 32]);
+        let scope = DriveEnvelopeContextV1::album_file_key(file, album, 2, 3).unwrap();
+        assert_eq!(scope.purpose, DriveEnvelopePurpose::AlbumFileKey);
+        let sealed = seal_b64(&file_key, &album_key, scope).unwrap();
+        assert_eq!(open_b64(&sealed, &album_key, scope).unwrap(), file_key);
+        for wrong in [
+            DriveEnvelopeContextV1::album_file_key(file, album, 1, 3).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(file, album, 2, 4).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(other, album, 2, 3).unwrap(),
+            DriveEnvelopeContextV1::album_file_key(file, other, 2, 3).unwrap(),
+            // A folder's wrap of a file key is a different thing.
+            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::FileKey, 2, 3, file, album).unwrap(),
+        ] {
+            assert!(open_b64(&sealed, &album_key, wrong).is_err());
+        }
+        assert!(seal_b64(b"short", &album_key, scope).is_err());
     }
 }

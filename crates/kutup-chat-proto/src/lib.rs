@@ -17,12 +17,17 @@
 use serde::{Deserialize, Serialize};
 
 mod backup;
+mod calls;
 pub mod content;
+mod extras;
 pub mod federation;
 mod history_transfer;
 mod identity;
+mod invite_link;
+mod locations;
 mod media;
 mod mls;
+mod polls;
 mod profile;
 mod sealed_sender;
 mod security_policy;
@@ -41,10 +46,20 @@ pub use backup::{
     MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES, MAX_CHAT_BACKUP_MEDIA_REFERENCES_PER_PAGE,
     MAX_CHAT_BACKUP_PAGE_SEGMENTS, MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
 };
+pub use calls::{
+    validate_room_id, CallLogBody, CallMediaV1, CallOutcomeV1, CallSignalKindV1, CallSignalV1,
+    GroupCallBody, GroupCallEventV1, HangupReasonV1, IceCandidateV1, MAX_CALL_ICE_CANDIDATES,
+    MAX_CALL_SDP_BYTES,
+};
 pub use content::{
-    ChatContent, ContactControlBody, ContactState, DisappearingExpiryStartBody,
-    DisappearingTimerBody, MessageMutationBody, MessageMutationOperation, ReactionBody,
-    ReceiptBody, ReceiptState, SentTranscriptBody, TextBody, TypingBody,
+    ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
+    DisappearingExpiryStartBody, DisappearingTimerBody, GroupUpdateBody, GroupUpdateChange,
+    MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
+    ReceiptState, SentTranscriptBody, StickerRemovedBody, StickerSavedBody, TextBody, TypingBody,
+    ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
+};
+pub use extras::{
+    LinkPreviewImageV1, LinkPreviewV1, MentionV1, StickerMarkV1, VisibleMessageExtrasV1,
 };
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
@@ -60,6 +75,15 @@ pub use history_transfer::{
     MAX_CHAT_HISTORY_TRANSFER_RECORDS,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
+pub use invite_link::{
+    InviteJoinRequestV1, InviteLinkCallV1, InviteLinkOperationV1, InviteLinkPreviewV1,
+    InviteLinkRequestEntryV1, InviteLinkResultV1, InviteRequestStatusV1, INVITE_LINK_TOKEN_BYTES,
+    MAX_INVITE_PREVIEW_SEALED_BYTES, MAX_INVITE_REQUEST_SEALED_BYTES, MAX_PENDING_INVITE_REQUESTS,
+};
+pub use locations::{
+    LiveLocationBody, LiveLocationStopBody, LocationBody, MAX_LIVE_LOCATION_MS,
+    MAX_LOCATION_LABEL_CHARS,
+};
 pub use media::{
     ChatAttachmentDescriptorV1, ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerEntryV1,
     ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
@@ -87,11 +111,12 @@ pub use mls::{
     MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
     MlsControlSigner, MlsConversationDeviceV1, MlsConversationGenesisV1, MlsConversationKindV1,
     MlsConversationMemberV1, MlsDeliveryCapabilityKindV1, MlsFinalizedControlBlockV1,
-    MlsGroupAuthorizationPolicyV1, MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1,
+    MlsGroupAuthorizationPolicyV1, MlsGroupAvatarV1, MlsGroupControlBodyV1,
+    MlsGroupCryptographicPolicyV1, MlsGroupInfoEditorsV1, MlsGroupInfoV1, MlsGroupInviteLinkV1,
     MlsIncarnationRecoveryPlanV1, MlsIncarnationRecoveryV1, MlsInvitationAcceptanceV1,
     MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, MlsKeyPackageBundleV1,
-    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsMailboxDeliveryKindV1, MlsMailboxEnvelopeV1,
-    MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsLeaveRequestV1, MlsMailboxDeliveryKindV1,
+    MlsMailboxEnvelopeV1, MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
     MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
     MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
     MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerApprovalCertificateV1,
@@ -104,12 +129,18 @@ pub use mls::{
     MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
     MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_GROUP_AUTHORIZATION_POLICY_VERSION,
     MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION, MLS_INVITATION_FEEDBACK_VERSION,
-    MLS_ORDERING_SERVICE_POLICY_VERSION, MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
+    MLS_ORDERING_SERVICE_POLICY_VERSION, MLS_PADDING_BLOCK_BYTES,
+    MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
+};
+pub use polls::{
+    PollBody, PollTerminateBody, PollVoteBody, MAX_POLL_OPTIONS, MAX_POLL_OPTION_CHARS,
+    MAX_POLL_QUESTION_CHARS, MIN_POLL_OPTIONS,
 };
 pub use profile::{
     decode_profile_envelope, encode_profile_envelope_header, ChatProfileResponse,
     DecodedProfileEnvelopeV1, OwnChatProfileResponse, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, MAX_PROFILE_AVATAR_BYTES,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, ACCOUNT_PROFILE_SOURCE,
+    MAX_PROFILE_ABOUT_CHARS, MAX_PROFILE_AVATAR_BYTES, PROFILE_ABOUT_PADDED_LENGTHS,
     PROFILE_NAME_PADDED_LENGTHS,
 };
 pub use sealed_sender::{
@@ -802,6 +833,21 @@ pub enum ChatWsServerMessage {
     /// The socket carries no archive metadata; clients fetch authenticated
     /// opaque relay state over REST.
     HistoryTransferAvailable { transfer_id: String },
+    /// The answer to a client [`ChatWsClientMessage::Ping`].
+    Pong,
+}
+
+/// Messages a client may send up the chat WebSocket (JSON text frames).
+/// Everything else a client does goes over REST.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ChatWsClientMessage {
+    /// A liveness probe: the server answers [`ChatWsServerMessage::Pong`].
+    /// Browsers cannot send WebSocket ping frames, and a connection that died
+    /// without a close (sleep, a network change) is otherwise noticed only
+    /// when the operating system gives up on it.
+    Ping,
 }
 
 /// [ADD] The `chat` block of `GET /api/auth/settings` — how a client
@@ -846,6 +892,17 @@ pub struct ChatCapabilities {
     /// application delivery are complete on the local and federated paths.
     #[serde(default)]
     pub mls_groups: bool,
+    /// `POST /api/chat/link-preview` fetches public pages for the sender's
+    /// link previews.
+    #[serde(default)]
+    pub link_previews: bool,
+    /// The VAPID application server key (base64url, uncompressed P-256)
+    /// browsers subscribe to wake-up pushes with, when the server sends them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_push_public_key: Option<String>,
+    /// This server hosts group calls on its SFU (accounts can start them).
+    #[serde(default)]
+    pub group_calls: bool,
     /// Immutable E2EE attachment upload, local/federated durable delivery,
     /// encrypted ledger and browser download are complete. Omitted until the
     /// entire Phase 6 path passes its gates.
@@ -878,6 +935,9 @@ impl Default for ChatCapabilities {
             profiles: true,
             sealed_sender: false,
             mls_groups: false,
+            link_previews: false,
+            web_push_public_key: None,
+            group_calls: false,
             media: None,
             backup: None,
             sealed_sender_policy: None,

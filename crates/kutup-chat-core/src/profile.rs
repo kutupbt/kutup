@@ -18,8 +18,8 @@ use crate::error::{ChatError, Result};
 use kutup_chat_proto::{
     capability_hash, decode_profile_envelope, derive_delivery_capability,
     encode_profile_envelope_header, ChatProfileResponse, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, MAX_PROFILE_AVATAR_BYTES,
-    PROFILE_NAME_PADDED_LENGTHS,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, MAX_PROFILE_ABOUT_CHARS,
+    MAX_PROFILE_AVATAR_BYTES, PROFILE_ABOUT_PADDED_LENGTHS, PROFILE_NAME_PADDED_LENGTHS,
 };
 
 pub const PROFILE_KEY_BYTES: usize = 32;
@@ -69,6 +69,23 @@ pub fn validate_display_name(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// The "about" line: trimmed, at most 140 characters (Signal's limit), one
+/// line; empty means none.
+pub fn validate_about(value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.chars().count() > MAX_PROFILE_ABOUT_CHARS
+        || value.len() > PROFILE_ABOUT_PADDED_LENGTHS[PROFILE_ABOUT_PADDED_LENGTHS.len() - 1]
+        || value.chars().any(char::is_control)
+    {
+        return Err(ChatError::Invalid(
+            "profile about must be one line of at most 140 characters".into(),
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
 pub fn validate_avatar(avatar: Option<&[u8]>, content_type: Option<&str>) -> Result<()> {
     match (avatar, content_type) {
         (None, None) => Ok(()),
@@ -105,6 +122,7 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
             display_name,
             avatar,
             avatar_content_type,
+            about: None,
             revision: 1,
             source_device_id,
         },
@@ -118,6 +136,7 @@ pub(crate) struct LocalProfileUpdate<'a> {
     pub display_name: &'a str,
     pub avatar: Option<Vec<u8>>,
     pub avatar_content_type: Option<String>,
+    pub about: Option<String>,
     pub source_device_id: u32,
     pub wrapping_key: &'a [u8; 32],
     pub canonical_recipient: &'a str,
@@ -132,6 +151,7 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
         display_name,
         avatar,
         avatar_content_type,
+        about,
         source_device_id,
         wrapping_key,
         canonical_recipient,
@@ -146,6 +166,7 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
             display_name,
             avatar,
             avatar_content_type,
+            about,
             revision,
             source_device_id,
         },
@@ -174,6 +195,7 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
             display_name: &current.display_name,
             avatar: current.avatar.clone(),
             avatar_content_type: current.avatar_content_type.clone(),
+            about: current.about.clone(),
             revision,
             source_device_id,
         },
@@ -200,6 +222,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
             display_name: &desired.display_name,
             avatar: desired.avatar.clone(),
             avatar_content_type: desired.avatar_content_type.clone(),
+            about: desired.about.clone(),
             source_device_id,
             wrapping_key,
             canonical_recipient,
@@ -217,6 +240,77 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
             rng,
         )
     }
+}
+
+/// What the account app edits (docs/plans/unified-profile.md).
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
+pub struct AccountProfileUpdate {
+    pub display_name: String,
+    pub avatar: Option<Vec<u8>>,
+    pub avatar_content_type: Option<String>,
+    pub about: Option<String>,
+}
+
+/// Seal the account's next profile revision from the account app: over the
+/// current one (same key, one revision later), or the first one with a fresh
+/// key. Only the master key is needed; no chat device takes part. Returns the
+/// exact upload.
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
+pub fn seal_account_profile<R: Rng + CryptoRng>(
+    master_key: &[u8; 32],
+    current: Option<&PutChatProfileRequest>,
+    update: AccountProfileUpdate,
+    canonical_account: &str,
+    rng: &mut R,
+) -> Result<PutChatProfileRequest> {
+    let wrapping_key = derive_wrapping_key(master_key)?;
+    let about = validate_about(update.about.as_deref())?;
+    let (key, revision) = match current {
+        Some(current) => {
+            let profile = open_own_profile(current, &wrapping_key, canonical_account)?;
+            let revision = profile
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| ChatError::Invalid("profile revision is exhausted".into()))?;
+            (profile.key, revision)
+        }
+        None => {
+            let mut key = vec![0u8; PROFILE_KEY_BYTES];
+            rng.fill(key.as_mut_slice());
+            (key, 1)
+        }
+    };
+    let profile = prepare_local_profile(
+        LocalProfileDraft {
+            key,
+            display_name: &update.display_name,
+            avatar: update.avatar,
+            avatar_content_type: update.avatar_content_type,
+            about,
+            revision,
+            source_device_id: kutup_chat_proto::ACCOUNT_PROFILE_SOURCE,
+        },
+        &wrapping_key,
+        canonical_account,
+        rng,
+    )?;
+    profile
+        .pending_upload
+        .ok_or_else(|| ChatError::Db("sealed profile has no upload".into()))
+}
+
+/// The account's own profile as the account app shows it.
+#[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
+pub fn open_account_profile(
+    master_key: &[u8; 32],
+    current: &PutChatProfileRequest,
+    canonical_account: &str,
+) -> Result<LocalProfile> {
+    open_own_profile(
+        current,
+        &derive_wrapping_key(master_key)?,
+        canonical_account,
+    )
 }
 
 pub fn open_own_profile(
@@ -251,9 +345,10 @@ pub fn open_own_profile(
             "wrapped profile key does not match delivery capability verifier".into(),
         ));
     }
-    let (display_name, avatar, avatar_content_type) = decrypt_profile_items(
+    let (display_name, avatar, avatar_content_type, about) = decrypt_profile_items(
         &encrypted.name,
         encrypted.avatar.as_deref(),
+        encrypted.about.as_deref(),
         &key,
         &encrypted.account,
         &encrypted.version,
@@ -265,6 +360,7 @@ pub fn open_own_profile(
         display_name,
         avatar,
         avatar_content_type,
+        about,
         revision: encrypted.revision,
         source_device_id: encrypted.source_device_id,
         pending_upload: None,
@@ -288,9 +384,10 @@ pub fn open_peer_profile(
             "peer profile key does not match profile version".into(),
         ));
     }
-    let (display_name, avatar, avatar_content_type) = decrypt_profile_items(
+    let (display_name, avatar, avatar_content_type, about) = decrypt_profile_items(
         &encrypted.name,
         encrypted.avatar.as_deref(),
+        encrypted.about.as_deref(),
         key,
         &encrypted.account,
         &encrypted.version,
@@ -303,6 +400,7 @@ pub fn open_peer_profile(
         display_name: Some(display_name),
         avatar,
         avatar_content_type,
+        about,
         revision: encrypted.revision,
         source_device_id: encrypted.source_device_id,
     })
@@ -326,6 +424,7 @@ struct LocalProfileDraft<'a> {
     display_name: &'a str,
     avatar: Option<Vec<u8>>,
     avatar_content_type: Option<String>,
+    about: Option<String>,
     revision: u64,
     source_device_id: u32,
 }
@@ -341,12 +440,14 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         display_name,
         avatar,
         avatar_content_type,
+        about,
         revision,
         source_device_id,
     } = draft;
     profile_key(&key)?;
     let display_name = validate_display_name(display_name)?;
     validate_avatar(avatar.as_deref(), avatar_content_type.as_deref())?;
+    let about = validate_about(about.as_deref())?;
     let version = profile_version(&key)?;
     let name = encrypt_name(
         &display_name,
@@ -367,6 +468,22 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         source_device_id,
         rng,
     )?;
+    let about_ciphertext = about
+        .as_deref()
+        .map(|about| {
+            encrypt_padded(
+                about,
+                &PROFILE_ABOUT_PADDED_LENGTHS,
+                ProfileEnvelopePurpose::About,
+                &key,
+                canonical_recipient,
+                &version,
+                revision,
+                source_device_id,
+                rng,
+            )
+        })
+        .transpose()?;
     let wrapped_context = ProfileEnvelopeContextV1::new(
         ProfileEnvelopePurpose::WrappedProfileKey,
         canonical_recipient,
@@ -392,6 +509,7 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         source_device_id,
         name,
         avatar: avatar_ciphertext,
+        about: about_ciphertext,
         wrapped_key,
         access_key_verifier: access_key_verifier(&access_key),
         delivery_capability_verifier: hex::encode(capability_hash(&delivery_capability)),
@@ -401,6 +519,7 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         display_name,
         avatar,
         avatar_content_type,
+        about,
         revision,
         source_device_id,
         pending_upload: Some(pending_upload),
@@ -418,22 +537,70 @@ fn encrypt_name<R: Rng + CryptoRng>(
     source_device_id: u32,
     rng: &mut R,
 ) -> Result<String> {
-    let bytes = value.as_bytes();
-    let padded_len = NAME_PADDED_LENGTHS
-        .into_iter()
-        .find(|length| bytes.len() <= *length)
-        .ok_or_else(|| ChatError::Invalid("profile display name is too large".into()))?;
-    let mut padded = vec![0u8; padded_len];
-    padded[..bytes.len()].copy_from_slice(bytes);
-    let context = ProfileEnvelopeContextV1::new(
+    encrypt_padded(
+        value,
+        &NAME_PADDED_LENGTHS,
         ProfileEnvelopePurpose::DisplayName,
+        key,
         account,
         version,
         revision,
         source_device_id,
+        rng,
     )
-    .map_err(ChatError::Invalid)?;
+}
+
+/// Text zero-padded to the smallest bucket that fits, so the ciphertext
+/// length tells the server only the bucket.
+#[allow(clippy::too_many_arguments)]
+fn encrypt_padded<R: Rng + CryptoRng>(
+    value: &str,
+    buckets: &[usize],
+    purpose: ProfileEnvelopePurpose,
+    key: &[u8],
+    account: &str,
+    version: &str,
+    revision: u64,
+    source_device_id: u32,
+    rng: &mut R,
+) -> Result<String> {
+    let bytes = value.as_bytes();
+    let padded_len = buckets
+        .iter()
+        .copied()
+        .find(|length| bytes.len() <= *length)
+        .ok_or_else(|| ChatError::Invalid("profile text is too large".into()))?;
+    let mut padded = vec![0u8; padded_len];
+    padded[..bytes.len()].copy_from_slice(bytes);
+    let context =
+        ProfileEnvelopeContextV1::new(purpose, account, version, revision, source_device_id)
+            .map_err(ChatError::Invalid)?;
     encrypt_b64(&padded, &profile_key(key)?, &context, rng)
+}
+
+/// The text of a padded envelope (see [`encrypt_padded`]).
+fn decrypt_padded(
+    encrypted: &str,
+    buckets: &[usize],
+    key: &[u8; 32],
+    context: &ProfileEnvelopeContextV1,
+) -> Result<String> {
+    let padded = decrypt_b64(encrypted, key, context)?;
+    if !buckets.contains(&padded.len()) {
+        return Err(ChatError::Content(
+            "encrypted profile text has an invalid padded length".into(),
+        ));
+    }
+    let end = padded
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(padded.len());
+    if padded[end..].iter().any(|byte| *byte != 0) {
+        return Err(ChatError::Content("profile text padding is invalid".into()));
+    }
+    std::str::from_utf8(&padded[..end])
+        .map(str::to_owned)
+        .map_err(|_| ChatError::Content("profile text is not UTF-8".into()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -469,12 +636,13 @@ fn encrypt_avatar<R: Rng + CryptoRng>(
 fn decrypt_profile_items(
     encrypted_name: &str,
     encrypted_avatar: Option<&str>,
+    encrypted_about: Option<&str>,
     key: &[u8],
     account: &str,
     version: &str,
     revision: u64,
     source_device_id: u32,
-) -> Result<(String, Option<Vec<u8>>, Option<String>)> {
+) -> Result<(String, Option<Vec<u8>>, Option<String>, Option<String>)> {
     let key = profile_key(key)?;
     let name_context = ProfileEnvelopeContextV1::new(
         ProfileEnvelopePurpose::DisplayName,
@@ -526,7 +694,23 @@ fn decrypt_profile_items(
             (Some(bytes.to_vec()), Some(content_type.to_string()))
         }
     };
-    Ok((display_name, avatar, avatar_content_type))
+    let about = match encrypted_about {
+        None => None,
+        Some(value) => {
+            let context = ProfileEnvelopeContextV1::new(
+                ProfileEnvelopePurpose::About,
+                account,
+                version,
+                revision,
+                source_device_id,
+            )
+            .map_err(ChatError::Content)?;
+            let text = decrypt_padded(value, &PROFILE_ABOUT_PADDED_LENGTHS, &key, &context)?;
+            validate_about(Some(&text))
+                .map_err(|_| ChatError::Content("encrypted profile about is invalid".into()))?
+        }
+    };
+    Ok((display_name, avatar, avatar_content_type, about))
 }
 
 fn encrypt_b64<R: Rng + CryptoRng>(
@@ -757,6 +941,7 @@ mod tests {
                 display_name: "Alice Local Edit",
                 avatar: None,
                 avatar_content_type: None,
+                about: Some("Out hiking".into()),
                 source_device_id: 1,
                 wrapping_key: &wrapping,
                 canonical_recipient: RECIPIENT,
@@ -769,8 +954,99 @@ mod tests {
         let rebased =
             rebase_local_profile(&desired, &remote, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
         assert_eq!(rebased.display_name, "Alice Local Edit");
+        assert_eq!(rebased.about.as_deref(), Some("Out hiking"));
         assert!(rebased.revision > remote.revision);
         assert_ne!(rebased.key, original.key);
         assert_ne!(rebased.key, remote.key);
+    }
+
+    #[test]
+    fn about_is_padded_encrypted_and_opened_by_owner_and_peer() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let wrapping = derive_wrapping_key(&[7; 32]).unwrap();
+        let original =
+            create_local_profile("Alice", None, None, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
+        let about = "Out hiking 🥾 until Monday";
+        let updated = update_local_profile(
+            &original,
+            LocalProfileUpdate {
+                display_name: "Alice",
+                avatar: None,
+                avatar_content_type: None,
+                about: Some(format!("  {about}  ")),
+                source_device_id: 1,
+                wrapping_key: &wrapping,
+                canonical_recipient: RECIPIENT,
+            },
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(updated.about.as_deref(), Some(about));
+        let upload = updated.pending_upload.clone().unwrap();
+        // Only the bucket shows: 128 bytes of plaintext plus the tag.
+        let envelope = decode_profile_envelope(upload.about.as_deref().unwrap()).unwrap();
+        assert_eq!(envelope.ciphertext.len(), 128 + TAG_BYTES);
+        let own = open_own_profile(&upload, &wrapping, RECIPIENT).unwrap();
+        assert_eq!(own.about.as_deref(), Some(about));
+        let peer = open_peer_profile(RECIPIENT, &ChatProfileResponse::from(&upload), &updated.key)
+            .unwrap();
+        assert_eq!(peer.about.as_deref(), Some(about));
+
+        for bad in ["x".repeat(141), "two\nlines".to_string()] {
+            assert!(validate_about(Some(&bad)).is_err(), "{bad:?}");
+        }
+        assert_eq!(validate_about(Some("   ")).unwrap(), None);
+    }
+
+    #[test]
+    fn the_account_app_seals_and_reopens_the_profile_from_the_master_key() {
+        let mut rng = rand::rng();
+        let master = [7u8; 32];
+        let first = seal_account_profile(
+            &master,
+            None,
+            AccountProfileUpdate {
+                display_name: "Ada".into(),
+                avatar: None,
+                avatar_content_type: None,
+                about: Some("Counting things".into()),
+            },
+            RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(
+            (first.revision, first.source_device_id),
+            (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE)
+        );
+        let opened = open_account_profile(&master, &first, RECIPIENT).unwrap();
+        assert_eq!(opened.display_name, "Ada");
+        assert_eq!(opened.about.as_deref(), Some("Counting things"));
+
+        let next = seal_account_profile(
+            &master,
+            Some(&first),
+            AccountProfileUpdate {
+                display_name: "Ada L.".into(),
+                avatar: None,
+                avatar_content_type: None,
+                about: None,
+            },
+            RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(next.revision, 2);
+        assert_eq!(
+            next.version, first.version,
+            "same key: contacts keep reading it"
+        );
+        // A chat device opens it with the same master-derived wrapping key.
+        let device_view =
+            open_own_profile(&next, &derive_wrapping_key(&master).unwrap(), RECIPIENT).unwrap();
+        assert_eq!(device_view.display_name, "Ada L.");
+        assert_eq!(device_view.about, None);
+        // Another master key opens nothing.
+        assert!(open_account_profile(&[8u8; 32], &next, RECIPIENT).is_err());
     }
 }

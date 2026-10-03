@@ -6,9 +6,9 @@ use clap::Subcommand;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::api::versions::{PatchVersionRequest, RecordSnapshotRequest};
+use crate::api::versions::{NewVersion, PatchVersionRequest};
 use crate::context::require_session;
-use crate::cryptohelpers::find_file_and_key;
+use crate::cryptohelpers::{find_file_and_key, rekey_if_behind};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 #[derive(Subcommand)]
@@ -99,8 +99,20 @@ fn download(
     let ctx = require_session(profile)?;
     let master_key = ctx.session.master_key_bytes()?;
 
-    let (row, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
-    let meta = crate::file_crypto::open_metadata(&row, &file_key).context("decrypt metadata")?;
+    let found = find_file_and_key(&ctx.client, &master_key, file_id)?;
+    let (row, file_key) = (&found.file, &found.file_key);
+    let meta = crate::file_crypto::open_metadata(row, file_key).context("decrypt metadata")?;
+    // A version opens with the file key of the generation it was saved at.
+    let generation = ctx
+        .client
+        .list_versions(file_id)?
+        .into_iter()
+        .find(|v| v.id == version_id)
+        .map(|v| v.key_generation)
+        .ok_or_else(|| {
+            crate::errors::NotFound(format!("version {version_id} not found for file {file_id}"))
+        })?;
+    let version_key = crate::file_crypto::key_at(row, file_key, generation)?;
 
     let short = &version_id[..version_id.len().min(8)];
     let dest_path = {
@@ -116,9 +128,9 @@ fn download(
     let stream = ctx.client.download_version_stream(file_id, version_id)?;
     let bar = crate::output::progress_bar(stream.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, row.key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&row.id, generation)?;
     let written =
-        match crate::transfer::stream_download(stream, &file_key, blob_context, &mut out, |n| {
+        match crate::transfer::stream_download(stream, &version_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
             Ok(w) => w,
@@ -144,8 +156,14 @@ fn download(
 fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
     let master_key = ctx.session.master_key_bytes()?;
-    let (row, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
-    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, row.key_epoch)?;
+    // The restored copy is new content: under a file key the folder's
+    // current members alone hold.
+    let found = rekey_if_behind(
+        &ctx.client,
+        find_file_and_key(&ctx.client, &master_key, file_id)?,
+    )?;
+    let (row, file_key) = (&found.file, &found.file_key);
+    let blob_context = DriveFileBlobContextV1::new(&row.id, row.key_generation)?;
 
     // The restored row carries the SOURCE version's collab metadata: those
     // values become the served x-kutup-seq / x-kutup-doc-key-id headers, and
@@ -160,26 +178,32 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
             crate::errors::NotFound(format!("version {version_id} not found for file {file_id}"))
         })?;
 
-    // download chosen version → decrypt → re-encrypt → snapshot-blob → record.
+    // download chosen version → decrypt → re-encrypt → store as the newest.
     let encrypted = ctx.client.download_version(file_id, version_id)?;
-    let old =
-        drive_object::decrypt_file_blob(&encrypted, &file_key, blob_context).context("decrypt")?;
+    // The source opens with the file key of the generation it was saved at.
+    let old = drive_object::decrypt_file_blob(
+        &encrypted,
+        &crate::file_crypto::key_at(row, file_key, src.key_generation)?,
+        DriveFileBlobContextV1::new(&row.id, src.key_generation)?,
+    )
+    .context("decrypt")?;
     let re_encrypted =
-        drive_object::encrypt_file_blob(&old, &file_key, blob_context).context("re-encrypt")?;
-    let size = re_encrypted.len() as i64;
-
-    let blob = ctx.client.upload_snapshot_blob(file_id, re_encrypted)?;
+        drive_object::encrypt_file_blob(&old, file_key, blob_context).context("re-encrypt")?;
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_default();
-    let res = ctx.client.record_snapshot(
+    let res = ctx.client.create_version(
         file_id,
-        &RecordSnapshotRequest {
-            s3_version_id: blob.s3_version_id,
-            storage_path: blob.storage_path,
+        re_encrypted,
+        &NewVersion {
+            // The same kind as the source: a note's state stays a note's state.
+            kind: if src.kind.is_empty() {
+                "yjs".into()
+            } else {
+                src.kind.clone()
+            },
             seq_at_snapshot: src.seq_at_snapshot,
             doc_key_id: src.doc_key_id,
-            size_bytes: size,
             label: format!("Restored from {now}"),
             keep_forever: false,
         },

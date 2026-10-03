@@ -30,11 +30,11 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
     capability_hash, constant_time_capability_hash_eq, AccountAddress, AccountManifestDeviceV1,
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AckRequest,
-    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EcPreKey,
-    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
-    PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId,
-    PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage,
+    ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope,
+    OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose,
+    ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
     RenameChatDeviceRequest, ReplenishKeysRequest, SealedDeliveryResponseV1,
     SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
     UserPreKeyBundlesResponse,
@@ -44,7 +44,7 @@ use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::{jwt, ratelimit, AppState};
+use crate::{ratelimit, AppState};
 
 /// libsignal registration ids are random values in `1..16380`.
 const MAX_REGISTRATION_ID: u32 = 16380;
@@ -108,13 +108,23 @@ const WS_TICKET_TTL_SECONDS: i64 = 60;
 const MAX_PREKEY_BATCH: usize = 100;
 pub(crate) const PROFILE_ACCESS_KEY_HEADER: &str = "x-kutup-profile-access-key";
 const PROFILE_ACCESS_KEY_BYTES: usize = 16;
-type PublicProfileRow = (i16, String, i64, i32, String, Option<String>, Vec<u8>);
+type PublicProfileRow = (
+    i16,
+    String,
+    i64,
+    i32,
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<u8>,
+);
 type OwnProfileRow = (
     i16,
     String,
     i64,
     i32,
     String,
+    Option<String>,
     Option<String>,
     String,
     Vec<u8>,
@@ -224,7 +234,10 @@ fn validate_profile(
     if profile.revision == 0 || profile.revision > i64::MAX as u64 {
         return Err(AppError::bad_request("profile revision is out of range"));
     }
-    if profile.source_device_id == 0 || profile.source_device_id > MAX_DEVICE_ID as u32 {
+    // A chat device (1-127), or the account app (docs/plans/unified-profile.md).
+    if (profile.source_device_id == 0 || profile.source_device_id > MAX_DEVICE_ID as u32)
+        && profile.source_device_id != kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
+    {
         return Err(AppError::bad_request(
             "profile sourceDeviceId is out of range",
         ));
@@ -232,6 +245,9 @@ fn validate_profile(
     validate_profile_envelope(&profile.name, ProfileEnvelopePurpose::DisplayName, profile)?;
     if let Some(avatar) = profile.avatar.as_deref() {
         validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, profile)?;
+    }
+    if let Some(about) = profile.about.as_deref() {
+        validate_profile_envelope(about, ProfileEnvelopePurpose::About, profile)?;
     }
     validate_profile_envelope(
         &profile.wrapped_key,
@@ -306,6 +322,16 @@ fn validate_public_profile_envelopes(profile: &ChatProfileResponse) -> AppResult
         validate_profile_envelope_context(
             avatar,
             ProfileEnvelopePurpose::Avatar,
+            &profile.account,
+            &profile.version,
+            profile.revision,
+            profile.source_device_id,
+        )?;
+    }
+    if let Some(about) = profile.about.as_deref() {
+        validate_profile_envelope_context(
+            about,
+            ProfileEnvelopePurpose::About,
             &profile.account,
             &profile.version,
             profile.revision,
@@ -859,12 +885,18 @@ pub async fn put_profile(
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
     let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let (verifier, delivery_verifier) = validate_profile(&profile, &canonical_account)?;
+    // The account app edits the profile too, without being a chat device
+    // (docs/plans/unified-profile.md); any other source must be one.
     let device_exists: Option<i32> =
-        sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
-            .bind(user_id)
-            .bind(profile.source_device_id as i32)
-            .fetch_optional(&mut *tx)
-            .await?;
+        if profile.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
+            Some(1)
+        } else {
+            sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
+                .bind(user_id)
+                .bind(profile.source_device_id as i32)
+                .fetch_optional(&mut *tx)
+                .await?
+        };
     if device_exists.is_none() {
         return Err(AppError::not_found(
             "profile source chat device is not registered",
@@ -902,14 +934,16 @@ pub async fn put_profile(
     sqlx::query(
         "INSERT INTO chat_profiles
              (user_id, suite, version, revision, source_device_id, name_ciphertext,
-              avatar_ciphertext, wrapped_key, access_key_verifier, is_current)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+              avatar_ciphertext, wrapped_key, access_key_verifier, is_current,
+              about_ciphertext)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
          ON CONFLICT (user_id, version) DO UPDATE SET
              suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
              source_device_id = EXCLUDED.source_device_id,
              name_ciphertext = EXCLUDED.name_ciphertext,
              avatar_ciphertext = EXCLUDED.avatar_ciphertext,
+             about_ciphertext = EXCLUDED.about_ciphertext,
              wrapped_key = EXCLUDED.wrapped_key,
              access_key_verifier = EXCLUDED.access_key_verifier,
              is_current = true,
@@ -924,6 +958,7 @@ pub async fn put_profile(
     .bind(&profile.avatar)
     .bind(&profile.wrapped_key)
     .bind(verifier)
+    .bind(&profile.about)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -1049,7 +1084,7 @@ pub(crate) async fn load_public_profile(
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.access_key_verifier
+                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
          WHERE u.username = $1 AND u.is_active = true AND p.version = $2",
@@ -1058,7 +1093,8 @@ pub(crate) async fn load_public_profile(
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((suite, version, revision, source_device_id, name, avatar, verifier)) = row else {
+    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier)) = row
+    else {
         return Ok(None);
     };
     let presented = Sha256::digest(access_key);
@@ -1075,6 +1111,7 @@ pub(crate) async fn load_public_profile(
         source_device_id: source_device_id as u32,
         name,
         avatar,
+        about,
     };
     validate_public_profile_envelopes(&response)?;
     Ok(Some(response))
@@ -1089,7 +1126,7 @@ async fn load_own_profile_in(
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.wrapped_key, p.access_key_verifier,
+                p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key, p.access_key_verifier,
                 c.capability_hash
          FROM chat_profiles p
          JOIN chat_delivery_capabilities c ON c.user_id = p.user_id
@@ -1108,6 +1145,7 @@ async fn load_own_profile_in(
             source_device_id,
             name,
             avatar,
+            about,
             wrapped_key,
             verifier,
             delivery_verifier,
@@ -1120,6 +1158,7 @@ async fn load_own_profile_in(
                 source_device_id: source_device_id as u32,
                 name,
                 avatar,
+                about,
                 wrapped_key,
                 access_key_verifier: hex::encode(verifier),
                 delivery_capability_verifier: hex::encode(delivery_verifier),
@@ -1131,6 +1170,9 @@ async fn load_own_profile_in(
             )?;
             if let Some(avatar) = profile.avatar.as_deref() {
                 validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, &profile)?;
+            }
+            if let Some(about) = profile.about.as_deref() {
+                validate_profile_envelope(about, ProfileEnvelopePurpose::About, &profile)?;
             }
             validate_profile_envelope(
                 &profile.wrapped_key,
@@ -2148,6 +2190,7 @@ fn sealed_device_list_mismatch(
 
 pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, DeliveredEnvelope)>) {
     for (user, device, envelope) in stored {
+        crate::web_push::wake_if_offline(state, user, device);
         let message = ChatWsServerMessage::Envelope { envelope };
         if let Ok(text) = serde_json::to_string(&message) {
             for connection in state.chat_hub.connections(user, device) {
@@ -2306,6 +2349,10 @@ async fn deliver_messages(
     tx.commit().await?;
 
     for (user, device, envelope) in stored {
+        // Not for this account's own transcripts and notes to self.
+        if recipient_id != sender_id {
+            crate::web_push::wake_if_offline(state, user, device);
+        }
         let msg = ChatWsServerMessage::Envelope { envelope };
         if let Ok(text) = serde_json::to_string(&msg) {
             for conn in state.chat_hub.connections(user, device) {
@@ -2610,8 +2657,10 @@ pub async fn ws(
         .filter(|token| !token.is_empty());
     let (user_uuid, device_id) = match bearer {
         Some(token) => {
-            let (user_id, _is_admin) = jwt::validate_access_token(token, &state.config.jwt_secret)
-                .map_err(|_| AppError::unauthorized("invalid token"))?;
+            let user_id = crate::middleware::authenticate_access_token(&state, token)
+                .await
+                .map_err(|_| AppError::unauthorized("invalid token"))?
+                .user_id;
             let user_uuid =
                 Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
             let device_id: i32 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
@@ -2671,14 +2720,21 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
         conn.write(ChatWsOut::Text(text)).await;
     }
 
-    // Read loop — the client sends nothing meaningful today (acks are REST); we only
-    // watch for disconnect and honour forced close.
+    // Read loop — acks are REST; the client only sends liveness pings. We
+    // answer those, watch for disconnect and honour forced close.
     loop {
         tokio::select! {
             _ = conn.close.notified() => break,
             msg = stream.next() => match msg {
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => {} // ping/pong handled by axum; other frames ignored
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(ChatWsClientMessage::Ping) = serde_json::from_str(&text) {
+                        if let Ok(pong) = serde_json::to_string(&ChatWsServerMessage::Pong) {
+                            conn.write(ChatWsOut::Text(pong)).await;
+                        }
+                    }
+                }
+                Some(Ok(_)) => {} // protocol ping/pong handled by axum; other frames ignored
             },
         }
     }
@@ -2719,6 +2775,7 @@ mod tests {
                 kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
             ),
             avatar: None,
+            about: None,
             wrapped_key: opaque_profile_envelope(
                 ProfileEnvelopePurpose::WrappedProfileKey,
                 32 + 16,

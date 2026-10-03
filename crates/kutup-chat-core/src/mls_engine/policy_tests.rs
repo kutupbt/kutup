@@ -188,6 +188,7 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
             policy_version: 1,
             sequence: 2,
             application_senders: MlsApplicationSenderPolicyV1::Administrators,
+            group_info_editors: Default::default(),
         };
         let pending = client
             .prepare_authorization_policy_change(
@@ -351,6 +352,7 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
             policy_version: 1,
             sequence: 4,
             application_senders: MlsApplicationSenderPolicyV1::Members,
+            group_info_editors: Default::default(),
         };
         assert!(client
             .prepare_authorization_policy_change(

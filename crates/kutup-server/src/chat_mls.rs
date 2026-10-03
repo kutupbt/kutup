@@ -15,9 +15,11 @@ mod control_store;
 mod conversation_store;
 mod delivery_store;
 mod federation_control;
+pub(crate) mod group_calls;
 mod identified_packages;
 mod invitation_feedback;
 mod invitation_routes;
+pub(crate) mod invite_links;
 mod mailbox_routes;
 mod membership;
 mod package_routes;
@@ -45,6 +47,9 @@ pub(crate) use control_routes::{
     collect_ordering_votes, commit_control_block, create_conversation,
 };
 use federation_control::{replicate_genesis, request_remote_ordering_vote};
+pub(crate) use group_calls::{
+    federated_token as federated_group_call_token, hosts_group_calls, token as group_call_token,
+};
 pub(crate) use identified_packages::{
     federated_get_identified_key_packages, get_identified_key_packages,
 };
@@ -52,6 +57,10 @@ pub(crate) use invitation_feedback::{
     federated_record_invitation_feedback, list_invitation_feedback,
 };
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
+pub(crate) use invite_links::{
+    call as call_invite_link, federated_call as federated_call_invite_link,
+    sweep as sweep_invite_links,
+};
 pub(crate) use mailbox_routes::{ack as ack_mailbox, drain as drain_mailbox};
 use membership::prepare_membership_finalization;
 pub(crate) use membership::stage_membership_delivery;
@@ -120,6 +129,7 @@ async fn notify_mls_mailbox_targets(state: &AppState, targets: Vec<(Uuid, i32)>)
         return;
     };
     for (user_id, device_id) in targets {
+        crate::web_push::wake_if_offline(state, user_id, device_id);
         for connection in state.chat_hub.connections(user_id, device_id) {
             connection.write(ChatWsOut::Text(text.clone())).await;
         }

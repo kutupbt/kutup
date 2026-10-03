@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/crates/kutup-crypto-wasm"
-OUT="$ROOT/frontend/public/crypto-wasm"
+OUT="$ROOT/frontend/wasm/crypto-wasm"
 
 if ! command -v wasm-bindgen >/dev/null 2>&1; then
   echo "wasm-bindgen CLI is required (install version 0.2.126)" >&2

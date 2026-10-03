@@ -185,6 +185,11 @@ ML-KEM prekey, and bounded one-time EC/PQ prekeys. Session establishment and
 steady-state ciphertext are generated only by libsignal. A bundle is unusable
 until its exact device identity matches the accepted account manifest.
 
+Plaintext is padded before encryption with Signal's scheme: the content, one
+`0x80` byte, then zeros up to a multiple of 160 bytes
+(`kutup-chat-core/src/padding.rs`). A receiver refuses anything that is not a
+whole number of blocks ending in that terminator.
+
 Sending is multi-device fan-out. Each destination device has an independent
 ratchet. A client-generated UUID `sendId` and durable outbox make retries
 idempotent. A 409 device mismatch causes a bounded manifest/bundle refresh; a
@@ -299,6 +304,118 @@ external backups or a user copying plaintext before expiry, and the UI must not
 claim otherwise. Saved-to-Drive copies are new recipient-owned objects and do
 not expire with the Chat message.
 
+### Message extras
+
+A visible message (text or attachment) may carry, beside its body, Signal's
+DataMessage extras as authenticated top-level content fields — the same way
+as `expiresAfterSeconds`, so an older reader keeps the message and ignores
+them, while a present but malformed field rejects the whole message on every
+receive path (Direct, sync transcript, MLS):
+
+| Field | On | Rule |
+| --- | --- | --- |
+| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` a canonical address. Readers show "@" and the member's current name. |
+| `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
+| `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
+| `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
+| `sticker` | photo attachment | `{emoji?}`: the attachment is a WebP or PNG of at most 512 KiB, not view-once. Readers draw it without a bubble and may save it to their own stickers. |
+
+### Calls
+
+`call` carries one 1:1 call signal (`CallSignalV1`: offer, answer, ICE
+batch, hang-up, busy) and is ephemeral like `typing`: never history, never
+a linked-device transcript, dropped from the outbox after 60 s, suppressed
+from people not accepted, refused in Note to Self and in MLS. `callLog` is a
+local-only record of a finished call, like `groupUpdate`. `groupCall`
+(`GroupCallBody`) announces a group call starting or ending, MLS only. See
+[`chat-calls.md`](chat-calls.md).
+
+### Polls
+
+Three content kinds, in Direct chats and groups alike:
+
+- `poll` (visible): `{question, options, allowMultiple?}`, a question of
+  1–200 and 2–10 distinct options of 1–100 characters, on one line each. It
+  may carry `expiresAfterSeconds` like a text.
+- `pollVote`: `{targetMessageId, options}`, the voter's current choice as
+  ascending distinct indexes; empty takes the vote back. Each voter's latest
+  vote (sender order) counts; a vote naming a missing option, or several in
+  a single-choice poll, is ignored.
+- `pollTerminate`: `{targetMessageId}`; only the poll's author ends it, and
+  votes after that do not count. It shows as "Alice ended the poll".
+
+A receiver refuses a poll-kind message whose body does not validate; votes
+and ends are purged with their poll.
+
+### Locations
+
+`location` (visible), in Direct chats, Note to Self and groups: a place sent
+once, `{lat, lon, label?}` — finite degrees within ±90 and ±180 (clients
+send at most six decimals), and an optional label of 1–100 characters on one
+line. It may carry `expiresAfterSeconds` like a text; a receiver refuses a
+body that does not validate. Each viewer's own map settings decide how it is
+shown (docs/plans/maps.md): a map drawn in the browser, or the coordinates
+with "Open in maps". Choosing the place (tapping a map, the device's
+location, or a city found in a list searched on the device) sends nothing
+anywhere. Live location is a separate channel, not a stream of these.
+
+### Live locations
+
+A live location is a short-lived stream on the sharer's server, not a series
+of messages (docs/plans/maps.md "Live location"):
+
+- `liveLocation` (`LiveLocationBody`): `{shareId, generation, server,
+  streamId, key, readCapability, untilMs}`. Generation 1 starts the share,
+  is visible, and may carry `expiresAfterSeconds`. Each later generation (a
+  new stream and key, every hour and as soon as anyone leaves a group) is
+  hidden and folded into the share; it counts only from the same sharer in
+  the same conversation and never extends `untilMs`. A share lasts at most
+  8 hours.
+- `liveLocationStop`: `{shareId}`, the sharer ending it early (hidden).
+- The stream holds only the latest update: a fixed 88-byte
+  `LiveLocationUpdateV1` (`kutup-crypto/src/live_location.rs`, vector
+  `liveLocation`), XChaCha20-Poly1305 under `key`, authenticating the
+  stream id and a counter that must increase. The server stores hashes of
+  the write secret (kept by the sharing device) and of `readCapability`,
+  the update and times; no account, conversation or position.
+- Readers poll every 10 s while the message is on screen; a reader on
+  another server reads through its own (`/api/fed/chat/live-locations`).
+  After a new generation the old stream is deleted, so someone who left has
+  a key to nothing new.
+- The sharing device writes about every 15–30 s while moving and every
+  3 minutes while still, only while its tab is open (browsers give pages no
+  location in the background).
+
+### Account state across devices
+
+Signal keeps pinned, archived and muted chats in a storage service and syncs
+reads with sync messages. Kutup carries the same state as more hidden
+same-account controls on the Note-to-Self linked-device path, next to
+`contactControl` and `disappearingExpiryStart`:
+
+| Kind | Body | Merge |
+| --- | --- | --- |
+| `conversationState` | conversation, `revision`, `sourceDeviceId`, `updatedAtMs`, `pinned`, `archived`, `mutedUntilMs` (2^53−1 = until unmuted), `markedUnread` | whole record; highest `(revision, sourceDeviceId)` wins |
+| `readPosition` | conversation, `throughMessageId`, `readThroughMs` | furthest wins; the anchor message places it on each device, `readThroughMs` (the reading device's clock) when the anchor is missing |
+| `deleteForMe` | conversation, 1–64 `messageIds` | union; the named messages (and reactions, edits, receipts to them) are purged like expired ones, also when a copy arrives later |
+| `viewOnceOpened` | conversation, `messageId`, `sender`, `timestampMs`, `video` | like `deleteForMe` for that message; the control stays as the "Viewed photo/video" placeholder |
+| `stickerSaved` | `stickerId`, `emoji?`, `contentType` (WebP or PNG), `data` (base64, ≤ 48 KiB) | the account's stickers, newest first; a later save of the same id replaces it |
+| `stickerRemoved` | `stickerId` | removes that sticker; the purge then drops both records |
+
+All six are rejected unless they arrive as a transcript from another device
+of the same account addressed to Note to Self, are rejected as MLS
+application content, and a device sends them only to its own Note to Self
+(`conversationState` must name the sending device). They stay in the local
+history, hidden from every view, so the continuous backup restores them to a
+replacement browser. The purge keeps only the newest `conversationState` and
+the furthest `readPosition` per conversation, so the history holds one of
+each; `deleteForMe` controls are kept so a late copy is still removed, and a
+`stickerSaved` is dropped once a later `stickerRemoved` names it.
+
+A chat archived before a newer incoming message counts as unarchived unless
+it is muted, as in Signal; nothing is written for that. The server sees only
+ordinary Note-to-Self sync traffic.
+
 ### Local search contract
 
 Chat search is a client-only operation over decrypted history already present
@@ -323,7 +440,9 @@ client relationship state. First-contact/request traffic stays identified.
 `ProfileSuiteId = 1` fixes `ProfileEnvelopeV1`: XChaCha20-Poly1305 with
 HKDF-SHA256 purpose subkeys and a canonical header binding profile owner,
 profile-key-derived version, revision, source device and field purpose. Display
-names retain the fixed 53/257-byte Signal-style padding buckets. The random
+names retain the fixed 53/257-byte Signal-style padding buckets. The optional
+"about" line (purpose 4, one line of at most 140 characters) uses Signal's
+128/254/512-byte buckets. The random
 profile key is distributed only inside E2EE messages together with the exact
 numeric profile suite; a missing or unknown suite never authorizes a profile
 fetch. From that key the client derives:
@@ -426,8 +545,10 @@ downgrades delivery or regenerates supposedly durable ciphertext.
 ## 11. Privacy and traffic shape
 
 V1 protects content and removes sender identity from established destination
-delivery. It does not hide message length, timing, IP address, origin domain,
-recipient, or device fan-out.
+delivery. Direct and MLS message sizes are rounded up to 160-byte steps
+(Signal's padding), so short messages of any kind look alike; longer ones
+still reveal their approximate length. V1 does not hide timing, IP address,
+origin domain, recipient, or device fan-out.
 
 The post-v1 advanced traffic-inspection profile may add fixed cells, dummy
 cells, persistent multiplexed connections, controlled-rate batching/delay and

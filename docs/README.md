@@ -26,7 +26,7 @@ disagrees with current behavior.
 | Documentation checker scripts | `Documentation` and complete `CI` |
 | `.github/workflows/**` only | `Workflow validation` |
 | Application code, executable configuration, or a mixed code/docs or code/workflow change | Complete `CI` matrix, plus any matching lightweight workflow |
-| `v*` or `desktop-v*` tag | CLI or desktop release workflow respectively |
+| `v*` tag | CLI release workflow |
 
 The lightweight paths prevent prose-only and workflow-only pull requests from
 spending the Rust, WASM, frontend, PostgreSQL/SeaweedFS, and browser matrix.
@@ -45,6 +45,9 @@ gates and sanitized-artifact rules.
 | Unified Drive/Chat federation | [`federation-protocol.md`](federation-protocol.md) | Federation sections in the Drive and Chat threat models |
 | Direct Chat and Note to Self | [`chat-protocol.md`](chat-protocol.md) | [`chat-security-threat-model.md`](chat-security-threat-model.md) |
 | Private MLS groups | [`chat-mls.md`](chat-mls.md) | [`chat-security-threat-model.md`](chat-security-threat-model.md) |
+| Calls | [`chat-calls.md`](chat-calls.md) | [`chat-calls.md`](chat-calls.md) "What servers learn" |
+| Notifications and Web Push | [`chat-notifications.md`](chat-notifications.md) | [`chat-notifications.md`](chat-notifications.md) "What servers learn" |
+| Group invite links | [`chat-invite-links.md`](chat-invite-links.md) | [`chat-invite-links.md`](chat-invite-links.md) "What servers learn" |
 | Chat media | [`chat-media.md`](chat-media.md) | [`chat-media-security-threat-model.md`](chat-media-security-threat-model.md) |
 | Continuous Chat recovery | [`chat-backup.md`](chat-backup.md) | [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md) |
 | Crypto ownership and upgrades | [`cryptographic-dependencies.md`](cryptographic-dependencies.md), [`crypto-agility.md`](crypto-agility.md) | Purpose-specific threat models above |
@@ -52,9 +55,8 @@ gates and sanitized-artifact rules.
 
 ## Clients and integrations
 
-- [`desktop-build.md`](desktop-build.md) documents the Tauri desktop shell.
 - [`mobile-build.md`](mobile-build.md) documents the native iOS/Android work in
-  progress and the experimental Tauri-mobile path retained in this repository.
+  progress. There is no desktop app for now; it returns after Android and iOS.
 - [`chat-native-bindings.md`](chat-native-bindings.md) documents the shared
   Rust/UniFFI Chat boundary being integrated by the native mobile clients.
 - [`onlyoffice.md`](onlyoffice.md) documents client-only Office editing and the

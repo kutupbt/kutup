@@ -1,8 +1,9 @@
 # Unified media preview, in-app open, and save plan
 
 **Status:** partially implemented; shared preview generation, Chat presentation,
-and private ciphertext cache landed, while Drive sidecars and native export
-hardening remain planned
+and private ciphertext cache landed, while native export hardening remains
+planned. **Drive previews are superseded by `docs/plans/drive-thumbnails.md`**
+(see "Drive wire adapter" below).
 
 **Written:** 2026-08-11
 
@@ -220,6 +221,17 @@ introduce a capability-gated descriptor V2. Do not add non-optional or unknown
 fields to V1 while older strict decoders exist.
 
 ### Drive wire adapter
+
+> **Superseded (2026-09-24) by `docs/plans/drive-thumbnails.md`.** Drive
+> previews are a replaceable per-file slot sealed under the file key, not a
+> sidecar referenced from encrypted metadata. Kutup documents are edited
+> collaboratively after upload: a metadata-referenced sidecar would need a
+> metadata rewrite (rename permission, revision-by-revision) on every save,
+> which collaborators who did not upload a file cannot do and concurrent
+> saves would contend on. The freshness this design gave is to come from
+> signed file revisions covering content and previews together. The
+> generation pipeline below is shared as planned. The original text follows
+> for the record.
 
 Introduce a Drive metadata V2 decoder rather than weakening V1's exact-key
 validation. V2 adds an optional encrypted preview reference with:

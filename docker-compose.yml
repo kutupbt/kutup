@@ -82,6 +82,21 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
+      # This server's canonical external address (docs/self-hosting.md). In
+      # production it must be HTTPS; it also anchors the server identity that
+      # Chat groups need.
+      SERVER_URL: ${SERVER_URL:-}
+      # Where each web app lives (https://<app>.<KUTUP_BASE_DOMAIN>, or the
+      # explicit URLs); the frontend container serves the same hostnames.
+      KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}
+      KUTUP_ACCOUNT_URL: ${KUTUP_ACCOUNT_URL:-}
+      KUTUP_DRIVE_URL: ${KUTUP_DRIVE_URL:-}
+      KUTUP_CHAT_URL: ${KUTUP_CHAT_URL:-}
+      KUTUP_OFFICE_URL: ${KUTUP_OFFICE_URL:-}
+      KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
+      KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
+      # The map relay's shared tile cache; its size is set on the admin Maps page.
+      MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (email:username:password) — created on first boot; it can
       # never be demoted/disabled/deleted via the API.
       ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
@@ -106,9 +121,19 @@ services:
       CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: ${CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY:-}
       CHAT_MLS_ORDERING_POLICY: ${CHAT_MLS_ORDERING_POLICY:-}
       CHAT_MLS_CONTROL_SIGNING_KEY: ${CHAT_MLS_CONTROL_SIGNING_KEY:-}
+      CHAT_WEB_PUSH: ${CHAT_WEB_PUSH:-true}
+      CHAT_WEB_PUSH_HOSTS: ${CHAT_WEB_PUSH_HOSTS:-}
+      CHAT_WEB_PUSH_SUBJECT: ${CHAT_WEB_PUSH_SUBJECT:-}
+      CHAT_STUN_URLS: ${CHAT_STUN_URLS:-}
+      CHAT_TURN_URLS: ${CHAT_TURN_URLS:-}
+      CHAT_TURN_SECRET: ${CHAT_TURN_SECRET:-}
+      CHAT_SFU_URL: ${CHAT_SFU_URL:-}
+      CHAT_SFU_API_KEY: ${CHAT_SFU_API_KEY:-}
+      CHAT_SFU_API_SECRET: ${CHAT_SFU_API_SECRET:-}
       # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
+      RATE_LIMIT_FORK_PER_MIN: ${RATE_LIMIT_FORK_PER_MIN:-}
       RATE_LIMIT_CHAT_KEYS_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_PER_MIN:-}
       RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_IP_PER_MIN:-}
       RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-}
@@ -117,6 +142,8 @@ services:
       RATE_LIMIT_ADMIN_PER_MIN: ${RATE_LIMIT_ADMIN_PER_MIN:-}
       LOGIN_LOCKOUT_THRESHOLD: ${LOGIN_LOCKOUT_THRESHOLD:-}
       LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-}
+    volumes:
+      - maps_cache:/var/cache/kutup-maps
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,10 +151,21 @@ services:
         condition: service_completed_successfully
 
   frontend:
+    # The four web apps, each served on its own hostname: the same app
+    # addresses the backend publishes (KUTUP_BASE_DOMAIN gives
+    # https://<app>.<domain>; the explicit URLs override it).
     build:
       context: .
       dockerfile: frontend/Dockerfile
     restart: unless-stopped
+    environment:
+      KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}
+      KUTUP_ACCOUNT_URL: ${KUTUP_ACCOUNT_URL:-}
+      KUTUP_DRIVE_URL: ${KUTUP_DRIVE_URL:-}
+      KUTUP_CHAT_URL: ${KUTUP_CHAT_URL:-}
+      KUTUP_OFFICE_URL: ${KUTUP_OFFICE_URL:-}
+      KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
+      KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
 
   nginx:
     image: nginx:alpine
@@ -147,5 +185,48 @@ services:
       timeout: 5s
       retries: 30
 
+  # TURN relay for Chat calls (optional: `docker compose --profile turn up`).
+  # It relays only DTLS-SRTP packets it cannot read; credentials come from the
+  # backend (CHAT_TURN_SECRET). Host networking keeps the relay port range
+  # reachable without publishing thousands of ports.
+  coturn:
+    image: coturn/coturn:4.6
+    profiles: ["turn"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SECRET: ${CHAT_TURN_SECRET:-}
+      TURN_REALM: ${CHAT_TURN_REALM:-kutup}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        [ -n "$$TURN_SECRET" ] || { echo 'set CHAT_TURN_SECRET for the TURN relay' >&2; exit 1; };
+        exec turnserver --use-auth-secret --static-auth-secret="$$TURN_SECRET"
+        --realm="$$TURN_REALM" --listening-port=3478 --min-port=49160 --max-port=49200
+        --no-cli --no-multicast-peers --fingerprint --log-file=stdout
+        --denied-peer-ip=10.0.0.0-10.255.255.255
+        --denied-peer-ip=172.16.0.0-172.31.255.255
+        --denied-peer-ip=192.168.0.0-192.168.255.255
+        --denied-peer-ip=127.0.0.0-127.255.255.255
+        --denied-peer-ip=169.254.0.0-169.254.255.255
+
+  # SFU for group calls (optional: `docker compose --profile sfu up`). Frames
+  # arrive end-to-end encrypted; put port 7880 behind the TLS proxy as
+  # CHAT_SFU_URL (wss://) and open UDP 50000-60000 and TCP 7881.
+  livekit:
+    image: livekit/livekit-server:v1.13
+    profiles: ["sfu"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SFU_KEY: ${CHAT_SFU_API_KEY:-}
+      SFU_SECRET: ${CHAT_SFU_API_SECRET:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        [ -n "$$SFU_KEY" ] && [ -n "$$SFU_SECRET" ] || { echo 'set CHAT_SFU_API_KEY and CHAT_SFU_API_SECRET' >&2; exit 1; };
+        LIVEKIT_KEYS="$$SFU_KEY: $$SFU_SECRET" exec /livekit-server --port 7880 --rtc.tcp_port 7881 --rtc.port_range_start 50000 --rtc.port_range_end 60000 --rtc.use_external_ip
+
 volumes:
   postgres_data:
+  maps_cache:

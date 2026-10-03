@@ -55,7 +55,8 @@ SERVER_URL=https://kutup.example.com
 # If federation is enabled, it must match FEDERATION_SERVER_NAME.
 CHAT_SERVER_NAME=kutup.example.com
 
-# Unified federation v2 identity used by both Chat and Drive:
+# Unified federation v2 identity used by both Chat and Drive. Optional: a
+# server without it makes and keeps its own (see "SERVER_URL" below).
 #   openssl rand -base64 32
 # FEDERATION_SERVER_NAME=kutup.example.com
 # FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
@@ -65,14 +66,47 @@ CHAT_SERVER_NAME=kutup.example.com
 CHAT_MAX_ACTIVE_DEVICES=10
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 
+# Link previews: the server fetches public https pages (port 443, public
+# addresses only) for the sender's previews. It then sees the links its users
+# preview, never their messages. Set to false to turn previews off.
+CHAT_LINK_PREVIEWS=true
+
+# Web Push: wake Chat devices whose browser is closed. Pushes are empty (the
+# server cannot read messages); the server sends them only to the push
+# services listed (exact hosts, or .suffix for subdomains). The VAPID key is
+# made once and kept in the database. Subject: a mailto: or https: contact.
+CHAT_WEB_PUSH=true
+# CHAT_WEB_PUSH_HOSTS=fcm.googleapis.com,updates.push.services.mozilla.com,.push.apple.com,.notify.windows.com
+# CHAT_WEB_PUSH_SUBJECT=mailto:admin@example.com
+
+# Calls: media flows browser to browser (DTLS-SRTP). STUN finds public
+# addresses; a TURN relay (coturn with use-auth-secret) carries calls that
+# can't connect directly and hides addresses for "Always relay calls".
+# The server hands out 12-hour credentials made with CHAT_TURN_SECRET.
+# `docker compose --profile turn up` starts coturn with the same secret.
+# CHAT_STUN_URLS=stun:turn.example.com:3478
+# CHAT_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+# CHAT_TURN_SECRET=<long random string>
+# CHAT_TURN_REALM=turn.example.com
+
+# Group calls: a LiveKit SFU (`docker compose --profile sfu up`). Browsers
+# connect to CHAT_SFU_URL (wss:, proxied by TLS to the SFU's port 7880); UDP
+# 50000-60000 and TCP 7881 must be reachable. Frames are end-to-end
+# encrypted, so the SFU forwards what it cannot read. Without these, accounts
+# here can join group calls other servers host but not start one.
+# CHAT_SFU_URL=wss://sfu.example.com
+# CHAT_SFU_API_KEY=<key name>
+# CHAT_SFU_API_SECRET=<32+ random characters>
+
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
 # active online private key.
 # CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
 # CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
 
-# Private MLS groups are advertised only when both authenticated values are
-# complete and Chat is enabled by the shared federation policy.
+# Private MLS groups work without configuration: the server orders them with
+# a control key it makes and the standard v1 policy. Set both values only to
+# publish a custom policy.
 # CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
 # CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
 
@@ -108,6 +142,8 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # unreachable except through nginx.
 # RATE_LIMIT_LOGIN_PER_MIN=10
 # RATE_LIMIT_PREFLIGHT_PER_MIN=20
+# RATE_LIMIT_FORK_PER_MIN=120           # each app opened redeems one session hand-off
+# RATE_LIMIT_USER_LOOKUP_PER_MIN=30
 # RATE_LIMIT_REGISTER_PER_HOUR=10
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_FED_USERS_PER_MIN=60
@@ -208,8 +244,19 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
-| `frontend` | Compiled React app (served by Nginx) |
+| `frontend` | The web apps — account, Drive, Chat, Photos, Maps and the OnlyOffice sandbox — each on its own hostname (Nginx) |
 | `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
+
+**The web apps and their hostnames.** Each app has its own origin:
+`account.`, `drive.`, `chat.`, `photos.`, `maps.` and `office.` under
+`KUTUP_BASE_DOMAIN` (or the explicit
+`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE}_URL`). The backend and the
+`frontend` container read the same settings: the backend publishes the map to
+the apps, and the `frontend` container serves one app per hostname (any other
+hostname gets `404`) and sends the OnlyOffice sandbox's Content Security
+Policy, which only Drive may embed. Point all six names at the server, cover
+them with the certificate, and keep the `Host` header when proxying; the
+bundled `nginx` does.
 
 ---
 
@@ -309,9 +356,24 @@ move the new seed into `FEDERATION_SIGNING_KEY`, remove
 seed does not authorize replacement; remote peers will quarantine a competing
 history and require an explicitly confirmed break-glass re-pin.
 
-Federation is unavailable until both generic identity variables are set. Back
-up the signing seed: losing it does not authorize silent replacement, and
-remote servers will quarantine a conflicting history.
+Without these variables the server makes its own identity on first start:
+it is named after `CHAT_SERVER_NAME`, anchored at `SERVER_URL` (which must be
+canonical HTTPS in production), and its seed is kept in the database table
+`server_generated_keys`, so database backups carry it. Chat groups need this
+identity even when every member is local, because clients verify each
+ordering server's signed policy history; it admits no other server by itself.
+Once a server has an identity it never makes another: to manage the seed
+yourself (for rotation, say), copy it into the environment unchanged,
+
+```sh
+docker compose exec -T postgres psql -U kutup -d kutup -Atc \
+  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federation-identity'"
+```
+
+and set it as `FEDERATION_SIGNING_KEY` with `FEDERATION_SERVER_NAME` equal to
+`CHAT_SERVER_NAME`. Back up the signing seed either way: losing it does not
+authorize silent replacement, and remote servers will quarantine a conflicting
+history.
 
 After configuring the identity, manage the unified control plane in **Admin →
 Settings → Federation**. It has an emergency global stop and a feature-scoped
@@ -563,7 +625,7 @@ Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
 binaries use stable filenames and form one deployment unit with the web bundle
 and API server. They must be revalidated and must never receive an immutable
 cache policy from an outer reverse proxy or CDN. The bundled frontend sends
-`Cache-Control: no-cache, must-revalidate` for both paths. Preserve that header
+`Cache-Control: no-cache` for both paths. Preserve that header
 when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
 and may remain immutable.
 
@@ -571,6 +633,41 @@ Serving stale generated WASM with a newer JavaScript bundle can produce a
 fail-closed Chat or Drive initialization error because the Rust and HTTP DTOs
 no longer agree. Deploy the frontend, its generated WASM directories, and the
 backend from the same release.
+
+---
+
+## Maps
+
+Kutup stores no map data. On the admin **Maps** page you choose the
+providers people may use (OpenFreeMap and OpenStreetMap, which need no API
+key, and optionally your own tile server), and whether map traffic goes
+through this server: **off** (browsers load maps from the provider),
+**each person chooses**, or **always**. Each person's maps stay off until
+they turn them on in their account's Maps settings. Turn maps off entirely
+for no third-party requests at all.
+
+Through the relay, providers see the server instead of people's addresses.
+The relay keeps one shared tile cache in `MAPS_CACHE_DIR` (the compose file
+uses the `maps_cache` volume; without the variable it is a temporary
+directory), sized on the Maps page. Keep the cache on when OpenStreetMap is
+offered: its [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+does not allow fetching the same tiles repeatedly. If your own tile server
+is only reachable from the Kutup server (e.g. on the Docker network), set
+map traffic to **always**.
+
+The Maps app (`KUTUP_MAPS_URL`, e.g. `maps.example.org`, served by the same
+frontend image) keeps people's place lists. Each list is an encrypted Drive
+file (`.kutupmap`) that counts against its owner's storage, so no separate
+storage or service is needed. Lists work with maps turned off: places are
+then added by city (searched on the device) or by coordinates.
+
+The Photos app (`KUTUP_PHOTOS_URL`, e.g. `photos.example.org`, the same
+frontend image) shows people's photos and videos by when and where they were
+taken. Photos are ordinary Drive files in folders people choose (by default
+a "Photos" folder in My files), so they share the Drive storage quota and
+need nothing more on the server. Dates, places and the rest are read on the
+device and sealed inside each file's encrypted metadata; the Places map
+uses the map settings above.
 
 ---
 
@@ -585,19 +682,23 @@ backend from the same release.
 
 ---
 
-## SeaweedFS Bucket Versioning (required for collaborative editing)
+## SeaweedFS bucket versioning and lifecycle
 
-The collaborative-edit feature uses S3 object versioning to store file snapshots. The `seaweedfs-init` Compose service enables versioning and applies a lifecycle policy automatically on stack startup.
+Kutup does not depend on S3 object versioning: every file version is an
+object of its own (`files/{id}/versions/{versionId}`), and version retention
+is Kutup's job (`docs/plans/drive-versions-v2.md` — the last day whole, then
+hourly for a week, then daily up to each account's setting, 7 days to 10
+years). Deletes remove every stored version of an object, so they are final
+whether or not the bucket is versioned.
 
-The compose stack has been updated to:
-1. Mount `seaweedfs-init.sh` and `lifecycle.json` into the init container.
-2. The script waits for SeaweedFS S3, creates the bucket (idempotent), enables versioning, applies the lifecycle.
-
-**Lifecycle defaults:** 30-day or 50-version retention for noncurrent versions, whichever yields more. Named (`keep_forever=true`) versions are kept indefinitely (the kutup backend's cleanup job filters them out — they don't rely on the SeaweedFS lifecycle alone).
-
-To customize retention, edit `lifecycle.json` and re-run the init container:
+The `seaweedfs-init` Compose service still creates the bucket and applies
+`lifecycle.json`, now only a safety net: anything overwritten or deleted
+outside Kutup's own deletes (noncurrent versions, expired delete markers)
+goes after a day. Re-run it after upgrading:
 ```sh
 docker compose run --rm seaweedfs-init
 ```
 
-If you migrate an existing pre-collab-edit deployment, run `seaweedfs-init.sh` once after upgrading. The script is idempotent.
+Versions stored by earlier builds as S3 object versions of
+`files/{id}/snapshot` are moved onto their own keys automatically when the
+server starts.

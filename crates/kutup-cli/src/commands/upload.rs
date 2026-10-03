@@ -89,13 +89,7 @@ pub fn run(
             progress: Progress::Bar,
         },
     )?;
-    extract_whiteboard_assets(
-        &ctx.client,
-        &up,
-        &collection_key,
-        Path::new(local_path),
-        &mut Vec::new(),
-    );
+    extract_whiteboard_assets(&ctx.client, &up, Path::new(local_path), &mut Vec::new());
 
     let name = file_name(local_path);
     if json {
@@ -118,7 +112,6 @@ struct DirUpload {
 fn extract_whiteboard_assets(
     client: &Client,
     up: &crate::uploader::Uploaded,
-    collection_key: &[u8],
     path: &Path,
     warnings: &mut Vec<String>,
 ) {
@@ -129,9 +122,7 @@ fn extract_whiteboard_assets(
         client,
         &up.file_id,
         &up.file_key,
-        &up.collection_id,
-        up.key_epoch,
-        collection_key,
+        up.key_generation,
         path,
     ) {
         let w = format!("asset extraction {}: {e:#}", path.display());
@@ -190,13 +181,7 @@ fn upload_dir(
             ) {
                 Ok(up) => {
                     eprintln!("  ↑ {}", path.display());
-                    extract_whiteboard_assets(
-                        client,
-                        &up,
-                        &sub_col_key,
-                        &path,
-                        &mut stats.warnings,
-                    );
+                    extract_whiteboard_assets(client, &up, &path, &mut stats.warnings);
                     stats.uploaded.push(serde_json::json!({
                         "id": up.file_id,
                         "path": path.display().to_string(),

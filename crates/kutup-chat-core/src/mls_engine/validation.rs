@@ -26,7 +26,10 @@ pub(super) fn validate_pending_membership_change(
         MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::RoutineAdmin
             | MlsControlActionTypeV1::DeviceSync
+            | MlsControlActionTypeV1::GroupInfoChange
     ) || block.conversation_id != control.transition.conversation_id
+        || (block.proposal.action_type == MlsControlActionTypeV1::GroupInfoChange)
+            != control.next_group_info.is_some()
         || block.incarnation != control.transition.incarnation
         || block.proposal.proposal_id != control.transition.proposal_id
         || block.transition_digest.as_deref() != Some(transition_digest.as_str())
@@ -68,7 +71,21 @@ pub(super) fn validate_pending_membership_change(
                 "durable MLS device synchronization changes account membership".into(),
             ));
         }
+        MlsControlActionTypeV1::GroupInfoChange
+            if control.transition.previous_member_count != control.transition.next_member_count
+                || control.transition.previous_roster_commitment
+                    != control.transition.next_roster_commitment
+                || control.transition.previous_participant_domains
+                    != control.transition.next_participant_domains =>
+        {
+            return Err(ChatError::Db(
+                "durable MLS group information change alters the roster".into(),
+            ));
+        }
         _ => {}
+    }
+    if let Some(info) = &control.next_group_info {
+        info.validate().map_err(ChatError::Db)?;
     }
     let mut previous_destination = None;
     for delivery in &control.deliveries {
@@ -534,10 +551,10 @@ pub(super) fn validate_private_roster_action(
                 );
             }
         }
-        MlsControlActionTypeV1::DeviceSync => {
+        MlsControlActionTypeV1::DeviceSync | MlsControlActionTypeV1::GroupInfoChange => {
             if added != 0 || removed != 0 || previous != next {
                 return Err(
-                    "MLS device synchronization must preserve the exact account roster".into(),
+                    "MLS device synchronization and group information changes must preserve the exact account roster".into(),
                 );
             }
         }
@@ -1133,8 +1150,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                                 .is_some_and(|next| {
                                     record.current_authorization_policy.sequence.checked_add(1)
                                         == Some(next.sequence)
-                                        && record.current_authorization_policy.application_senders
-                                            != next.application_senders
+                                        && !record.current_authorization_policy.same_rules(next)
                                 }),
                             MlsControlActionTypeV1::CryptographicPolicyChange => request
                                 .next_cryptographic_policy

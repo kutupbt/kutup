@@ -1,94 +1,44 @@
-import { test, expect, type Page } from '@playwright/test'
-import { signInOrBootstrap } from '../fixtures/auth'
+import { expect, test } from '@playwright/test'
+import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { backFromEditor, createNote, item, openItem, renameItem } from '../fixtures/drive'
 
-// Drive rename + editor-navbar inline rename.
-// The rename endpoint is E2EE-blind: the metadata blob is re-encrypted
-// client-side and PUT to /files/:id. Backend only sees ciphertext.
+const PASSWORD = 'Deneme123*RenamePassword'
 
-async function enterMyFiles(page: Page) {
-    const navigation = page.getByRole('navigation', { name: 'Primary navigation' })
-    await navigation.getByRole('link', { name: 'My Files', exact: true }).click()
-    await expect(page).toHaveURL(/\/drive(?:\?.*)?$/)
-}
+test('drive: rename a note from its menu; the name persists', async ({ browser }) => {
+  const context = await browser.newContext()
+  await registerAccount(context, newAccount('rename', PASSWORD))
+  const page = await openDrive(context)
 
-async function createNote(page: Page, name: string) {
-    const editorPromise = page.context().waitForEvent('page', { timeout: 30_000 })
-    await page.getByRole('button', { name: 'New', exact: true }).click()
-    await page.getByRole('menuitem', { name: /^Note/ }).click()
+  const original = await createNote(page)
+  await backFromEditor(page)
+  const renamed = `renamed-${Date.now()}.md`
+  await renameItem(page, original, renamed)
+  await expect(item(page, original)).toHaveCount(0)
 
-    const dialog = page.getByRole('dialog')
-    await expect(dialog).toBeVisible()
-    await dialog.getByRole('textbox').fill(name)
-    await dialog.getByRole('button', { name: 'Create & open', exact: true }).click()
-
-    const editor = await editorPromise
-    await editor.waitForLoadState('domcontentloaded')
-    await editor.close()
-    await expect(page.locator('tr', { hasText: name }).first()).toBeVisible({ timeout: 15_000 })
-}
-
-test('drive: rename a note via the dropdown menu, name persists', async ({ context }) => {
-    const page = await signInOrBootstrap(context)
-    await enterMyFiles(page)
-
-    const originalName = `rename-source-${Date.now()}.md`
-    await createNote(page, originalName)
-    const row = page.locator('tr', { hasText: originalName }).first()
-    await expect(row).toBeVisible({ timeout: 10_000 })
-    const newBase = `renamed-${Date.now()}`
-
-    // Open the row's "..." dropdown menu and click Rename.
-    await row.locator('button[aria-haspopup="menu"], button:has(svg)').last().click()
-    await page.getByRole('menuitem', { name: 'Rename', exact: true }).click()
-
-    // Dialog opens with the basename (extension is locked + shown grayed).
-    const dialog = page.getByRole('dialog')
-    const input = dialog.getByRole('textbox')
-    await expect(input).toBeVisible()
-    await input.fill(newBase)
-    await dialog.getByRole('button', { name: 'Rename', exact: true }).click()
-    await expect(dialog).toBeHidden({ timeout: 15_000 })
-
-    // Reload Drive and assert the server-backed encrypted metadata persists.
-    await page.reload()
-    await expect(page.locator('tr', { hasText: `${newBase}.md` }).first()).toBeVisible({ timeout: 15_000 })
+  // The name is encrypted metadata: a reload decrypts it again from the server.
+  await page.reload()
+  await expect(item(page, renamed)).toBeVisible({ timeout: 60_000 })
+  await context.close()
 })
 
-test('editor: inline-rename a note from the navbar, name persists across reload', async ({ context }) => {
-    const page = await signInOrBootstrap(context)
-    await enterMyFiles(page)
+test('editor: rename a note from its header; the name persists across reload', async ({ browser }) => {
+  const context = await browser.newContext()
+  await registerAccount(context, newAccount('inlinerename', PASSWORD))
+  const page = await openDrive(context)
 
-    const originalName = `inline-source-${Date.now()}.md`
-    await createNote(page, originalName)
+  const original = await createNote(page)
+  const renamed = `inline-${Date.now()}.md`
+  await page.getByRole('button', { name: original, exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Name').fill(renamed)
+  await dialog.getByRole('button', { name: 'Rename', exact: true }).click()
+  await expect(page.getByRole('button', { name: renamed, exact: true })).toBeVisible({ timeout: 15_000 })
 
-    // Open the note created by this test in a new editor tab.
-    const editorPromise = context.waitForEvent('page', { timeout: 30_000 })
-    const noteRow = page.locator('tr', { hasText: originalName }).first()
-    await expect(noteRow).toBeVisible()
-    await noteRow.locator('td').nth(1).dblclick()
-    const editor = await editorPromise
-    await editor.waitForLoadState('domcontentloaded')
-
-    // Click the filename in the navbar to enter edit mode. The
-    // EditableFilename renders the basename inside a <button> while
-    // unfocused; clicking it swaps to an <input> showing only the base
-    // (the .md is locked alongside, grayed out).
-    const navBtn = editor.locator('header button[title$=".md"]').first()
-    await expect(navBtn).toHaveAttribute('title', originalName, { timeout: 15_000 })
-    await navBtn.click()
-
-    const newBase = `inline-${Date.now()}`
-    const input = editor.locator('header input').first()
-    await expect(input).toBeVisible()
-    await input.fill(newBase)
-    await editor.keyboard.press('Enter')
-    await expect(editor.locator(`header button[title="${newBase}.md"]`).first()).toBeVisible({
-        timeout: 15_000,
-    })
-
-    // Reload the editor page; navbar should show the new name.
-    await editor.reload()
-    await expect(editor.locator(`header button[title="${newBase}.md"]`).first()).toBeVisible({
-        timeout: 15_000,
-    })
+  await page.reload()
+  await expect(page.getByRole('button', { name: renamed, exact: true })).toBeVisible({ timeout: 60_000 })
+  await backFromEditor(page)
+  await expect(item(page, renamed)).toBeVisible()
+  await openItem(page, renamed)
+  await expect(page.getByRole('button', { name: renamed, exact: true })).toBeVisible({ timeout: 60_000 })
+  await context.close()
 })

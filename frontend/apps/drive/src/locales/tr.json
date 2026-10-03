@@ -1,0 +1,631 @@
+{
+  "app": {
+    "title": "Kutup Drive"
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "boot": {
+    "opening": "Drive'ınız açılıyor…",
+    "failedTitle": "Drive açılamadı",
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin."
+  },
+  "nav": {
+    "myFiles": "Dosyalarım",
+    "shared": "Benimle paylaşılanlar",
+    "sharedByMe": "Paylaştıklarım",
+    "trash": "Çöp kutusu",
+    "settings": "Ayarlar"
+  },
+  "explorer": {
+    "sortBy": "Sırala",
+    "fields": {
+      "modified": "Değiştirilme",
+      "name": "Ad",
+      "size": "Boyut",
+      "type": "Tür"
+    },
+    "dir": {
+      "newest": "En yeni önce",
+      "oldest": "En eski önce",
+      "az": "A'dan Z'ye",
+      "za": "Z'den A'ya",
+      "largest": "En büyük önce",
+      "smallest": "En küçük önce"
+    },
+    "foldersFirst": "Önce klasörler",
+    "filter": "Tür",
+    "filterCount_one": "{{count}} tür",
+    "filterCount_other": "{{count}} tür",
+    "showOnly": "Yalnızca göster",
+    "clearFilter": "Tümünü göster",
+    "view": "Görünüm",
+    "views": {
+      "list": "Liste",
+      "grid": "Izgara"
+    },
+    "actions": "İşlemler",
+    "actionsFor": "{{name}} için işlemler",
+    "kinds": {
+      "folder": "Klasörler",
+      "note": "Notlar",
+      "document": "Belgeler",
+      "spreadsheet": "Tablolar",
+      "presentation": "Sunumlar",
+      "whiteboard": "Beyaz tahtalar",
+      "map": "Haritalar",
+      "pdf": "PDF'ler",
+      "image": "Görseller",
+      "video": "Videolar",
+      "audio": "Ses",
+      "code": "Kod",
+      "archive": "Arşivler",
+      "other": "Diğer dosyalar"
+    },
+    "selectAll": "Tümünü seç",
+    "showPreviews": "Önizlemeleri göster",
+    "sharedFile": "Paylaşıldı"
+  },
+  "newMenu": {
+    "new": "Yeni",
+    "folder": "Klasör",
+    "folderTitle": "Yeni klasör",
+    "untitledFolder": "Adsız klasör",
+    "create": "Oluştur",
+    "uploadFiles": "Dosya yükle",
+    "uploadFolder": "Klasör yükle",
+    "createFailed": "Belge oluşturulamadı.",
+    "documents": {
+      "note": "Not",
+      "document": "Belge",
+      "spreadsheet": "Tablo",
+      "presentation": "Sunum",
+      "whiteboard": "Beyaz tahta",
+      "map": "Harita"
+    },
+    "untitled": {
+      "note": "Adsız not",
+      "document": "Adsız belge",
+      "spreadsheet": "Adsız tablo",
+      "presentation": "Adsız sunum",
+      "whiteboard": "Adsız beyaz tahta",
+      "map": "Adsız harita"
+    }
+  },
+  "drive": {
+    "encrypted": "Şifreli öğe",
+    "encryptedFolderTitle": "Bu klasör açılamıyor",
+    "encryptedFolder": "Anahtarı bu cihazda doğrulanamadı. Bozulmuş olabilir ya da anahtarları değişmiş biri tarafından paylaşılmış olabilir.",
+    "folderMissingTitle": "Klasör bulunamadı",
+    "folderMissing": "Çöp kutusuna taşınmış olabilir ya da artık erişiminiz yok.",
+    "loadFailed": "Dosyalarınız yüklenemedi.",
+    "emptyTitle": "Bu klasör boş",
+    "emptyDescription": "Dosyaları buraya bırakın ya da yüklemek veya oluşturmak için Yeni'yi kullanın.",
+    "emptyReadOnly": "Bu klasörde henüz bir şey paylaşılmadı.",
+    "noMatchTitle": "Burada bu türde bir şey yok",
+    "noMatchDescription": "Tümünü görmek için tür filtresini değiştirin.",
+    "selection_one": "{{count}} seçili",
+    "selection_other": "{{count}} seçili",
+    "clearSelection": "Seçimi temizle",
+    "actions": {
+      "open": "Aç",
+      "openInMaps": "Haritalar’da aç",
+      "download": "İndir",
+      "downloadZip": "ZIP olarak indir",
+      "rename": "Yeniden adlandır",
+      "color": "Renk",
+      "share": "Paylaş",
+      "publicLink": "Herkese açık bağlantı al",
+      "trash": "Çöp kutusuna taşı",
+      "copyTo": "Kopyala…",
+      "moveTo": "Taşı…",
+      "quickLook": "Hızlı bakış"
+    },
+    "movedToTrash_one": "Çöp kutusuna taşındı",
+    "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
+    "undo": "Geri al",
+    "undoFailed": "Geri yüklenemedi; yeniden denemek için Çöp kutusunu açın.",
+    "trashFailed": "Çöp kutusuna taşınamadı.",
+    "zipping": "ZIP hazırlanıyor…",
+    "zipProgress": "Dosyalar ekleniyor: {{total}} dosyadan {{done}}",
+    "zipEmpty": "Bu klasörde indirilecek dosya yok.",
+    "zipTooLarge": "Bu klasör 1 GB'tan büyük. ZIP olarak indirmek için Chrome ya da Edge kullanın ya da dosyaları tek tek indirin.",
+    "downloadFailed": "İndirme başarısız oldu.",
+    "linkFailed": "Bağlantı oluşturulamadı.",
+    "dropHere": "{{name}} klasörüne yüklemek için bırakın"
+  },
+  "dialogs": {
+    "name": {
+      "label": "Ad",
+      "required": "Bir ad girin.",
+      "tooLong": "En fazla {{max}} karakter kullanın.",
+      "slash": "Adlarda / ya da \\ bulunamaz.",
+      "taken": "Burada bu adda bir şey zaten var.",
+      "failed": "Ad kaydedilemedi."
+    },
+    "rename": {
+      "title": "Yeniden adlandır",
+      "submit": "Yeniden adlandır"
+    },
+    "color": {
+      "title": "Klasör rengi",
+      "default": "Varsayılan",
+      "ice": "Buz",
+      "teal": "Camgöbeği",
+      "amber": "Kehribar",
+      "red": "Kırmızı",
+      "failed": "Renk kaydedilemedi.",
+      "orange": "Turuncu",
+      "green": "Yeşil",
+      "blue": "Mavi",
+      "purple": "Mor",
+      "pink": "Pembe"
+    },
+    "share": {
+      "title": "“{{name}}” paylaş",
+      "description": "Paylaştığınız kişiler bu klasörün anahtarının kendilerine mühürlenmiş bir kopyasını alır. Alt klasörler ayrıca paylaşılır.",
+      "recipient": "E-posta ya da Kutup adresi",
+      "recipientHint": "Bu sunucudaki biri için e-posta, başka sunucudaki biri için kullanici@sunucu.",
+      "canUpload": "Dosya ekleyebilir ve düzenleyebilir",
+      "canUploadHint": "Bu olmadan yalnızca görüntüleyebilirler. Ekledikleri kendi depolama alanlarından düşer.",
+      "quota": "Yükleme sınırı (GiB)",
+      "quotaHint": "İsteğe bağlı. Depolama alanları dışında sınır istemiyorsanız boş bırakın.",
+      "quotaInvalid": "Sıfırdan büyük bir boyut girin.",
+      "canDelete": "Eklediği dosyaları silebilir",
+      "canDeleteHint": "Başkalarının dosyalarını asla silemez.",
+      "note": "Aynı kişiyle yeniden paylaşmak izinlerini değiştirir.",
+      "submit": "Paylaş",
+      "shared": "{{account}} ile paylaşıldı",
+      "notFound": "Bu adreste kimse yok. Başka bir Kutup sunucusu için kullanici@sunucu kullanın.",
+      "failed": "Klasör paylaşılamadı."
+    },
+    "publicLink": {
+      "title": "Herkese açık bağlantı",
+      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir.",
+      "warning": "Bu bağlantıya sahip olan herkes bu dosyaları açabilir. Bağlantıyı klasörün Paylaş penceresinden yeniden kopyalayabilir ya da kaldırabilirsiniz."
+    },
+    "invite": {
+      "title": "Davet bağlantısı",
+      "description": "{{account}} başka bir Kutup sunucusunda. Bu bağlantıyı gönderin; Benimle paylaşılanlar altında ekler.",
+      "warning": "Bağlantı bir kez ve yalnızca {{account}} hesabı için çalışır. Yeniden gösterilmez."
+    },
+    "copy": {
+      "title_one": "{{count}} öğeyi kopyala…",
+      "title_other": "{{count}} öğeyi kopyala…",
+      "submit": "Buraya kopyala",
+      "locked": "Bu klasörün anahtarı kullanılamıyor.",
+      "readOnly": "Bu klasöre dosya ekleyemezsin.",
+      "foldersOwnedOnly": "Klasörler yalnızca kendi klasörlerine kopyalanabilir.",
+      "intoItself": "Bir klasör kendi içine kopyalanamaz.",
+      "failed": "Kopyalama başlatılamadı."
+    },
+    "move": {
+      "title_one": "{{count}} öğeyi taşı…",
+      "title_other": "{{count}} öğeyi taşı…",
+      "description": "Hiçbir şey yeniden yüklenmez. Yeni klasörü açabilen herkes oraya taşıdıklarını açabilir.",
+      "submit": "Buraya taşı",
+      "locked": "Bu klasörün anahtarı kullanılamıyor.",
+      "readOnly": "Yalnızca düzenleyebildiğin klasörler arasında taşıyabilirsin.",
+      "otherOwner": "Yalnızca aynı kişiye ait klasörler arasında. Bunun yerine oraya kopyala.",
+      "remote": "Başka bir sunucudaki klasörlere taşınamaz, kopyalanabilir.",
+      "notOwner": "Klasörü yalnızca sahibi taşıyabilir.",
+      "intoItself": "Bir klasör kendi içine ya da içindeki bir klasöre taşınamaz.",
+      "alreadyThere": "Zaten bu klasörde.",
+      "done_one": "{{folder}} klasörüne taşındı",
+      "done_other": "{{count}} öğe {{folder}} klasörüne taşındı",
+      "nameTaken": "“{{name}}” zaten {{folder}} klasöründe var; taşınmadı.",
+      "namesTaken_one": "{{count}} öğenin adı {{folder}} klasöründe zaten var; taşınmadı.",
+      "namesTaken_other": "{{count}} öğenin adı {{folder}} klasöründe zaten var; taşınmadılar.",
+      "changed_one": "{{count}} öğe bu arada değişti ve taşınmadı. Yeniden dene.",
+      "changed_other": "{{count}} öğe bu arada değişti ve taşınmadı. Yeniden dene.",
+      "failed_one": "{{count}} öğe taşınamadı.",
+      "failed_other": "{{count}} öğe taşınamadı.",
+      "undoFailed": "Her şey geri taşınamadı. İki klasörü de kontrol et."
+    },
+    "picker": {
+      "expand": "{{name}} klasörünü aç",
+      "collapse": "{{name}} klasörünü kapat"
+    },
+    "access": {
+      "title": "Erişimi olanlar",
+      "loading": "Erişimi olanlar yükleniyor…",
+      "loadFailed": "Erişimi olanlar yüklenemedi.",
+      "empty": "Bu klasörü yalnızca siz açabilirsiniz.",
+      "canEdit": "Ekleyebilir ve düzenleyebilir",
+      "canView": "Görüntüleyebilir",
+      "otherServer": "başka bir sunucuda",
+      "link": "Herkese açık bağlantı",
+      "linkCreated": "Oluşturulma: {{created}}",
+      "linkExpires": "Oluşturulma: {{created}} · bitiş: {{expires}}",
+      "legacyLinks_one": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak onu da kaldırır; ardından yeni bir bağlantı oluşturun.",
+      "legacyLinks_other": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak bunları da kaldırır; ardından yeni bağlantılar oluşturun.",
+      "copy": "Bağlantıyı kopyala",
+      "copied": "Bağlantı kopyalandı",
+      "remove": "Çıkar",
+      "removeNamed": "{{name}} kişisini çıkar",
+      "removeLink": "Bu bağlantıyı kaldır",
+      "confirmTitle": "{{name}} çıkarılsın mı?",
+      "confirmBody": "Erişimi hemen kalkar ve klasör, kendisine hiç verilmeyecek yeni bir anahtara geçer: bundan sonra eklenen ya da değiştirilen hiçbir şeyi okuyamaz. Daha önce açtıkları ya da indirdikleri onlarda kalır.",
+      "removed": "Erişim kaldırıldı",
+      "changed": "Bu arada erişim değişti. Listeyi kontrol edip yeniden deneyin.",
+      "recipientChanged": "{{account}} hesabını sıfırladı. Onu çıkarın, isterseniz sonra yeniden paylaşın.",
+      "failed": "Erişim kaldırılamadı. Yeniden deneyin."
+    }
+  },
+  "shared": {
+    "emptyTitle": "Henüz sizinle bir şey paylaşılmadı",
+    "emptyDescription": "Başkalarının sizinle paylaştığı klasörler ve dosyalar, diğer Kutup sunucularından gelen klasörler dahil, burada görünür.",
+    "from": "{{account}} tarafından",
+    "addInvite": "Davet bağlantısından ekle",
+    "invite": {
+      "title": "Davet bağlantısından ekle",
+      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör, tek dosya veya Fotoğraflar albümü davet bağlantısını yapıştırın.",
+      "link": "Davet bağlantısı",
+      "invalid": "Bu bir Kutup davet bağlantısı değil.",
+      "submit": "Ekle",
+      "added": "Benimle paylaşılanlar’a eklendi",
+      "notFound": "Bu davet yok ya da zaten kullanılmış.",
+      "notForYou": "Bu davet başka bir hesap için.",
+      "failed": "Davet eklenemedi.",
+      "albumAdded": "Albüm eklendi. Fotoğraflar'da.",
+      "openPhotos": "Fotoğraflar'da aç"
+    },
+    "leave": "Ayrıl",
+    "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",
+    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Drive'ınızdan kalkar. Sizi yeniden davet edebilir.",
+    "leaveFailed": "Klasörden ayrılınamadı.",
+    "waitingName": "Sahibi bekleniyor",
+    "waiting": "sahibinin erişimi güncellemesi bekleniyor",
+    "editsWait": "sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
+    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "goneName": "Artık paylaşılmıyor",
+    "gone": "artık paylaşılmıyor ya da sunucusuna ulaşılamıyor",
+    "remove": "Kaldır",
+    "removeFileTitle": "Bu dosya Benimle paylaşılanlar’dan kaldırılsın mı?",
+    "removeFileDescription": "“{{name}}” başka bir sunucuda. Artık görmezsiniz; yeniden görmek için yeni bir davet gerekir."
+  },
+  "trash": {
+    "empty": "Çöp kutusunu boşalt",
+    "emptyTitle": "Çöp kutusu boş",
+    "emptyDescription": "Sildiğiniz şeyler kalıcı olarak kaldırılmadan önce bir süre burada durur.",
+    "retention": "Çöp kutusundaki öğeler depolama alanınızdan düşmeye devam eder ve sunucunun saklama süresinden sonra kalıcı olarak kaldırılır.",
+    "restore": "Geri yükle",
+    "restored": "“{{name}}” geri yüklendi",
+    "restoreFailed": "Geri yüklenemedi.",
+    "restoreParentFirst": "Klasörü de çöp kutusunda. Önce klasörü geri yükleyin.",
+    "deleteForever": "Kalıcı olarak sil",
+    "deleteForeverTitle": "Kalıcı olarak silinsin mi?",
+    "deleteForeverDescription": "“{{name}}” ve içindeki her şey şimdi kaldırılır.",
+    "cannotUndo": "Bu geri alınamaz.",
+    "deleteFailed": "Silinemedi.",
+    "emptyConfirmTitle": "Çöp kutusu boşaltılsın mı?",
+    "emptyConfirmDescription_one": "{{count}} öğe kalıcı olarak kaldırılır.",
+    "emptyConfirmDescription_other": "{{count}} öğe kalıcı olarak kaldırılır.",
+    "withFiles_one": "İçinde {{count}} dosya",
+    "withFiles_other": "İçinde {{count}} dosya"
+  },
+  "public": {
+    "title": "Paylaşılan dosyalar",
+    "decrypting": "Bu cihazda şifre çözülüyor…",
+    "description_one": "{{count}} dosya, bu bağlantıdaki anahtarla tarayıcınızda çözüldü.",
+    "description_other": "{{count}} dosya, bu bağlantıdaki anahtarla tarayıcınızda çözüldü.",
+    "emptyTitle": "Dosya yok",
+    "emptyDescription": "Bu klasörde şu anda dosya yok.",
+    "footer": "Kutup · uçtan uca şifreli. Sunucu bu dosyaların içeriğini hiç görmedi.",
+    "failure": {
+      "missingKey": {
+        "title": "Bu bağlantı eksik",
+        "description": "# işaretinden sonraki kısım anahtarı taşır ve eksik. Bağlantının tamamını yeniden isteyin."
+      },
+      "notFound": {
+        "title": "Bu bağlantı yok",
+        "description": "Yanlış yazılmış olabilir ya da klasör silinmiş."
+      },
+      "expired": {
+        "title": "Bu bağlantının süresi doldu",
+        "description": "Paylaşan kişiden yenisini isteyin."
+      },
+      "badKey": {
+        "title": "Bu bağlantının anahtarı uymuyor",
+        "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."
+      },
+      "other": {
+        "title": "Dosyalar açılamadı",
+        "description": "Bağlantınızı kontrol edip sayfayı yenileyin."
+      },
+      "waiting": {
+        "title": "Sahibi bekleniyor",
+        "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Drive’ı açtığında yeniden çalışır."
+      }
+    }
+  },
+  "editor": {
+    "status": {
+      "connecting": "Bağlanıyor…",
+      "ready": "Canlı",
+      "error": "Çevrimdışı — yeniden bağlanıyor"
+    },
+    "save": "Kaydet",
+    "saving": "Kaydediliyor…",
+    "saved": "Kaydedildi",
+    "saveHint": "Geçerli durumu kaydet (Ctrl+S)",
+    "saveVersion": "Sürüm kaydet",
+    "saveVersionHint": "Süresiz saklanan adlandırılmış bir sürüm kaydet",
+    "nameVersion": {
+      "title": "Bu sürümü adlandır",
+      "description": "Adlandırılmış sürümler süresiz saklanır ve geçmişin en üstünde görünür.",
+      "label": "Sürüm adı"
+    },
+    "history": "Geçmiş",
+    "historyTitle": "Sürüm geçmişi",
+    "closeHistory": "Geçmişi kapat",
+    "shortcutsButton": "Klavye kısayolları",
+    "cursorColor": "İmleç rengi",
+    "useColor": "{{color}} kullan",
+    "customColor": "Özel renk…",
+    "colorSaveFailed": "İmleç rengin kaydedilemedi",
+    "restoreFailed": "Bu sürüm geri yüklenemedi",
+    "restored": "Sürüm geri yüklendi",
+    "preRestoreLabel": "Geri yüklemeden önce, {{time}}",
+    "restoredLabel": "{{time}} sürümünden geri yüklendi",
+    "quotaSave": "Depolama kotası aşıldı — kaydedilemedi",
+    "mode": {
+      "label": "Görünüm",
+      "edit": "Düzenle",
+      "split": "Böl",
+      "read": "Oku"
+    },
+    "code": {
+      "copy": "Kodu kopyala",
+      "copied": "Kopyalandı"
+    },
+    "unfold": "Aç",
+    "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
+    "palette": {
+      "title": "Komut paleti",
+      "placeholder": "Bir komut yaz…",
+      "empty": "Eşleşen komut yok.",
+      "switcher": "Bir dosya ya da klasör aç",
+      "switcherPlaceholder": "Dosya ya da klasör bul…",
+      "livePreview": "Canlı önizleme: notu okunduğu gibi göster",
+      "sourceMode": "Kaynak modu: düz Markdown göster",
+      "switcherEmpty": "Bu adla bir şey yok.",
+      "fold": "İmleçte katla",
+      "unfold": "İmleçte aç",
+      "foldAll": "Her şeyi katla",
+      "unfoldAll": "Her şeyi aç",
+      "groups": {
+        "view": "Görünüm",
+        "file": "Dosya",
+        "fold": "Katlama"
+      }
+    },
+    "focus": {
+      "enter": "Odak modu (Ctrl/⌘+Shift+F)",
+      "exit": "Odak modundan çık (Esc)"
+    },
+    "callout": {
+      "note": "Not",
+      "abstract": "Özet",
+      "info": "Bilgi",
+      "todo": "Yapılacak",
+      "tip": "İpucu",
+      "success": "Başarılı",
+      "question": "Soru",
+      "warning": "Uyarı",
+      "failure": "Başarısız",
+      "danger": "Tehlike",
+      "bug": "Hata",
+      "example": "Örnek",
+      "quote": "Alıntı"
+    },
+    "menu": {
+      "addLink": "Bağlantı ekle",
+      "addExternalLink": "Dış bağlantı ekle",
+      "format": "Biçim",
+      "paragraph": "Paragraf",
+      "insert": "Ekle",
+      "highlight": "Vurgu",
+      "callout": "Bilgi kutusu",
+      "strikethrough": "Üstü çizili",
+      "math": "Matematik",
+      "bullet": "Madde işaretli liste",
+      "numbered": "Numaralı liste",
+      "task": "Görev listesi",
+      "heading": "Başlık {{level}}",
+      "quote": "Alıntı",
+      "body": "Gövde metni",
+      "table": "Tablo",
+      "codeBlock": "Kod bloğu",
+      "mathBlock": "Matematik bloğu",
+      "rule": "Yatay çizgi",
+      "picture": "Görsel…",
+      "cut": "Kes",
+      "copy": "Kopyala",
+      "paste": "Yapıştır",
+      "pastePlain": "Düz metin olarak yapıştır",
+      "selectAll": "Tümünü seç",
+      "clipboardBlocked": "Tarayıcın burada panoya izin vermedi. Bunun yerine Ctrl+C / Ctrl+V (Mac’te ⌘) kullan."
+    },
+    "links": {
+      "noAccess": "Bu öğeye erişimin yok ya da öğe artık yok",
+      "loading": "Öğe aranıyor…"
+    },
+    "image": {
+      "adding_one": "Görsel ekleniyor…",
+      "adding_other": "{{count}} görsel ekleniyor…",
+      "loading": "Görsel yükleniyor",
+      "unavailable": "Görsel kullanılamıyor",
+      "tooLarge": "En fazla {{limit}} boyutunda görseller eklenebilir.",
+      "unsupported": "Bu tür görsel eklenemez: PNG, JPEG, GIF, WebP ya da AVIF kullan.",
+      "failed": "Görsel eklenemedi. Yeniden dene."
+    },
+    "outline": {
+      "title": "Ana hat",
+      "hint": "Notun başlıkları; oraya gitmek için birine tıkla",
+      "close": "Ana hattı kapat",
+      "empty": "Henüz başlık yok. Eklemek için bir satıra # ile başla."
+    },
+    "statusBar": {
+      "selected": "{{words}} · {{chars}} seçili",
+      "cursor": "Satır {{line}}, Sütun {{col}}",
+      "words_one": "{{count}} kelime",
+      "words_other": "{{count}} kelime",
+      "chars_one": "{{count}} karakter",
+      "chars_other": "{{count}} karakter",
+      "collaborators_one": "Burada {{count}} kişi daha var",
+      "collaborators_other": "Burada {{count}} kişi daha var"
+    },
+    "shortcuts": {
+      "bold": "Kalın",
+      "italic": "İtalik",
+      "code": "Satır içi kod",
+      "link": "Bağlantı (seçim yoksa: bir dosya ya da klasör bağla)",
+      "focusMode": "Odak modu (çıkmak için Esc)",
+      "fold": "İmleçteki bölümü katla ya da aç",
+      "foldAll": "Her şeyi katla ya da aç",
+      "palette": "Komut paleti",
+      "switcher": "Bir dosya ya da klasör aç",
+      "kutupLink": "Drive’ındaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
+      "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
+      "title": "Düzenleyici klavye kısayolları",
+      "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
+      "save": "Kaydet",
+      "search": "Belgede bul",
+      "undo": "Geri al",
+      "redo": "Yinele",
+      "comment": "Satır yorumunu aç/kapat",
+      "cycleMode": "Düzenle / Böl / Oku arasında geç",
+      "cycleModeRev": "Modlar arasında geriye geç",
+      "addCursor": "Tıklanan yere imleç ekle",
+      "rectSelect": "Dikdörtgen seçim"
+    },
+    "versions": {
+      "loading": "Sürümler yükleniyor…",
+      "loadFailed": "Sürüm geçmişi yüklenemedi.",
+      "empty": "Henüz sürüm yok",
+      "emptyHint": "Sürümler sen düzenledikçe ya da Sürüm kaydet'i seçtiğinde otomatik kaydedilir.",
+      "kept": "Saklanıyor",
+      "today": "Bugün, {{time}}",
+      "yesterday": "Dün, {{time}}",
+      "meta": "{{size}} · anahtar {{key}}",
+      "name": "Adlandır",
+      "namePlaceholder": "Sürüm adı",
+      "keep": "Süresiz sakla",
+      "unkeep": "Saklamayı bırak",
+      "restore": "Geri yükle",
+      "updateFailed": "Bu sürüm güncellenemedi"
+    },
+    "restore": {
+      "title": "Bu sürüm geri yüklensin mi?",
+      "description": "Önce geçerli durumu yedek sürüm olarak kaydet ya da yedeklemeden doğrudan geri yükle.",
+      "restoreOnly": "Yalnızca geri yükle",
+      "saveAndRestore": "Kaydet ve geri yükle"
+    },
+    "whiteboard": {
+      "loading": "Beyaz tahta yükleniyor…",
+      "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi"
+    },
+    "office": {
+      "loading": "Belge düzenleyici yükleniyor…",
+      "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
+      "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir.",
+      "notPdf": "Bu dosya bir PDF gibi görünmüyor, bu yüzden PDF düzenleyici açamıyor. Dosyayı indir ya da görüntüleyicide aç.",
+      "openFailed": "Düzenleyici bu belgeyi açamadı. Yeniden dene ya da dosyayı indir.",
+      "about": {
+        "open": "Bu düzenleyici hakkında",
+        "title": "Bu düzenleyici hakkında",
+        "developer": "Belgeler, tablolar ve sunular, özgün geliştiricisi Ascensio System SIA olan ONLYOFFICE ile düzenlenir.",
+        "modified": "Bu, değiştirilmiş bir sürümdür: CryptPad, ONLYOFFICE'i tamamen tarayıcıda çalışacak şekilde uyarladı; Kutup bunun üzerinde kendi değişikliklerini sürdürür.",
+        "licence": "ONLYOFFICE'in ek koşullarıyla birlikte GNU AGPL v3 altında özgür bir yazılımdır. Değişiklikler ve tarihleriyle birlikte kaynak kodu herkese açıktır.",
+        "licenceLink": "Lisans ve bildirimler",
+        "termsLink": "ONLYOFFICE ek koşulları",
+        "editorSource": "Düzenleyicinin kaynak kodu",
+        "converterSource": "Dosya dönüştürücünün (x2t) kaynak kodu",
+        "trademark": "ONLYOFFICE, Ascensio System SIA'nın ticari markasıdır. Kutup, ONLYOFFICE ile bağlantılı değildir ve onun tarafından onaylanmamıştır."
+      }
+    },
+    "viewOnly": "Yalnızca görüntüleme"
+  },
+  "file": {
+    "opening": "Açılıyor…",
+    "failedTitle": "Bu dosya açılamıyor",
+    "backToDrive": "Drive'a dön",
+    "backTo": "{{folder}} klasörüne dön",
+    "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
+    "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
+    "tooLarge": "{{size}} boyutuyla tarayıcıda açılamayacak kadar büyük (sınır {{limit}}). Bunun yerine indir.",
+    "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
+    "noPreviewTitle": "Bu dosya türü için önizleme yok",
+    "noPreview": "Cihazında açmak için indir.",
+    "restoring": "Geri yükleniyor…",
+    "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme"
+  },
+  "search": {
+    "label": "Drive'da ara",
+    "placeholder": "Drive'da ara",
+    "clear": "Aramayı temizle",
+    "searching": "“{{query}}” aranıyor…",
+    "results_one": "“{{query}}” için {{count}} sonuç",
+    "results_other": "“{{query}}” için {{count}} sonuç",
+    "noneTitle": "Bir şey bulunamadı",
+    "none": "Adında “{{query}}” geçen dosya ya da klasör yok.",
+    "showInFolder": "Klasöründe göster"
+  },
+  "quickLook": {
+    "loading": "Şifre çözülüyor…",
+    "cut": "Yalnızca başı gösteriliyor. Tamamı için dosyayı aç.",
+    "previous": "Önceki dosya",
+    "next": "Sonraki dosya",
+    "openInEditor": "Düzenleyicide aç",
+    "none": {
+      "type": "Bu dosya türü için önizleme yok.",
+      "size": "Bu dosya önizleme için çok büyük. Aç ya da indir.",
+      "failed": "Önizleme yüklenemedi."
+    },
+    "picture": {
+      "type": "Önizleme görseli. Tamamını görmek ve düzenlemek için dosyayı aç.",
+      "size": "Önizleme görseli: dosya burada gösterilemeyecek kadar büyük. Aç ya da indir."
+    }
+  },
+  "viewer": {
+    "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
+  },
+  "settings": {
+    "title": "Drive ayarları",
+    "description": "Drive'ın dosyalarınızı nasıl sakladığı ve klasörleri nasıl açtığı. Profiliniz ve güvenliğiniz hesap ayarlarınızdadır.",
+    "versions": {
+      "title": "Dosya sürümleri",
+      "description": "Bir belgenin her kaydı geri yükleyebileceğin bir sürüm tutar. Son gün tamamen, son hafta saatte bir, daha eskileri günde bir sürüm olarak saklanır. Adlandırdığın sürümler süresiz saklanır. Sürümler depolama alanına sayılır.",
+      "keep": "Sürümleri şu süre sakla",
+      "failed": "Ayar kaydedilemedi.",
+      "retention": {
+        "d7": "1 hafta",
+        "d30": "30 gün",
+        "d90": "90 gün",
+        "d180": "6 ay",
+        "d365": "1 yıl",
+        "d3650": "10 yıl"
+      }
+    },
+    "view": {
+      "title": "Varsayılan görünüm",
+      "description": "Klasörlerin bu tarayıcıda nasıl açıldığı.",
+      "list": "Liste",
+      "grid": "Izgara"
+    }
+  },
+  "sharedByMe": {
+    "emptyTitle": "Henüz bir şey paylaşmıyorsunuz",
+    "emptyDescription": "Kişilerle veya bağlantıyla paylaştığınız klasör ve dosyalar burada görünür.",
+    "people_one": "{{count}} kişi",
+    "people_other": "{{count}} kişi",
+    "otherServers_one": "başka sunucuda {{count}} kişi",
+    "otherServers_other": "başka sunucularda {{count}} kişi",
+    "links_one": "herkese açık bağlantı",
+    "links_other": "{{count}} herkese açık bağlantı",
+    "manage": "Paylaşımı yönet"
+  }
+}

@@ -15,7 +15,6 @@ use uuid::Uuid;
 use super::active_policy;
 use super::policy::advertised_policy;
 use crate::error::{AppError, AppResult};
-use crate::federation::FederationPolicyFeature;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
@@ -161,16 +160,7 @@ pub(crate) async fn status(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> AppResult<Response> {
-    let chat_publicly_enabled = match state.federation.as_ref() {
-        Some(federation) => {
-            federation
-                .policy()
-                .feature_is_publicly_enabled(FederationPolicyFeature::Chat)
-                .await?
-        }
-        None => false,
-    };
-    let advertised_policy = advertised_policy(&state, chat_publicly_enabled).await?;
+    let advertised_policy = advertised_policy(&state).await?;
     let advertised = advertised_policy.is_some();
     let policy = match advertised_policy {
         Some(policy) => Some(policy),

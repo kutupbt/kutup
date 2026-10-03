@@ -59,8 +59,12 @@ fn base_storage_path(
     format!("chat-backup/{user_id}/{backup_id}/bases/{object_id}/{ciphertext_digest}")
 }
 
-fn media_storage_path(user_id: Uuid, backup_id: Uuid, media_id: &str, operation: Uuid) -> String {
-    format!("chat-backup/{user_id}/{backup_id}/media/{media_id}/{operation}")
+/// Where one upload attempt of a backup media object is stored: a key of
+/// its own per attempt, so concurrent retries never share one — the attempt
+/// that loses (the row already exists) deletes only its own bytes.
+fn media_storage_path(user_id: Uuid, backup_id: Uuid, media_id: &str) -> String {
+    let attempt = Uuid::new_v4();
+    format!("chat-backup/{user_id}/{backup_id}/media/{media_id}/{attempt}")
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -330,13 +334,14 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         delivery_media_bytes: u64::try_from(delivery_media_bytes).unwrap_or_default(),
         history_media_bytes: u64::try_from(history_media_bytes).unwrap_or_default(),
     };
-    let backup: Option<(
+    type BackupRow = (
         String,
         serde_json::Value,
         Option<serde_json::Value>,
         i64,
         Option<OffsetDateTime>,
-    )> = sqlx::query_as(
+    );
+    let backup: Option<BackupRow> = sqlx::query_as(
         "SELECT root_envelope,signer_authorization,current_manifest,current_cursor,
                 latest_protected_at FROM chat_backups WHERE user_id=$1",
     )
@@ -615,7 +620,7 @@ pub async fn list_segments(
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| AppError::not_found("Chat history is not provisioned"))?;
-    let rows: Vec<(
+    type SegmentRow = (
         Uuid,
         i64,
         i32,
@@ -625,7 +630,8 @@ pub async fn list_segments(
         String,
         Vec<u8>,
         OffsetDateTime,
-    )> = sqlx::query_as(
+    );
+    let rows: Vec<SegmentRow> = sqlx::query_as(
         "SELECT operation_id,cursor,source_device_id,device_sequence,previous_segment_digest,
                     ciphertext_bytes,ciphertext_sha256,ciphertext,acknowledged_at
              FROM chat_backup_segments WHERE user_id=$1 AND cursor>$2
@@ -1368,7 +1374,7 @@ pub async fn copy_media(
     if measured_outer_bytes != expected_outer_bytes {
         return Err(AppError::internal("backup media framing length mismatch"));
     }
-    let path = media_storage_path(user_id, backup_id, &request.media_id, operation_id);
+    let path = media_storage_path(user_id, backup_id, &request.media_id);
     let body = ByteStream::from_path(output.path())
         .await
         .map_err(|_| AppError::internal("read backup media temp file"))?;
@@ -1667,10 +1673,7 @@ pub async fn upload_media(
         }));
     }
 
-    let path = format!(
-        "chat-backup/{user_id}/{backup_id}/media/{}/direct-{reference_id}",
-        metadata.media_id
-    );
+    let path = media_storage_path(user_id, backup_id, &metadata.media_id);
     let body = ByteStream::from_path(file.path())
         .await
         .map_err(|_| AppError::internal("read backup media temp file"))?;

@@ -597,6 +597,7 @@ pub(super) fn replay_mls_control_history(
             MlsControlActionTypeV1::MembershipChange
                 | MlsControlActionTypeV1::RoutineAdmin
                 | MlsControlActionTypeV1::DeviceSync
+                | MlsControlActionTypeV1::GroupInfoChange
         ) && request.membership_transition.is_some()
         {
             let transition = request

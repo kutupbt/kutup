@@ -122,6 +122,13 @@ impl MlsClient {
         let expires_after_seconds = content
             .disappearing_after_seconds()
             .map_err(ChatError::Content)?;
+        content.extras().map_err(ChatError::Content)?;
+        if content.structured_content_is_valid() == Some(false)
+            || (content.kind == kutup_chat_proto::content::kind::GROUP_CALL
+                && content.as_group_call().is_none())
+        {
+            return Err(ChatError::Content(format!("invalid MLS {}", content.kind)));
+        }
         if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_TIMER
             && content.as_disappearing_timer().is_none()
         {
@@ -129,10 +136,15 @@ impl MlsClient {
                 "MLS disappearing-message timer is invalid".into(),
             ));
         }
-        if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START {
-            return Err(ChatError::Content(
-                "disappearing expiry starts are same-account controls, not MLS applications".into(),
-            ));
+        if ChatContent::is_account_control_kind(&content.kind)
+            || ChatContent::is_local_only_kind(&content.kind)
+            // Group calls have their own path; 1:1 signals never ride MLS.
+            || content.kind == kutup_chat_proto::content::kind::CALL
+        {
+            return Err(ChatError::Content(format!(
+                "{} is not an MLS application",
+                content.kind
+            )));
         }
         let canonical_content =
             serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
@@ -179,6 +191,7 @@ impl MlsClient {
                 "MLS application sender is not permitted by group policy".into(),
             ));
         }
+        let mut left_notice = None;
         if let Some(control) = group_control {
             match control {
                 MlsGroupControlBodyV1::OwnerCandidate { candidate } => {
@@ -259,6 +272,40 @@ impl MlsClient {
                         context.server_timestamp,
                     )?;
                 }
+                MlsGroupControlBodyV1::LeaveRequest { request } => {
+                    request.validate().map_err(ChatError::Trust)?;
+                    if request.conversation_id != conversation.request.genesis.conversation_id
+                        || request.incarnation != conversation.request.genesis.incarnation
+                        || request.requested_at
+                            > context
+                                .server_timestamp
+                                .saturating_add(KEY_PACKAGE_CLOCK_SKEW_SECONDS as i64)
+                    {
+                        return Err(ChatError::Trust(
+                            "MLS leave request differs from its authenticated group".into(),
+                        ));
+                    }
+                    let (local_address, _) =
+                        parse_device_credential_identity(&metadata.credential_identity)?;
+                    let record = metadata
+                        .conversations
+                        .get_mut(&conversation.request.genesis.conversation_id.to_string())
+                        .ok_or_else(|| {
+                            ChatError::Db("local MLS conversation record is unavailable".into())
+                        })?;
+                    if sender == local_address {
+                        // Left from another of this account's devices.
+                        record.left = true;
+                        left_notice = Some(left_notice_record(
+                            record,
+                            &local_address,
+                            sender_device_id,
+                            epoch,
+                        )?);
+                    } else {
+                        record.departing_members.insert(sender.clone());
+                    }
+                }
             }
         }
         // Disappearing messages get a full local viewing window even after a
@@ -292,7 +339,14 @@ impl MlsClient {
             mls_state: Some(state),
             ..Pending::default()
         };
-        writes.mls_messages.insert(record_id, history.clone());
+        // After leaving, what the group still sends until the removal is
+        // committed is decrypted (the MLS state must advance) but not kept.
+        if !conversation.left {
+            writes.mls_messages.insert(record_id, history.clone());
+        }
+        if let Some(notice) = left_notice {
+            writes.mls_messages.insert(notice.record_id.clone(), notice);
+        }
         self.db.apply(&writes).await?;
         Ok(AppliedInboundMlsApplication {
             message: history,
@@ -604,6 +658,7 @@ impl MlsClient {
             text,
             reply_to,
             None,
+            &VisibleMessageExtrasV1::default(),
             created_at_ms,
         )
         .await
@@ -620,6 +675,7 @@ impl MlsClient {
         text: &str,
         reply_to: Option<&str>,
         expires_after_seconds: Option<u32>,
+        extras: &VisibleMessageExtrasV1,
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
         let parsed_send_id = Uuid::parse_str(send_id)
@@ -649,6 +705,7 @@ impl MlsClient {
                     .disappearing_after_seconds()
                     .map_err(ChatError::Content)?
                     != expires_after_seconds
+                || &content.extras().map_err(ChatError::Content)? != extras
             {
                 return Err(ChatError::Trust(
                     "MLS send id is already bound to different text or conversation".into(),
@@ -687,11 +744,98 @@ impl MlsClient {
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let mut content = ChatContent::text_with_id(send_id, sent_at, seq, text)
             .with_reply_to(reply_to)
+            .map_err(ChatError::Invalid)?
+            .with_extras(extras)
             .map_err(ChatError::Invalid)?;
         if let Some(seconds) = expires_after_seconds {
             content = content
                 .with_disappearing_after(seconds)
                 .map_err(ChatError::Invalid)?;
+        }
+        let content_bytes =
+            serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
+        self.create_application_message_inner(
+            send_id,
+            *conversation_id.as_bytes(),
+            incarnation,
+            mls_group_id,
+            &content_bytes,
+            &content_bytes,
+            expected_recipients,
+            created_at_ms,
+            Some(seq),
+        )
+        .await
+    }
+
+    /// A poll, a vote or the end of a poll, built by `build` with the
+    /// sender sequence. A retry with the same send id must build the same
+    /// content.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_structured_application_message(
+        &self,
+        send_id: &str,
+        conversation_id: Uuid,
+        incarnation: u64,
+        mls_group_id: &[u8],
+        created_at_ms: i64,
+        build: impl Fn(u64) -> std::result::Result<ChatContent, String>,
+    ) -> Result<MlsOutboxEntry> {
+        let parsed_send_id = Uuid::parse_str(send_id)
+            .map_err(|_| ChatError::Invalid("MLS send id must be a UUID".into()))?;
+        if parsed_send_id.is_nil() || conversation_id.is_nil() {
+            return Err(ChatError::Invalid(
+                "MLS message identifiers are invalid".into(),
+            ));
+        }
+        if let Some(existing) = self.db.load_mls_outbox(send_id).await? {
+            let content: ChatContent = serde_json::from_slice(&existing.content)
+                .map_err(|error| ChatError::Db(error.to_string()))?;
+            let expected = build(content.seq).map_err(ChatError::Invalid)?;
+            if existing.conversation_id != *conversation_id.as_bytes()
+                || existing.incarnation != incarnation
+                || existing.mls_group_id != mls_group_id
+                || content != expected
+            {
+                return Err(ChatError::Trust(
+                    "MLS send id is already bound to different content or conversation".into(),
+                ));
+            }
+            return Ok(existing);
+        }
+        let (_, metadata) = self.load_provider().await?;
+        let conversation = active_conversation_for_group(&metadata, mls_group_id)?;
+        if conversation.request.genesis.conversation_id != conversation_id
+            || conversation.request.genesis.incarnation != incarnation
+        {
+            return Err(ChatError::Trust(
+                "MLS message conversation differs from the authenticated group".into(),
+            ));
+        }
+        let (self_account, _) = parse_device_credential_identity(&metadata.credential_identity)?;
+        let expected_recipients = conversation
+            .current_roster
+            .iter()
+            .map(|member| member.address.canonical())
+            .filter(|address| address != &self_account)
+            .collect::<Vec<_>>();
+        if expected_recipients.is_empty() {
+            return Err(ChatError::Invalid(
+                "MLS group has no remote account recipient".into(),
+            ));
+        }
+        let seq = self
+            .db
+            .load_last_sent_seq()
+            .await?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
+        let content = build(seq).map_err(ChatError::Invalid)?;
+        if content.message_id.as_deref() != Some(send_id) {
+            return Err(ChatError::Invalid(
+                "MLS content id must match its send id".into(),
+            ));
         }
         let content_bytes =
             serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
@@ -1182,6 +1326,7 @@ impl MlsClient {
             sent_at,
             descriptor,
             None,
+            &VisibleMessageExtrasV1::default(),
             created_at_ms,
         )
         .await
@@ -1197,6 +1342,7 @@ impl MlsClient {
         sent_at: &str,
         descriptor: ChatAttachmentDescriptorV1,
         expires_after_seconds: Option<u32>,
+        extras: &VisibleMessageExtrasV1,
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
         let parsed_send_id = Uuid::parse_str(send_id)
@@ -1219,11 +1365,12 @@ impl MlsClient {
                 || existing.mls_group_id != mls_group_id
                 || content.message_id.as_deref() != Some(send_id)
                 || content.sent_at != sent_at
-                || content.as_attachment() != Some(descriptor)
+                || content.as_attachment().as_ref() != Some(&descriptor)
                 || content
                     .disappearing_after_seconds()
                     .map_err(ChatError::Content)?
                     != expires_after_seconds
+                || &content.extras().map_err(ChatError::Content)? != extras
             {
                 return Err(ChatError::Trust(
                     "MLS send id is already bound to a different attachment or conversation".into(),
@@ -1261,7 +1408,9 @@ impl MlsClient {
             .checked_add(1)
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let mut content = ChatContent::attachment_with_id(send_id, sent_at, seq, descriptor)
-            .map_err(ChatError::Content)?;
+            .map_err(ChatError::Content)?
+            .with_extras(extras)
+            .map_err(ChatError::Invalid)?;
         if let Some(seconds) = expires_after_seconds {
             content = content
                 .with_disappearing_after(seconds)
@@ -1305,6 +1454,13 @@ impl MlsClient {
             created_at_ms,
         )?;
         let content_digest: [u8; 32] = Sha256::digest(plaintext).into();
+        if serde_json::from_slice::<ChatContent>(plaintext)
+            .is_ok_and(|content| ChatContent::is_local_only_kind(&content.kind))
+        {
+            return Err(ChatError::Invalid(
+                "local timeline notices are never sent".into(),
+            ));
+        }
 
         if let Some(existing) = self.db.load_mls_outbox(send_id).await? {
             if existing.conversation_id != conversation_id
@@ -1341,6 +1497,9 @@ impl MlsClient {
         // without constructing the Kutup control log.
         if !metadata.conversations.is_empty() {
             let conversation = active_conversation_for_group(&metadata, mls_group_id)?;
+            if conversation.left && !is_group_control {
+                return Err(ChatError::Trust("this account left the group".into()));
+            }
             if conversation.request.genesis.conversation_id.as_bytes() != &conversation_id
                 || conversation.request.genesis.incarnation != incarnation
                 || conversation.last_finalized_epoch != group.epoch().as_u64()

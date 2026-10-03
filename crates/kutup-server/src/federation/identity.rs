@@ -55,6 +55,15 @@ impl LocalFederationIdentity {
                 .clone()
         };
         if document.key.public_key_bytes()? != config.signing_key.verifying_key().to_bytes() {
+            if config.generated {
+                anyhow::bail!(
+                    "this server's identity (sequence {}, key {}) was made with a configured FEDERATION_SIGNING_KEY; \
+                     set FEDERATION_SERVER_NAME and that FEDERATION_SIGNING_KEY again. A server makes its own \
+                     key only before it has an identity",
+                    document.sequence,
+                    document.key.key_id
+                );
+            }
             anyhow::bail!(
                 "FEDERATION_SIGNING_KEY does not match persisted identity sequence {} ({})",
                 document.sequence,

@@ -1328,6 +1328,7 @@ dependencies = [
  "thiserror",
  "tls_codec",
  "uuid",
+ "x25519-dalek",
  "zeroize",
 ]
 
@@ -1339,6 +1340,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "kutup-crypto",
  "kutup-federation-proto",
  "serde",
  "serde_json",
@@ -1380,6 +1382,7 @@ dependencies = [
  "hkdf",
  "hpke-rs",
  "hpke-rs-rust-crypto",
+ "serde",
  "sha2",
  "thiserror",
  "zeroize",

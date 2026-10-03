@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::keyring::Keyring;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use clap::Subcommand;
@@ -57,9 +58,13 @@ fn parse_pub_url(s: &str) -> Result<PubUrl> {
     let token = parts[1].to_string();
 
     let frag = u.fragment().unwrap_or("");
-    let key_b64 = url::form_urlencoded::parse(frag.as_bytes())
-        .find(|(k, _)| k == "key")
-        .map(|(_, v)| v.into_owned())
+    // Standard base64 carries `+` and `/`: read the value as written (a
+    // form decoder would turn `+` into a space), undoing only %-escapes.
+    let key_b64 = frag
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("key="))
+        .map(percent_decode)
+        .transpose()?
         .ok_or_else(|| anyhow!("URL fragment missing #key=..."))?;
     let link_key = base64::engine::general_purpose::STANDARD
         .decode(&key_b64)
@@ -87,6 +92,22 @@ fn unwrap_collection_key(share: &PublicShare, link_key: &[u8]) -> Result<Vec<u8>
     )?;
     drive_envelope::open_b64(&share.collection_key_envelope, link_key, context)
         .context("unwrap collection key")
+}
+
+/// The shared folder's keys: the link's, and older ones through the
+/// folder's owner-signed history (docs/plans/drive-share-revocation.md).
+fn link_keyring(client: &Client, p: &PubUrl, share: &PublicShare) -> Result<Keyring> {
+    let col_key = unwrap_collection_key(share, &p.link_key)?;
+    Keyring::load_from(
+        client,
+        &format!("/share/{}/epochs", p.token),
+        &share.target_id,
+        &share.owner_user_id,
+        share.collection_key_epoch,
+        None,
+        &col_key,
+        || crate::keyring::decode_key(&share.owner_authority_public_key),
+    )
 }
 
 fn get(json: bool, url: &str) -> Result<()> {
@@ -122,12 +143,12 @@ fn is_zero(v: &i64) -> bool {
     *v == 0
 }
 
-fn decrypt_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
-    match crate::file_crypto::open(f, col_key) {
+fn decrypt_display(f: &crate::api::File, keys: &Keyring) -> FileDisplay {
+    match crate::file_crypto::open(f, keys) {
         Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
             name: meta.name,
-            size: meta.size,
+            size: meta.size as i64,
         },
         Err(_) => FileDisplay {
             id: f.id.clone(),
@@ -144,9 +165,9 @@ fn ls(json: bool, url: &str) -> Result<()> {
     if share.share_type != "collection" {
         bail!("not a collection share (type={})", share.share_type);
     }
-    let col_key = unwrap_collection_key(&share, &p.link_key)?;
+    let keys = link_keyring(&client, &p, &share)?;
     let files = client.list_public_share_files(&p.token)?;
-    let out: Vec<FileDisplay> = files.iter().map(|f| decrypt_display(f, &col_key)).collect();
+    let out: Vec<FileDisplay> = files.iter().map(|f| decrypt_display(f, &keys)).collect();
 
     if json {
         crate::output::print_json(&out)?;
@@ -171,7 +192,7 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let p = parse_pub_url(url)?;
     let client = pub_client(&p);
     let share = client.get_public_share(&p.token)?;
-    let col_key = unwrap_collection_key(&share, &p.link_key)?;
+    let keys = link_keyring(&client, &p, &share)?;
 
     let files = client.list_public_share_files(&p.token)?;
     let target = files.iter().find(|f| f.id == file_id).ok_or_else(|| {
@@ -179,7 +200,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     })?;
 
     let (file_key, meta) =
-        crate::file_crypto::open(target, &col_key).context("decrypt file record")?;
+        crate::file_crypto::open(target, &keys).context("decrypt file record")?;
+    // What the link serves: the file's current content, at its own key generation.
+    let (content_key, content_generation) = crate::file_crypto::content_key(target, &file_key)?;
 
     let dest_path = {
         let pp = Path::new(dest_dir);
@@ -193,10 +216,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let resp = client.public_share_download_stream(&p.token, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let blob_context =
-        DriveFileBlobContextV1::new(&target.id, &target.collection_id, target.key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&target.id, content_generation)?;
     let written =
-        match crate::transfer::stream_download(resp, &file_key, blob_context, &mut out, |n| {
+        match crate::transfer::stream_download(resp, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
             Ok(w) => w,
@@ -219,6 +241,27 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Undoes `%XX` escapes (a link pasted through something that escaped
+/// `+`, `/` or `=`).
+fn percent_decode(value: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = value
+                .get(i + 1..i + 3)
+                .ok_or_else(|| anyhow!("bad %-escape in link key"))?;
+            out.push(u8::from_str_radix(hex, 16).context("bad %-escape in link key")?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).context("link key is not text")
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_pub_url;
@@ -234,6 +277,14 @@ mod tests {
             assert_eq!(u.link_key.len(), 32);
         }
         assert!(parse_pub_url("https://h.example/x/tok#key=aaaa").is_err());
+        // `+` and `/` survive, raw or %-escaped.
+        let key = base64::engine::general_purpose::STANDARD.encode([0xfbu8; 32]);
+        assert!(key.contains('+') || key.contains('/'));
+        let escaped = key.replace('+', "%2B").replace('/', "%2F");
+        for k in [&key, &escaped] {
+            let u = parse_pub_url(&format!("https://h.example/s/tok#key={k}")).unwrap();
+            assert_eq!(u.link_key, vec![0xfbu8; 32]);
+        }
         assert!(parse_pub_url("https://h.example/s/tok").is_err()); // missing #key
     }
 }

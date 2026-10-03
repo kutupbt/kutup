@@ -109,6 +109,31 @@ pub struct MlsOrderingServicePolicyV1 {
 }
 
 impl MlsOrderingServicePolicyV1 {
+    /// The v1 policy a server publishes when its operator sets none: the v1
+    /// suites, the protocol ceilings, and the default abuse limits, bound to
+    /// its domain and its online control signing key.
+    pub fn standard(
+        canonical_domain: &str,
+        control_signing_key_id: &str,
+        control_signing_public_key: &str,
+    ) -> Self {
+        Self {
+            policy_version: MLS_ORDERING_SERVICE_POLICY_VERSION,
+            canonical_domain: canonical_domain.to_string(),
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
+            anonymous_delivery_suite:
+                MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
+            control_signing_key_id: control_signing_key_id.to_string(),
+            control_signing_public_key: control_signing_public_key.to_string(),
+            accepts_group_ordering: true,
+            maximum_group_members: MAX_MLS_GROUP_ACCOUNTS as u16,
+            maximum_authorities: 64,
+            maximum_control_payload_bytes: MAX_MLS_CONTROL_PAYLOAD_BYTES as u32,
+            pending_message_requests: PendingMessageRequestPolicyV1::default(),
+            abuse_limits: MlsAbuseLimitsV1::default(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.policy_version != MLS_ORDERING_SERVICE_POLICY_VERSION {
             return Err("unsupported MLS ordering service policy version".into());

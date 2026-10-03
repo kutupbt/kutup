@@ -7,7 +7,7 @@
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE};
+use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE, USER_AGENT};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -23,6 +23,7 @@ use crate::models::{
     MeResponse, MessageResponse, OkResponse, PreflightLoginResponse, PreflightRecoverResponse,
     RefreshResponse, SettingsResponse, TotpSetupResponse, UserLookupResponse,
 };
+use crate::sessions::{self, ClientType};
 use crate::{jwt, ratelimit, totp, AppState};
 
 /// bcrypt cost — matches Go's `bcrypt.DefaultCost` (10).
@@ -73,6 +74,12 @@ pub struct LoginRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     access_token: String,
+    /// The server-side session this sign-in created (empty on the 2FA/setup branches).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    session_id: String,
+    /// Only for non-web clients (the CLI); web clients get an HttpOnly cookie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
     user_id: String,
     username: String,
     master_key_envelope: String,
@@ -125,6 +132,8 @@ pub struct RefreshRequest {
 pub struct UpdateMeRequest {
     /// Hex color like `#ef4444`; empty string clears it; absent leaves it unchanged.
     color: Option<String>,
+    /// How long file versions are kept: 7, 30, 90, 180, 365 or 3650 days.
+    version_retention_days: Option<i32>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -145,6 +154,9 @@ pub struct EmailQuery {
 #[serde(rename_all = "camelCase")]
 pub struct CompleteSetupResponse {
     access_token: String,
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
     user_id: String,
     username: String,
     is_admin: bool,
@@ -273,7 +285,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     } else {
         None
     };
-    let mls_groups = crate::chat_mls::policy::advertised_policy(&state, federation_enabled)
+    let mls_groups = crate::chat_mls::policy::advertised_policy(&state)
         .await?
         .is_some();
     let chat_storage_default_quota_bytes: u64 = sqlx::query_scalar::<_, String>(
@@ -308,6 +320,12 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
+        link_previews: state.config.chat_link_previews,
+        web_push_public_key: state
+            .web_push
+            .as_ref()
+            .map(|push| push.public_key().to_owned()),
+        group_calls: mls_groups && crate::chat_mls::hosts_group_calls(&state),
         media: Some(
             kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
                 state.config.chat_media_max_plaintext_bytes,
@@ -327,6 +345,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     Ok(Json(SettingsResponse {
         registration_enabled: val.as_deref() != Some("false"),
         chat,
+        apps: state.config.apps.clone(),
     })
     .into_response())
 }
@@ -503,8 +522,10 @@ pub async fn get_login_preflight(
 )]
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> AppResult<Response> {
+    let client = direct_sign_in_client(&headers)?;
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     // Per-account lockout (on top of the per-IP route limiter): N failed password
@@ -607,6 +628,8 @@ pub async fn login(
 
     issue_tokens_and_respond(
         &state,
+        &headers,
+        client,
         &user_id,
         &username,
         &master_key_envelope,
@@ -617,6 +640,7 @@ pub async fn login(
         used_bytes,
         &color,
     )
+    .await
 }
 
 /// `POST /api/auth/login/2fa` — mirrors `LoginTwoFA`.
@@ -629,8 +653,10 @@ pub async fn login(
 )]
 pub async fn login_two_fa(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Result<Json<TwoFALoginRequest>, JsonRejection>,
 ) -> AppResult<Response> {
+    let client = direct_sign_in_client(&headers)?;
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     if ratelimit::is_totp_blocked(&req.pre_auth_token) {
@@ -701,6 +727,8 @@ pub async fn login_two_fa(
 
     issue_tokens_and_respond(
         &state,
+        &headers,
+        client,
         &user_id,
         &username,
         &master_key_envelope,
@@ -711,6 +739,7 @@ pub async fn login_two_fa(
         used_bytes,
         &color,
     )
+    .await
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
@@ -829,19 +858,26 @@ pub async fn recover(
     if res.rows_affected() == 0 {
         return Err(AppError::not_found("user not found"));
     }
+    // New password, new key wrapping: every existing sign-in ends.
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+        .bind(&req.email)
+        .fetch_one(&state.pool)
+        .await?;
+    sessions::revoke_all_for_user(&state.pool, user_id, None).await?;
     Ok(Json(MessageResponse {
         message: "password reset".to_string(),
     })
     .into_response())
 }
 
-/// `POST /api/auth/refresh` — mirrors `Refresh`. Reads the refresh token from the cookie,
-/// falling back to the JSON body.
+/// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
+/// it in the HttpOnly cookie on their own origin and receive the next one the same way;
+/// the CLI presents and receives it in the JSON body.
 #[utoipa::path(
     post,
     path = "/api/auth/refresh",
     tag = "auth",
-    request_body(content = RefreshRequest, description = "Fallback when the refresh_token cookie is absent"),
+    request_body(content = RefreshRequest, description = "CLI only; web clients use the refresh_token cookie"),
     responses((status = 200, description = "Fresh access token", body = RefreshResponse))
 )]
 pub async fn refresh(
@@ -849,41 +885,55 @@ pub async fn refresh(
     headers: HeaderMap,
     body: Option<Json<RefreshRequest>>,
 ) -> AppResult<Response> {
-    let mut token = cookie_value(&headers, "refresh_token").unwrap_or_default();
-    if token.is_empty() {
-        token = body.map(|Json(b)| b.refresh_token).unwrap_or_default();
-    }
+    let from_cookie = cookie_value(&headers, REFRESH_COOKIE).filter(|t| !t.is_empty());
+    let token = match &from_cookie {
+        Some(t) => t.clone(),
+        None => body.map(|Json(b)| b.refresh_token).unwrap_or_default(),
+    };
     if token.is_empty() {
         return Err(AppError::unauthorized("missing refresh token"));
     }
-
-    let claims = jwt::validate_token(&token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid refresh token"))?;
-    if !claims.sub.is_empty() {
-        return Err(AppError::unauthorized("invalid refresh token"));
-    }
-
-    let row: Option<(bool, bool)> =
-        sqlx::query_as("SELECT is_active, is_admin FROM users WHERE id = $1")
-            .bind(
-                Uuid::parse_str(&claims.user_id)
-                    .map_err(|_| AppError::unauthorized("unauthorized"))?,
+    // A failed web refresh also clears the cookie: there is nothing left to keep.
+    let outcome = match sessions::refresh(&state.pool, &token, from_cookie.is_some()).await {
+        Ok(o) => o,
+        Err(err) if from_cookie.is_some() => {
+            return Ok((
+                [(SET_COOKIE, clear_refresh_cookie(&state))],
+                err.into_response(),
             )
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some((is_active, is_admin)) = row else {
-        return Err(AppError::unauthorized("unauthorized"));
+                .into_response())
+        }
+        Err(err) => return Err(err),
     };
-    if !is_active {
-        return Err(AppError::unauthorized("unauthorized"));
-    }
-
-    let access = jwt::generate_access_token(&claims.user_id, is_admin, &state.config.jwt_secret)
-        .map_err(|_| AppError::internal("token"))?;
-    Ok(Json(RefreshResponse {
+    let (session, next) = match outcome {
+        sessions::RefreshOutcome::Rotated {
+            session,
+            refresh_token,
+        } => (session, Some(refresh_token)),
+        sessions::RefreshOutcome::Grace { session } => (session, None),
+    };
+    let access = jwt::generate_access_token(
+        &session.user_id.to_string(),
+        session.is_admin,
+        &session.session_id.to_string(),
+        &state.config.jwt_secret,
+    )
+    .map_err(|_| AppError::internal("token"))?;
+    let body = RefreshResponse {
         access_token: access,
-    })
-    .into_response())
+        session_id: session.session_id.to_string(),
+        refresh_token: if session.client.uses_cookie() {
+            None
+        } else {
+            next.clone()
+        },
+    };
+    match (session.client.uses_cookie(), next) {
+        (true, Some(next)) => {
+            Ok(([(SET_COOKIE, refresh_cookie(&state, &next))], Json(body)).into_response())
+        }
+        _ => Ok(Json(body).into_response()),
+    }
 }
 
 /// `GET /api/user/me` — mirrors `GetMe`.
@@ -907,12 +957,13 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         i64,
         bool,
         String,
+        i32,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   chat_storage_quota_bytes, chat_storage_used_bytes,
-                  is_admin, COALESCE(color, '')
+                  is_admin, COALESCE(color, ''), version_retention_days
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -931,6 +982,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         chat_used,
         is_admin,
         color,
+        version_retention_days,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -947,6 +999,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         chat_storage_used_bytes: chat_used,
         is_admin,
         color,
+        version_retention_days,
     })
     .into_response())
 }
@@ -965,7 +1018,16 @@ pub async fn update_me(
     user: AuthUser,
     body: Result<Json<UpdateMeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request body"))?;
+    let Json(req) = body.map_err(|rejection| {
+        if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+            AppError::new(
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large",
+            )
+        } else {
+            AppError::bad_request("invalid request body")
+        }
+    })?;
 
     if let Some(color) = req.color {
         if !color.is_empty() && !is_valid_hex_color(&color) {
@@ -978,6 +1040,20 @@ pub async fn update_me(
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update color"))?;
+    }
+
+    if let Some(days) = req.version_retention_days {
+        if !crate::version_retention::RETENTION_DAYS.contains(&days) {
+            return Err(AppError::bad_request(
+                "versionRetentionDays must be 7, 30, 90, 180, 365 or 3650",
+            ));
+        }
+        sqlx::query("UPDATE users SET version_retention_days = $1 WHERE id = $2")
+            .bind(days)
+            .bind(parse_uuid(&user.user_id)?)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| AppError::internal("failed to update version retention"))?;
     }
 
     Ok(Json(OkResponse { ok: true }).into_response())
@@ -1152,6 +1228,7 @@ pub async fn complete_setup(
     headers: HeaderMap,
     body: Result<Json<RegisterRequest>, JsonRejection>,
 ) -> AppResult<Response> {
+    let client = direct_sign_in_client(&headers)?;
     let token = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -1253,31 +1330,66 @@ pub async fn complete_setup(
     .fetch_one(&state.pool)
     .await?;
 
-    let access = jwt::generate_access_token(&user_id, is_admin, &state.config.jwt_secret)
-        .map_err(|_| AppError::internal("token"))?;
-    let refresh = jwt::generate_refresh_token(&user_id, &state.config.jwt_secret)
-        .map_err(|_| AppError::internal("token"))?;
-    let cookie = refresh_cookie(&refresh, state.config.app_env == "production");
-
-    Ok((
-        [(SET_COOKIE, cookie)],
-        Json(CompleteSetupResponse {
-            access_token: access,
-            user_id,
-            username,
-            is_admin,
-            storage_quota_bytes: quota,
-            storage_used_bytes: used,
-        }),
+    let issued = sessions::create(&state.pool, uid, client, None, user_agent(&headers)).await?;
+    let access = jwt::generate_access_token(
+        &user_id,
+        is_admin,
+        &issued.session_id.to_string(),
+        &state.config.jwt_secret,
     )
-        .into_response())
+    .map_err(|_| AppError::internal("token"))?;
+    let body = CompleteSetupResponse {
+        access_token: access,
+        session_id: issued.session_id.to_string(),
+        refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
+        user_id,
+        username,
+        is_admin,
+        storage_quota_bytes: quota,
+        storage_used_bytes: used,
+    };
+    if client.uses_cookie() {
+        Ok((
+            [(SET_COOKIE, refresh_cookie(&state, &issued.refresh_token))],
+            Json(body),
+        )
+            .into_response())
+    } else {
+        Ok(Json(body).into_response())
+    }
 }
 
 // --- helpers ---
 
+/// The client a password sign-in comes from (`X-Kutup-Client`). Only clients that
+/// sign in directly are accepted here; drive and chat get forked sessions.
+pub(crate) fn direct_sign_in_client(headers: &HeaderMap) -> AppResult<ClientType> {
+    let client = client_header(headers)
+        .ok_or_else(|| AppError::bad_request("missing or unknown X-Kutup-Client header"))?;
+    if !client.signs_in_directly() {
+        return Err(AppError::bad_request(
+            "this client signs in through the account app",
+        ));
+    }
+    Ok(client)
+}
+
+pub(crate) fn client_header(headers: &HeaderMap) -> Option<ClientType> {
+    headers
+        .get(CLIENT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(ClientType::parse)
+}
+
+pub(crate) fn user_agent(headers: &HeaderMap) -> Option<&str> {
+    headers.get(USER_AGENT).and_then(|v| v.to_str().ok())
+}
+
 #[allow(clippy::too_many_arguments)]
-fn issue_tokens_and_respond(
+async fn issue_tokens_and_respond(
     state: &AppState,
+    headers: &HeaderMap,
+    client: ClientType,
     user_id: &str,
     username: &str,
     master_key_envelope: &str,
@@ -1288,45 +1400,68 @@ fn issue_tokens_and_respond(
     used: i64,
     color: &str,
 ) -> AppResult<Response> {
-    let access = jwt::generate_access_token(user_id, is_admin, &state.config.jwt_secret)
-        .map_err(|_| AppError::internal("token"))?;
-    let refresh = jwt::generate_refresh_token(user_id, &state.config.jwt_secret)
-        .map_err(|_| AppError::internal("token"))?;
-    let cookie = refresh_cookie(&refresh, state.config.app_env == "production");
-
-    Ok((
-        [(SET_COOKIE, cookie)],
-        Json(LoginResponse {
-            access_token: access,
-            user_id: user_id.to_string(),
-            username: username.to_string(),
-            master_key_envelope: master_key_envelope.to_string(),
-            drive_private_key_envelope: drive_private_key_envelope.to_string(),
-            public_key: pub_key.to_string(),
-            is_admin,
-            storage_quota_bytes: quota,
-            storage_used_bytes: used,
-            color: color.to_string(),
-            ..Default::default()
-        }),
+    let uid = parse_uuid(user_id)?;
+    let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
+    let access = jwt::generate_access_token(
+        user_id,
+        is_admin,
+        &issued.session_id.to_string(),
+        &state.config.jwt_secret,
     )
-        .into_response())
+    .map_err(|_| AppError::internal("token"))?;
+    let body = LoginResponse {
+        access_token: access,
+        session_id: issued.session_id.to_string(),
+        refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
+        user_id: user_id.to_string(),
+        username: username.to_string(),
+        master_key_envelope: master_key_envelope.to_string(),
+        drive_private_key_envelope: drive_private_key_envelope.to_string(),
+        public_key: pub_key.to_string(),
+        is_admin,
+        storage_quota_bytes: quota,
+        storage_used_bytes: used,
+        color: color.to_string(),
+        ..Default::default()
+    };
+    if client.uses_cookie() {
+        Ok((
+            [(SET_COOKIE, refresh_cookie(state, &issued.refresh_token))],
+            Json(body),
+        )
+            .into_response())
+    } else {
+        Ok(Json(body).into_response())
+    }
 }
 
-/// Builds the refresh-token Set-Cookie value — mirrors the Fiber cookie (HttpOnly,
-/// SameSite=Lax, 7-day Max-Age, scoped to `/api/auth/refresh`; Secure in production).
-fn refresh_cookie(value: &str, secure: bool) -> String {
+pub(crate) const REFRESH_COOKIE: &str = "refresh_token";
+pub(crate) const CLIENT_HEADER: &str = "x-kutup-client";
+
+/// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent
+/// only to `/api/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.
+pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
     let mut c = format!(
-        "refresh_token={value}; Max-Age=604800; Path=/api/auth/refresh; HttpOnly; SameSite=Lax"
+        "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/auth/refresh; HttpOnly; SameSite=Lax",
+        sessions::SESSION_TTL.whole_seconds()
     );
-    if secure {
+    if state.config.app_env == "production" {
+        c.push_str("; Secure");
+    }
+    c
+}
+
+pub(crate) fn clear_refresh_cookie(state: &AppState) -> String {
+    let mut c =
+        format!("{REFRESH_COOKIE}=; Max-Age=0; Path=/api/auth/refresh; HttpOnly; SameSite=Lax");
+    if state.config.app_env == "production" {
         c.push_str("; Secure");
     }
     c
 }
 
 /// Reads a single cookie value from the `Cookie` header.
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(COOKIE)?.to_str().ok()?;
     let prefix = format!("{name}=");
     raw.split(';')
@@ -1361,8 +1496,8 @@ fn is_valid_username(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-/// `^#[0-9a-fA-F]{6}$` — mirrors `colorHexRegexp`.
-fn is_valid_hex_color(s: &str) -> bool {
+/// `^#[0-9a-fA-F]{6}$` — mirrors `colorHexRegexp`. Shared by user and folder colours.
+pub(crate) fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
     bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }

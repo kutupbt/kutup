@@ -22,7 +22,6 @@ use crate::file_crypto;
 use crate::mimetype::guess_mime;
 use crate::session::{ResumeState, Store};
 use crate::transfer::{chunk_boundary, cipher_size, StreamUploader};
-use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use kutup_crypto::stream::HEADER_BYTES;
 
@@ -50,8 +49,8 @@ pub struct UploadRequest<'a> {
 pub struct Uploaded {
     pub file_id: String,
     pub file_key: [u8; 32],
-    pub collection_id: String,
-    pub key_epoch: u32,
+    /// The file key's generation (a new file's first).
+    pub key_generation: u32,
 }
 
 pub(crate) fn now_unix() -> i64 {
@@ -125,7 +124,8 @@ pub fn upload_streaming(
     let meta = FileMetadata {
         name: name.clone(),
         mime_type: guess_mime(local_path),
-        size: plain_size,
+        size: plain_size as u64,
+        media: None,
     };
     let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
     debug_assert_eq!(record.metadata_revision, 1);
@@ -145,7 +145,7 @@ pub fn upload_streaming(
     }
 
     let file = File::open(local_path)?;
-    let blob_context = DriveFileBlobContextV1::new(&record.id, collection_id, record.key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&record.id, record.key_generation)?;
     let up = StreamUploader::new(file, &record.file_key, plain_size, blob_context)?;
 
     let now = now_unix();
@@ -174,8 +174,7 @@ pub fn upload_streaming(
     Ok(Uploaded {
         file_id,
         file_key: record.file_key,
-        collection_id: collection_id.to_string(),
-        key_epoch: record.key_epoch,
+        key_generation: record.key_generation,
     })
 }
 
@@ -207,8 +206,7 @@ fn try_resume(
                         return Ok(Some(Uploaded {
                             file_id: rec.file_id.clone(),
                             file_key,
-                            collection_id: collection_id.to_string(),
-                            key_epoch: rec.key_epoch,
+                            key_generation: file_crypto::FIRST_GENERATION,
                         }));
                     }
                 }
@@ -249,7 +247,7 @@ fn try_resume(
 
             let file = File::open(local_path)?;
             let blob_context =
-                DriveFileBlobContextV1::new(&rec.file_id, collection_id, rec.key_epoch)?;
+                DriveFileBlobContextV1::new(&rec.file_id, file_crypto::FIRST_GENERATION)?;
             let up = match StreamUploader::resume(
                 file,
                 &file_key,
@@ -282,8 +280,7 @@ fn try_resume(
             Ok(Some(Uploaded {
                 file_id,
                 file_key,
-                collection_id: collection_id.to_string(),
-                key_epoch: rec.key_epoch,
+                key_generation: file_crypto::FIRST_GENERATION,
             }))
         }
     }
@@ -362,17 +359,16 @@ fn unwrap_file_key(
     collection_id: &str,
     collection_key: &[u8],
 ) -> Result<[u8; 32]> {
-    let context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::FileKey,
-        rec.key_epoch,
-        1,
+    // An upload in flight is a new file: its key's first generation.
+    file_crypto::open_file_key(
+        &rec.file_key_envelope,
         &rec.file_id,
         collection_id,
-    )?;
-    let key = drive_envelope::open_b64(&rec.file_key_envelope, collection_key, context)
-        .context("unwrap resumed file key")?;
-    key.try_into()
-        .map_err(|_| anyhow::anyhow!("resumed file key has wrong length"))
+        rec.key_epoch,
+        file_crypto::FIRST_GENERATION,
+        collection_key,
+    )
+    .context("unwrap resumed file key")
 }
 
 fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {

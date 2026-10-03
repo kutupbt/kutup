@@ -1345,6 +1345,25 @@ fn ordering_policy_requires_production_group_capacity() {
 }
 
 #[test]
+fn standard_ordering_policy_is_the_valid_v1_default() {
+    let (authority, _) = authority("orderer.example", 42);
+    let policy = MlsOrderingServicePolicyV1::standard(
+        "orderer.example",
+        &authority.key_id,
+        &authority.public_key,
+    );
+    policy.validate().unwrap();
+    assert!(policy.accepts_group_ordering);
+    assert_eq!(policy.canonical_domain, "orderer.example");
+    assert_eq!(policy.control_signing_key_id, authority.key_id);
+    let bytes = policy.canonical_bytes().unwrap();
+    assert_eq!(
+        MlsOrderingServicePolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        policy
+    );
+}
+
+#[test]
 fn private_control_and_client_history_have_stable_canonical_vectors() {
     let (authorities, _) = authority_set(1);
     let owner_key = ed25519_dalek::SigningKey::from_bytes(&[44; 32]);
@@ -1382,6 +1401,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         owner_set: owners.clone(),
         authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
         cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+        group_info: None,
     };
     let private_bytes = private.canonical_bytes().unwrap();
     assert_eq!(
@@ -1417,7 +1437,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "37d09d4995b3112593e10bffb17b088add934f7ee9f506525390f9590ca7ab8f"
+        "cb5a86c5566da5d31cc830c9ecd41faa0fd1c9c05739f58ae5798f813cf48c35"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
@@ -1455,7 +1475,7 @@ fn private_group_policies_have_stable_canonical_vectors() {
     );
     assert_eq!(
         cryptographic.policy_digest().unwrap(),
-        "02022f987460f6317c4b9b9627c941a29e1de1aeb1c36538b4d61ff09c0d3581"
+        "084323eb8f72a298088306c3ee4e4361753c5a782e11791df6b6ade28d6001c3"
     );
 }
 
@@ -1628,6 +1648,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         owner_set: owners,
         authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
         cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+        group_info: None,
     };
     let first = MlsClientControlHistoryPageV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -1663,4 +1684,124 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         &second.canonical_bytes().unwrap()
     )
     .is_ok());
+}
+
+#[test]
+fn group_info_editors_default_keeps_existing_policy_bytes() {
+    let policy = MlsGroupAuthorizationPolicyV1::members_default();
+    assert_eq!(
+        policy.canonical_bytes().unwrap(),
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1}"#.to_vec()
+    );
+    let open = MlsGroupAuthorizationPolicyV1 {
+        group_info_editors: MlsGroupInfoEditorsV1::Members,
+        ..policy.clone()
+    };
+    let bytes = open.canonical_bytes().unwrap();
+    assert_eq!(
+        bytes,
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":1}"#.to_vec()
+    );
+    assert_eq!(
+        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        open
+    );
+    assert!(!open.same_rules(&policy));
+    assert!(open.may_edit_group_info(false));
+    assert!(!policy.may_edit_group_info(false));
+    assert!(policy.may_edit_group_info(true));
+    // The default must not be spelled out: it would not be canonical.
+    assert!(MlsGroupAuthorizationPolicyV1::from_canonical_bytes(
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":2}"#
+    )
+    .is_err());
+}
+
+#[test]
+fn group_info_enforces_signal_limits() {
+    use base64::Engine as _;
+    let valid = MlsGroupInfoV1 {
+        sequence: 1,
+        name: "Ağaç evi 🌲".into(),
+        description: "line one\nline two".into(),
+        avatar: Some(MlsGroupAvatarV1 {
+            content_type: "image/webp".into(),
+            data: base64::engine::general_purpose::STANDARD.encode([7u8; 100]),
+        }),
+        invite_link: Some(MlsGroupInviteLinkV1 {
+            secret: base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+            host: "a.test".into(),
+            approval_required: true,
+        }),
+    };
+    valid.validate().unwrap();
+    let too_big =
+        base64::engine::general_purpose::STANDARD
+            .encode(vec![0u8; MlsGroupInfoV1::MAX_AVATAR_BYTES + 1]);
+    for invalid in [
+        MlsGroupInfoV1 {
+            sequence: 0,
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: String::new(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: " padded".into(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: "x".repeat(33),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: "tab\there".into(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            description: "d".repeat(481),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            avatar: Some(MlsGroupAvatarV1 {
+                content_type: "image/gif".into(),
+                data: "AAAA".into(),
+            }),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            avatar: Some(MlsGroupAvatarV1 {
+                content_type: "image/png".into(),
+                data: too_big.clone(),
+            }),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            invite_link: Some(MlsGroupInviteLinkV1 {
+                secret: base64::engine::general_purpose::STANDARD.encode([9u8; 16]),
+                host: "a.test".into(),
+                approval_required: false,
+            }),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            invite_link: Some(MlsGroupInviteLinkV1 {
+                secret: base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+                host: "https://a.test".into(),
+                approval_required: false,
+            }),
+            ..valid.clone()
+        },
+    ] {
+        assert!(invalid.validate().is_err(), "{invalid:?}");
+    }
+    assert!(valid.same_content(&MlsGroupInfoV1 {
+        sequence: 5,
+        ..valid.clone()
+    }));
+    assert!(!valid.same_content(&MlsGroupInfoV1 {
+        invite_link: None,
+        ..valid.clone()
+    }));
 }

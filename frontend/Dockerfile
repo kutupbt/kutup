@@ -1,4 +1,7 @@
-ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:c3142b6f74a22f6c5db14256be59e9c160e25b77234b069c0cd889405f2bd8b3
+# The Kutup web apps: account, drive, chat and the OnlyOffice sandbox, each
+# served on its own hostname by one nginx (frontend/docker/). Build context is
+# the repository root, so the WASM crates compile here.
+ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:724ae7164bdfa79018a70b59fa7e84b96e300b05995183584bb5055fa7f8282a
 
 FROM ${KUTUP_OFFICE_ASSETS_IMAGE} AS office-assets
 
@@ -23,33 +26,32 @@ RUN --mount=type=cache,id=kutup-browser-cargo-registry,target=/usr/local/cargo/r
     && bash scripts/build-crypto-wasm.sh \
     && bash scripts/build-chat-wasm.sh
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
-# Pin to the pnpm version declared in package.json's `packageManager` field.
-# `corepack prepare pnpm@latest --activate` was hitting an npm-registry tag
-# lookup that fails inside this builder; npm-installing the exact version
-# bypasses corepack's signature/tag-lookup path entirely.
+# The version in package.json's `packageManager` field.
 RUN npm install -g pnpm@10.28.2
 
-WORKDIR /app
-COPY frontend/package.json frontend/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
-
+WORKDIR /app/frontend
 COPY frontend .
-COPY --from=browser-wasm /src/frontend/public/crypto-wasm ./public/crypto-wasm
-COPY --from=browser-wasm /src/frontend/public/chat-wasm ./public/chat-wasm
-COPY --from=office-assets /opt/kutup/onlyoffice/ ./public/onlyoffice/
-RUN test -s public/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js \
-    && test -s public/onlyoffice/dist/v9/web-apps/apps/common/main/resources/img/header/header-logo_s.svg \
-    && test -s public/onlyoffice/dist/x2t/x2t.wasm \
-    && test -s public/onlyoffice/templates/oodoc_base.js \
-    && test -s public/onlyoffice/LICENSES/ONLYOFFICE-ADDITIONAL-TERMS.md \
-    && grep -Fx 'v9.2.0.119+5' public/onlyoffice/dist/v9/.version \
-    && grep -Fx 'v7.3+1' public/onlyoffice/dist/x2t/.version \
-    && grep -Fx '2025.6.0' public/onlyoffice/templates/.version
-RUN pnpm run build:web
+RUN --mount=type=cache,id=kutup-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile
+COPY --from=browser-wasm /src/frontend/wasm ./wasm
+COPY --from=office-assets /opt/kutup/onlyoffice/ ./apps/office/public/onlyoffice/
+RUN o=apps/office/public/onlyoffice \
+    && test -s $o/dist/v9/web-apps/apps/api/documents/api.js \
+    && test -s $o/dist/v9/web-apps/apps/common/main/resources/img/header/header-logo_s.svg \
+    && test -s $o/dist/x2t/x2t.wasm \
+    && test -s $o/templates/oodoc_base.js \
+    && test -s $o/LICENSES/ONLYOFFICE-ADDITIONAL-TERMS.md \
+    && grep -Fx 'kutup-v9.4.0.131.3' $o/dist/v9/.version \
+    && grep -Fx 'kutup-v9.4.0.131.1' $o/dist/x2t/.version \
+    && grep -Fx '2025.6.0' $o/templates/.version
+RUN pnpm run build \
+    && mkdir -p /out \
+    && for app in account drive chat maps photos office; do cp -r apps/$app/dist /out/$app; done
 
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+FROM nginx:1.29-alpine
+COPY --from=builder /out /usr/share/nginx/html
+COPY frontend/docker/40-kutup-hosts.sh /docker-entrypoint.d/40-kutup-hosts.sh
+RUN chmod +x /docker-entrypoint.d/40-kutup-hosts.sh && rm /etc/nginx/conf.d/default.conf
 EXPOSE 80

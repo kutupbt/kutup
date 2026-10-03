@@ -1,42 +1,24 @@
+import { createRequire } from 'node:module'
+import path from 'node:path'
 import { defineConfig } from 'vitest/config'
-import path from 'path'
+
+// The ESM build of libsodium-wrappers-sumo has a broken relative import for
+// libsodium-sumo.mjs; force the CJS build (its package "main").
+const requireFromCrypto = createRequire(path.resolve(__dirname, 'packages/crypto/package.json'))
+const libsodiumCjs = requireFromCrypto.resolve('libsodium-wrappers-sumo')
 
 export default defineConfig({
+  resolve: {
+    alias: { 'libsodium-wrappers-sumo': libsodiumCjs },
+  },
   test: {
-    // jsdom by default so component tests + sessionStorage-touching code
-    // work. Pure-node tests (crypto/, collab/) are unaffected — they don't
-    // touch window/document.
+    include: ['packages/*/src/**/*.test.{ts,tsx}', 'apps/*/src/**/*.test.{ts,tsx}'],
     environment: 'jsdom',
     globals: false,
     setupFiles: ['./vitest.setup.ts'],
     environmentOptions: {
-      jsdom: {
-        // Anchor jsdom to a real URL so axios's fetch adapter can resolve
-        // relative paths like baseURL: '/api'. Without this jsdom defaults
-        // to "about:blank" which the URL parser rejects.
-        url: 'http://localhost/',
-      },
-    },
-    // The OnlyOffice install dump (frontend/public/onlyoffice/dist) is ~1 GB
-    // of bundled editor. Excluding it keeps vitest's chokidar from blowing
-    // the host's file-watcher limit (ENOSPC).
-    watchExclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/public/onlyoffice/**',
-    ],
-  },
-  resolve: {
-    alias: {
-      // Mirror vite.config.ts.
-      '@': path.resolve(__dirname, './src'),
-      // The ESM build of libsodium-wrappers-sumo has a broken relative
-      // import for libsodium-sumo.mjs (the file lives in a separate
-      // package). Force the CJS build so Node-resolve works under Vitest.
-      'libsodium-wrappers-sumo': path.resolve(
-        __dirname,
-        'node_modules/libsodium-wrappers-sumo/dist/modules-sumo/libsodium-wrappers.js',
-      ),
+      // A real URL so axios can resolve relative paths like '/api'.
+      jsdom: { url: 'http://localhost/' },
     },
   },
 })

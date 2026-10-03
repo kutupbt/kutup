@@ -1178,8 +1178,9 @@ pub async fn storage_summary(
     .await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
-          (SELECT COALESCE(SUM(encrypted_size_bytes),0)::bigint FROM files WHERE uploader_user_id=$1) +
+          (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM files WHERE uploader_user_id=$1) +
           (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_assets WHERE uploader_user_id=$1) +
+          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_thumbnails WHERE uploader_user_id=$1) +
           (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_versions WHERE author_user_id=$1)",
     )
     .bind(user_id)

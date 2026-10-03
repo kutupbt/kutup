@@ -27,10 +27,11 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_envelope::DriveEnvelopeContextV1;
 use kutup_crypto::drive_object::{DriveFileBlobContextV1, FILE_BLOB_PREFIX_BYTES};
 use uuid::Uuid;
 
+use crate::drive_writes::Room;
 use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_prefix};
 use crate::middleware::AuthUser;
 use crate::storage::CompletedPart;
@@ -227,10 +228,9 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     };
     let is_owner = owner_user_id == user_id;
 
-    let mut upload_quota_bytes: Option<i64> = None;
     if !is_owner {
-        let share: Option<(bool, Option<i64>)> = sqlx::query_as(
-            "SELECT cs.can_upload, cs.upload_quota_bytes FROM collection_shares cs \
+        let can_upload: Option<bool> = sqlx::query_scalar(
+            "SELECT cs.can_upload FROM collection_shares cs \
              JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
              WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
         )
@@ -240,9 +240,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         .await
         .ok()
         .flatten();
-        match share {
-            Some((true, q)) => upload_quota_bytes = q,
-            _ => return tus_text(StatusCode::FORBIDDEN, "forbidden"),
+        if can_upload != Some(true) {
+            return tus_text(StatusCode::FORBIDDEN, "forbidden");
         }
     }
 
@@ -250,83 +249,46 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Ok(epoch) => epoch,
         Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
     };
-    let file_key_context = match DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::FileKey,
-        epoch,
-        1,
-        file_id_text,
-        coll_id,
-    ) {
+    // A new file's key is generation 1, wrapped at the folder's epoch.
+    let file_key_context = match DriveEnvelopeContextV1::file_key(file_id_text, coll_id, epoch, 1) {
         Ok(context) => context,
         Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
     };
-    let metadata_context = match DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::FileMetadata,
-        epoch,
-        1,
-        file_id_text,
-        coll_id,
-    ) {
+    let metadata_context = match DriveEnvelopeContextV1::file_metadata(file_id_text, 1, 1) {
         Ok(context) => context,
         Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
     };
-    if validate_envelope(file_key_envelope, file_key_context).is_err()
-        || validate_envelope(metadata_envelope, metadata_context).is_err()
+    if let Err(error) = validate_envelope(file_key_envelope, file_key_context)
+        .and_then(|()| validate_envelope(metadata_envelope, metadata_context))
     {
-        return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope");
+        // 409 when the folder key rotated since the client read it.
+        return tus_text(
+            error.status,
+            if error.status == StatusCode::CONFLICT {
+                "folder key changed"
+            } else {
+                "invalid Drive envelope"
+            },
+        );
     }
 
-    // User-level quota: committed + reserved (in-flight) + this one ≤ cap. FOR UPDATE
-    // locks the user row so concurrent Creates can't race past the cap together.
-    let user_row: Result<(i64, i64), _> = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await;
-    let (quota, used) = match user_row {
-        Ok(v) => v,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read user"),
-    };
-    let reserved: i64 = sqlx::query_scalar(
-        "SELECT (SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM uploads WHERE user_id=$1) +
-                (SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
-                (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-                   FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap_or(0);
-    if used + reserved + total_bytes > quota {
-        return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "storage quota exceeded");
+    // The id, then room: the user's quota less what their open uploads have
+    // reserved, and the share's limit when uploading into someone's folder.
+    // Both hold until commit (the user's row stays locked).
+    match crate::drive_writes::claim_file_id(&mut tx, file_id, None).await {
+        Ok(true) => {}
+        Ok(false) => return tus_text(StatusCode::CONFLICT, "file id already in use"),
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db claim file id"),
     }
-
-    // Per-share upload-quota check, same as files.rs.
-    if !is_owner {
-        if let Some(share_quota) = upload_quota_bytes {
-            let used_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes),0)::bigint FROM files \
-                 WHERE collection_id=$1 AND uploader_user_id=$2",
-            )
-            .bind(coll_uuid)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap_or(0);
-            let reserved_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM uploads \
-                 WHERE collection_id=$1 AND user_id=$2",
-            )
-            .bind(coll_uuid)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap_or(0);
-            if used_share + reserved_share + total_bytes > share_quota {
-                return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "share upload quota exceeded");
-            }
+    match crate::drive_writes::check_room(&mut tx, user_id, coll_uuid, total_bytes, None).await {
+        Ok(Room::Enough) => {}
+        Ok(Room::Quota) => {
+            return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "storage quota exceeded")
         }
+        Ok(Room::ShareLimit) => {
+            return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "share upload quota exceeded")
+        }
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db quota"),
     }
 
     // Allocate the upload-session id; the client allocated the file id before
@@ -584,15 +546,10 @@ pub async fn patch(
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "chunk exceeds Upload-Length");
     }
     if received_bytes == 0 {
-        let epoch = match u32::try_from(key_epoch) {
-            Ok(epoch) => epoch,
-            Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
+        let context = match DriveFileBlobContextV1::new(&file_id.to_string(), 1) {
+            Ok(context) => context,
+            Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
         };
-        let context =
-            match DriveFileBlobContextV1::new(&file_id.to_string(), &coll_id.to_string(), epoch) {
-                Ok(context) => context,
-                Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
-            };
         if validate_file_blob_prefix(&body, context).is_err() {
             return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob");
         }
@@ -670,6 +627,33 @@ pub async fn patch(
     }
 
     // --- finaliser path ---
+    // Everything the create checked must still hold now that the file lands:
+    // the uploader may still write here, the folder is live at the epoch the
+    // envelopes are bound to, the id is still free, and the file still fits
+    // (a quota lowered meanwhile). Refused, the upload is discarded.
+    if let Some(refusal) = finalize_refusal(
+        &mut tx,
+        user_id,
+        upload_id,
+        coll_id,
+        file_id,
+        key_epoch,
+        total_bytes,
+    )
+    .await
+    {
+        drop(tx);
+        let _ = state
+            .storage
+            .abort_multipart(&storage_path, &s3_upload_id)
+            .await;
+        let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+            .bind(upload_id)
+            .execute(&state.pool)
+            .await;
+        return refusal;
+    }
+
     // complete-multipart (stitched in place at the canonical key) → INSERT files → bump
     // quota → DELETE the uploads row. Complete runs before the DB commit, so a crash
     // between them leaves an orphan S3 object for the orphan-sweep job.
@@ -689,9 +673,9 @@ pub async fn patch(
     if sqlx::query(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
-             metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-             storage_path, encrypted_size_bytes) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             metadata_envelope, file_key_envelope, key_epoch, key_generation, \
+             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1)",
     )
     .bind(file_id)
     .bind(coll_id)
@@ -742,6 +726,68 @@ pub async fn patch(
         ],
     )
         .into_response()
+}
+
+/// The finaliser's re-checks (see `patch`): the refusal, if one applies.
+async fn finalize_refusal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    upload_id: Uuid,
+    coll_id: Uuid,
+    file_id: Uuid,
+    key_epoch: i32,
+    total_bytes: i64,
+) -> Option<Response> {
+    let db = || {
+        Some(tus_text(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "db finalize check",
+        ))
+    };
+    let folder: Option<(Uuid, i32, Option<bool>)> = match sqlx::query_as(
+        "SELECT c.owner_user_id, c.key_epoch,
+                (SELECT cs.can_upload FROM collection_shares cs
+                 WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
+         FROM collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE",
+    )
+    .bind(coll_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await
+    {
+        Ok(folder) => folder,
+        Err(_) => return db(),
+    };
+    let Some((owner, epoch, can_upload)) = folder else {
+        return Some(tus_text(StatusCode::CONFLICT, "folder no longer available"));
+    };
+    if owner != user_id && can_upload != Some(true) {
+        return Some(tus_text(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    if epoch != key_epoch {
+        return Some(tus_text(
+            StatusCode::CONFLICT,
+            "folder key changed during upload",
+        ));
+    }
+    match crate::drive_writes::claim_file_id(tx, file_id, Some(upload_id)).await {
+        Ok(true) => {}
+        Ok(false) => return Some(tus_text(StatusCode::CONFLICT, "file id already in use")),
+        Err(_) => return db(),
+    }
+    match crate::drive_writes::check_room(tx, user_id, coll_id, total_bytes, Some(upload_id)).await
+    {
+        Ok(Room::Enough) => None,
+        Ok(Room::Quota) => Some(tus_text(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "storage quota exceeded",
+        )),
+        Ok(Room::ShareLimit) => Some(tus_text(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "share upload quota exceeded",
+        )),
+        Err(_) => db(),
+    }
 }
 
 // ---------------------------------------------------------------------------

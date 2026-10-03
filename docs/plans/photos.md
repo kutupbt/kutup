@@ -1,0 +1,459 @@
+# Photos
+
+**Status:** slices 1 to 5 implemented 2026-09-26 and 2026-09-27 (details
+below, under "Slice 1 done" to "Slice 4 done" and "Slice 5 progress"). Plan written 2026-09-26. Branch `feat/frontend-rewrite`. The product
+owner asked for it after Maps: "continue with photos". The roadmap's
+decisions stand (docs/roadmap.md, "Photos (like Ente Photos)"):
+- photos are Drive files in folders you choose;
+- albums are views;
+- one storage quota for Drive and Photos;
+- the Places map lives in Photos.
+
+The product owner also asked for Ente's map of where photos were taken to be
+studied closely (see "Places").
+
+References: Ente (`kutup-references/ente`: `web/`, the mobile app's map in
+`mobile/apps/photos/lib/ui/map`, its Rust clusterer in
+`rust/crates/location/src/cluster.rs`) and Proton Drive's Photos
+(`kutup-references/WebClients/applications/drive/src/app/photos`).
+
+## What people get
+
+`photos.<domain>`, a fifth web app:
+- **Timeline:** everything, newest first, by day under month headings, with a
+  scrubber to jump by year and month.
+- **Viewer:** full screen, with an info panel showing when, where (a small
+  map), camera, size and folder.
+- **Places:** a map of where photos were taken.
+- **Library tools:** favourites, archive, hidden, trash; upload by drag and
+  drop, with duplicates skipped.
+- **Later slices:** albums, then shared and public albums, then tagging on
+  the device (faces, objects, text), which search uses.
+
+## How it is built
+
+### Photos are Drive files
+
+- **Uploads** go to one folder, "Photos" in My files by default; Settings
+  can choose another.
+- **Library folders:** the timeline shows that folder and any others you add,
+  each with its subfolders. Folders shared with you count too.
+- **Drive rules apply to every photo:** its key, thumbnails, versions, trash,
+  quota and sharing. A photo moved in Drive stays in the timeline if its new
+  folder is in the library.
+
+The library settings live on the server as folder ids (`photos_preferences`:
+upload folder and library folders), as Maps keeps its save folder. The
+server already knows the folders exist; it learns only which ones Photos
+shows.
+
+### Photo metadata, encrypted with the photo
+
+The timeline and Places need, for each photo:
+- when it was taken;
+- where;
+- its size;
+- for videos, its length;
+- a hash to find duplicates.
+
+Proton keeps the capture time in plaintext so its server can sort the
+timeline. Kutup does not: everything goes into the file's existing metadata
+envelope, under the file key, and the browser sorts.
+
+`FileMetadataV1` gains an optional `media` object:
+
+| Field | Meaning |
+|---|---|
+| `takenAt` | when it was taken, UTC milliseconds |
+| `takenOffset` | the local time zone there, in minutes, so the time is shown as it was on the camera |
+| `takenFrom` | where the date came from: `exif`, `video`, `filename` or `file` (the file's own date) |
+| `lat`, `lon` | where, when known; (0, 0) counts as unknown, as in Ente |
+| `width`, `height` | after rotation |
+| `durationMs` | videos |
+| `camera` | make and model, up to 100 characters |
+| `hash` | SHA-256 of the content, base64 |
+| `caption` | the owner's text, up to 2,000 characters |
+
+- **One canonical format, in Rust.** The format moves into `kutup-crypto` (a
+  `file_metadata` module: encode, strict decode, limits), used by the CLI
+  and through WASM by the browser. Today the browser and the CLI each hold a
+  copy, and both reject unknown fields. Vectors are checked in, as for every
+  format.
+- **Changes are metadata revisions.** A rename keeps `media`. Edits (fixing a
+  date or a place, a caption) are new metadata revisions, as a rename is.
+- **Who sees it:** anyone who can open the photo, as in Proton (its
+  encrypted XAttr) and Ente (its public magic metadata). A shared photo shows
+  its date and place to the people it is shared with. The viewer says so
+  beside the place.
+
+### Reading it, on the device
+
+The same code serves Drive and Photos uploads (`@kutup/files`), in the
+bounded preview worker that already makes thumbnails.
+- **Images:** `exifreader` (MPL-2.0), as Ente and Proton use it.
+  - **Date order:** DateTimeOriginal, then DateTimeDigitized, then
+    DateTime, from XMP, IPTC or EXIF, with sub-seconds and offsets.
+  - **Other fields:** GPS, dimensions swapped for rotated orientations,
+    make and model.
+  - **Rejected dates:** zero and the year-4501 placeholder.
+- **Videos:** a small bounded MP4/QuickTime box reader for:
+  - the creation time (`mvhd`, or Apple's `com.apple.quicktime.creationdate`);
+  - the place (ISO 6709 `©xyz` or Apple's location key);
+  - size and length.
+  Proton reads `mvhd` the same way. No ffmpeg.
+- **Fallbacks:** a date in the file name (Ente's patterns:
+  `IMG-20171218-WA0028`, `Screenshot_…`, `20240101_120000`), then the
+  file's own date.
+- **The hash** is taken on the device from the plaintext (through WASM,
+  streamed), before upload, because the metadata is sealed first.
+
+Photos already in Drive have no `media`. Photos fills it in the background:
+- **Where it can:** for a file you may rename, it downloads, reads and writes
+  a new revision. It works a few files at a time and resumes after a reload,
+  as the thumbnail backfill does.
+- **Where it can't:** for one you may only view, it reads the data on the
+  device and keeps it in memory.
+
+Until then, a photo sorts by when it was uploaded.
+
+### Timeline
+
+- **Loading:** the browser lists the library folders' files (the cached
+  folder queries Drive uses) and opens their metadata. It keeps images and
+  videos, sorted by `takenAt`.
+- **Layout:** grouped by day under month headings, as in Ente. Rows are
+  virtualized, drawing only rows near the screen. The scrubber jumps by
+  month, as in Proton.
+- **Thumbnails:** Drive's small thumbnail (512 px). Missing ones are made by
+  the existing backfill. Loading goes nearest to the screen first; rows
+  scrolled away stop loading, as in Proton.
+- **Selection:**
+  - click, shift-click for a range, or a day's checkbox for the whole day;
+  - actions: download, move to trash, favourite, share (a single photo, with
+    Drive's file sharing).
+- **Large libraries:** in-memory for the first slice.
+  - **To measure:** 10,000 photos (opening 10,000 metadata envelopes).
+  - **If too slow:** a local cache of dates, places and thumbnails, encrypted
+    at rest under a key the browser cannot export. Unlike Ente's, whose
+    thumbnail cache is plaintext.
+
+### Viewer
+
+- **Images:** the original when the browser can draw it and it is under
+  50 MB; otherwise the large thumbnail (1920 px).
+- **Videos:** played as Drive plays them today, downloaded and decrypted
+  first.
+- **Info panel:** date and time with the time zone, the place on a small map,
+  camera, dimensions, size, folder (opens it in Drive), and caption.
+  - **Editable by those who may rename the photo:** date, place, caption.
+  - **Photos you can only view:** shown, not editable.
+
+### Upload and duplicates
+
+- Uploads go to the upload folder: drag and drop anywhere, or the Upload
+  button.
+- **Duplicates:** before a file uploads, its hash and name are looked up in
+  the library on the device. A file with the same name and hash is skipped
+  and reported as already in the library; the same content under another
+  name is uploaded. This is Ente's rule.
+- The server never sees a hash. Proton sends name and content hashes, keyed
+  per folder, to its server; Kutup does not.
+
+### Favourites, archive, hidden
+
+These are yours, not the photo's: a favourite from a shared folder is
+private to you. They are kept in one encrypted **library record** per
+account:
+- **Key:** a random library key, sealed with the account key (new account
+  envelope purpose).
+- **Record:** file id sets for favourites, archived and hidden, sealed under
+  that key (new Drive envelope purpose), with a revision.
+- **Two devices changing it at once:** the second write is refused, and that
+  device merges and writes again.
+- **What the server learns:** only that a record exists and its size. Ente's
+  favourites are a collection its server can see.
+
+**Where each shows:**
+- **Archived:** leaves the timeline and Places, and appears in albums and
+  search.
+- **Hidden:** leaves everything except its own page.
+
+A lock on Hidden (asking again for the password) is a later choice.
+
+### Places (studied from Ente, as asked)
+
+**Ente's two versions:**
+- **Web** (`CollectionMapDialog.tsx`):
+  - a Leaflet map with `supercluster` (80 px radius);
+  - each marker is the newest photo in its group, with a count;
+  - clicking a group zooms to where it splits;
+  - a side panel lists every photo inside the current view, newest first,
+    by day, and updates as the map moves;
+  - thumbnails load for what is on screen plus a 15% margin, and the next
+    zoom level.
+- **Mobile** (`map_screen.dart`, clustering in Rust):
+  - groups by distance on screen (a grid of cells the marker's size, points
+    joining the nearest group within that distance);
+  - a tapped group zooms to fit its photos;
+  - a pull-up gallery shows the photos in view;
+  - the map opens where the most recent photos are: among the 10 newest
+    photos with a place, it takes the biggest group within 50 km and centres
+    on its middle photo;
+  - it works across the date line.
+
+**Kutup's Places does the same:**
+- **Map:** the shared map component (MapLibre, the provider the admin chose,
+  through the relay if set) with photo markers. Maps off for this person:
+  the usual "maps are off" state, with a link to turn them on.
+- **Clustering:** Ente's screen-space grid, in TypeScript, on the device.
+  Pure functions with tests (date line included), run on each move, for
+  photos near the view.
+- **Markers:** the newest photo in each group, with a count. Clicking one
+  zooms to fit it; a single photo opens the viewer.
+- **Panel:** the photos in view (a bottom sheet on phones), newest first, by
+  day, updating as the map moves.
+- **Opening position:** every photo with a place fitted in view, once the
+  library has loaded (unlike Ente, which opens on the biggest recent group),
+  so no place is hidden until you zoom out.
+- **Which photos:** those with a place, minus archived and hidden. A photo's
+  place comes only from its encrypted metadata; tiles are the only thing
+  fetched, as for every map.
+
+### HEIC, RAW, live photos, video (slice 3)
+
+- **HEIC** (iPhone photos): Safari draws them; other browsers need libheif
+  in WASM (LGPL-3.0, compatible with Kutup's AGPL-3.0), in the preview
+  worker, for thumbnails and the viewer. Ente does the same.
+- **RAW:** the JPEG preview cameras embed, for the thumbnail and viewer; the
+  original downloads.
+- **Live photos:** the still and the video stay two Drive files. The video's
+  `media` names its still. The timeline shows one tile with a "Live" badge,
+  and the viewer plays the video on hover or press.
+  - Proton links related photos the same way.
+  - Ente zips the two into one file; that would hide them from Drive.
+  - Pairing on web upload uses Ente's rules: the same base name, one image
+    and one video, taken within a day. The native apps will pair from the
+    phone's own records.
+- **Video streaming:** Drive's secretstream format is sequential, so a video
+  can play while it downloads but cannot jump ahead without decrypting what
+  comes before. Seeking needs a format with independently sealed chunks,
+  which is a new file suite. That is recorded as its own decision, not done
+  here.
+
+### Albums (slices 4 and 5)
+
+- **An album is a new kind of Drive collection** (kind `album`), hidden from
+  Drive's folder tree. It holds references, not files:
+  - `album_items(album, file, file key sealed under the album key, added by,
+    added at)`, with a new Drive envelope purpose;
+  - a photo in five albums is one file, counted once.
+- **Access:** the server lets anyone with access to the album download the
+  photo and its thumbnails.
+- **Reused from folders:** keys, epochs, members, sharing across servers,
+  public links and revocation all come from collections, so shared albums
+  get them without a second system.
+- **Collaborative albums:** members allowed to add put in their own photos,
+  which stay in their storage (Proton and Ente do the same).
+- **"Save to my library"** copies a photo from someone else's album into your
+  upload folder.
+
+### Tagging on the device (slice 6)
+
+The server holds only ciphertext, so it cannot find faces, objects or text
+in photos: the client does, as Ente does. The client decrypts each photo
+and runs ML models on it (face detection and face embeddings, a CLIP image
+embedding, later OCR). What it finds (face boxes, embeddings, text) is
+sealed under the photo's file key, like its thumbnails, and uploaded, so
+any device that can open the photo, and anyone it is shared with, reuses
+the tags instead of running the models again. Faces are grouped into people
+on the device; the people you name, merge or ignore are an account-private
+encrypted record, like the favourites. Search (by person, by what is in a
+photo, by text) runs on the device over these tags, next to search by
+date, place, name, caption and camera. Face grouping is opt in (biometric
+data).
+
+**Decided 2026-09-27:** the models run in both the browser and the native
+apps (Ente runs them only in its desktop and mobile apps); whichever device
+tags a photo first uploads the tags and the others reuse them. The slice is
+deferred until after the native iOS and Android apps. Still to decide then:
+which models (their size and licences) and where they are downloaded from.
+The design comes in its own plan.
+
+## Slices
+
+1. **Foundation and timeline:**
+   - the `photos.` origin, `web-photos` sessions, the app switcher and the
+     account's apps page;
+   - `media` metadata (Rust format, vectors, WASM, CLI keeping it on
+     rename), read on upload in Drive and Photos;
+   - library settings;
+   - the timeline, viewer and info panel;
+   - upload with duplicates skipped;
+   - the metadata backfill.
+2. **Library tools:**
+   - favourites, archive and hidden (the library record);
+   - Places;
+   - editing date, place and caption;
+   - the trash view (Drive's trash, photos only).
+3. **Formats:** HEIC, RAW, live photos, and video details.
+4. **Private albums.**
+5. **Shared albums:** people here and on other servers, collaborative albums,
+   public album links.
+6. **Tagging on the device:** faces and people, objects and scenes, text in
+   photos; the tags synced encrypted, and search built on them.
+
+## Slice 1 done (2026-09-26)
+
+- **The format:** `FileMetadataV1` with `media` is the Rust format
+  (`kutup-crypto` `file_metadata`, vector `fileMetadata`), used by the
+  browser through WASM and by the CLI. Rename, re-key, re-seal for sharing
+  and copy keep `media`. The hash is SHA-256 (the crate's own).
+- **Reading on upload:** `@kutup/files/media` (ExifReader; a bounded
+  MP4/QuickTime reader for `mvhd`, `tkhd`, Apple's keys, `©xyz` and 3GPP
+  `loci`; dates in names). Tested on real JPEG, MP4 and MOV files. Every
+  Drive upload of a photo or video seals it too.
+- **The app:** `photos.` (`KUTUP_PHOTOS_URL`, dev port 5178, `web-photos`
+  sessions, migration 066); in the app switcher and on the account's apps
+  page.
+  - The timeline: virtualized, by day under month headings, with a month
+    scrubber.
+  - Selection: click, shift-click, a whole day; download (one file, or a
+    ZIP), share one, move to trash.
+  - Drag and drop anywhere to upload.
+  - The viewer: the original when the browser can draw it (the large
+    thumbnail otherwise); arrows, swipes and keys; a details panel with a
+    small map.
+  - Settings: the upload folder, and library folders (yours or shared with
+    you).
+- **Catch-up:** photos without details or a thumbnail get both from one
+  download, one at a time, those on screen first. They are written back
+  where this account may, and kept for the tab otherwise.
+- **Shared with Drive:** the thumbnail store and queue (`drive-core`), photo
+  and video thumbnails (`@kutup/files/thumbnails`), the upload queue and
+  panel and the storage meter (`drive-ui`).
+- **Also fixed:** Drive's retry after a folder moved to a new key mid-upload
+  read the folder index by the wrong cache key and always failed.
+- **Not yet:** folders shared from other servers in the library (their ids
+  are not local folders); a thumbnail for a HEIC photo in browsers that
+  cannot decode it (slice 3).
+
+## Slice 2 done (2026-09-27)
+
+- **The library record:** `photos_library` in `kutup-crypto` (vector
+  `photosLibrary`, WASM), `GET`/`PUT /api/photos/library` with
+  compare-and-swap (migration 067). Every change is a function of the
+  marks, replayed on the newer record after a `409`: two browsers marking
+  photos at the same moment keep both changes (checked in a browser).
+- **Favourites, Archive, Hidden:** pages of their own; a heart on favourite
+  tiles; the selection and the viewer mark and unmark. Archived and hidden
+  photos leave the timeline and Places.
+- **Places:** Ente's design, as studied. The map package gains
+  `useKutupMap` (the provider and relay setup `MapView` now uses too) and a
+  screen-space clusterer ported from Ente's Rust one (`cluster.ts`, with
+  tests, the date line included). Markers show the newest photo of each
+  group with a count; opening a group zooms to it, a photo opens the viewer;
+  the panel lists what is in view by day. It opens on the group of your ten
+  newest located photos.
+- **Editing:** date and time with the time zone it was taken in, place (on a
+  map or as coordinates, or removed) and caption, for photos this account
+  may write; a new metadata revision. The details show the caption.
+- **Trash:** Drive's trash, photos and videos only, with their pictures (the
+  trash listing now carries thumbnail stamps, and a trashed file's owner may
+  read them); restore and delete forever. Drive's trash module moved to
+  `drive-core`.
+
+## Slice 3 done (2026-09-27)
+
+- **HEIC/HEIF:** recognized by its `ftyp` brands (compatible brands too)
+  and decoded in the preview worker with libheif-js 1.23 (LGPL-3.0, WASM,
+  loaded only for such files); Safari draws the original, other browsers
+  get it converted on the device (up to 4096 px) in the viewer. Its size
+  comes from its `ispe` box, its tags from ExifReader.
+- **RAW** (DNG, CR2, CR3, NEF, NRW, ARW, ORF, RW2, PEF, SRW, RAF): the
+  largest embedded baseline or progressive JPEG (TIFF directories, RAF's
+  header, a bounded scan for CR3; lossless sensor data skipped), turned by
+  the RAW's orientation; thumbnails and the viewer use it. Drive treats
+  these names as images too.
+- **Photo budget:** thumbnails of photos (in Drive as in Photos) allow up to
+  64 MP and 128 MiB; HEIC and RAW always get the large thumbnail.
+- **Live photos:** `media.liveOf` (the still's file id) in the format and
+  its vector. Uploading a still and a short video with one name (Ente's
+  rules: one of each, `_3`/`_HEVC` ignored, at most 6 s, taken within a day)
+  uploads the still first and the video naming it. The library shows one
+  tile with a Live badge; the viewer plays the video over the still; trash
+  and ZIP downloads take both. Pairs uploaded elsewhere are not paired
+  after the fact yet.
+- **Video:** a video the browser cannot play (HEVC outside Safari) says so
+  and offers the download. Seeking while streaming still needs a seekable
+  file suite (see above).
+
+Checked in Chromium: HEIC thumbnails and the converted HEIC in the viewer,
+a RAW's preview turned upright, a live photo as one tile that plays.
+
+## Slice 4 done (2026-09-27)
+
+- **Format:** Drive envelope purpose 12, `AlbumFileKey` (Rust with tests,
+  WASM, TS `@kutup/crypto/album`).
+- **Server:** `collections.kind` (`folder`/`album`, migration 068); albums
+  sit at the top level and database triggers keep files and folders out of
+  them whatever path writes; `album_items`; `/api/albums` (list, create,
+  delete, items, add, remove). Albums stay out of Drive's folder listing
+  and trash; deleting one leaves its photos.
+- **Photos:** an Albums page (cards with the newest photo as cover), an
+  album page on the shared grid (select, open, remove from the album,
+  rename, delete), "Add to album" in the selection (an album, or a new one).
+  Only your own photos go in (others' are theirs to share). A live photo goes
+  in whole. Items left at an older file key (the photo was re-keyed) are
+  re-sealed when the album opens.
+
+Checked in a browser: a new album from a selection, a live photo added
+whole, opening and removing photos, rename, delete with the photos kept,
+Drive not showing albums; the database guards directly.
+
+## Slice 5 progress (2026-09-27)
+
+- **Shared with people on this server:** albums are shared, listed,
+  re-keyed and left as folders are (drive-core's opener and rotation; the
+  rotation request carries every item re-sealed). Members see and open the
+  photos; "Can add photos" lets them put in their own (they stay in their
+  storage) and take out only those; the owner takes out any. Leaving takes
+  your photos with you. Checked in a browser with two accounts, including a
+  removal that re-keyed the album (epoch 2, every item re-sealed).
+- **Public links:** the owner makes a link in the share dialog
+  (`photos.<domain>/s/<token>#key=<link key>`), copies it again later
+  (the owner keeps a copy of the link key under their master key), and
+  removes it, which re-keys the album. The link page needs no account: it
+  opens the album key with the link key, the album's name, and each photo's
+  key sealed under the album key, and shows a grid, a viewer (the original,
+  HEIC and RAW converted as in the app) and a download. The server serves
+  the album's items and their thumbnails to the token only; files that are
+  album items count as reached by the link. Links survive removing a person
+  and re-keying, as folder links do. Checked in a browser: a stranger with
+  no account saw the photos, opened and downloaded one; a link without its
+  key was refused; after removal the link stopped working.
+- **Shared with people on other servers:** the share dialog takes
+  `user@server` too; the album key is sealed to that person as for a
+  folder, and the owner sends them the invite link it shows
+  (`…/invite#server=…&capability=…&kind=album`). They add it in Photos
+  (Albums, "Add from invite link"); Drive accepts one too and points to
+  Photos. Their server keeps the invite's kind, so Drive lists shared
+  folders and Photos shared albums. The owner's server lists the album's
+  items and serves their thumbnails and content to the capability; the
+  recipient's server relays them. View only: photos added from another
+  server would have to live there, which albums cannot hold yet. When the
+  owner moves the album to a new key, the recipient's server refreshes the
+  share on its next look (the new key sealed to them, the epoch chain
+  checked); when the owner removes them, the album says it is no longer
+  shared, and they take it off their list. Checked in a browser with two
+  servers (fa.localhost and fb.localhost): sharing, the invite, thumbnails
+  and an original through the relay, a re-key while shared, and removal.
+
+**Slice 5 done.**
+
+## Open questions
+
+Each has a proposed answer, used unless the product owner decides otherwise:
+- **Folders shared with you in the library?** Yes, any folder you can open.
+  Photos you can only view get no metadata written.
+- **Lock on Hidden?** Not in these slices.
+- **Library cache on the device?** Only if 10,000 photos measure slow.

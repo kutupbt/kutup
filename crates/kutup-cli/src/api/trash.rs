@@ -59,6 +59,8 @@ pub struct TrashFile {
     pub file_key_envelope: String,
     #[serde(default)]
     pub key_epoch: u32,
+    /// The generation of the file's current key.
+    pub key_generation: u32,
     #[serde(default)]
     pub metadata_revision: u64,
     #[serde(default)]
@@ -123,7 +125,7 @@ mod tests {
             "files": [{
                 "id": "a1", "collectionId": "c1",
                 "metadataEnvelope": "me", "fileKeyEnvelope": "fke",
-                "keyEpoch": 1, "metadataRevision": 1,
+                "keyEpoch": 1, "keyGeneration": 2, "metadataRevision": 1,
                 "collectionOwnerUserId": "u1", "collectionOwnerKeyEnvelope": "oke",
                 "collectionKeyEpoch": 1, "collectionEpochStatement": "es",
                 "collectionEpochStatementHash": "esh",
@@ -136,6 +138,7 @@ mod tests {
         assert_eq!(parsed.folders[0].owner_key_envelope, "oke");
         assert_eq!(parsed.files.len(), 1);
         assert_eq!(parsed.files[0].collection_owner_key_envelope, "oke");
+        assert_eq!(parsed.files[0].key_generation, 2);
         assert_eq!(parsed.files[0].deleted_at, "2026-07-02T11:30:00Z");
     }
 }

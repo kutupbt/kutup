@@ -98,7 +98,12 @@ fn folder_name(f: &TrashFolder, master_key: &[u8], session: &Session) -> String 
 }
 
 /// master key → row-level collection key wrap → file key → metadata.
-fn file_meta(f: &TrashFile, master_key: &[u8], session: &Session) -> (String, Option<i64>) {
+fn file_meta(
+    client: &crate::api::Client,
+    f: &TrashFile,
+    master_key: &[u8],
+    session: &Session,
+) -> (String, Option<i64>) {
     let inner = || -> Result<FileMetadata> {
         let collection = crate::api::Collection {
             id: f.collection_id.clone(),
@@ -130,15 +135,25 @@ fn file_meta(f: &TrashFile, master_key: &[u8], session: &Session) -> (String, Op
             metadata_envelope: f.metadata_envelope.clone(),
             file_key_envelope: f.file_key_envelope.clone(),
             key_epoch: f.key_epoch,
+            key_generation: f.key_generation,
             metadata_revision: f.metadata_revision,
             encrypted_size_bytes: 0,
             created_at: String::new(),
+            // Only the name is read here: no content, no older keys.
+            content_key_generation: f.key_generation,
+            key_history: Vec::new(),
         };
-        let (_, metadata) = crate::file_crypto::open(&file, &col_key)?;
+        // Older keys only if the file predates the folder's last rotation.
+        let keys = if f.key_epoch == f.collection_key_epoch {
+            crate::keyring::Keyring::current_only(&col_key, f.collection_key_epoch)
+        } else {
+            crate::keyring::Keyring::load(client, &collection, &col_key, master_key)?
+        };
+        let (_, metadata) = crate::file_crypto::open(&file, &keys)?;
         Ok(metadata)
     };
     match inner() {
-        Ok(meta) => (meta.name, Some(meta.size)),
+        Ok(meta) => (meta.name, Some(meta.size as i64)),
         Err(_) => ("[encrypted]".to_string(), None),
     }
 }
@@ -161,7 +176,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         });
     }
     for f in &trash.files {
-        let (name, size) = file_meta(f, &master_key, &ctx.session);
+        let (name, size) = file_meta(&ctx.client, f, &master_key, &ctx.session);
         entries.push(TrashEntry {
             id: f.id.clone(),
             entry_type: "file",

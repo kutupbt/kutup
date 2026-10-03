@@ -52,6 +52,8 @@ pub struct SettingsResponse {
     /// Chat feature advertisement (docs/chat-protocol.md §10). A client
     /// feature-gates chat on this and must not show chat UI when absent/disabled.
     pub chat: kutup_chat_proto::ChatCapabilities,
+    /// Where each Kutup web app lives (server config; see docs/self-hosting.md).
+    pub apps: crate::config::AppOrigins,
 }
 
 /// Authenticated global settings managed by a server administrator.
@@ -89,6 +91,10 @@ pub struct PreflightRecoverResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub access_token: String,
+    pub session_id: String,
+    /// The rotated refresh token, for non-web clients only (web: cookie).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 /// `GET /api/user/me` — mirrors `handlers.MeResponse`.
@@ -106,6 +112,8 @@ pub struct MeResponse {
     pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub color: String,
+    /// How long this account's file versions are kept (days).
+    pub version_retention_days: i32,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.
@@ -177,6 +185,15 @@ pub struct CollectionRow {
     pub upload_used_bytes: Option<i64>,
     #[serde(skip_serializing_if = "is_false")]
     pub is_shared: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: time::OffsetDateTime,
+    /// The folder's own last change (rename, colour) or its newest direct child's
+    /// (a file uploaded, renamed or edited; a subfolder created) — what a file
+    /// manager shows as a folder's "modified" time.
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: time::OffsetDateTime,
 }
 
 /// `POST /api/collections` body — mirrors `handlers.CreateCollectionRequest`.
@@ -232,13 +249,71 @@ pub struct FileRow {
     pub uploader_user_id: String,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
+    /// The folder epoch the file key is wrapped at; below the folder's own
+    /// epoch, the file is re-keyed before it is written to or moved.
     pub key_epoch: i32,
+    /// The generation of the file's current key (docs/plans/drive-move.md).
+    pub key_generation: i32,
     pub metadata_revision: i64,
     pub encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    /// When each thumbnail variant was stored; absent when there is none.
+    pub thumbnails: FileThumbnails,
+    /// A thumbnail exists but was drawn from something other than the
+    /// latest version (docs/plans/drive-thumbnails.md): redraw it.
+    pub thumbnail_stale: bool,
+    /// The key generation the uploaded content was sealed at.
+    pub original_key_generation: i32,
+    /// The key generation of the content a download serves (its latest
+    /// whole-file version, else the upload).
+    pub content_key_generation: i32,
+    /// The file's older keys, each sealed under the next (generations 2 to
+    /// `key_generation`, in order). Empty for most files.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub key_history: Vec<FileKeyHistoryEntry>,
+    /// Shared with someone by itself (docs/plans/drive-file-sharing.md).
+    /// Shown to the owner only; false for everyone else.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+}
+
+/// Generation `generation`'s record: the key of `generation − 1` sealed under
+/// its own (`PreviousFileKey`).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct FileKeyHistoryEntry {
+    pub generation: i32,
+    pub previous_key_envelope: String,
+}
+
+/// The key generation of what `GET /files/{id}/download` serves
+/// (`file_content`): the latest whole-file version's, else the original's;
+/// for `files f`.
+pub const CONTENT_KEY_GENERATION_SQL: &str = "COALESCE((SELECT v.key_generation FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file' ORDER BY v.created_at DESC LIMIT 1), f.original_key_generation)";
+
+/// The `key_history` column for a query over `files f`.
+pub const FILE_KEY_HISTORY_SQL: &str = "COALESCE((SELECT json_agg(json_build_object('generation', h.generation, 'previousKeyEnvelope', h.previous_key_envelope) ORDER BY h.generation) FROM file_key_history h WHERE h.file_id = f.id), '[]'::json)";
+
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct FileThumbnails {
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sm: Option<OffsetDateTime>,
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lg: Option<OffsetDateTime>,
+    /// The key generation each variant was sealed at.
+    #[serde(rename = "smKeyGeneration", skip_serializing_if = "Option::is_none")]
+    pub sm_key_generation: Option<i32>,
+    #[serde(rename = "lgKeyGeneration", skip_serializing_if = "Option::is_none")]
+    pub lg_key_generation: Option<i32>,
 }
 
 /// File upload result — mirrors `handlers.UploadResult`.
@@ -277,6 +352,7 @@ pub struct TrashFileRow {
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     pub key_epoch: i32,
+    pub key_generation: i32,
     pub metadata_revision: i64,
     pub collection_owner_user_id: String,
     pub collection_owner_key_envelope: String,
@@ -285,6 +361,8 @@ pub struct TrashFileRow {
     pub collection_epoch_statement_hash: String,
     #[serde(with = "time::serde::rfc3339")]
     pub deleted_at: OffsetDateTime,
+    /// Its thumbnails, which its owner may still read while it is in the trash.
+    pub thumbnails: FileThumbnails,
 }
 
 /// `GET /api/trash` body — the caller's trash roots, newest first.
@@ -438,6 +516,8 @@ mod tests {
             upload_quota_bytes: None,
             upload_used_bytes: None,
             is_shared: false,
+            created_at: time::macros::datetime!(2026-09-01 10:00 UTC),
+            updated_at: time::macros::datetime!(2026-09-23 12:30 UTC),
         };
         let v: serde_json::Value = serde_json::to_value(&row).unwrap();
         let obj = v.as_object().unwrap();
@@ -446,6 +526,8 @@ mod tests {
         assert!(!obj.contains_key("isShared"));
         assert!(obj.contains_key("ownerKeyEnvelope"));
         assert!(!obj.contains_key("namedShareEnvelope"));
+        assert_eq!(obj["createdAt"], "2026-09-01T10:00:00Z");
+        assert_eq!(obj["updatedAt"], "2026-09-23T12:30:00Z");
     }
 
     #[test]

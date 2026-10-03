@@ -4,8 +4,7 @@ name: Release CLI
 # (amd64 + arm64) and publishes a GitHub Release with the archives + checksums.
 # Replaces the previous Go/GoReleaser build (cmd/kutup/ was removed in the Go→Rust cutover).
 #
-# Trigger: push a tag like `v0.1.0`. (The desktop app releases independently on `desktop-v*`
-# tags — see release-desktop.yml. The two never overlap.)
+# Trigger: push a tag like `v0.1.0`.
 
 on:
   push:

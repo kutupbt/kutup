@@ -146,26 +146,34 @@ sequenceDiagram
 For each file upload:
 
 1. Client generates the canonical file UUID and random **file key** before contacting the server.
-2. Client constructs a 48-byte `DriveFileBlobHeaderV1` containing magic,
-   `DriveObjectSuiteId`, file-blob purpose, collection epoch, file UUID and
-   collection UUID. HKDF-SHA256 derives a stream key from the random file key
+2. Client constructs a 32-byte `DriveFileBlobHeaderV1` containing magic,
+   `DriveObjectSuiteId`, file-blob purpose, the file key's generation (1 for
+   a new file) and the file UUID — no folder, so the file can move without
+   re-encryption. HKDF-SHA256 derives a stream key from the random file key
    and that exact header.
 3. Client encrypts the bytes in 5 MiB XChaCha20 secretstream frames. The Drive
    header is associated data on every frame, and even an empty object emits an
-   authenticated `TAG_FINAL` frame. The stored prefix is the 48-byte Drive
+   authenticated `TAG_FINAL` frame. The stored prefix is the 32-byte Drive
    header followed by the 24-byte secretstream header.
 4. Client seals `{name, mimeType, size}` as a `FileMetadata`
    `DriveEnvelopeV1` under the file key. Its authenticated context binds the
-   file UUID, collection UUID, collection-key epoch, and metadata revision.
+   file UUID, the key generation and the metadata revision.
 5. Client seals the file key as a `FileKey` `DriveEnvelopeV1` under the
-   collection key, bound to the same UUIDs and epoch.
+   collection key, bound to the file, the collection, the collection epoch
+   and the key generation. This wrap is the only file object that names the
+   folder: moving a file re-seals it for the destination and nothing else
+   (docs/plans/drive-move.md).
 6. Client uploads the UUID, two canonical envelopes, and opaque content. The
    backend independently checks all three public headers against the current
-   collection epoch before storage. Multipart, tus, version snapshots and
-   signed federation use identical blob semantics.
+   collection epoch and the file's key generation before storage. Multipart,
+   tus, version snapshots and signed federation use identical blob semantics.
 7. Rename creates the exact next metadata revision; rollback, gaps, relocation,
-   wrong purpose, stale epoch, stream truncation and bytes after `TAG_FINAL`
-   fail closed.
+   wrong purpose, stale epoch or generation, stream truncation and bytes
+   after `TAG_FINAL` fail closed.
+8. A file whose folder rotated past it (someone was removed) gets a new key
+   of the next generation before anything new is written to it or it moves;
+   the key it leaves is sealed under the new one, so older content, versions
+   and thumbnails still open through the file's own key chain.
 
 On download, the client receives the blob and all encrypted fields, then reverses the process locally.
 
@@ -180,6 +188,21 @@ canonical accounts, and both account incarnations. Local and federated sharing
 use the same cryptographic envelope; federation adds only signed routing and a
 domain-bound delivery capability. The server stores the envelope but cannot
 open the collection key.
+
+A single file can also be shared by itself (docs/plans/drive-file-sharing.md).
+A `FileShareEnvelopeV1`, sealed and signed the same way, carries that file's
+own key, bound to the file and its key generation. The recipient never gets
+the folder's key. Removing someone moves the file to a new key, re-sealed for
+whoever stays. When the file moves to a new key another way (a folder member
+re-keys it after the folder rotated), its shares can read what they had but
+cannot edit. The owner's Drive re-seals them the next time it is open.
+
+People who share a folder also give each other their profile key, in a
+`ProfileKeyEnvelopeV1` sealed and signed the same way, so Drive shows names
+and pictures from the end-to-end encrypted profile. The server accepts one
+only between people with a share between them, forwards it to the other
+person's server when needed, and cannot read it
+(docs/plans/unified-profile.md).
 
 Public links use the same typed envelope implementation with the distinct
 `PublicLinkCollectionKey` purpose. The random link key stays exclusively in
@@ -458,11 +481,11 @@ sequenceDiagram
     participant B as Browser B<br/>(Editor)
 
     Note over A: edit → diff → encrypt
-    A->>A: derive frame key = HKDF(collection key,<br/>suite + kind + epoch + doc generation + UUIDs)
-    A->>A: AEAD encrypt (XChaCha20-Poly1305)<br/>AAD = canonical 96-byte header
+    A->>A: derive frame key = HKDF(file key,<br/>suite + kind + key generation + doc generation + file UUID)
+    A->>A: AEAD encrypt (XChaCha20-Poly1305)<br/>AAD = canonical 80-byte header
     A->>A: Ed25519-sign (header + ciphertext)
     A->>R: WS frame (header + ciphertext + sig)
-    R->>R: verify signature + epoch
+    R->>R: verify signature + key generation
     alt persisted (yjs / oo_op / excalidraw_op)
         R->>R: append to file_update_log
     else ephemeral (awareness / *_cursor)
@@ -480,20 +503,20 @@ Three engines run side-by-side, each routed by `KIND` byte in the envelope:
 - **Excalidraw op** (`KIND.EXCALIDRAW_OP` = 8) carries an array of changed elements. Convergence relies on each element's `versionNonce` plus Excalidraw's `reconcileElements` — last-write-wins per element, no CRDT semantics. Ephemeral on the wire (canonical state lives in snapshots).
 
 ### Wire envelope
-`CollabFrameSuiteId = 1` is encoded as a canonical 96-byte big-endian header,
+`CollabFrameSuiteId = 1` is encoded as a canonical 80-byte big-endian header,
 XChaCha20-Poly1305 ciphertext/tag and a trailing 64-byte Ed25519 signature. The
-header authenticates suite, kind, collection-key epoch, document-key
-generation, file and collection UUIDs, sender device, sequence, nonce and exact
-ciphertext length. The server strictly parses the same Rust format, verifies
+header authenticates suite, kind, file-key generation, document-key
+generation, file UUID, sender device, sequence, nonce and exact ciphertext
+length. The server strictly parses the same Rust format, verifies
 the registered sender signature, requires the exact current context and stores
 only the opaque bytes.
 
 ### Collaboration frame key
 The canonical Rust implementation derives a purpose key with HKDF-SHA256 from
-the current collection key. Suite, kind, collection epoch, document-key
-generation, file UUID and collection UUID are derivation inputs and header
-AAD. A key or frame cannot be relocated to another document, collection,
-epoch, generation or kind. Browser clients call this implementation through
+the file key. Suite, kind, file-key generation, document-key generation and
+file UUID are derivation inputs and header AAD. A key or frame cannot be
+relocated to another document, key generation, document generation or kind;
+it names no folder, so a document's log survives a move. Browser clients call this implementation through
 WASM; CLI/native clients call the same crate directly.
 
 ### Device keys
@@ -508,10 +531,12 @@ Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Sav
 
 Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-forever versions are exempt forever.
 
-The snapshot endpoints (`/files/:fileId/snapshot-blob` + `/files/:fileId/versions`) are file-type-agnostic — notes, office docs, and whiteboards all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
+Versions are stored with one request (`POST /files/:fileId/versions`, multipart, charged by measured size, one object per version; `docs/plans/drive-versions-v2.md`) and are file-type-agnostic — notes (`kind = yjs`), office docs and whiteboards (`kind = file`) all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
 
 ### Federation, sharing
-Existing collection-share + federation flows are unchanged. A live-edited file is still a regular `files` row with an encrypted blob; non-editing users continue to download it as today.
+A live-edited file is still a regular `files` row with an encrypted blob; non-editing users download it as usual.
+
+Across servers, each browser connects only to its own server. For a file on another server, that server (the bridge) keeps a local room, subscribes at the file's server (home) over the signed Drive federation transport, sends its users' frames home in batches, and receives home's new frames by push, never by polling. Home applies the same checks as for a local frame plus the share's edit permission, and stores remote senders as `(domain, device)`. Versions and the seed are relayed the same way. Only notes and place lists use it so far; see `docs/plans/collab-federation.md`.
 
 ### Replay protection
 Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.

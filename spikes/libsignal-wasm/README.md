@@ -48,5 +48,5 @@ cargo build --release --target wasm32-unknown-unknown  # browser-target compile 
    IndexedDB store implementations, and Safari/Firefox smoke tests. The crypto — the
    actual go/no-go risk — is proven above.
 
-This crate is intentionally **outside the root Cargo workspace** (like `src-tauri/`) so
+This crate is intentionally **outside the root Cargo workspace** so
 the app's `cargo build`/`cargo test` never pays for the libsignal dependency tree.

@@ -33,6 +33,11 @@ uuid.workspace = true
 time.workspace = true
 utoipa.workspace = true
 jsonwebtoken.workspace = true
+# VAPID signatures (ES256) for Web Push wake-ups.
+p256 = { workspace = true, features = ["ecdsa"] }
+# coturn shared-secret TURN credentials for Chat calls.
+hmac = "0.12"
+sha1 = "0.10"
 bcrypt.workspace = true
 totp-rs.workspace = true
 url.workspace = true

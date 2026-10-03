@@ -2,11 +2,12 @@ import { defineConfig, devices } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 
-// kutup e2e: runs against the local stack at https://localhost:38443
-// (override with E2E_BASE_URL when the stack is on a different port).
-// Tests assume the stack is already up; the wipe-stack fixture (bin/reset)
-// is invoked manually between specs that need a fresh DB.
-const BASE_URL = process.env.E2E_BASE_URL ?? 'https://localhost:38443'
+import { allOrigins, appOrigin } from './fixtures/apps'
+
+// kutup e2e: runs against a running stack whose apps live one per hostname,
+// https://{app}.localhost:38443 by default (fixtures/apps.ts; override with
+// E2E_APP_ORIGIN and, for two-server specs, E2E_SECONDARY_APP_ORIGIN).
+// Tests assume the stack is already up.
 const SAFE_ARTIFACTS = process.env.KUTUP_E2E_SAFE_ARTIFACTS === '1'
 if (SAFE_ARTIFACTS) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1'
 
@@ -28,7 +29,9 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {
-    baseURL: BASE_URL,
+    // Relative navigation opens the account app; specs name other apps with
+    // appUrl().
+    baseURL: appOrigin('account'),
     ignoreHTTPSErrors: true,
     // Security and backup CI handles recovery phrases, bearer tokens, opaque
     // archives, and account identifiers. Those jobs persist allow-listed
@@ -47,7 +50,32 @@ export default defineConfig({
       // OnlyOffice's nested canvas/worker stack in a long zero-retry run.
       // `playwright install chromium` provides this binary alongside the
       // shell, so local and CI installation commands remain unchanged.
-      use: { ...devices['Desktop Chrome'], channel: 'chromium' },
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+        launchOptions: { args: browserArgs() },
+      },
     },
   ],
 })
+
+/**
+ * Test hostnames outside `localhost` (the federation stack's `*.a.test`)
+ * resolve to this machine, and their plain-HTTP origins count as secure
+ * contexts, which the apps' Web Crypto, service worker and clipboard need.
+ */
+function browserArgs(): string[] {
+  const origins = allOrigins().map((origin) => new URL(origin))
+  const foreign = origins.filter((url) => url.hostname !== 'localhost' && !url.hostname.endsWith('.localhost'))
+  const args: string[] = []
+  // A local stack's self-signed certificate: Playwright's ignoreHTTPSErrors
+  // does not cover service-worker scripts, which ONLYOFFICE registers.
+  if (process.env.E2E_TRUST_LOCAL_CERT === '1') args.push('--ignore-certificate-errors')
+  if (foreign.length > 0) {
+    const rules = [...new Set(foreign.map((url) => url.hostname))].map((host) => `MAP ${host} 127.0.0.1`)
+    args.push(`--host-resolver-rules=${rules.join(', ')}`)
+  }
+  const insecure = foreign.filter((url) => url.protocol === 'http:').map((url) => url.origin)
+  if (insecure.length > 0) args.push(`--unsafely-treat-insecure-origin-as-secure=${insecure.join(',')}`)
+  return args
+}

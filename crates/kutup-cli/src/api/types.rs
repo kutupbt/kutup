@@ -129,6 +129,10 @@ pub struct RecoverRequest {
 pub struct RefreshResponse {
     #[serde(default)]
     pub access_token: String,
+    /// The rotated refresh token. Absent when a concurrent refresh already
+    /// rotated it (the server's grace window); keep the stored one then.
+    #[serde(default)]
+    pub refresh_token: String,
 }
 
 /// `POST /user/2fa/setup` response — `secret` is the base32 form for manual entry, `qr_uri`
@@ -245,25 +249,73 @@ pub struct File {
     pub metadata_envelope: String,
     #[serde(default)]
     pub file_key_envelope: String,
+    /// The folder epoch the file key is wrapped at; below the folder's own
+    /// epoch, the file is re-keyed before it is written to or moved.
     #[serde(default)]
     pub key_epoch: u32,
+    /// The generation of the file's current key (docs/plans/drive-move.md).
+    pub key_generation: u32,
     #[serde(default)]
     pub metadata_revision: u64,
     #[serde(default)]
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
+    /// The key generation of what `/files/{id}/download` serves (its latest
+    /// whole-file version, else the upload).
+    pub content_key_generation: u32,
+    /// The file's older keys, each sealed under the next (generations 2 to
+    /// `key_generation`, in order); absent for most files.
+    #[serde(default)]
+    pub key_history: Vec<FileKeyHistoryEntry>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileMetadata {
-    pub name: String,
-    #[serde(default)]
-    pub mime_type: String,
-    #[serde(default)]
-    pub size: i64,
+/// `POST /files/{id}/rekey`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RekeyRequest {
+    /// The generation the file is leaving (compare-and-swap).
+    pub from_generation: u32,
+    /// The new key, sealed under the folder's current key.
+    pub file_key_envelope: String,
+    /// The metadata, re-sealed under the new key.
+    pub metadata_envelope: String,
+    /// The key being left, sealed under the new one (`PreviousFileKey`).
+    pub previous_key_envelope: String,
 }
+
+/// `POST /files/{id}/move`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveFileRequest {
+    /// The folder the file is in now (compare-and-swap).
+    pub from_collection_id: String,
+    pub to_collection_id: String,
+    /// The destination's current epoch, which the envelope is sealed at.
+    pub to_key_epoch: u32,
+    /// The file's current key sealed under the destination's key.
+    pub file_key_envelope: String,
+}
+
+/// `POST /collections/{id}/move`; `None` moves the folder to the top level.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCollectionRequest {
+    pub parent_collection_id: Option<String>,
+}
+
+/// One generation of a file's key history: the key of `generation − 1`
+/// sealed under the key of `generation`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileKeyHistoryEntry {
+    pub generation: u32,
+    pub previous_key_envelope: String,
+}
+
+/// A file's metadata: the canonical format in `kutup-crypto` (name, type,
+/// size and a photo's details), so a rename keeps what it does not change.
+pub use kutup_crypto::file_metadata::FileMetadataV1 as FileMetadata;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -312,11 +364,17 @@ pub struct FederatedShareResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicShareRequest {
+    /// The link's id, chosen here (bound into the owner's copy of its key).
+    pub id: String,
     pub share_type: String,
     pub target_id: String,
     pub collection_key_envelope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_hours: Option<i64>,
+    /// The link key sealed for the owner under their master key (purpose 9),
+    /// so the owner can list, copy and keep the link across a folder-key
+    /// rotation (docs/plans/drive-share-revocation.md).
+    pub owner_link_key_envelope: String,
 }
 
 #[derive(Debug, Deserialize)]

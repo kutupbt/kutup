@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="$ROOT/crates/kutup-chat-core"
-OUT="$ROOT/frontend/public/chat-wasm"
+OUT="$ROOT/frontend/wasm/chat-wasm"
 
 if ! command -v wasm-bindgen >/dev/null 2>&1; then
   echo "wasm-bindgen CLI is required (install version 0.2.126)" >&2

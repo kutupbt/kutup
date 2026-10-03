@@ -6,30 +6,45 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod albums;
+mod calls;
 mod chat_federation;
 mod chat_hub;
 mod chat_media_federation;
 mod chat_mls;
+mod collab_federation;
 mod config;
 mod db;
 mod drive_federation;
+mod drive_federation_albums;
+mod drive_federation_files;
+mod drive_profile_keys;
+mod drive_writes;
 mod error;
 mod federation;
+mod file_content;
 mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod live_locations;
+mod maps;
 mod middleware;
 mod models;
 mod openapi;
+mod photos;
 mod ratelimit;
 mod sealed_sender_service;
+mod server_keys;
+mod sessions;
 mod site_settings;
 mod ssrf;
 mod storage;
 mod storage_probe;
 mod telemetry;
 mod totp;
+mod version_retention;
+mod web_push;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -55,9 +70,20 @@ use models::HealthResponse;
 /// in Go (injected via `-ldflags` in release builds; `"dev"` otherwise).
 const BUILD_VERSION: &str = "dev";
 
-/// Max request body — mirrors the Fiber `BodyLimit: 10 GB`. Streaming upload routes
-/// (tus) disable this per-route once they land (`DefaultBodyLimit::disable()`).
-const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+/// Default request-body cap. Handlers that buffer (JSON, `Bytes`) hold the
+/// whole body in memory, so the default is small; the upload routes that
+/// need more raise it on their own route (and stream to disk).
+const BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+/// A whole-file multipart upload, streamed to a temp file.
+const DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+/// A saved version (streamed to a temp file): an office document or
+/// whiteboard, or a restored copy of one.
+const DRIVE_VERSION_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// One tus PATCH is one encryption chunk (5 MiB plus overhead); room to spare.
+const TUS_PATCH_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+/// A federated Drive upload (streamed to disk, its signed digest checked
+/// there): one file blob of the same bound as an upload, plus framing.
+const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024 + 16 * 1024 * 1024;
 const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
@@ -82,6 +108,12 @@ pub struct AppState {
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
+    /// Web Push wake-ups for closed browsers; `None` when `CHAT_WEB_PUSH=false`.
+    pub(crate) web_push: Option<Arc<web_push::WebPush>>,
+    /// Map providers, people's choices and the tile relay (docs/plans/maps.md).
+    pub(crate) maps: Arc<maps::MapService>,
+    /// Live editing across servers (docs/plans/collab-federation.md).
+    pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
 }
 
 #[tokio::main]
@@ -134,7 +166,9 @@ async fn main() -> anyhow::Result<()> {
         &config,
         time::OffsetDateTime::now_utc(),
     )?;
-    let mls_ordering = chat_mls::MlsOrderingService::from_config(&config)?.map(Arc::new);
+    let mls_ordering = chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
+        .await?
+        .map(Arc::new);
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
             .feature_policies()
@@ -260,16 +294,44 @@ async fn main() -> anyhow::Result<()> {
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
         storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
+    let web_push = if config.chat_web_push {
+        let subject = if config.chat_web_push_subject.is_empty() {
+            if config.server_url.starts_with("https://") {
+                config.server_url.clone()
+            } else {
+                format!("mailto:postmaster@{}", config.chat_server_name)
+            }
+        } else {
+            config.chat_web_push_subject.clone()
+        };
+        Some(
+            web_push::WebPush::start(
+                pool.clone(),
+                chat_hub.clone(),
+                &config.chat_web_push_hosts,
+                subject,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    live_locations::spawn_sweeper(pool.clone());
+    let maps =
+        Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         pool,
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
+        collab_federation: Arc::new(collab_federation::CollabFederation::default()),
         chat_hub,
         federation,
         sealed_sender,
         mls_ordering,
         storage_probe,
+        web_push,
+        maps,
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
@@ -284,8 +346,15 @@ async fn main() -> anyhow::Result<()> {
     // `/api/collections/`). This mirrors Fiber's default `StrictRouting = false`, which the
     // Go CLI relies on (it calls e.g. `/collections/` with a trailing slash).
     let app = NormalizePathLayer::trim_trailing_slash().layer(build_router(state));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    tracing::info!("listening on :3000");
+    // PORT (default 3000): e.g. a second local server for federation testing.
+    let port: u16 = match std::env::var("PORT") {
+        Ok(value) if !value.is_empty() => value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("PORT must be a port number"))?,
+        _ => 3000,
+    };
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    tracing::info!("listening on :{port}");
     // into_make_service_with_connect_info exposes the peer address so the rate-limit
     // layers can key on the client IP (Fiber's c.IP()). `ServiceExt` provides it for the
     // NormalizePath-wrapped service (not just a bare Router).
@@ -400,8 +469,9 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_versions,
-        files, shares, trash, tus,
+        admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
+        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
+        sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -452,12 +522,34 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/auth/complete-setup", post(auth::complete_setup))
+        // --- Sessions: sign-out, the session list, forks, web local keys ---
+        .route("/api/auth/logout", post(session_routes::logout))
+        .route(
+            "/api/auth/sessions",
+            get(session_routes::list_sessions).delete(session_routes::revoke_other_sessions),
+        )
+        .route(
+            "/api/auth/sessions/:id",
+            delete(session_routes::revoke_session),
+        )
+        .route(
+            "/api/auth/sessions/current/local-key",
+            get(session_routes::get_local_key).put(session_routes::put_local_key),
+        )
+        .route("/api/auth/forks", post(session_routes::create_fork))
+        .route(
+            "/api/auth/forks/consume",
+            post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_fork)),
+        )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route("/api/user/2fa/setup", post(auth::setup_totp))
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
-        .route("/api/users/by-email/:email", get(auth::get_user_by_email))
+        .route(
+            "/api/users/by-email/:email",
+            get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
         // --- Collections (authenticated). ---
         .route(
             "/api/collections",
@@ -482,10 +574,74 @@ fn build_router(state: AppState) -> Router {
             post(collections::share_collection),
         )
         .route(
+            "/api/drive/profile-keys",
+            put(drive_profile_keys::put_profile_key),
+        )
+        .route("/api/drive/people", get(drive_profile_keys::list_people))
+        // --- Maps (docs/plans/maps.md). ---
+        .route("/api/maps", get(maps::get_config))
+        .route("/api/maps/preferences", put(maps::put_preferences))
+        .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
+        // --- Photos (docs/plans/photos.md). ---
+        .route(
+            "/api/photos/preferences",
+            get(photos::get_preferences).put(photos::put_preferences),
+        )
+        .route("/api/albums", get(albums::list).post(albums::create))
+        .route("/api/albums/:id", delete(albums::delete))
+        .route(
+            "/api/albums/:id/items",
+            get(albums::items).post(albums::add_items),
+        )
+        .route("/api/albums/:id/items/remove", post(albums::remove_items))
+        .route("/api/albums/:id/keys", get(albums::keys))
+        .route("/api/albums/:id/membership", delete(albums::leave))
+        .route(
+            "/api/photos/library",
+            get(photos::get_library)
+                .put(photos::put_library)
+                .route_layer(DefaultBodyLimit::max(photos::LIBRARY_BODY_LIMIT)),
+        )
+        // --- Live-location streams (docs/plans/maps.md). ---
+        .route(
+            "/api/live-locations",
+            post(live_locations::create).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/live-locations/:streamId",
+            get(live_locations::read)
+                .put(live_locations::write)
+                .delete(live_locations::delete)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
             "/api/collections/:id/federated-shares",
             post(drive_federation::create_federated_share),
         )
         .route("/api/collections/:id/files", get(files::list_files))
+        // --- Folder access: key history, who has access, rotation. ---
+        .route("/api/collections/:id/epochs", get(folder_access::epochs))
+        .route("/api/collections/:id/access", get(folder_access::access))
+        .route(
+            "/api/collections/:id/rotate",
+            post(folder_access::rotate).route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route("/api/files/:id/rekey", post(folder_access::rekey))
+        // --- Sharing a single file (docs/plans/drive-file-sharing.md). ---
+        .route("/api/files/:id/share", post(file_shares::share_file))
+        .route("/api/files/:id/access", get(file_shares::file_access))
+        .route("/api/files/:id/shares", put(file_shares::reseal))
+        .route("/api/files/:id/sharing", put(file_shares::set_sharing))
+        .route("/api/files/:id/rotate", post(file_shares::rotate))
+        .route("/api/shared-files", get(file_shares::shared_with_me))
+        .route("/api/file-shares/pending", get(file_shares::pending))
+        .route("/api/shared-by-me", get(file_shares::shared_by_me))
+        // --- Moving files and folders (docs/plans/drive-move.md). ---
+        .route("/api/files/:id/move", post(drive_move::move_file))
+        .route(
+            "/api/collections/:id/move",
+            post(drive_move::move_collection),
+        )
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
@@ -678,6 +834,22 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
+        .route("/api/chat/link-preview", post(chat_link_preview::fetch))
+        .route("/api/chat/call-servers", get(calls::call_servers))
+        .route(
+            "/api/chat/group-calls/token",
+            post(chat_mls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/chat/push-subscription",
+            put(web_push::put_subscription)
+                .delete(web_push::delete_subscription)
+                .route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/chat/invite-links",
+            post(chat_mls::call_invite_link).route_layer(DefaultBodyLimit::max(128 * 1024)),
+        )
         .route("/api/chat/ws", get(chat::ws))
         // Chat-media uses the same storage client and tus multipart semantics,
         // but a separate typed object namespace and quota reference model.
@@ -714,11 +886,18 @@ fn build_router(state: AppState) -> Router {
         .route("/api/uploads", post(tus::create))
         .route(
             "/api/uploads/:id",
-            patch(tus::patch).head(tus::head).delete(tus::delete),
+            patch(tus::patch)
+                .head(tus::head)
+                .delete(tus::delete)
+                .route_layer(DefaultBodyLimit::max(TUS_PATCH_LIMIT_BYTES)),
         )
         // --- Files (authenticated) ---
-        .route("/api/files/upload", post(files::upload))
+        .route(
+            "/api/files/upload",
+            post(files::upload).route_layer(DefaultBodyLimit::max(DRIVE_UPLOAD_LIMIT_BYTES)),
+        )
         .route("/api/files/:id/download", get(files::download))
+        .route("/api/files/:id/original", get(files::download_original))
         .route(
             "/api/files/:id",
             put(files::update_metadata).delete(files::delete),
@@ -730,11 +909,9 @@ fn build_router(state: AppState) -> Router {
         .route("/api/trash/:id/restore", post(trash::restore))
         .route(
             "/api/files/:fileId/versions",
-            get(file_versions::list).post(file_versions::record),
-        )
-        .route(
-            "/api/files/:fileId/snapshot-blob",
-            post(file_versions::upload_snapshot_blob),
+            get(file_versions::list)
+                .post(file_versions::create)
+                .route_layer(DefaultBodyLimit::max(DRIVE_VERSION_LIMIT_BYTES)),
         )
         .route(
             "/api/files/:fileId/versions/:vid/download",
@@ -746,7 +923,23 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/files/:fileId/assets/:assetId",
-            put(file_assets::upload).get(file_assets::download),
+            put(file_assets::upload)
+                .get(file_assets::download)
+                // One asset envelope plus the multipart framing.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
+        )
+        .route(
+            "/api/files/:fileId/thumbnails/:variant",
+            put(file_thumbnails::upload)
+                .get(file_thumbnails::download)
+                // A large thumbnail envelope, whole, and no more.
+                .route_layer(DefaultBodyLimit::max(1100 * 1024)),
+        )
+        .route(
+            "/api/files/:fileId/thumbnails",
+            delete(file_thumbnails::delete),
         )
         // --- Collab-edit WebSocket. Auth (token + file access + device) happens inside the
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
@@ -759,6 +952,16 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/share/:token/files",
             get(shares::list_public_share_files),
+        )
+        .route("/api/share/:token/epochs", get(shares::public_share_epochs))
+        .route("/api/share/:token/album", get(shares::public_album_items))
+        .route(
+            "/api/share/:token/thumbnails/:fileId/:variant",
+            get(shares::public_thumbnail),
+        )
+        .route(
+            "/api/share/:token/state/:fileId",
+            get(shares::public_share_state),
         )
         .route(
             "/api/share/:token/download/:fileId",
@@ -799,6 +1002,18 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/mls/anonymous/messages",
             post(chat_mls::federated_submit_anonymous_message)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/group-calls/token",
+            post(chat_mls::federated_group_call_token)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/invite-links",
+            post(chat_mls::federated_call_invite_link)
+                .route_layer(DefaultBodyLimit::max(128 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -886,6 +1101,17 @@ fn build_router(state: AppState) -> Router {
             get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/chat/live-locations/:streamId",
+            get(live_locations::federated_read)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/profile-keys",
+            put(drive_profile_keys::receive_profile_key)
+                .route_layer(DefaultBodyLimit::max(16 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/invite",
             get(drive_federation::get_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -894,11 +1120,110 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
+                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/epochs",
+            get(drive_federation::list_epochs)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
             "/api/fed/drive/files/:fileId/content",
             get(drive_federation::download_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/subscribe",
+            post(collab_federation::subscribe)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/unsubscribe",
+            post(collab_federation::unsubscribe)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/frames",
+            post(collab_federation::frames)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/log",
+            post(collab_federation::log).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/list",
+            post(collab_federation::versions_list)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/create",
+            post(collab_federation::versions_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/versions/patch",
+            post(collab_federation::versions_patch)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/claim-seed",
+            post(collab_federation::claim_seed)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/push",
+            post(collab_federation::receive_push)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/assets/create",
+            post(collab_federation::assets_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::ASSET_BODY_LIMIT))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/files/:fileId/assets/:assetId",
+            get(collab_federation::asset_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/files/:fileId/versions/:vid",
+            get(collab_federation::version_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/file-invite",
+            get(drive_federation_files::get_file_invite)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/file-content",
+            get(drive_federation_files::get_file_content)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId/state",
+            get(drive_federation_files::get_folder_file_state)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/album",
+            get(drive_federation_albums::album_items)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId/thumbnails/:variant",
+            get(drive_federation_albums::thumbnail)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/file-state",
+            get(drive_federation_files::get_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -918,8 +1243,115 @@ fn build_router(state: AppState) -> Router {
             delete(drive_federation::remove_incoming_share),
         )
         .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/state",
+            get(drive_federation_files::proxy_folder_file_state),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/album",
+            get(drive_federation_albums::proxy_album_items),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant",
+            get(drive_federation_albums::proxy_thumbnail),
+        )
+        // Live editing of files on other servers, relayed through this one:
+        // the same suffixes as `/api/files/:id/…`.
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/collab/ws",
+            get(collab_federation::ws_folder_file),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/collab/ws",
+            get(collab_federation::ws_shared_file),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions",
+            get(collab_federation::folder_versions)
+                .post(collab_federation::folder_version_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions",
+            get(collab_federation::file_versions)
+                .post(collab_federation::file_version_create)
+                .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT)),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid/download",
+            get(collab_federation::folder_version_download),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions/:vid/download",
+            get(collab_federation::file_version_download),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/versions/:vid",
+            patch(collab_federation::folder_version_patch),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/versions/:vid",
+            patch(collab_federation::file_version_patch),
+        )
+        // Pictures in notes and on whiteboards of files on other servers.
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/assets/:assetId",
+            get(collab_federation::folder_asset_download)
+                .put(collab_federation::folder_asset_upload)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/assets/:assetId",
+            get(collab_federation::file_asset_download)
+                .put(collab_federation::file_asset_upload)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/claim-seed",
+            post(collab_federation::folder_claim_seed),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/claim-seed",
+            post(collab_federation::file_claim_seed),
+        )
+        .route(
+            "/api/drive/federation/file-shares",
+            post(drive_federation_files::accept_file_share)
+                .get(drive_federation_files::list_file_shares),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id",
+            get(drive_federation_files::get_file_share)
+                .delete(drive_federation_files::remove_file_share),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/content",
+            get(drive_federation_files::proxy_file_content),
+        )
+        .route(
+            "/api/drive/federation/file-shares/:id/state",
+            get(drive_federation_files::proxy_file_state),
+        )
+        .route(
+            "/api/files/:id/federated-shares",
+            post(drive_federation_files::create_federated_file_share),
+        )
+        .route(
             "/api/drive/federation/shares/:shareId/files",
-            get(drive_federation::proxy_list_files).post(drive_federation::proxy_upload),
+            get(drive_federation::proxy_list_files)
+                .post(drive_federation::proxy_upload)
+                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/refresh",
+            post(drive_federation::refresh_incoming_share),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/epochs",
+            get(drive_federation::proxy_list_epochs),
         )
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/content",
@@ -954,6 +1386,7 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
                 )
+                .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(
                     "/api/admin/federation",
                     get(admin::get_federation_control_plane).put(admin::update_federation_policy),
@@ -1041,7 +1474,8 @@ async fn run_orphan_sweep_cmd(
     let mut delete = false;
     let mut age_floor = std::time::Duration::from_secs(24 * 3600);
     let mut page_sleep = std::time::Duration::from_millis(200);
-    let mut prefix = "files/".to_string();
+    // The whole bucket: the sweep recognises Drive's key shapes itself.
+    let mut prefix = String::new();
     for a in args {
         if a == "--delete" {
             delete = true;
@@ -1174,6 +1608,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("tus-resumable"),
             HeaderName::from_static("upload-offset"),
             HeaderName::from_static("upload-length"),
+            HeaderName::from_static("x-kutup-key-generation"),
             axum::http::header::LOCATION,
         ])
 }

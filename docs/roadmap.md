@@ -1,7 +1,7 @@
 # Production-readiness roadmap
 
 Kutup is **pre-production**: there is no public release yet (until the first
-`v*` / `desktop-v*` git tag). This document is the canonical list of everything
+`v*` git tag). This document is the canonical list of everything
 between today and "ready to tag v1".
 
 It is the bridge between `docs/` (current state, authoritative) and
@@ -80,15 +80,14 @@ The exact third-party ownership boundary is
 
 ### Signed builds
 
-Desktop release builds are currently unsigned. macOS Gatekeeper and Windows
-SmartScreen treat unsigned `.dmg` / `.msi` as untrusted; non-technical users
-see scary warnings.
+Release builds are currently unsigned. The CLI archives carry checksums only,
+and a future desktop app will need macOS notarization and Windows
+Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 
 | What's needed | Where |
 |---|---|
 | Apple Developer ID for macOS signing + notarization | external — requires Apple Developer Program ($99/yr) |
 | Microsoft Authenticode certificate for Windows | external — DigiCert / Sectigo (~$300/yr) |
-| `.github/workflows/release-desktop.yml` — accept signing secrets, run `codesign` (mac) + `signtool` (win) | repo |
 | Native iOS signing, TestFlight/App Store Connect, entitlements, and opaque production icons | external + sibling `kutup-ios` repository |
 | Native Android upload key, Play App Signing/Console, and release metadata | external + sibling `kutup-android` repository |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
@@ -157,11 +156,6 @@ platform lifecycle, secure storage, complete Direct/MLS/media/backup parity,
 packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
-
-The Tauri shell's retained mobile targets are experimental. In that path iOS
-Keychain works, while Android still lacks a keyring backend and re-authenticates
-after restart. Work on that wrapper must not be reported as completion of the
-dedicated native apps.
 
 ### Responsive web · mobile selection mode
 
@@ -421,7 +415,129 @@ traffic is enabled.
 
 ---
 
+## New apps (after v1)
+
+Two more apps join Drive and Chat, each built the same way (product owner,
+2026-09-26):
+- its own origin (`photos.<domain>`, `maps.<domain>`);
+- a place in the app switcher;
+- one sign-in through session forking, with client types `web-photos` and
+  `web-maps`, and `<platform>-photos` / `<platform>-maps` for the native
+  apps later;
+- the account's one end-to-end encrypted profile;
+- federation over the same signed stack.
+
+Each gets a plan in `docs/plans/` before any code. Upstream checkouts for
+reference are in `kutup-references/` (`ente`, `comaps`).
+
+### Photos (like Ente Photos)
+
+An end-to-end encrypted photo and video library on `photos.<domain>`.
+Plan: docs/plans/photos.md (2026-09-26); slices 1 (the app, the timeline,
+the viewer, details read on the device), 2 (favourites, archive, hidden,
+Places, editing, trash), 3 (HEIC, RAW, live photos), 4 (private albums) and
+5 (albums shared with people here, who may add photos; with people on other
+servers, who view them; and public album links) are done. Open: people on
+other servers adding their own photos to an album (their photos would live
+on their server), and slice 6, tagging on the device.
+Reference mostly Ente (`kutup-references/ente`: on-device face grouping,
+the Places map, the timeline); Proton's Photos section in its Drive web app
+(`kutup-references/WebClients/applications/drive/src/app/photos`, with
+albums) is the second reference.
+- **Library:** a timeline, albums, favourites, archive and hidden items, and
+  trash.
+- **Photos are Drive files (decided 2026-09-26):** ordinary files in
+  folders you choose, as in Nextcloud Photos and Synology Photos, with
+  Drive's encryption (every photo, thumbnail and piece of
+  metadata — EXIF, dates, location, captions — under the photo's file key),
+  quota, versions, trash and sharing. Uploads and phone backup go to one
+  folder you choose (default a normal "Photos" folder in My files); the
+  timeline shows that folder plus any other folders you add. The Photos app
+  organises them by when and where, not by folder; a photo is one file
+  wherever it is and counts once.
+- **Albums are views:** an album lists photos without copying them, so one
+  photo can be in several albums and still count once.
+- **Photo handling:** dates and locations kept per photo (encrypted),
+  thumbnails at several sizes, video streaming.
+- **Sharing:** one photo with single-file sharing
+  (docs/plans/drive-file-sharing.md); albums shared with people here and on
+  other servers, collaborative albums, and public album links with the key
+  in the URL fragment.
+- **Tagging on the device:** faces and people, objects and text found by ML
+  models that run in the client (Ente's approach), since the server holds
+  only ciphertext; the tags are sealed under each photo's file key and
+  synced, and search runs over them on the device. Models run in the
+  browser and in the native apps; deferred until after the native iOS and
+  Android apps (decided 2026-09-27).
+- **Uploads:** from the web; automatic backup from the native apps (with
+  mobile, see "Native iOS and Android apps"), into your upload folder.
+- **Places:** a map of where your photos were taken, like Ente's, inside the
+  Photos app, drawn with the shared map component. Photos cluster by area, and opening a spot shows
+  what was taken there. The locations come from the encrypted metadata and
+  are placed on the map in the browser, so the server learns nothing.
+- **Storage (decided 2026-09-26):** one storage quota per account, shared
+  by Drive and Photos, the way one Google One plan covers Google Drive and
+  Google Photos; as Drive files, photos use it without anything extra.
+  Storage pages in both apps show the shared total. Chat's separate media quota is
+  unchanged.
+- **Open questions for the plan:** how are live photos, RAW files and
+  videos handled (thumbnails and streaming)? How are duplicates found
+  without the server learning which files match (a hash kept inside the
+  encrypted metadata)? How does the browser keep the timeline of many
+  folders fast (a local encrypted index of dates and places), and how do
+  albums of photos shared with you work?
+
+### Maps (like CoMaps)
+
+A private map for Chat and Photos, plus lists of pinned places: no tracking,
+and your places are yours. It is not a navigation app. Where each part lives
+(product owner, 2026-09-26):
+1. **Places map, in the Photos app (`photos.`):** where each photo was
+   taken. It is part of Photos, not a view in the Maps app.
+2. **Pinned place lists, in the Maps app (`maps.`):** end-to-end encrypted lists
+   (trips, restaurants, meeting points) that several people edit together,
+   shared with people here and on other servers like Drive folders. Your own
+   saved pins sync across devices; lists import and export as KML/GPX.
+3. **Location, in the Chat app (`chat.`):** sending a place once, and live
+   location for a set time, like WhatsApp. Sent, shown and followed inside
+   Chat. Both travel end-to-end encrypted inside the chat; a
+   live location is a stream of encrypted updates that stops when the time
+   runs out or the sender stops it.
+
+Navigation, routing and turn-by-turn directions are not goals. A place can
+still be opened in the device's own maps app.
+
+A place is chosen by dropping a pin on the map or taking the device's
+current location. City search runs on the device from a downloaded cities
+list, as in Ente; searching places by name through a geocoder may come
+later.
+
+- **One map component:** a shared package (e.g. `@kutup/map`) that Photos,
+  Maps and Chat all use, the way `@kutup/ui` is shared. Each app shows the
+  map inside its own pages; none of them sends you to another app to see a
+  location.
+- **Map data (decided 2026-09-26, docs/plans/maps.md):** no map data on the
+  server for now. Tiles come from providers that need no API key
+  (OpenFreeMap, OpenStreetMap) or the server's own tile server. The admin
+  chooses which are offered and whether traffic goes through a caching proxy
+  on the server (off, available or enforced), or turns maps off. Each user
+  turns maps on (off by default, with a notice like Ente's) and chooses from
+  the admin's list; users cannot add tile servers. Self-hosted map data (the
+  CoMaps way) is future work.
+- **Privacy:** places, live locations and photo locations stay end-to-end
+  encrypted and are drawn in the browser. Loading tiles still reveals the
+  area being viewed: directly to the provider, or through the proxy to the
+  Kutup server only. With maps off, nothing is requested.
+- **Open questions:** in docs/plans/maps.md.
+
+---
+
 ## Polish / smaller items (future)
+
+### Chat app (web) follow-ups
+
+Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
+(required before deployment).
 
 ### Files workspace follow-up
 
@@ -431,6 +547,46 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · office documents and whiteboards across servers
+
+Notes and place lists are edited together live across servers
+(docs/plans/collab-federation.md). Office documents and whiteboards from
+another server open for viewing and download only, until their editors use
+the routed endpoints that notes and lists already use. Deferred (product owner,
+2026-09-26) until OnlyOffice is brought into the repo as source we can change.
+What it needs, found while starting it:
+- **Peer lists across servers.** OnlyOffice drops changes from participants it
+  was not told about, and each server's room lists only its own peers. The
+  bridge must send its roster home and home must push the merged roster back.
+  Entries need a `server` so device ids, which are per server, cannot collide
+  (the office bridge keys peers and `indexUser` by device id).
+- **Whiteboard images:** `/files/:id/assets/:assetId` relayed like versions.
+- Socket, versions, restore and thumbnails taking the remote base, as notes
+  do. Also still to come:
+shared files in Drive search.
+
+### Office · editor start-up race on reload
+
+On roughly one warm reload in four, ONLYOFFICE's own editor frame loads its
+scripts but never reports `onAppReady`, so `api.js` never sends it its
+configuration and the loading skeleton stays. The bridge
+(`frontend/apps/office/public/onlyoffice/inner.html`) recovers by mounting the
+editor again after 7 seconds, at most twice, so the document opens, but
+late. The cause is inside the vendored editor build
+(`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office
+editing spec (`tests/e2e/specs/03-office-editing.spec.ts`) exercises reloads.
+
+### Chat · MLS changes built on a stale epoch
+
+When an administrator or owner changes a group moments after another
+member's commit, before their own client has applied it, both ordering
+servers refuse the new block (the local one with 409, a stale height) and
+the client shows "Secure chat is temporarily unavailable". It should instead
+fetch the control history it is missing, rebuild the change on the current
+epoch, and retry. The browser gate
+(`tests/e2e/specs/32-chat-two-server-security.spec.ts`) waits for the peer's
+commit before acting, as a person usually would.
+
 ### Federation polish
 
 Cross-server presence indicators in collab, outgoing Drive-share revocation,
@@ -439,7 +595,6 @@ implemented; these are product-lifecycle improvements above it.
 
 ### Test coverage gaps
 
-- Tauri session-persistence — no E2E test today
 - Browser-level Drive federation UI coverage (the isolated two-server server
   harness already covers the complete Drive and Chat transport lifecycle)
 - Responsive web has an automated phone/desktop axe and state-transition gate;
@@ -449,13 +604,12 @@ implemented; these are product-lifecycle improvements above it.
 
 `docs/research/perf-baseline-2026-05-06.md` is a single point. Continuous benchmarking (or even a manual quarterly pass) would catch regressions.
 
-### Tauri shell · real OnlyOffice / Office docs
+### Desktop app
 
-Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on
-`tauri::generate_context!()` (the ~2.6GB SDK gets embedded as a static byte
-array). The same applies to mobile. Loading the SDK from
-`${serverUrl}/onlyoffice/…` so the shell streams it from the user's server
-remains separate Tauri work.
+There is no desktop app for now. The Tauri shell, its desktop release
+workflow and the `desktop-v*` tags were removed with the multi-app web
+rewrite (it expected the old single app). Desktop returns after the Android
+and iOS apps, built against the per-app origins.
 
 ### Responsive web · federation share-with from sheet
 
@@ -467,14 +621,11 @@ The `.excalidraw` whiteboard asset extraction/hydration deferral is **done**
 (`crates/kutup-cli/src/whiteboard.rs` — upload extracts + re-snapshots,
 download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
-- **Share lifecycle management (needs server slices first).** There is no
-  endpoint to list a collection's outgoing user shares, revoke one, or
-  list/delete public links (the web UI can't either — only recipient-side
-  `DELETE /api/drive/federation/shares/:shareId` exists). Server work:
-  `GET /api/collections/:id/shares`, `DELETE /api/collections/:id/share/:userId`,
-  `GET`/`DELETE /api/user/shares` (public links, owner-scoped via
-  `public_shares.created_by`); then `kutup share ls / revoke / unlink` and
-  matching web UI. Until then the CLI ships no affordance (no stubs).
+- **Share lifecycle management — done** (docs/plans/drive-share-revocation.md):
+  owners list who has access and remove members, federated recipients and
+  public links in the web app and with `kutup share access` / `kutup share
+  remove`; every removal rotates the folder key. Federated uploads stream
+  (signed content digest, spooled and checked before parsing).
 - **Server improvements that unlock better CLI behavior** (noted per the
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one

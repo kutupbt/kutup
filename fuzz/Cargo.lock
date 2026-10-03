@@ -993,6 +993,7 @@ dependencies = [
  "hpke-rs",
  "hpke-rs-rust-crypto",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "zeroize",

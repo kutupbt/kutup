@@ -1,0 +1,23 @@
+{
+  "name": "@kutup/files",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./media": "./src/media/index.ts",
+    "./mediaCache": "./src/mediaCache/index.ts",
+    "./mediaPreview": "./src/mediaPreview/index.ts",
+    "./*": "./src/*.ts",
+    "./media/raw": "./src/media/raw.ts"
+  },
+  "dependencies": {
+    "@kutup/crypto": "workspace:*",
+    "@kutup/session": "workspace:*",
+    "exifreader": "^4.46.0",
+    "fflate": "^0.8.2",
+    "libheif-js": "^1.23.2",
+    "pdfjs-dist": "6.3.289",
+    "tus-js-client": "^4"
+  }
+}

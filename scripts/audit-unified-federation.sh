@@ -10,7 +10,8 @@ feature_modules=(
 )
 runtime_paths=(
   crates/kutup-server/src
-  frontend/src
+  frontend/apps
+  frontend/packages
   docker-compose.yml
   .env.example
 )
@@ -64,7 +65,7 @@ fail_if_present \
 fail_if_present \
   "a removed unsigned Drive federation route is registered" \
   '"/api/(fed-proxy|fed/users|fed/invites|fed/shares)' \
-  crates/kutup-server/src frontend/src
+  crates/kutup-server/src frontend/apps frontend/packages
 
 require_present \
   "Chat is not wired to the shared FederationStack" \

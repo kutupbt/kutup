@@ -1,0 +1,222 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: 2026 kutup contributors
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  x2t WASM bridge — runs the AGPL OnlyOffice x2t binary-format converter
+  in an isolated iframe. Mounted as a sibling of the OnlyOffice editor by
+  inner.html. Communicates via postMessage:
+
+    parent → us:  { type: 'convert', requestId, input, fileName, outputFormat,
+                    fonts?, mediasSources?, mediasData?, pdfBuffer?, pdfChanges? }
+    us → parent:  { type: 'x2t-ready' }                     (once on boot)
+                  { type: 'convert-result', requestId, output, images }
+                  { type: 'convert-error',  requestId, error }
+
+  This file is a 1:1 port of CryptPad's www/common/outer/x2t.js conversion
+  loop, narrowed to a postMessage-only API kutup's bridge can call.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>x2t bridge — Kutup</title>
+    <script>
+      ;(function () {
+        'use strict'
+        var EXPECTED_ORIGIN = window.location.origin
+
+        // x2t.js's pre-js does `new URL(document.currentScript.getAttribute('src'))`,
+        // which throws on relative URLs. Inject the script tag with an
+        // absolute src so the URL constructor is happy.
+        var s = document.createElement('script')
+        s.src = EXPECTED_ORIGIN + '/onlyoffice/dist/x2t/x2t.js'
+        s.onload = bootstrap
+        s.onerror = function () {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(
+              { type: 'x2t-error', error: 'failed to load x2t.js' },
+              EXPECTED_ORIGIN,
+            )
+          }
+        }
+        document.head.appendChild(s)
+
+        function bootstrap () {
+        // x2t.js is an Emscripten module that sets `window.Module`.
+        var Mod = window.Module
+        if (!Mod) {
+          // Surface to parent so it can show a useful error.
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(
+              { type: 'x2t-error', error: 'window.Module not present after x2t.js load' },
+              EXPECTED_ORIGIN,
+            )
+          }
+          return
+        }
+
+        var initFs = function () {
+          try {
+            Mod.FS.mkdir('/working')
+            Mod.FS.mkdir('/working/media')
+            Mod.FS.mkdir('/working/fonts')
+            Mod.FS.mkdir('/working/themes')
+          } catch (e) {
+            // Idempotent — mkdir on existing dir throws but the dir exists.
+          }
+        }
+
+        var fireReady = function () {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'x2t-ready' }, EXPECTED_ORIGIN)
+          }
+        }
+
+        Mod.onRuntimeInitialized = function () {
+          initFs()
+          fireReady()
+        }
+
+        // If the runtime already initialized before we set the callback (rare
+        // but possible if x2t.js boot is synchronous), still fire ready.
+        if (Mod.calledRun) {
+          initFs()
+          fireReady()
+        }
+
+        // ---------- conversion -----------------------------------------------
+        var safeName = function (name) {
+          if (typeof name !== 'string') return 'file.bin'
+          // Strip path-traversal & unusual chars.
+          return name.replace(/[\\\/<>:"|?*]/g, '_').slice(0, 200)
+        }
+
+        var convert = function (msg) {
+          var fileName = safeName(msg.fileName || 'file.bin')
+          var outputFormat = msg.outputFormat
+          if (!outputFormat) throw new Error('outputFormat required')
+
+          // Write input.
+          Mod.FS.writeFile('/working/' + fileName, msg.input)
+
+          var writeFonts = function (fonts) {
+            try { Mod.FS.mkdir('/working/fonts') } catch (e) { /* exists */ }
+            ;(fonts || []).forEach(function (font) {
+              if (!font || typeof font.name !== 'string') return
+              Mod.FS.writeFile('/working/fonts/' + safeName(font.name), font.data)
+            })
+          }
+
+          // A PDF edited in ONLYOFFICE's PDF editor: the original PDF is the
+          // input, the editor's compiled changes the first file of changes/
+          // beside it, and x2t (m_bFromChanges) writes the PDF with them.
+          var pdfParams = ''
+          if (outputFormat === 'pdf' && msg.pdfChanges) {
+            try { Mod.FS.mkdir('/working/changes') } catch (e) { /* exists */ }
+            Mod.FS.readdir('/working/changes').forEach(function (f) {
+              if (f !== '.' && f !== '..') Mod.FS.unlink('/working/changes/' + f)
+            })
+            Mod.FS.writeFile('/working/changes/changes0.bin', msg.pdfChanges)
+            writeFonts(msg.fonts)
+            pdfParams = '<m_sFontDir>/working/fonts/</m_sFontDir><m_bFromChanges>true</m_bFromChanges>'
+          // PDF from OnlyOffice's print output (CryptPad's x2t.js): the
+          // print buffer at a fixed name, and the fonts the layout used.
+          } else if (outputFormat === 'pdf') {
+            if (!msg.pdfBuffer) throw new Error('pdf output needs the print buffer')
+            Mod.FS.writeFile('/working/pdf.bin', msg.pdfBuffer)
+            writeFonts(msg.fonts)
+            pdfParams = '<m_sFontDir>/working/fonts/</m_sFontDir>'
+          }
+
+          // Write images (themes + media) if provided.
+          var images = msg.images || {}
+          var mediasSources = msg.mediasSources || {}
+          var mediasData = msg.mediasData || {}
+          Object.keys(images).forEach(function (mediaKey) {
+            if (/\.bin$/.test(mediaKey)) return
+            var mediaData = mediasData[mediaKey]
+            if (mediaData) {
+              var path = mediaKey.split('/')
+              var mediaFileName = path.pop()
+              var themeIdx = path.indexOf('themes')
+              if (themeIdx >= 0) {
+                var theme = path[themeIdx + 1]
+                try {
+                  Mod.FS.mkdir('/working/themes/' + theme)
+                  Mod.FS.mkdir('/working/themes/' + theme + '/media')
+                } catch (e) { /* exists */ }
+                Mod.FS.writeFile('/working/themes/' + theme + '/media/' + mediaFileName, new Uint8Array(mediaData.content))
+                return
+              }
+            }
+            var mediaFileName2 = mediaKey.substring(6)
+            var mediaSource = mediasSources[mediaFileName2]
+            var srcData = mediaSource ? mediasData[mediaSource.src] : undefined
+            if (srcData) {
+              Mod.FS.writeFile('/working/media/' + mediaFileName2, new Uint8Array(srcData.content))
+            }
+          })
+
+          // Build TaskQueueDataConvert XML — the exact shape x2t expects.
+          var params =
+            '<?xml version="1.0" encoding="utf-8"?>' +
+            '<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+              '<m_sFileFrom>/working/' + fileName + '</m_sFileFrom>' +
+              '<m_sThemeDir>/working/themes</m_sThemeDir>' +
+              '<m_sFileTo>/working/' + fileName + '.' + outputFormat + '</m_sFileTo>' +
+              pdfParams +
+              '<m_bIsNoBase64>false</m_bIsNoBase64>' +
+            '</TaskQueueDataConvert>'
+
+          Mod.FS.writeFile('/working/params.xml', params)
+
+          var rc = Mod.ccall('main1', 'number', ['string'], ['/working/params.xml'])
+          if (rc !== 0) throw new Error('x2t main1 returned ' + rc)
+
+          var output = Mod.FS.readFile('/working/' + fileName + '.' + outputFormat)
+
+          // Collect any image files x2t emitted (relevant for OOXML→bin path
+          // — bin needs media/ for OnlyOffice to render images).
+          var emittedImages = []
+          try {
+            var files = Mod.FS.readdir('/working/media/')
+            files.forEach(function (f) {
+              if (f === '.' || f === '..') return
+              emittedImages.push({
+                name: f,
+                data: Mod.FS.readFile('/working/media/' + f, { encoding: 'binary' }),
+              })
+            })
+          } catch (e) { /* no media dir is fine */ }
+
+          return { output: output, images: emittedImages }
+        }
+
+        window.addEventListener('message', function (e) {
+          // Only the bridge page that embeds this one (same origin).
+          if (e.origin !== EXPECTED_ORIGIN || e.source !== window.parent) return
+          var msg = e.data
+          if (!msg || msg.type !== 'convert') return
+          var requestId = msg.requestId
+          try {
+            var result = convert(msg)
+            // Send transferable Uint8Array buffers for zero-copy.
+            e.source.postMessage(
+              { type: 'convert-result', requestId: requestId, output: result.output, images: result.images },
+              EXPECTED_ORIGIN,
+            )
+          } catch (err) {
+            e.source.postMessage(
+              { type: 'convert-error', requestId: requestId, error: (err && err.message) || String(err) },
+              EXPECTED_ORIGIN,
+            )
+          }
+        })
+        }  // end bootstrap()
+      })()
+    </script>
+  </head>
+  <body>
+    <p>x2t bridge — converts OOXML ↔ OnlyOffice .bin via WebAssembly.</p>
+  </body>
+</html>

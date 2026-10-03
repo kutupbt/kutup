@@ -1,0 +1,631 @@
+{
+  "app": {
+    "title": "Kutup Drive"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The address may be mistyped, or the page may have moved."
+  },
+  "boot": {
+    "opening": "Opening your Drive…",
+    "failedTitle": "Drive could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+  },
+  "nav": {
+    "myFiles": "My files",
+    "shared": "Shared with me",
+    "sharedByMe": "Shared by me",
+    "trash": "Trash",
+    "settings": "Settings"
+  },
+  "explorer": {
+    "sortBy": "Sort by",
+    "fields": {
+      "modified": "Modified",
+      "name": "Name",
+      "size": "Size",
+      "type": "Type"
+    },
+    "dir": {
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "az": "A to Z",
+      "za": "Z to A",
+      "largest": "Largest first",
+      "smallest": "Smallest first"
+    },
+    "foldersFirst": "Folders first",
+    "filter": "Type",
+    "filterCount_one": "{{count}} type",
+    "filterCount_other": "{{count}} types",
+    "showOnly": "Show only",
+    "clearFilter": "Show everything",
+    "view": "View",
+    "views": {
+      "list": "List",
+      "grid": "Grid"
+    },
+    "actions": "Actions",
+    "actionsFor": "Actions for {{name}}",
+    "kinds": {
+      "folder": "Folders",
+      "note": "Notes",
+      "document": "Documents",
+      "spreadsheet": "Spreadsheets",
+      "presentation": "Presentations",
+      "whiteboard": "Whiteboards",
+      "map": "Maps",
+      "pdf": "PDFs",
+      "image": "Images",
+      "video": "Videos",
+      "audio": "Audio",
+      "code": "Code",
+      "archive": "Archives",
+      "other": "Other files"
+    },
+    "selectAll": "Select all",
+    "showPreviews": "Show previews",
+    "sharedFile": "Shared"
+  },
+  "newMenu": {
+    "new": "New",
+    "folder": "Folder",
+    "folderTitle": "New folder",
+    "untitledFolder": "Untitled folder",
+    "create": "Create",
+    "uploadFiles": "Upload files",
+    "uploadFolder": "Upload folder",
+    "createFailed": "The document could not be created.",
+    "documents": {
+      "note": "Note",
+      "document": "Document",
+      "spreadsheet": "Spreadsheet",
+      "presentation": "Presentation",
+      "whiteboard": "Whiteboard",
+      "map": "Map"
+    },
+    "untitled": {
+      "note": "Untitled note",
+      "document": "Untitled document",
+      "spreadsheet": "Untitled spreadsheet",
+      "presentation": "Untitled presentation",
+      "whiteboard": "Untitled whiteboard",
+      "map": "Untitled map"
+    }
+  },
+  "drive": {
+    "encrypted": "Encrypted item",
+    "encryptedFolderTitle": "This folder cannot be opened",
+    "encryptedFolder": "Its key did not verify on this device. It may be damaged, or shared by someone whose keys changed.",
+    "folderMissingTitle": "Folder not found",
+    "folderMissing": "It may have been moved to trash, or you no longer have access.",
+    "loadFailed": "Your files could not be loaded.",
+    "emptyTitle": "This folder is empty",
+    "emptyDescription": "Drop files here, or use New to upload or create something.",
+    "emptyReadOnly": "Nothing has been shared in this folder yet.",
+    "noMatchTitle": "Nothing of that type here",
+    "noMatchDescription": "Change the type filter to see everything.",
+    "selection_one": "{{count}} selected",
+    "selection_other": "{{count}} selected",
+    "clearSelection": "Clear selection",
+    "actions": {
+      "open": "Open",
+      "openInMaps": "Open in Maps",
+      "download": "Download",
+      "downloadZip": "Download as ZIP",
+      "rename": "Rename",
+      "color": "Colour",
+      "share": "Share",
+      "publicLink": "Get public link",
+      "trash": "Move to trash",
+      "copyTo": "Copy to…",
+      "moveTo": "Move to…",
+      "quickLook": "Quick look"
+    },
+    "movedToTrash_one": "Moved to trash",
+    "movedToTrash_other": "{{count}} items moved to trash",
+    "undo": "Undo",
+    "undoFailed": "Could not restore; open Trash to try again.",
+    "trashFailed": "Could not move to trash.",
+    "zipping": "Preparing ZIP…",
+    "zipProgress": "Adding files: {{done}} of {{total}}",
+    "zipEmpty": "This folder has no files to download.",
+    "zipTooLarge": "This folder is over 1 GB. Use Chrome or Edge to download it as a ZIP, or download files one by one.",
+    "downloadFailed": "The download failed.",
+    "linkFailed": "The link could not be created.",
+    "dropHere": "Drop to upload into {{name}}"
+  },
+  "dialogs": {
+    "name": {
+      "label": "Name",
+      "required": "Enter a name.",
+      "tooLong": "Use at most {{max}} characters.",
+      "slash": "Names cannot contain / or \\.",
+      "taken": "Something here already has that name.",
+      "failed": "The name could not be saved."
+    },
+    "rename": {
+      "title": "Rename",
+      "submit": "Rename"
+    },
+    "color": {
+      "title": "Folder colour",
+      "default": "Default",
+      "ice": "Ice",
+      "teal": "Teal",
+      "amber": "Amber",
+      "red": "Red",
+      "failed": "The colour could not be saved.",
+      "orange": "Orange",
+      "green": "Green",
+      "blue": "Blue",
+      "purple": "Purple",
+      "pink": "Pink"
+    },
+    "share": {
+      "title": "Share “{{name}}”",
+      "description": "People you share with get their own sealed copy of this folder's key. Subfolders are shared separately.",
+      "recipient": "Email or Kutup address",
+      "recipientHint": "An email for someone on this server, or user@other-server.",
+      "canUpload": "Can add and edit files",
+      "canUploadHint": "Without this they can only view. What they add counts against their own storage.",
+      "quota": "Upload limit (GiB)",
+      "quotaHint": "Optional. Leave empty for no limit beyond their storage.",
+      "quotaInvalid": "Enter a size above zero.",
+      "canDelete": "Can delete files they added",
+      "canDeleteHint": "They never delete other people's files.",
+      "note": "Sharing again with the same person changes their permissions.",
+      "submit": "Share",
+      "shared": "Shared with {{account}}",
+      "notFound": "No one with that address. For another Kutup server use user@server.",
+      "failed": "The folder could not be shared."
+    },
+    "publicLink": {
+      "title": "Public link",
+      "description": "Anyone with this link can see and download the files directly in this folder, without signing in.",
+      "warning": "Anyone who has this link can open these files. You can copy it again, or remove it, from the folder's Share dialog."
+    },
+    "invite": {
+      "title": "Invite link",
+      "description": "{{account}} is on another Kutup server. Send them this link; they add it under Shared with me.",
+      "warning": "The link works once and only for {{account}}'s account. It is not shown again."
+    },
+    "copy": {
+      "title_one": "Copy {{count}} item to…",
+      "title_other": "Copy {{count}} items to…",
+      "submit": "Copy here",
+      "locked": "This folder's key is not available.",
+      "readOnly": "You cannot add files to this folder.",
+      "foldersOwnedOnly": "Folders can only be copied into your own folders.",
+      "intoItself": "A folder cannot be copied into itself.",
+      "failed": "The copy could not be started."
+    },
+    "move": {
+      "title_one": "Move {{count}} item to…",
+      "title_other": "Move {{count}} items to…",
+      "description": "Nothing is uploaded again. Whoever can open the new folder can open what you move there.",
+      "submit": "Move here",
+      "locked": "This folder's key is not available.",
+      "readOnly": "You can only move between folders you can edit.",
+      "otherOwner": "Only between folders of the same owner. Copy it there instead.",
+      "remote": "Folders on another server take copies, not moves.",
+      "notOwner": "Only the folder's owner can move it.",
+      "intoItself": "A folder cannot move into itself or a folder inside it.",
+      "alreadyThere": "Already in this folder.",
+      "done_one": "Moved to {{folder}}",
+      "done_other": "{{count}} items moved to {{folder}}",
+      "nameTaken": "“{{name}}” is already in {{folder}}; it was not moved.",
+      "namesTaken_one": "{{count}} item has a name already in {{folder}}; it was not moved.",
+      "namesTaken_other": "{{count}} items have names already in {{folder}}; they were not moved.",
+      "changed_one": "{{count}} item changed meanwhile and was not moved. Try again.",
+      "changed_other": "{{count}} items changed meanwhile and were not moved. Try again.",
+      "failed_one": "{{count}} item could not be moved.",
+      "failed_other": "{{count}} items could not be moved.",
+      "undoFailed": "Could not move everything back. Check both folders."
+    },
+    "picker": {
+      "expand": "Expand {{name}}",
+      "collapse": "Collapse {{name}}"
+    },
+    "access": {
+      "title": "Who has access",
+      "loading": "Loading who has access…",
+      "loadFailed": "Could not load who has access.",
+      "empty": "Only you can open this folder.",
+      "canEdit": "Can add and edit",
+      "canView": "Can view",
+      "otherServer": "on another server",
+      "link": "Public link",
+      "linkCreated": "Created {{created}}",
+      "linkExpires": "Created {{created}} · expires {{expires}}",
+      "legacyLinks_one": "{{count}} link was made before links could be copied again. Removing anyone also removes it; make a new link afterwards.",
+      "legacyLinks_other": "{{count}} links were made before links could be copied again. Removing anyone also removes them; make new links afterwards.",
+      "copy": "Copy link",
+      "copied": "Link copied",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "removeLink": "Remove this link",
+      "confirmTitle": "Remove {{name}}?",
+      "confirmBody": "They lose access now, and the folder moves to a new key they never get: nothing added or changed from now on is readable to them. What they already opened or downloaded stays with them.",
+      "removed": "Access removed",
+      "changed": "Who has access changed meanwhile. Check the list and try again.",
+      "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to.",
+      "failed": "Access could not be removed. Try again."
+    }
+  },
+  "shared": {
+    "emptyTitle": "Nothing shared with you yet",
+    "emptyDescription": "Folders and files other people share with you appear here, including folders from other Kutup servers.",
+    "from": "From {{account}}",
+    "addInvite": "Add from invite link",
+    "invite": {
+      "title": "Add from an invite link",
+      "description": "Paste the invite link someone on another Kutup server sent you, for a folder, a single file or a Photos album.",
+      "link": "Invite link",
+      "invalid": "That is not a Kutup invite link.",
+      "submit": "Add",
+      "added": "Added to Shared with me",
+      "notFound": "This invite does not exist or was already used.",
+      "notForYou": "This invite is for a different account.",
+      "failed": "The invite could not be added.",
+      "albumAdded": "Album added. It is in Photos.",
+      "openPhotos": "Open in Photos"
+    },
+    "leave": "Leave",
+    "leaveTitle": "Leave this shared folder?",
+    "leaveDescription": "“{{name}}” from {{account}} disappears from your Drive. They can invite you again.",
+    "leaveFailed": "Could not leave the folder.",
+    "waitingName": "Waiting for the owner",
+    "waiting": "waiting for the owner to update access",
+    "editsWait": "view only until the owner updates access",
+    "waitingHint": "This file moved to a new key. It opens once its owner opens Kutup Drive again.",
+    "goneName": "No longer shared",
+    "gone": "no longer shared, or its server cannot be reached",
+    "remove": "Remove",
+    "removeFileTitle": "Remove this file from Shared with me?",
+    "removeFileDescription": "“{{name}}” is on another server. You stop seeing it; to see it again you need a new invite."
+  },
+  "trash": {
+    "empty": "Empty trash",
+    "emptyTitle": "Trash is empty",
+    "emptyDescription": "Things you delete stay here for a while before they are removed for good.",
+    "retention": "Items in trash still count against your storage and are removed permanently after the server's retention period.",
+    "restore": "Restore",
+    "restored": "Restored “{{name}}”",
+    "restoreFailed": "Could not restore.",
+    "restoreParentFirst": "Its folder is also in trash. Restore the folder first.",
+    "deleteForever": "Delete forever",
+    "deleteForeverTitle": "Delete forever?",
+    "deleteForeverDescription": "“{{name}}” and everything in it are removed now.",
+    "cannotUndo": "This cannot be undone.",
+    "deleteFailed": "Could not delete.",
+    "emptyConfirmTitle": "Empty trash?",
+    "emptyConfirmDescription_one": "{{count}} item is removed for good.",
+    "emptyConfirmDescription_other": "{{count}} items are removed for good.",
+    "withFiles_one": "{{count}} file inside",
+    "withFiles_other": "{{count}} files inside"
+  },
+  "public": {
+    "title": "Shared files",
+    "decrypting": "Decrypting on this device…",
+    "description_one": "{{count}} file, decrypted in your browser with the key in this link.",
+    "description_other": "{{count}} files, decrypted in your browser with the key in this link.",
+    "emptyTitle": "No files",
+    "emptyDescription": "This folder has no files in it right now.",
+    "footer": "Kutup · end-to-end encrypted. The server never saw these files' contents.",
+    "failure": {
+      "missingKey": {
+        "title": "This link is incomplete",
+        "description": "The part after # holds the key and is missing. Ask for the whole link again."
+      },
+      "notFound": {
+        "title": "This link does not exist",
+        "description": "It may have been mistyped, or the folder was deleted."
+      },
+      "expired": {
+        "title": "This link has expired",
+        "description": "Ask the person who shared it for a new one."
+      },
+      "badKey": {
+        "title": "This link's key does not fit",
+        "description": "The link was changed or copied incompletely. Ask for the whole link again."
+      },
+      "other": {
+        "title": "The files could not be opened",
+        "description": "Check your connection and reload."
+      },
+      "waiting": {
+        "title": "Waiting for the owner",
+        "description": "This file moved to a new key, and its owner has not updated this link yet. It works again once they open Kutup Drive."
+      }
+    }
+  },
+  "editor": {
+    "status": {
+      "connecting": "Connecting…",
+      "ready": "Live",
+      "error": "Offline — reconnecting"
+    },
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveHint": "Save the current state (Ctrl+S)",
+    "saveVersion": "Save version",
+    "saveVersionHint": "Save a named version that is kept forever",
+    "nameVersion": {
+      "title": "Name this version",
+      "description": "Named versions are kept forever and appear at the top of the history.",
+      "label": "Version name"
+    },
+    "history": "History",
+    "historyTitle": "Version history",
+    "closeHistory": "Close history",
+    "shortcutsButton": "Keyboard shortcuts",
+    "cursorColor": "Cursor colour",
+    "useColor": "Use {{color}}",
+    "customColor": "Custom colour…",
+    "colorSaveFailed": "Couldn't save your cursor colour",
+    "restoreFailed": "Couldn't restore this version",
+    "restored": "Version restored",
+    "preRestoreLabel": "Before restore, {{time}}",
+    "restoredLabel": "Restored from {{time}}",
+    "quotaSave": "Storage quota exceeded — couldn't save",
+    "mode": {
+      "label": "View",
+      "edit": "Edit",
+      "split": "Split",
+      "read": "Read"
+    },
+    "code": {
+      "copy": "Copy code",
+      "copied": "Copied"
+    },
+    "unfold": "Unfold",
+    "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "palette": {
+      "title": "Command palette",
+      "placeholder": "Type a command…",
+      "empty": "No command matches.",
+      "switcher": "Open a file or folder",
+      "switcherPlaceholder": "Find a file or folder…",
+      "livePreview": "Live preview: show the note as it reads",
+      "sourceMode": "Source mode: show plain Markdown",
+      "switcherEmpty": "Nothing by that name.",
+      "fold": "Fold at the cursor",
+      "unfold": "Unfold at the cursor",
+      "foldAll": "Fold everything",
+      "unfoldAll": "Unfold everything",
+      "groups": {
+        "view": "View",
+        "file": "File",
+        "fold": "Folding"
+      }
+    },
+    "focus": {
+      "enter": "Focus mode (Ctrl/⌘+Shift+F)",
+      "exit": "Leave focus mode (Esc)"
+    },
+    "callout": {
+      "note": "Note",
+      "abstract": "Summary",
+      "info": "Info",
+      "todo": "To do",
+      "tip": "Tip",
+      "success": "Success",
+      "question": "Question",
+      "warning": "Warning",
+      "failure": "Failure",
+      "danger": "Danger",
+      "bug": "Bug",
+      "example": "Example",
+      "quote": "Quote"
+    },
+    "menu": {
+      "addLink": "Add link",
+      "addExternalLink": "Add external link",
+      "format": "Format",
+      "paragraph": "Paragraph",
+      "insert": "Insert",
+      "highlight": "Highlight",
+      "callout": "Callout",
+      "strikethrough": "Strikethrough",
+      "math": "Math",
+      "bullet": "Bullet list",
+      "numbered": "Numbered list",
+      "task": "Task list",
+      "heading": "Heading {{level}}",
+      "quote": "Quote",
+      "body": "Body text",
+      "table": "Table",
+      "codeBlock": "Code block",
+      "mathBlock": "Math block",
+      "rule": "Horizontal rule",
+      "picture": "Picture…",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "pastePlain": "Paste as plain text",
+      "selectAll": "Select all",
+      "clipboardBlocked": "Your browser didn’t allow the clipboard here. Use Ctrl+C / Ctrl+V (⌘ on a Mac) instead."
+    },
+    "links": {
+      "noAccess": "You don’t have access to this item, or it is gone",
+      "loading": "Looking this item up…"
+    },
+    "image": {
+      "adding_one": "Adding the image…",
+      "adding_other": "Adding {{count}} images…",
+      "loading": "Image loading",
+      "unavailable": "Image unavailable",
+      "tooLarge": "Images up to {{limit}} can be added.",
+      "unsupported": "This kind of image can’t be added: use PNG, JPEG, GIF, WebP or AVIF.",
+      "failed": "The image could not be added. Try again."
+    },
+    "outline": {
+      "title": "Outline",
+      "hint": "The note’s headings; click one to go there",
+      "close": "Close the outline",
+      "empty": "No headings yet. Start a line with # to add one."
+    },
+    "statusBar": {
+      "selected": "{{words}} · {{chars}} selected",
+      "cursor": "Ln {{line}}, Col {{col}}",
+      "words_one": "{{count}} word",
+      "words_other": "{{count}} words",
+      "chars_one": "{{count}} character",
+      "chars_other": "{{count}} characters",
+      "collaborators_one": "{{count}} other person here",
+      "collaborators_other": "{{count}} other people here"
+    },
+    "shortcuts": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "code": "Inline code",
+      "link": "Link (nothing selected: link a file or folder)",
+      "focusMode": "Focus mode (Esc to leave)",
+      "fold": "Fold or unfold the section at the cursor",
+      "foldAll": "Fold or unfold everything",
+      "palette": "Command palette",
+      "switcher": "Open a file or folder",
+      "kutupLink": "Link a file or folder in your Drive (![[ shows a picture)",
+      "continueList": "Continue a list (again on an empty item to end it)",
+      "title": "Editor keyboard shortcuts",
+      "description": "Save and search work anywhere on the page; the rest only while the editor has focus.",
+      "save": "Save",
+      "search": "Find in document",
+      "undo": "Undo",
+      "redo": "Redo",
+      "comment": "Toggle line comment",
+      "cycleMode": "Cycle Edit / Split / Read",
+      "cycleModeRev": "Cycle modes backward",
+      "addCursor": "Add a cursor at the click",
+      "rectSelect": "Rectangular selection"
+    },
+    "versions": {
+      "loading": "Loading versions…",
+      "loadFailed": "Couldn't load the version history.",
+      "empty": "No versions yet",
+      "emptyHint": "Versions are saved automatically as you edit, or when you choose Save version.",
+      "kept": "Kept",
+      "today": "Today, {{time}}",
+      "yesterday": "Yesterday, {{time}}",
+      "meta": "{{size}} · key {{key}}",
+      "name": "Name",
+      "namePlaceholder": "Version name",
+      "keep": "Keep forever",
+      "unkeep": "Stop keeping",
+      "restore": "Restore",
+      "updateFailed": "Couldn't update this version"
+    },
+    "restore": {
+      "title": "Restore this version?",
+      "description": "Save the current state as a backup version first, or restore directly without a backup.",
+      "restoreOnly": "Restore only",
+      "saveAndRestore": "Save & restore"
+    },
+    "whiteboard": {
+      "loading": "Loading whiteboard…",
+      "imageQuota": "Storage quota exceeded — image not uploaded"
+    },
+    "office": {
+      "loading": "Loading the document editor…",
+      "unsupported": "This kind of office file can't be edited here.",
+      "unavailable": "The document editor could not be loaded. Try again, or download the file.",
+      "notPdf": "This file doesn't look like a PDF, so the PDF editor can't open it. Download it or open it in the viewer.",
+      "openFailed": "The editor could not open this document. Try again, or download the file.",
+      "about": {
+        "open": "About this editor",
+        "title": "About this editor",
+        "developer": "Documents, spreadsheets and presentations are edited with ONLYOFFICE, originally developed by Ascensio System SIA.",
+        "modified": "This is a modified version: CryptPad adapted ONLYOFFICE to run entirely in the browser, and Kutup maintains its own changes on top.",
+        "licence": "It is free software under the GNU AGPL v3 with ONLYOFFICE's additional terms. Its source code, with the changes and their dates, is public.",
+        "licenceLink": "Licence and notices",
+        "termsLink": "ONLYOFFICE additional terms",
+        "editorSource": "Source code of the editor",
+        "converterSource": "Source code of the file converter (x2t)",
+        "trademark": "ONLYOFFICE is a trademark of Ascensio System SIA. Kutup is not affiliated with or endorsed by ONLYOFFICE."
+      }
+    },
+    "viewOnly": "View only"
+  },
+  "file": {
+    "opening": "Opening…",
+    "failedTitle": "This file can't be opened",
+    "backToDrive": "Back to Drive",
+    "backTo": "Back to {{folder}}",
+    "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
+    "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",
+    "tooLarge": "At {{size}} it is too large to open in the browser (the limit is {{limit}}). Download it instead.",
+    "loadFailed": "It could not be loaded. Check your connection and try again.",
+    "noPreviewTitle": "No preview for this kind of file",
+    "noPreview": "Download it to open it on your device.",
+    "restoring": "Restoring…",
+    "waitingForOwner": "This file moved to a new key, and its owner has not updated your access yet. It opens once they open Kutup Drive again.",
+    "editsWait": "View only until the owner updates access"
+  },
+  "search": {
+    "label": "Search Drive",
+    "placeholder": "Search in Drive",
+    "clear": "Clear search",
+    "searching": "Searching for “{{query}}”…",
+    "results_one": "{{count}} result for “{{query}}”",
+    "results_other": "{{count}} results for “{{query}}”",
+    "noneTitle": "Nothing found",
+    "none": "No file or folder name contains “{{query}}”.",
+    "showInFolder": "Show in folder"
+  },
+  "quickLook": {
+    "loading": "Decrypting…",
+    "cut": "Only the beginning is shown. Open the file to see all of it.",
+    "previous": "Previous file",
+    "next": "Next file",
+    "openInEditor": "Open in editor",
+    "none": {
+      "type": "There is no preview for this kind of file.",
+      "size": "This file is too large to preview. Open or download it instead.",
+      "failed": "The preview could not be loaded."
+    },
+    "picture": {
+      "type": "A preview picture. Open the file to see and edit all of it.",
+      "size": "A preview picture: the file is too large to show here. Open or download it."
+    }
+  },
+  "viewer": {
+    "imageUnreadable": "This browser can't display this image. Download it to open it on your device."
+  },
+  "settings": {
+    "title": "Drive settings",
+    "description": "How Drive keeps your files and opens folders. Your profile and security are in your account settings.",
+    "versions": {
+      "title": "File versions",
+      "description": "Every save of a document keeps a version you can restore. The last day is kept whole, the last week one per hour, and older versions one per day. Versions you name are kept forever. Versions count towards your storage.",
+      "keep": "Keep versions for",
+      "failed": "The setting could not be saved.",
+      "retention": {
+        "d7": "1 week",
+        "d30": "30 days",
+        "d90": "90 days",
+        "d180": "6 months",
+        "d365": "1 year",
+        "d3650": "10 years"
+      }
+    },
+    "view": {
+      "title": "Default view",
+      "description": "How folders open in this browser.",
+      "list": "List",
+      "grid": "Grid"
+    }
+  },
+  "sharedByMe": {
+    "emptyTitle": "You share nothing yet",
+    "emptyDescription": "Folders and files you share with people, or by link, appear here.",
+    "people_one": "{{count}} person",
+    "people_other": "{{count}} people",
+    "otherServers_one": "{{count}} on another server",
+    "otherServers_other": "{{count}} on other servers",
+    "links_one": "public link",
+    "links_other": "{{count}} public links",
+    "manage": "Manage sharing"
+  }
+}

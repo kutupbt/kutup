@@ -7,13 +7,37 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 
 > **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
+**Request bodies** are capped at 4 MiB unless a route says otherwise; the
+upload routes raise it (whole-file upload 10 GiB, a version 2 GiB, a tus
+chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
+10 GiB, streamed to disk). A larger body gets `413`.
+
 ---
 
 ## Authentication
 
+Sign-ins are **server-side sessions** (`auth_sessions`). Every session has a
+client type, sent by the client in the `X-Kutup-Client` header:
+
+| Client type | Who | Signs in | Refresh token |
+|---|---|---|---|
+| `web-account` | the account web app (`account.<domain>`) | password (`/login`, `/login/2fa`, `/complete-setup`) | HttpOnly cookie on that origin |
+| `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/auth/forks`) | HttpOnly cookie on their own origin |
+| `cli` | the `kutup` CLI | password | JSON body |
+
+Access tokens are 15-minute JWTs carrying the session id (`sid`); every
+authenticated request (and each collab / chat WebSocket upgrade) checks that
+the session is still live, so revoking a session takes effect immediately.
+Refresh tokens are opaque 32-byte secrets that **rotate on every refresh**;
+see `/api/auth/refresh`. Resetting the password (`/api/auth/recover`), an admin
+disabling the account and an admin wipe end every session of the account.
+Design: `docs/plans/multi-app-web-rewrite.md`.
+
 ### GET /api/auth/settings
 
-Returns public server settings (e.g. registration enabled/disabled).
+Returns public server settings: whether registration is open, the Chat
+capability advertisement, and where each web app lives (`apps`, from
+`KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
 **Auth:** None
 
@@ -31,6 +55,12 @@ Returns public server settings (e.g. registration enabled/disabled).
     "federation": true,
     "sealedSender": true,
     "mlsGroups": true
+  },
+  "apps": {
+    "account": "https://account.example.org",
+    "drive": "https://drive.example.org",
+    "chat": "https://chat.example.org",
+    "office": "https://office.example.org"
   }
 }
 ```
@@ -116,7 +146,7 @@ Fetch the complete account-protection suite and parameters before submitting cre
 
 Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one email lock that account out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown emails too, so a `429` does not reveal whether the account exists.
 
-**Auth:** None
+**Auth:** None · **Header:** `X-Kutup-Client: web-account` or `cli` (required; `400` otherwise)
 
 **Request body:**
 ```json
@@ -130,6 +160,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
 ```json
 {
   "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
   "userId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -141,7 +172,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
 }
 ```
 
-The refresh token is delivered via an HTTP-only cookie named `refresh_token` (scoped to `Path=/api/auth/refresh`) — it is not present in the JSON body.
+For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
@@ -153,7 +184,7 @@ The refresh token is delivered via an HTTP-only cookie named `refresh_token` (sc
 
 Complete login when 2FA is enabled. Locked after 5 failed attempts.
 
-**Auth:** None (uses `preAuthToken` from the login response)
+**Auth:** None (uses `preAuthToken` from the login response) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
 
 **Request body:**
 ```json
@@ -206,27 +237,38 @@ Recover an account using a mnemonic-derived recovery key. The client proves poss
 
 `recoveryProof` is the 32-byte HKDF-derived authorization proof. The server
 bcrypt-compares it to the verifier stored at registration; it never receives
-the recovery entropy used for decryption.
+the recovery entropy used for decryption. A successful recovery **ends every
+session** of the account (web apps and CLIs alike).
 
 ---
 
 ### POST /api/auth/refresh
 
-Exchange a refresh token for a new access token. The refresh token is normally read from the HTTP-only `refresh_token` cookie set at login; for clients that cannot rely on cookies, it may instead be passed in the JSON body.
+Rotate the session's refresh token and get a new access token. Web sessions
+present the token in their `refresh_token` cookie and receive the next one the
+same way; the CLI presents it in the body and receives the next one in the body.
+A token presented the other way is refused (and does not rotate anything).
+
+A just-rotated token is still honoured for 60 seconds (two tabs refreshing with
+the same cookie): it yields an access token but no new refresh token. A rotated
+token presented after that window is treated as stolen and **revokes the
+session** and everything forked from it. A failed web refresh clears the cookie.
 
 **Auth:** None (the refresh token itself is the credential)
 
-**Request body (optional, only if no cookie is sent):**
+**Request body (CLI only):**
 ```json
 {
-  "refreshToken": "<jwt>"
+  "refreshToken": "<43-char base64url>"
 }
 ```
 
 **Response:**
 ```json
 {
-  "accessToken": "<jwt>"
+  "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
+  "refreshToken": "<CLI only, absent within the grace window>"
 }
 ```
 
@@ -236,14 +278,15 @@ Exchange a refresh token for a new access token. The refresh token is normally r
 
 Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery entropy, account Drive keys and typed account envelopes) and submits it here.
 
-**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true)
+**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
 
 **Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key).
 
-**Response:** issues an access token (JSON) and the refresh token (cookie) — the encrypted key bundle just submitted is **not** echoed back.
+**Response:** creates a session and issues tokens exactly as `/api/auth/login` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
 ```json
 {
   "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
   "userId": "<uuid>",
   "username": "alice",
   "isAdmin": false,
@@ -251,6 +294,109 @@ Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't ye
   "storageUsedBytes": 0
 }
 ```
+
+---
+
+## Sessions
+
+### POST /api/auth/logout
+
+End the caller's sign-in: the `web-account` (or `cli`) session **and every
+session forked from it**. Signing out of Drive or Chat therefore signs out of
+all Kutup web apps on that browser; they notice on their next request.
+
+**Auth:** Bearer · **Response:** `{"ok": true}` (web: also clears the cookie)
+
+### GET /api/auth/sessions
+
+The account's live sessions, most recently used first. `current` marks the
+caller's own sign-in (its root and the sessions forked from it).
+
+**Auth:** Bearer
+
+```json
+[
+  {
+    "id": "<uuid>",
+    "clientType": "web-drive",
+    "parentId": "<uuid of the web-account session>",
+    "userAgent": "Mozilla/5.0 …",
+    "createdAt": "2026-09-23T14:07:00Z",
+    "lastUsedAt": "2026-09-23T14:12:00Z",
+    "current": true
+  }
+]
+```
+
+### DELETE /api/auth/sessions/:id
+
+End one session of the caller's account and anything forked from it. `404` for
+an unknown or foreign id. **Auth:** Bearer
+
+### DELETE /api/auth/sessions
+
+Sign out everywhere else: end every session except the caller's own sign-in.
+**Auth:** Bearer
+
+### POST /api/auth/forks
+
+The account app hands a child web app a session (the Proton pattern). The
+payload is a `SessionFork` local-state envelope (`kutup-crypto::local_state`,
+profile = the child client type) sealed under a fresh 32-byte key that travels
+only in the child URL's fragment; the server stores the envelope once, for 60
+seconds, and never sees the key.
+
+**Auth:** Bearer, `web-account` sessions only (`403` otherwise)
+
+**Request body:**
+```json
+{
+  "childClientType": "web-drive",
+  "payload": "<canonical base64, ≤ 16 KiB>"
+}
+```
+
+**Response:**
+```json
+{
+  "selector": "<43-char base64url, single use>",
+  "childOrigin": "https://drive.example.org"
+}
+```
+
+The account app then redirects to
+`<childOrigin>/login#selector=<selector>&sk=<key>&state=<state>`.
+
+### POST /api/auth/forks/consume
+
+The child app, on its own origin, turns a fork into its own session. The
+`X-Kutup-Client` header must be the client type the fork was minted for and the
+request `Origin` must equal that app's configured origin (`403`); the selector
+is single-use and expires after 60 s (`401`). Sets the child's refresh cookie
+on its own origin. Rate-limited with login.
+
+**Request body:** `{"selector": "<selector>"}`
+
+**Response:**
+```json
+{
+  "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
+  "userId": "<uuid>",
+  "payload": "<the SessionFork envelope, canonical base64>"
+}
+```
+
+### PUT / GET /api/auth/sessions/current/local-key
+
+A web session keeps its unlocked keys in the browser as a `WebSession`
+local-state envelope (profile `<client type>:<session id>`); the 32-byte key
+that opens it lives only here, released only to that live session. Neither the
+browser blob nor this key is useful alone, and revoking the session makes the
+blob useless. Web sessions only (`400` for the CLI).
+
+**Auth:** Bearer · **Body / response:** `{"key": "<canonical base64, 32 bytes>"}`
+(`404` from GET when none is stored)
 
 ---
 
@@ -330,7 +476,7 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 Look up another local user's registered Drive identity (used when sharing a collection).
 
-**Auth:** Bearer JWT
+**Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
 **Param:** `:email` — URL-encoded email address
 
 **Response:**
@@ -381,10 +527,17 @@ envelope is returned in the other row type.
     "canDelete": false,
     "uploadQuotaBytes": null,
     "uploadUsedBytes": null,
-    "isShared": true
+    "isShared": true,
+    "createdAt": "2026-09-01T10:00:00Z",
+    "updatedAt": "2026-09-23T12:30:00Z"
   }
 ]
 ```
+
+`updatedAt` is the folder's "modified" time as a file manager shows it: the
+latest of the folder's own change (rename, colour), its newest direct file
+change (upload, rename, or a new saved version), and its newest direct
+subfolder. `GET /api/collections/:id` returns the same fields.
 
 `canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, `isShared`, and
 the owner identity fields are present only on shared collections (the owner has
@@ -591,9 +744,222 @@ The capability appears only in the fragment so browsers do not send it to the
 sharer's web origin. It is shown once and cannot be recovered from the outgoing
 share row.
 
+For a Photos album (`kind = 'album'`) the link ends in `&kind=album`, and the
+share is view only: `canUpload`, `canDelete` and `uploadQuotaBytes` must be
+`false`/`null`, else `400`.
+
+---
+
+## People you share with (profiles)
+
+People who share a folder, either way round and across servers, hand each
+other the key to their end-to-end encrypted profile so Drive can show names
+and pictures (docs/plans/unified-profile.md). One key per pair, however many
+folders they share.
+
+### GET /api/drive/people
+
+**Auth:** Bearer JWT
+
+Everyone you share a folder with or who shares one with you:
+
+```json
+{
+  "people": [{
+    "account": "bob@example.org",
+    "local": true,
+    "accountIncarnationId": "<hex>",
+    "drivePublicKey": "<base64>",
+    "driveSigningPublicKey": "<base64>",
+    "receivedEnvelope": "<ProfileKeyEnvelopeV1 base64> | null",
+    "sentProfileVersion": "<hex> | null"
+  }]
+}
+```
+
+For someone on another server (`local: false`) the three key fields are null:
+look them up with `GET /api/drive/federation/users/:username`. Open
+`receivedEnvelope` with your Drive key and check it with theirs; the profile
+key then fetches their profile through
+`GET /api/chat/users/:account/profile/:version`. When `sentProfileVersion` is
+not your current profile version, give them your key again.
+
+### PUT /api/drive/profile-keys
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "recipientAccount": "bob@example.org",
+  "envelope": "<ProfileKeyEnvelopeV1 base64>",
+  "profileVersion": "<hex, the version the key opens>"
+}
+```
+
+The server checks that the envelope is from you (your account, incarnation
+and Drive signing key), is for that account (and, here, its current
+incarnation), and that a share exists between you. Someone on another server
+gets it through `PUT /api/fed/drive/profile-keys`. `204`; `404` when there is
+no share between you; `400` for an envelope that does not match.
+
+---
+
+## Maps
+
+Kutup stores no map data (docs/plans/maps.md). The administrator chooses the
+providers people may use and whether map traffic goes through this server;
+each person turns maps on (off by default) and chooses within that. Places
+themselves are end-to-end encrypted elsewhere and drawn in the browser.
+
+### GET /api/maps
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "enabled": true,
+  "proxy": "off | available | enforced",
+  "providers": [{
+    "id": "openfreemap | openstreetmap | custom",
+    "name": "OpenFreeMap",
+    "kind": "vector | raster",
+    "url": "https://tiles.openfreemap.org/styles/liberty",
+    "proxyUrl": "/api/maps/proxy/openfreemap/styles/liberty",
+    "attribution": "…"
+  }],
+  "preferences": { "enabled": false, "provider": null, "viaProxy": true }
+}
+```
+
+`enabled: false` means the administrator turned maps off (no providers are
+listed). `proxyUrl` is null when the relay is off. A vector provider's `url`
+is a MapLibre style; a raster provider's is a `{z}/{x}/{y}` template.
+
+### PUT /api/maps/preferences
+
+**Auth:** Bearer JWT. Body: `{ enabled, provider, viaProxy, saveFolderId }`;
+`provider` must be one on offer (or null). `saveFolderId` is where the Maps
+app puts new lists: one of your own folders, not in the trash (`400`
+otherwise), or null for My files. Returns the same shape as `GET /api/maps`.
+
+### GET /api/maps/proxy/:provider/*path
+
+**Auth:** Bearer JWT. The resource at that path on the provider (style,
+TileJSON, tile, glyphs, sprite), fetched by this server and kept in its
+shared cache; JSON is rewritten so every URL on the provider points back
+here. Only offered providers while the relay is on; plain path segments
+only; images, JSON and vector tiles only, at most 4 MiB. `404` for a provider
+not offered or a resource it does not have, `429` above 1,200 requests a
+minute per person, `502` when the provider fails (an expired cached copy is
+served instead when there is one).
+
+## Photos
+
+The Photos app's library (docs/plans/photos.md). Photos are Drive files;
+their details are sealed in each file's metadata (`media`), never sent here.
+
+### GET /api/photos/preferences
+
+**Auth:** Bearer JWT. `{ uploadFolderId, libraryFolderIds }`: where uploads
+go (one of your own folders, or null until the app makes "Photos" in My
+files), and the other folders the library shows, each with its subfolders.
+Folders deleted, or no longer shared with you, are left out.
+
+### PUT /api/photos/preferences
+
+**Auth:** Bearer JWT. Body: the same shape. `uploadFolderId` must be one of
+your own folders, not in the trash; each library folder one you can open,
+at most 200 (`400` otherwise). Returns what was saved.
+
+### GET /api/photos/library · PUT /api/photos/library
+
+Your own marks on photos (favourites, archived, hidden) as one
+account-private envelope (`kutup-crypto` `photos_library`), sealed under a
+subkey of the master key; the server never reads it.
+
+- **GET** (Bearer JWT): `{ envelope, revision, envelopeDigest }`, `404`
+  before the first.
+- **PUT** (Bearer JWT): `{ envelope }`, the next revision: its header must
+  name this account's incarnation, the stored revision plus one and the
+  stored envelope's SHA-256 (revision 1 when there is none, or when the
+  stored one is from before the account was reset). `200` with the stored
+  record; `409` with the current record otherwise, which the client merges
+  into and seals again. Up to 6 MiB.
+
+### Albums
+
+Albums (docs/plans/photos.md) are collections of kind `album`: keys and
+epochs as a folder's, but they hold references to photos, never files or
+folders (the database refuses both), sit at the top level, and are left out
+of `GET /api/collections` and the trash. Each item is a file and its key
+sealed under the album key (Drive envelope purpose 12: object = file,
+parent = album, epoch = album epoch, revision = file key generation).
+
+- `GET /api/albums`: your albums (`{ id, ownerUserId, nameEnvelope,
+  ownerKeyEnvelope, keyEpoch, nameRevision, epochStatement,
+  epochStatementHash, itemCount, createdAt, updatedAt }`).
+- `POST /api/albums`: a new album, with the body of `POST /api/collections`
+  and no parent. Rename it with `PUT /api/collections/:id`.
+- `DELETE /api/albums/:id`: the album goes; its photos stay.
+- `GET /api/albums/:id/items`: `[{ file, fileKeyEnvelope, keyGeneration,
+  albumEpoch, addedBy, addedAt }]`, `file` as in a folder listing; photos in
+  the trash are left out.
+- `POST /api/albums/:id/items`: `{ items: [{ fileId, fileKeyEnvelope,
+  keyGeneration }] }`, up to 500; each one of your own files, sealed at its
+  current generation and the album's current epoch (`409` when a key
+  changed). Adding again re-seals.
+- `POST /api/albums/:id/items/remove`: `{ fileIds }`.
+
+- `GET /api/albums/:id/keys` (owner): every item's sealed key, those in
+  the trash too, for a rotation.
+- `DELETE /api/albums/:id/membership` (member): leave; the photos you put in
+  leave with you.
+
+Albums are shared as folders are (`POST /api/collections/:id/share`, with
+`canUpload` meaning "can add photos"; `GET /api/collections/:id/access`).
+`GET /api/albums` lists albums shared with you too. Members read the items
+and open the photos (their content, versions and thumbnails); members who may
+add put in their own photos and take out only those. Removing someone is a
+rotation (`POST /api/collections/:id/rotate`) whose body also carries
+`albumItems: [{ fileId, fileKeyEnvelope }]`: every item re-sealed under the
+new album key at the new epoch, or nothing changes (`409`).
+
+### Live-location streams
+
+A live location's stream on the sharer's server (docs/chat-protocol.md
+"Live locations"). The server keeps only the latest sealed update and
+deletes the stream at its end.
+
+- `POST /api/live-locations` (Bearer JWT):
+  `{ streamId: <16 bytes hex>, writeSecret: <32 bytes b64>,
+  readCapability: <32 bytes b64>, expiresAtMs }`, at most 8 hours ahead.
+  `201`; `409` for a taken id; `429` above 60 a hour per person.
+- `PUT /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+  `{ update: <88-byte LiveLocationUpdateV1 b64> }`. `204`; `404` for a wrong
+  secret or an ended stream; `409` when the counter is not above the stored
+  one; `429` within 3 s of the last write.
+- `GET /api/live-locations/:streamId[?server=]` (Bearer JWT,
+  `x-kutup-live-read`): `{ update, updatedAtMs, expiresAtMs }`; with
+  `server`, read from the sharer's server over signed federation
+  (`GET /api/fed/chat/live-locations/:streamId`). `404` for a wrong
+  capability or an ended stream; `429` above 600 reads a minute per person.
+- `DELETE /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+  `204`.
+
 ---
 
 ## Files
+
+**Write rights.** Reading a file needs the folder's owner or any share on it.
+Changing it — uploading into the folder, saving a version, naming or keeping
+one, storing a whiteboard asset or thumbnail, claiming a note's seed, or
+sending edits over the collab socket — needs the owner or a share with
+`canUpload` ("can add and edit"). Everything a recipient stores is charged to
+them and counts against the share's `uploadQuotaBytes`.
+
+**Quota.** Every writer checks the same headroom: quota − stored − the full
+declared length of the user's open tus uploads (an upload reserves its whole
+length until it is finalised).
 
 ### POST /api/files/upload
 
@@ -607,15 +973,18 @@ Upload an encrypted file to a collection. Multipart form.
 |-------|------|-------------|
 | `fileId` | string (canonical UUID) | Client-generated before envelope construction |
 | `collectionId` | string (UUID) | Target collection |
-| `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record bound to file, collection, epoch, and revision 1 |
-| `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record bound to file, collection, epoch, and revision 1 |
-| `file` | binary | Complete typed V1 Drive file blob (`application/octet-stream`) |
+| `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record under the file key, bound to the file (object = parent = file), key generation 1 and revision 1 |
+| `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
+| `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
 noncanonical, relocated, stale-epoch, wrong-purpose, or wrong-revision
 envelopes. It also validates that the blob's authenticated-format header binds
-the same file, collection and epoch before storage. It never accepts a
-server-generated replacement for `fileId`.
+the same file and key generation 1 before storage (the blob names no folder:
+docs/plans/drive-move.md). It never accepts a
+server-generated replacement for `fileId`. A `fileId` already used by a
+stored file or an open upload is refused with `409` and nothing is written —
+a retry cannot overwrite what an earlier attempt stored.
 
 **Response:** `201 Created`
 ```json
@@ -642,15 +1011,28 @@ List files in a collection.
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
+    "keyGeneration": 1,
     "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
     "createdAt": "2026-03-14T12:00:00Z",
-    "updatedAt": "2026-03-14T12:00:00Z"
+    "updatedAt": "2026-03-14T12:00:00Z",
+    "thumbnails": { "sm": "2026-03-14T12:00:05Z", "smKeyGeneration": 1 },
+    "thumbnailStale": false,
+    "originalKeyGeneration": 1,
+    "contentKeyGeneration": 1
   }
 ]
 ```
 
-`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 48-byte
+`keyEpoch` is the collection epoch the file key is wrapped at; `keyGeneration`
+counts the file's own keys (see "Moving" and `rekey` below).
+
+`thumbnails` has the store time of each thumbnail variant that exists (`sm`,
+`lg`; absent keys mean none). `thumbnailStale` is true when a stored thumbnail
+was drawn from something other than the file's latest version, so a client
+with write access should redraw it (see "Thumbnails" below).
+
+`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 32-byte
 typed Drive header, a 24-byte secretstream header, and at least one frame with
 a 17-byte authentication/tag overhead.
 
@@ -658,10 +1040,10 @@ a 17-byte authentication/tag overhead.
 
 ### PUT /api/files/:id
 
-Replace only the authenticated metadata envelope. The request must advance the
-stored revision by exactly one; gaps, rollback, replay, a wrong file or
-collection binding, and a stale epoch return `409` or `400` without changing
-the row.
+Replace only the authenticated metadata envelope, sealed at the file's current
+key generation. The request must advance the stored revision by exactly one;
+gaps, rollback, replay, a wrong file binding, and a stale key generation
+return `409` or `400` without changing the row.
 
 ```json
 {
@@ -678,7 +1060,24 @@ Download the encrypted content of a file.
 
 **Auth:** Bearer JWT
 
-**Response:** Raw binary (`application/octet-stream`) — the encrypted file bytes.
+**Response:** Raw binary (`application/octet-stream`) — the encrypted file
+bytes as the file is now: its latest `kind = file` version when it has one
+(the same sealed format as the upload), otherwise the original upload.
+Public links and federated reads serve the same.
+
+---
+
+### GET /api/files/:id/original
+
+Download the encrypted original upload, while it is kept (retention prunes
+it once versions cover it): the base of an office editing session that began
+before the file's first saved version (docs/onlyoffice.md, "Collaboration
+sessions").
+
+**Auth:** Bearer JWT (the same access as download)
+
+**Response:** Raw binary (`application/octet-stream`); `404` for no such
+file or a pruned original.
 
 ---
 
@@ -689,6 +1088,187 @@ Move a file to the trash (soft delete). The file disappears from every normal en
 **Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
 
 **Response:** `204 No Content`.
+
+---
+
+## Folder access and keys
+
+Who can open a folder and taking that access away
+(docs/plans/drive-share-revocation.md). A folder's keys form a chain of
+epochs; every removal rotates to the next.
+
+### GET /api/collections/:id/epochs
+
+The folder's key history, oldest first:
+`[{ epoch, epochStatement, epochStatementHash, previousKeyEnvelope? }]`.
+`previousKeyEnvelope` (absent for epoch 1) is the previous epoch's key sealed
+under this epoch's (purpose 8). Clients unlock older keys from the current one
+with `collection_keyring::unlock`, which verifies the owner-signed chain and
+every key commitment. **Auth:** owner (also for a trashed folder) or member.
+Public links: `GET /api/share/:token/epochs` (anonymous); federated
+recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
+
+### GET /api/collections/:id/access
+
+Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
+accountIncarnationId, drivePublicKey, driveSigningPublicKey, canUpload, canDelete, uploadQuotaBytes,
+createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope?, expiresAt?,
+createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
+recipientIncarnationId, canUpload, canDelete, uploadQuotaBytes, createdAt }] }`.
+A link without `ownerLinkKeyEnvelope` predates owner copies and cannot be kept
+through a rotation.
+
+### POST /api/collections/:id/rotate
+
+Owner only; all or nothing. **Body:** `{ fromEpoch, epochStatement,
+ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ userId,
+namedShareEnvelope }], publicLinks: [{ id, collectionKeyEnvelope }],
+federatedShares: [{ id, namedShareEnvelope }], removed: { members: [userId],
+publicLinks: [id], federatedShares: [id] } }`. The statement must chain from
+the current one under the owner's authority; the owner key, previous-key and
+name (next name revision) envelopes must be at `fromEpoch + 1`; every kept
+member's named share must be sealed at the new epoch to that exact account
+(federated: the same account incarnation as before), every kept link
+re-wrapped. Kept plus removed must be exactly the current access, else `409`
+(also when `fromEpoch` is stale). **Response:** `{ keyEpoch,
+epochStatementHash }`.
+
+### POST /api/files/:id/rekey
+
+Give a file a new key before writing to it (or moving it) when its folder has
+rotated past it. **Body:** `{ fromGeneration, fileKeyEnvelope,
+metadataEnvelope, previousKeyEnvelope }` — a new random file key of generation
+`fromGeneration + 1` wrapped at the folder's current epoch, the metadata (same
+revision) sealed under it, and the key being left sealed under it
+(`PreviousFileKey`, purpose 10). **Response:** `{ keyEpoch, keyGeneration }`.
+`409` if another editor re-keyed first or the file is already current.
+**Auth:** write access. Open collaboration sockets on the file are closed so
+peers reconnect under the new key.
+
+**New content only under the current key.** Versions, assets, thumbnails,
+renames and collaborative edits must be sealed at the file's current key
+generation (`409 file key changed` otherwise), and are refused for a file
+whose key is wrapped at an older epoch than its folder's (`409 file needs a
+re-key`). An upload sealed at an older folder epoch gets `409 folder key
+changed` (reload the folder and retry).
+
+**Listing fields.** File rows carry `keyGeneration`, `originalKeyGeneration`
+(the upload's), `contentKeyGeneration` (that of what `/download` serves),
+`keyHistory` (`[{ generation, previousKeyEnvelope }]`, generations 2 to
+`keyGeneration` in order, each sealing the one before) and
+`thumbnails.{sm,lg}KeyGeneration`; version rows carry `keyGeneration`; an
+asset download carries `X-Kutup-Key-Generation`. Each object opens with the
+file key of its own generation, reached from the current key through
+`keyHistory` wherever the file is.
+
+### Sharing a single file
+
+A file can be shared by itself with someone on this server, like Proton Drive
+and CryptPad (docs/plans/drive-file-sharing.md). They get the file's own key in
+a `FileShareEnvelopeV1` (magic `KUTPFS1`), bound to the file id, the file key
+generation, both accounts and both incarnations, and signed with the owner's
+Drive key. They never get the folder's key. Only the folder's owner shares.
+A file share lets its recipient open, download, list versions and join the
+collaboration socket (read-only for view). With edit, the recipient can also
+save versions, thumbnails and live edits, but only while the share opens the
+file's current key generation and that key is wrapped at the folder's current
+epoch. Otherwise `403`, and the share waits for the owner. Rename, move,
+delete and share stay with the owner. A file in the trash is out of reach
+through its shares.
+
+- **`POST /api/files/:id/share`**: owner only. **Body:** `{ recipientUserId,
+  shareEnvelope, canEdit }`. The envelope must be at the file's current
+  generation, sealed to that exact account (`400` otherwise). Sharing again
+  replaces the envelope and permission. `204`.
+- **`GET /api/files/:id/access`**: owner only. `{ keyGeneration, members:
+  [{ userId, account, accountIncarnationId, drivePublicKey,
+  driveSigningPublicKey, canEdit, keyGeneration, createdAt }] }`. A member
+  whose `keyGeneration` is below the file's is waiting to be re-sealed.
+- **`POST /api/files/:id/rotate`**: remove people, owner only, all or
+  nothing. **Body:** `{ fromGeneration, fileKeyEnvelope, metadataEnvelope,
+  previousKeyEnvelope, members: [{ userId, shareEnvelope }], removed: [userId]
+  }`. It uses the same new-generation envelopes as `rekey`, wrapped at the
+  folder's current epoch, plus an envelope at the new generation for everyone
+  who stays. Kept plus removed must be exactly the file's people and `removed`
+  must not be empty, else `409`. Collaboration sockets on the file are
+  closed. **Response:** the new `FileAccess`.
+- **`PUT /api/files/:id/shares`**: owner only. **Body:** `{ members: [{
+  userId, shareEnvelope }] }`. It re-seals shares left at an older generation
+  (someone else re-keyed the file) at the current one. `204`.
+- **`GET /api/file-shares/pending`**: the caller's files with shares to bring
+  up to date, `[{ fileId, collectionId }]`. These are shares below the file's
+  generation, or a file wrapped below its folder's epoch. The owner's Drive
+  re-keys the file if needed and re-seals.
+- **`GET /api/shared-files`**: files shared with the caller. `[{ file:
+  FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent,
+  ownerUserId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
+  sharedAt }]`. With `keyGeneration` below `file.keyGeneration`, the current
+  metadata cannot be opened yet. With `folderKeyCurrent: false`, the file
+  opens but edits wait.
+
+In a folder listing, a file shared by itself carries `shared: true`, for the
+folder's owner only.
+
+**Editors.** Someone with edit access may rename the file (at its current
+key). If the owner turns on "Editors can share"
+(`PUT /api/files/:id/sharing`, body `{ editorsCanShare }`, owner only, off by
+default), an editor may also share it with new people. They sign the
+envelope themselves, may not change anyone who already has it (`409`), and
+may read `GET /api/files/:id/access`. Only the owner removes people (the
+rotation takes the folder's key). Envelopes the owner re-seals become the
+owner's.
+
+- `GET /api/shared-files` rows also carry the envelope's sender
+  (`sharerAccount`, `sharerIncarnationId`, `sharerSigningPublicKey`), which is
+  the owner or an editor, plus `editorsCanShare`. A share left at an older
+  generation carries `metadataAtShare: { envelope, revision }`: the file's
+  metadata as it was then, under the key the share opens.
+- `GET /api/files/:id/access` also returns `editorsCanShare`.
+- **Public link to one file:** `POST /api/share` with `shareType: "file"`,
+  `targetId` = the file, `collectionKeyEnvelope` = the file's current key
+  sealed under the link key (Drive envelope purpose 11,
+  `public_link_file_key`: object = file, parent = owner, epoch = key
+  generation), `id` and `ownerLinkKeyEnvelope` as for folder links. Owner
+  only.
+  - Anonymous reads through the token: `GET /api/share/:token` (with
+    `file`, the file's record) and `GET /api/share/:token/download/:fileId`
+    (that file only).
+  - The file's links appear in its `access` (`publicLinks`, for the owner).
+  - Removing a link is a rotation (`removedLinks`), and a rotation re-wraps
+    every kept link (`publicLinks: [{ id, keyEnvelope }]`); kept plus
+    removed links must be exactly the current ones. `PUT /api/files/:id/shares`
+    re-wraps links left behind, and `pending` lists files whose links wait.
+- **`GET /api/share/:token/state/:fileId`** (anonymous, folder or file
+  links): the latest saved Yjs state of a note or place list, sealed under
+  the file key of the generation in `X-Kutup-Key-Generation` (`404` when it
+  has none). Their edits are not whole-file versions, so a link's page turns
+  the state back into the file.
+- **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
+  otherServers, links }]`. These are your folders shared with people or by
+  link, and your files shared by themselves, with counts.
+
+### POST /api/files/:id/move
+
+Move a file to another folder of the same owner (docs/plans/drive-move.md).
+**Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope }`
+— the file's current key sealed under the destination's key at its current
+epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
+content, metadata, versions, thumbnails and assets are bound to the file, not
+the folder. **Response:** `{ collectionId, keyEpoch }`. **Auth:** write access
+to both folders. `400` same folder, another owner's folder (copy instead) or
+an invalid envelope; `403` no write access; `409 the file moved`
+(`fromCollectionId` is stale), `409 file needs a re-key` (re-key it in its
+folder first, so no one removed from that folder can follow it), `409 folder
+key changed` (the destination rotated; reload). Open collaboration sockets on
+the file are closed.
+
+### POST /api/collections/:id/move
+
+Put a folder under another of the owner's folders, or at the top level.
+**Body:** `{ parentCollectionId: string | null }`. A folder's key is sealed to
+its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
+**Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
+under a folder the caller does not own.
 
 ---
 
@@ -736,13 +1316,17 @@ can be verified even when the collection is absent from the live listing.
       "collectionKeyEpoch": 1,
       "collectionEpochStatement": "<CollectionEpochStatementV1 base64>",
       "collectionEpochStatementHash": "<lowercase SHA-256 hex>",
-      "deletedAt": "2026-06-11T11:22:33Z"
+      "deletedAt": "2026-06-11T11:22:33Z",
+      "thumbnails": { "sm": "2026-06-11T11:20:00Z", "smKeyGeneration": 1 }
     }
   ]
 }
 ```
 
 `items` is the number of files trashed together with the folder (its subtree).
+A file row's `thumbnails` are as in a folder listing: while a file is in its
+owner's trash on its own, its owner may still read them
+(`GET /api/files/:id/thumbnails/:variant`), as Photos' trash shows them.
 
 ### POST /api/trash/:id/restore
 
@@ -774,7 +1358,11 @@ Empty the caller's whole trash. Irreversible.
 
 ### POST /api/share/
 
-Create a public share link for one collection. The link key used to open the
+Create a public share link for one collection. **Body** also carries the
+link's client-chosen `id` (canonical UUID) and `ownerLinkKeyEnvelope`: the
+link key sealed for the owner under their master key (`DriveEnvelopeV1`
+purpose 9, object = link id, parent = owner, epoch 1), so the owner can list
+and copy the link and keep it working across folder-key rotations. The link key used to open the
 typed collection-key envelope lives only in the URL fragment; the server never
 sees it.
 
@@ -791,7 +1379,9 @@ sees it.
 ```
 
 V1 accepts only `shareType: "collection"`. `expiresInHours` is optional; omit
-or send `null` for no expiry. `collectionKeyEnvelope` uses the public-link
+or send `null` for no expiry; otherwise 1 to 87,840 (ten years), else `400`.
+A link's folder in the trash makes the link answer `404` until it is
+restored. `collectionKeyEnvelope` uses the public-link
 purpose and binds the target collection, owner and current collection epoch.
 Malformed, relocated, stale-epoch or wrong-purpose envelopes are rejected
 before storage.
@@ -825,11 +1415,52 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
   "ownerUserId": "<uuid>",
-  "expiresAt": "2026-04-01T00:00:00Z"
+  "expiresAt": "2026-04-01T00:00:00Z",
+  "collectionKind": "album",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "nameRevision": 1
 }
 ```
 
 `expiresAt` is `null` when the share has no expiry. Returns `410 Gone` if the share has expired.
+`collectionKind`, `nameEnvelope` and `nameRevision` are present for collection shares; the name
+opens under the collection key (album links show the album's name).
+
+---
+
+### GET /api/share/:token/album
+
+The items of an album reached by a public link: each photo's file record, its
+thumbnails, and its file key sealed under the album key (Drive envelope
+purpose 12, `AlbumFileKey`).
+
+**Auth:** None (the token is the capability)
+
+**Response:**
+```json
+[
+  {
+    "file": { "id": "<uuid>", "collectionId": "<uuid>", "metadataEnvelope": "…", "fileKeyEnvelope": "…", "keyEpoch": 1, "keyGeneration": 1, "metadataRevision": 1, "encryptedSizeBytes": 4096, "createdAt": "…", "originalKeyGeneration": 1, "contentKeyGeneration": 1 },
+    "thumbnails": [{ "variant": "sm", "keyGeneration": 1, "…": "…" }],
+    "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
+    "keyGeneration": 1,
+    "albumEpoch": 1
+  }
+]
+```
+
+Returns `404` for an unknown token or a link that is not to an album, `410` if it has expired.
+Trashed photos are left out.
+
+---
+
+### GET /api/share/:token/thumbnails/:fileId/:variant
+
+A thumbnail (`sm` or `lg`) of a file the link reaches (for an album, one of
+its items). Streams the encrypted thumbnail; the client opens it with the
+file key. `404` when the file is not reached or has no such thumbnail.
+
+**Auth:** None
 
 ---
 
@@ -848,9 +1479,12 @@ List files in a public share.
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
+    "keyGeneration": 1,
     "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
-    "createdAt": "2026-03-14T12:00:00Z"
+    "createdAt": "2026-03-14T12:00:00Z",
+    "originalKeyGeneration": 1,
+    "contentKeyGeneration": 1
   }
 ]
 ```
@@ -867,7 +1501,7 @@ Download a file from a public share. Streams the encrypted blob (`application/oc
 
 **Response:** the raw encrypted bytes.
 
-Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target.
+Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target. For an album link, the album's items count as belonging to it.
 
 ---
 
@@ -1027,7 +1661,9 @@ response includes the wrapped profile-key envelope; peer responses omit it.
 
 ### PUT /api/chat/profile
 
-Publish a new opaque encrypted display-name/avatar profile. The server sees
+Publish a new opaque encrypted profile: display name, optional avatar and
+optional `about` (Signal's one-line "about", ≤ 140 characters, padded to
+128/254/512 bytes before encryption). The server sees
 only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay
@@ -1076,13 +1712,70 @@ Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id"
 
 `{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
 
+### POST /api/chat/link-preview
+
+Fetch one public page or image for a link preview the caller is building
+(`{ "url": "https://…", "kind": "page" | "image" }` → `{ finalUrl,
+contentType, body }`, body standard base64). Only `https` on port 443 whose
+every resolved address is public; the connection is pinned to the checked
+address; at most three redirects, each checked again; pages are cut at
+512 KiB and must be HTML, images must be JPEG/PNG/WebP/GIF of at most 2 MiB;
+8 s total. 30 per minute per account. `404` when `CHAT_LINK_PREVIEWS=false`
+(then `/api/auth/settings` → `chat.linkPreviews` is false), `400` for a
+non-public or non-https URL, `422` when the site gives nothing usable. The
+browser parses the page (`DOMParser`) and resizes the image; the preview then
+travels end-to-end encrypted in the message.
+
+### GET /api/chat/call-servers
+
+ICE servers for a call ([`chat-calls.md`](chat-calls.md)):
+`{ "iceServers": [{ "urls": [...], "username"?, "credential"? }], "relay": bool, "expiresAt"? }`.
+With `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, the TURN entry carries a
+12-hour coturn shared-secret credential (username `<expiry>:<pseudonym>`,
+password `base64(HMAC-SHA1(secret, username))`); `relay` is then true. 60
+per minute per account.
+
+### POST /api/chat/group-calls/token
+
+`{ "host", "roomId", "participantId" }` (room and tag: 32 lowercase hex each)
+→ `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
+for that room ([`chat-calls.md`](chat-calls.md) "Group calls"). The host
+mints it; another host is asked over signed federation
+(`POST /api/fed/chat/group-calls/token`). `404` when the host has no SFU,
+`429` over 30 per minute per account (300 per origin server), `502` when
+the host cannot be reached.
+
+### PUT /api/chat/push-subscription
+
+`{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device
+through the browser's push subscription while it has no live socket
+([`chat-notifications.md`](chat-notifications.md)). Only endpoints of the
+push services in `CHAT_WEB_PUSH_HOSTS` (https, port 443); `400` otherwise,
+`404` when Web Push is off (`/api/auth/settings` → `chat.webPushPublicKey`
+is then absent) or the device is not the caller's.
+
+### DELETE /api/chat/push-subscription?deviceId=N
+
+`204`: stop waking the device.
+
+### POST /api/chat/invite-links
+
+One operation on a group link's mailbox ([`chat-invite-links.md`](chat-invite-links.md)):
+`{ "host": "<domain>", "operation": { "op": "put" | "delete" | "preview" |
+"request" | "requests" | "decide" | "status" | "cancel", … } }` →
+`{ "result": "done" | "preview" | "requested" | "requests" | "status", … }`.
+The server carries it out when it is the host, and otherwise forwards it
+over signed federation. `404` when groups are off here or the link or request
+no longer exists, `403` for a token that does not match, `429` over the rate
+or waiting-request limits, `502` when the host cannot be reached.
+
 ### POST /api/chat/ws-ticket?deviceId=N
 
 Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
 
 ### GET /api/chat/ws?ticket=…
 
-WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
+WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth. The only client → server frame is `{ "type": "ping" }`, answered by `{ "type": "pong" }`: browsers cannot send protocol pings, so the web client probes every 25 s and reconnects when no answer arrives within 10 s.
 
 ---
 
@@ -1156,6 +1849,13 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
+### POST /api/fed/chat/invite-links
+
+One signed `InviteLinkOperationV1` for a group link this server hosts, from
+an account of the origin server; answered like `POST /api/chat/invite-links`
+in a signed response. The authenticated origin is recorded as a request's
+server.
+
 ---
 
 ## Drive Federation — Local Authenticated Endpoints
@@ -1200,17 +1900,20 @@ intended recipient username match the authenticated local account. Success is
   "canUpload": true,
   "canDelete": false,
   "uploadQuotaBytes": null,
+  "collectionKind": "folder",
   "createdAt": "<RFC3339>"
 }
 ```
 
 The retained remote capability is secret server-side state and is omitted from
-all responses.
+all responses. `collectionKind` is `folder` or `album`, as the owner's server
+states in the invite.
 
 ### GET /api/drive/federation/shares
 
 List the authenticated user's accepted remote shares. Returns the same public
-shape as acceptance, without any capability.
+shape as acceptance, without any capability. `?kind=folder` (the default)
+lists folders, for Drive; `?kind=album` lists Photos albums.
 
 ### DELETE /api/drive/federation/shares/:shareId
 
@@ -1230,12 +1933,96 @@ then releases the verified stream to the browser.
 
 Upload encrypted multipart fields (`fileId`, `metadataEnvelope`,
 `fileKeyEnvelope`, and `file`). Exact retries are idempotent
-and return the same `201 { "id": "<uuid>" }` result.
+and return the same `201 { "id": "<uuid>" }` result. The body is spooled to
+disk and streamed on to the owner's server with its signed content digest;
+it is never held in memory.
+
+### POST /api/drive/federation/shares/:shareId/refresh
+
+Bring a share's stored copy up to the owner's current folder key after a
+rotation. The recipient's server fetches the invite again and accepts it only
+from the same owner, folder and authority, never at an older epoch, and only
+if the owner's signed history (`GET /api/fed/drive/epochs`) descends from the
+stored epoch. A revoked share fails from the owner's server. **Response:** the
+refreshed share.
+
+### GET /api/drive/federation/shares/:shareId/files/:fileId/state
+
+A note's or place list's latest saved Yjs state in the remote folder, relayed:
+`{ keyGeneration, state }` (state base64, sealed under the file key of that
+generation), `404` when it has none. Their edits are not whole-file versions,
+so the browser turns the state back into the file.
+
+### GET /api/drive/federation/shares/:shareId/album
+
+The photos of an album on another server, relayed and verified: each item
+is `{ file, thumbnails, fileKeyEnvelope, keyGeneration, albumEpoch }`, the
+file key sealed under the album key (Drive envelope purpose 12). Content is
+read through `…/files/:fileId/content` above. `404` when the owner stopped
+sharing it.
+
+### GET /api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant
+
+A thumbnail (`sm` or `lg`) of a file the share reaches, relayed (still
+sealed under the file key) after its signed digest is checked.
+
+### Files shared by themselves across servers
+
+A file can be shared with someone on another server
+(docs/plans/drive-file-sharing.md, slice 2). It works like a folder invite,
+with a capability for that file alone. With `canEdit`, notes and place lists
+are edited live through the recipient's server (see *Collaboration across
+servers* below).
+
+- **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
+  `{ recipientUsername, recipientServer, shareEnvelope, canEdit }`. The envelope is a
+  `FileShareEnvelopeV1` at the file's current generation, sealed to the
+  remote account (looked up with `GET /api/drive/federation/users/:username`).
+  **Response:** `201 { inviteUrl }`, of the form
+  `…/invite#server=…&capability=…&kind=file`. Only the capability's hash is
+  kept.
+  - The file's `access` lists these recipients (`federatedShares`).
+  - A rotation re-seals them (`federatedShares: [{ id, shareEnvelope }]`, to
+    the same account incarnation) or removes them (`removedFederated`).
+  - `PUT /api/files/:id/shares` re-seals any left behind, and `pending`
+    lists files whose remote recipients wait.
+- **`POST /api/drive/federation/file-shares`** (recipient's server):
+  `{ server, capability }`. The server fetches the invite over the pinned
+  peer, checks it is for this account and sealed by the named owner, and
+  keeps the capability. The browser never gets it.
+- **`GET /api/drive/federation/file-shares`**: the accepted files.
+  **`GET …/file-shares/:id`**: the file as it is now on its owner's server
+  (`{ file, shareEnvelope, keyGeneration, owner… }`), checked again. It must
+  still be the owner first accepted; `404` once no longer shared.
+- **`GET …/file-shares/:id/content`**: the content, relayed.
+  **`GET …/file-shares/:id/state`**: the saved state, as above.
+  **`DELETE …/file-shares/:id`**: stop seeing it.
+
+### Collaboration across servers
+
+Live editing of a file on another server, through your own server
+(docs/plans/collab-federation.md). `BASE` is
+`/api/drive/federation/shares/:shareId/files/:fileId` for a file in a shared
+folder, or `/api/drive/federation/file-shares/:id` for a file shared by
+itself. Each route behaves as its local counterpart under `/api/files/:id`,
+with the same bodies and responses; this server relays it to the file's
+server, which applies the share's permission (`canUpload` on a folder,
+`canEdit` on a file) to every write.
+
+- **`GET BASE/collab/ws`**: the collab WebSocket (same frames, `hello`,
+  `stored` and `replayed` messages). Your server subscribes at the file's
+  server while anyone is in the room, and pushes your frames there.
+- **`GET BASE/versions`**, **`POST BASE/versions`** (multipart),
+  **`GET BASE/versions/:vid/download`**, **`PATCH BASE/versions/:vid`**:
+  versions. A version you save lists `remoteAuthor` (`user@server`) and is
+  charged to the file's owner.
+- **`POST BASE/claim-seed`**: whether your editor seeds a never-saved
+  document.
 
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
 
-Delete a remote ciphertext object when `canDelete` permits it. Exact retries
-are idempotent and return `204`.
+Move a file this share uploaded to the owner's trash, when `canDelete`
+permits it. Exact retries are idempotent and return `204`.
 
 ---
 
@@ -1251,6 +2038,14 @@ must be bound to that same domain.
 
 Return `{ "username", "server", "publicKey" }` for one active local user.
 
+### PUT /api/fed/drive/profile-keys
+
+Signed server-to-server delivery of a profile key
+(`{ senderAccount, recipientAccount, envelope, profileVersion }`). The sender
+must be on the calling server and the recipient here, the envelope must name
+both (and the recipient's current incarnation), and a share must exist
+between them. The recipient's client checks the sender's signature.
+
 ### GET /api/fed/drive/invite
 
 Return the encrypted collection metadata, wrapped key, intended recipient, and
@@ -1260,6 +2055,36 @@ grants for the capability-authorized share.
 
 List ciphertext file metadata for the capability-authorized collection.
 
+### GET /api/fed/drive/epochs
+
+The capability-authorized folder's key history, signed.
+
+### GET /api/fed/drive/album
+
+The capability-authorized album's photos, signed (see the relayed route
+above). `404` when the share is not for an album. For an album share,
+`GET /api/fed/drive/files/:fileId/content` reaches the album's items.
+
+### GET /api/fed/drive/files/:fileId/thumbnails/:variant
+
+A thumbnail of a file the capability reaches (a file in the folder, or a
+photo in the album), as a signed stream with its digest.
+
+### GET /api/fed/drive/files/:fileId/state
+
+A note's or place list's latest saved state in the capability-authorized
+folder, signed (`404` when none).
+
+### GET /api/fed/drive/file-invite · file-content · file-state
+
+The capability names one file shared by itself:
+- `file-invite`: its record, its key sealed to the recipient, and the owner's
+  identity;
+- `file-content`: its current ciphertext, as a signed stream with its digest;
+- `file-state`: its saved Yjs state.
+
+A file (or its folder) in the trash answers `404`.
+
 ### GET /api/fed/drive/files/:fileId/content
 
 Stream ciphertext with its precomputed signed content digest and exact length.
@@ -1268,11 +2093,44 @@ Stream ciphertext with its precomputed signed content digest and exact length.
 
 Store one encrypted multipart upload. The exact ciphertext is hashed while it
 is spooled and the digest is persisted with the file row. A stable request ID
-plus authenticated request hash provides persistent idempotency.
+plus authenticated request hash provides persistent idempotency. The folder
+owner pays: the upload must fit their quota (less their open uploads) and the
+share's `uploadQuotaBytes`, measured from the files the share uploaded. A
+`fileId` already in use is `409`. The request is signed over its content
+digest: the server verifies the signature first, spools and hashes the body,
+and parses nothing until the digest matches. Body cap 10 GiB.
 
 ### DELETE /api/fed/drive/files/:fileId
 
-Delete one ciphertext file under a persistent idempotent mutation result.
+Move one file **this share uploaded** to the owner's trash (restorable, and
+purged with its versions, assets, thumbnails and charges by the trash's own
+path), under a persistent idempotent mutation result. Other files are `404`.
+
+### Collaboration: `/api/fed/drive/collab/*`
+
+Between the file's server (home) and an editor's server (bridge). All are
+signed and carry the share's capability, except `push`, which home signs
+and which names a subscription the bridge made. Bodies are JSON; frames are
+base64 sealed collab frames.
+
+- **`POST subscribe`** `{ fileId, subscriptionId }` → `{ headSeq,
+  currentDocKeyId, floor, canWrite }`. Home pushes every new frame to the
+  bridge from then on. The lease lasts 60 s and is renewed by subscribing
+  again. **`POST unsubscribe`**, same body: the room is empty.
+- **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
+  frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
+  order, never the bridge's own. `404` for an unknown subscription.
+- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions }`
+  (null for relayed-only or refused frames). Checked as local frames are,
+  against the file's current keys and the share's edit permission; the
+  sender is kept as `(domain, device)`.
+- **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
+  catching up.
+- **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**
+  (a signed stream of the sealed blob); **`POST versions/create`** `{ fileId,
+  author, kind, seqAtSnapshot, docKeyId, label, keepForever, blob }` (up to
+  32 MiB); **`POST versions/patch`** `{ fileId, versionId, label,
+  keepForever }`; **`POST claim-seed`** `{ fileId }`.
 
 The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
 `/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and
@@ -1470,6 +2328,29 @@ Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
 `before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
 to 1000. Cells beginning with spreadsheet formula markers are neutralized and
 the response is downloaded as `kutup-admin-audit.csv`.
+
+---
+
+### GET /api/admin/maps · PUT /api/admin/maps
+
+**Auth:** Bearer JWT (admin)
+
+```json
+{
+  "enabled": true,
+  "providers": ["openfreemap", "openstreetmap"],
+  "custom": null,
+  "proxy": "available",
+  "cacheMegabytes": 2048
+}
+```
+
+`custom` is the server's own tile server,
+`{ name, kind: "vector" | "raster", url, attribution }`: a style URL, or a
+tile template with `{z}`, `{x}` and `{y}`; it must also be listed in
+`providers`. Maps on with no provider, a provider listed twice, or a cache
+above 102,400 MB is `400`. Saving writes the `maps.settings.update` audit
+entry.
 
 ---
 
@@ -1703,7 +2584,17 @@ WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=..
 
 PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
+A view-only recipient joins to follow edits: the server relays its presence
+frames (awareness and cursors) and drops everything else it sends. Edits are
+checked against the sender's rights frame by frame, and every open socket
+re-checks its session and file access every 15 s, closing when either is
+gone (share narrowed or removed, file or folder trashed, session signed out).
+A message is at most one frame (1 MiB of plaintext plus framing); a client
+sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
+frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
+day, as a buffer for peers resuming after a dropped connection.
+
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
 
 ### PUT /api/files/:fileId/assets/:assetId
 
@@ -1712,8 +2603,9 @@ complete `DriveEnvelopeV1` purpose-6 asset envelope for the exact live file,
 collection, current collection-key epoch and path `assetId`. Asset IDs are
 1–128 bytes and may not contain slash, backslash or `..`. Plaintext is capped
 at 25 MiB; oversized or invalid public envelopes are rejected before quota or
-object-storage mutation. **Auth:** Bearer JWT and file access. **Response:**
-`204` (content-addressed re-upload is idempotent).
+object-storage mutation. **Auth:** Bearer JWT and write access. **Response:**
+`204`. Assets are content-addressed and immutable: once an id is stored a
+re-upload changes nothing (neither bytes nor charge) and returns `204`.
 
 ### GET /api/files/:fileId/assets/:assetId
 
@@ -1721,6 +2613,33 @@ Return the stored opaque asset envelope as `application/octet-stream`. The
 client opens it with the current collection key and the same exact context;
 key, file, collection, epoch, asset-ID relocation and tampering fail closed.
 **Auth:** Bearer JWT and file access.
+
+### PUT /api/files/:fileId/thumbnails/:variant
+
+Store the file's `sm` (≤ 512 px) or `lg` (≤ 1920 px) thumbnail, replacing any
+previous one of that variant. **Body:** the raw `DriveEnvelopeV1` purpose-7
+thumbnail envelope (`application/octet-stream`), sealed under the file key
+by the client; the server checks its public header against the exact file,
+variant and current key epoch and its size against the variant cap
+(64 KiB / 1 MiB plaintext) before any quota or storage change.
+**Query:** `source` — the version id it was drawn from, or `original`
+(default); a version of another file is refused. The size is charged to the
+uploader; replacing your own thumbnail charges only the difference.
+**Auth:** Bearer JWT and write access. **Response:** `204`; `400` invalid
+envelope or source; `404` unknown variant; `413` too large or over quota.
+
+### GET /api/files/:fileId/thumbnails/:variant
+
+The stored envelope as `application/octet-stream`, with
+`Cache-Control: private, max-age=31536000, immutable` — clients add
+`?v={thumbnails.<variant>}` from the listing, so a URL never changes meaning
+and caches hold only ciphertext. **Auth:** Bearer JWT and file access.
+**Response:** `200`; `404` when there is none.
+
+### DELETE /api/files/:fileId/thumbnails
+
+Remove both variants and release their bytes to whoever was charged.
+**Auth:** Bearer JWT and write access. **Response:** `204`.
 
 ---
 
@@ -1738,18 +2657,29 @@ file/collection/epoch-bound Drive file-blob format as an original file. There
 is no snapshot-specific legacy decoder.
 
 ### PATCH /api/files/:fileId/versions/:vid
-**Body:** `{label?: string, keepForever?: boolean}` — set or unset.
-**Response:** updated version row.
+**Body:** `{label?: string, keepForever?: boolean}` — set or unset; a label
+is at most 200 characters. **Auth:** write access (it changes what retention
+keeps). **Response:** updated version row.
 
 ### POST /api/files/:fileId/versions
-Record a new snapshot. Server inserts the row and truncates `file_update_log` up to `seqAtSnapshot`.
-**Body:** `{s3VersionId, storagePath, seqAtSnapshot, docKeyId, sizeBytes, label?, keepForever?}`
-**Response 201:** `{id}` — the version row id.
+Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
+`file` — a complete typed Drive file blob, validated against the exact file,
+collection and current epoch; `kind` — `file` (the whole file: office
+documents, whiteboards, restored copies) or `yjs` (a note's collaboration
+state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`.
 
-### POST /api/files/:fileId/snapshot-blob
-Multipart `file` upload of a complete typed Drive file blob. Companion to POST
-/versions; validates its exact file, collection and current epoch binding,
-uploads the opaque bytes to S3 with versioning enabled, then returns the S3
-metadata for the client to hand to /versions. Text, office and whiteboard
-snapshots use this one format.
-**Response:** `{storagePath, s3VersionId}`.
+The server measures the body and charges **that** size to the author's
+quota (a client's size claim is not read), stores it as an object of its own
+(`files/{id}/versions/{versionId}`), records the row, truncates
+`file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
+so its folder's) — one transaction; the object is removed again if the
+commit fails. Under the relay's per-file lock, `seqAtSnapshot` is clamped
+to the log's head before the row is stored; truncation happens only when
+`docKeyId` is the file's current document key, and raises the file's log
+floor to that position so the next frame continues after it. **Auth:** write access (`403` for a view-only recipient).
+
+**Response 201:** the version row, including `kind`. `413` over quota.
+
+Versions are kept by the file owner's `versionRetentionDays` (see
+`PATCH /api/user/me`): the last day whole, the last week one per hour, then
+one per day; the newest version and `keepForever` ones always.

@@ -397,7 +397,18 @@ impl Engine {
                 if (remote.revision, remote.source_device_id)
                     > (local.revision, local.source_device_id) =>
             {
-                crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?
+                let mut adopted =
+                    crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                // The account app changed the profile: it cannot tell
+                // contacts, so this device fans the key out and they refetch.
+                if remote.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
+                    && (adopted.display_name != local.display_name
+                        || adopted.avatar != local.avatar
+                        || adopted.about != local.about)
+                {
+                    adopted.broadcast_pending = true;
+                }
+                adopted
             }
             (Some(local), _) => local,
             (None, Some(remote)) => {
@@ -422,11 +433,13 @@ impl Engine {
             .ok_or_else(|| ChatError::Db("local profile disappeared after initialization".into()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_profile<R: Rng + CryptoRng>(
         &mut self,
         display_name: &str,
         avatar: Option<Vec<u8>>,
         avatar_content_type: Option<String>,
+        about: Option<String>,
         wrapping_key: &[u8; 32],
         sent_at: &str,
         rng: &mut R,
@@ -443,6 +456,7 @@ impl Engine {
                 display_name,
                 avatar,
                 avatar_content_type,
+                about,
                 source_device_id: self.session.device_id(),
                 wrapping_key,
                 canonical_recipient: &canonical_self,
@@ -1250,10 +1264,14 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
-        let is_typing = content.as_typing().is_some();
-        if is_typing && peer_user == self.session.user() {
+        if content.kind == kutup_chat_proto::content::kind::CALL && content.as_call().is_none() {
+            return Err(ChatError::Invalid("invalid call signal".into()));
+        }
+        // Typing and call signals: delivered live, never history or a transcript.
+        let ephemeral = content.is_ephemeral();
+        if ephemeral && peer_user == self.session.user() {
             return Err(ChatError::Invalid(
-                "Note to Self does not emit typing indicators".into(),
+                "Note to Self does not take typing indicators or calls".into(),
             ));
         }
         if content.as_disappearing_timer().is_some()
@@ -1268,19 +1286,33 @@ impl Engine {
                 "disappearing-message timers require an established conversation".into(),
             ));
         }
-        if let Some(start) = content.as_disappearing_expiry_start() {
-            if peer_user != self.session.user() {
-                return Err(ChatError::Invalid(
-                    "disappearing expiry starts are same-account controls".into(),
-                ));
-            }
-            self.session
-                .validate_disappearing_expiry_start(&start, crate::clock::unix_millis())
-                .await?;
-        } else if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START {
+        if ChatContent::is_local_only_kind(&content.kind) {
             return Err(ChatError::Invalid(
-                "disappearing expiry start is invalid".into(),
+                "local timeline notices are never sent".into(),
             ));
+        }
+        if ChatContent::is_account_control_kind(&content.kind) {
+            if peer_user != self.session.user() {
+                return Err(ChatError::Invalid(format!(
+                    "{} is a same-account control and goes only to Note to Self",
+                    content.kind
+                )));
+            }
+            if content.account_control_is_valid() != Some(true) {
+                return Err(ChatError::Invalid(format!("{} is invalid", content.kind)));
+            }
+            if let Some(start) = content.as_disappearing_expiry_start() {
+                self.session
+                    .validate_disappearing_expiry_start(&start, crate::clock::unix_millis())
+                    .await?;
+            }
+            if let Some(state) = content.as_conversation_state() {
+                if state.source_device_id != self.session.device_id() {
+                    return Err(ChatError::Invalid(
+                        "conversation state must name this device as its source".into(),
+                    ));
+                }
+            }
         }
         if content
             .message_id
@@ -1328,7 +1360,7 @@ impl Engine {
             )));
         }
         let mut content = content.clone();
-        if !is_typing && peer_user != self.session.user() && content.profile_key.is_none() {
+        if !ephemeral && peer_user != self.session.user() && content.profile_key.is_none() {
             if let Some(profile) = self.session.local_profile().await? {
                 // Signal uploads a rotated profile before allowing the new key
                 // into messages. A pending first upload/edit/rotation is not a
@@ -1371,7 +1403,7 @@ impl Engine {
                     .await?;
                 let certificate = self.issue_verified_sender_certificate().await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = if is_typing {
+                let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
                     self.fetch_verified_bundles(&user).await?
@@ -1394,7 +1426,7 @@ impl Engine {
             } else {
                 let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = if is_typing {
+                let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
                     self.fetch_verified_bundles(&user).await?
@@ -1465,8 +1497,18 @@ impl Engine {
             let is_typing = content
                 .as_ref()
                 .is_some_and(|content| content.as_typing().is_some());
-            if is_typing && unix_millis().saturating_sub(entry.created_at) > 10_000 {
-                self.session.discard_typing_outbox(&entry.send_id).await?;
+            let is_call = content
+                .as_ref()
+                .is_some_and(|content| content.as_call().is_some());
+            // Late typing is wrong, and a late call signal rings for a call
+            // long over: drop them instead of delivering.
+            let expired_after = if is_typing { 10_000 } else { 60_000 };
+            if (is_typing || is_call)
+                && unix_millis().saturating_sub(entry.created_at) > expired_after
+            {
+                self.session
+                    .discard_ephemeral_outbox(&entry.send_id)
+                    .await?;
                 continue;
             }
             match self
@@ -1474,7 +1516,7 @@ impl Engine {
                 .await
             {
                 Ok(summary) => summaries.push(summary),
-                Err(_) if is_receipt || is_typing => {}
+                Err(_) if is_receipt || is_typing || is_call => {}
                 Err(error) => return Err(error),
             }
         }
@@ -2223,6 +2265,7 @@ mod tests {
             display_name: "Alice".into(),
             avatar: None,
             avatar_content_type: None,
+            about: None,
             revision: 9,
             source_device_id: 1,
             pending_upload: None,

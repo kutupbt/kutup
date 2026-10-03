@@ -1,0 +1,267 @@
+/*
+ * Kutup design tokens.
+ *
+ * Structure from the asec system: a paper content plane with white cards
+ * (raised without shadows), a "chrome" sidebar that follows the theme (white
+ * in light, ink in dark, as Signal Desktop and Google Drive do), and one
+ * signature element — the 3px spine (components/spine.tsx). The "stage"
+ * (full-screen calls) stays dark in both themes, as call screens do.
+ *
+ * Colour from Kutup's mark, the three diamonds (#0369a1 / #38bdf8 / #7dd3fc):
+ *
+ * - Light primary is the mark's deep diamond, #0369a1. White on it is 5.9:1,
+ *   so a primary button's label passes AA at body size. The mark's bright
+ *   #38bdf8 would be 2.1:1 there — it is reserved for dark surfaces.
+ * - Dark primary is the bright diamond, #38bdf8, with an ink label (8.8:1).
+ *   Unlike a dark navy on carbon it draws its own edge, so a primary button
+ *   still reads as a button in dark mode.
+ * - The chrome's active marker is the primary of its theme: #0369a1 on the
+ *   white light sidebar (5.9:1), #38bdf8 on the ink dark one (8.7:1).
+ *
+ * Raw Tailwind palette classes are banned by lint; every colour a component
+ * needs is a token here.
+ */
+
+@import 'tailwindcss';
+
+/* Scan the shared components too: apps reach this package through
+   node_modules, which Tailwind's automatic detection skips. */
+@source '../';
+/* The shared map component (@kutup/map) styles its own elements. */
+@source '../../../map/src';
+@source '../../../drive-ui/src';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+
+  /* ── base ─────────────────────────────────────────────────────────── */
+  --background: oklch(0.984 0.003 240);
+  --foreground: oklch(0.2 0.03 258);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.03 258);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.03 258);
+  --primary: #0369a1;
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.962 0.006 240);
+  --secondary-foreground: oklch(0.25 0.03 255);
+  --muted: oklch(0.962 0.006 240);
+  --muted-foreground: oklch(0.5 0.02 250);
+  --accent: oklch(0.955 0.022 232);
+  --accent-foreground: oklch(0.4 0.1 240);
+  --destructive: oklch(0.56 0.21 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.91 0.008 240);
+  --input: oklch(0.88 0.01 240);
+  --ring: #0284c7;
+  --radius: 0.625rem;
+
+  /* ── chrome: sidebar, app rail — white here, ink in dark ──────────── */
+  --chrome: #ffffff;
+  --chrome-foreground: #1b2433;
+  --chrome-muted: #566479;
+  --chrome-accent: #e8f2fa;
+  --chrome-border: oklch(0.91 0.008 240);
+  --chrome-active: #0369a1;
+
+  /* ── stage: full-screen calls — dark in both themes ──────────────── */
+  --stage: #0b1220;
+  --stage-foreground: #e7eefb;
+  --stage-muted: #93a4c0;
+  --stage-accent: #16223a;
+  --stage-active: #38bdf8;
+
+  /* ── status ───────────────────────────────────────────────────────── */
+  /*
+   * `ok` doubles as Kutup's "verified / protected" colour (a verified chat
+   * safety number, an end-to-end protected state). It is used sparingly: a
+   * security badge on every surface stops meaning anything.
+   */
+  --status-ok: oklch(0.52 0.12 170);
+  --status-ok-foreground: oklch(0.99 0 0);
+  --status-warn: oklch(0.72 0.15 75);
+  --status-warn-foreground: oklch(0.18 0.02 60);
+  --status-danger: oklch(0.56 0.21 27);
+  --status-danger-foreground: oklch(0.99 0 0);
+  --status-neutral: oklch(0.7 0.02 250);
+  --status-neutral-foreground: oklch(0.18 0.02 250);
+
+  /* ── file kinds ───────────────────────────────────────────────────── */
+  /*
+   * A file's type as a colour, in the conventions people already read at a
+   * glance: documents blue, spreadsheets green, presentations orange, PDFs
+   * red; whiteboards in Excalidraw's own purple (#6965db, #a8a5ff dark).
+   * Drawn as a filled tile with a `--kind-glyph` symbol on it (white
+   * here, ink in dark mode, like the primary button). Folders default to
+   * neutral, so any colour on a folder is one its owner chose.
+   * tokens.test.ts holds every pair to 4.5:1.
+   */
+  --kind-glyph: #ffffff;
+  --kind-folder: #5f6b7a;
+  --kind-note: #0f766e;
+  --kind-document: #2563eb;
+  --kind-spreadsheet: #15803d;
+  --kind-presentation: #c2410c;
+  --kind-whiteboard: #6965db;
+  --kind-map: #4d7c0f;
+  --kind-pdf: #dc2626;
+  --kind-image: #a21caf;
+  --kind-video: #be185d;
+  --kind-audio: #0e7490;
+  --kind-code: #475569;
+  --kind-archive: #a16207;
+  --kind-other: #64748b;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --chrome: #0b1220;
+  --chrome-foreground: #e7eefb;
+  --chrome-muted: #93a4c0;
+  --chrome-accent: #16223a;
+  --chrome-border: oklch(1 0 0 / 9%);
+  --chrome-active: #38bdf8;
+
+  --background: oklch(0.155 0.014 255);
+  --foreground: oklch(0.96 0.008 240);
+  --card: oklch(0.195 0.016 255);
+  --card-foreground: oklch(0.96 0.008 240);
+  --popover: oklch(0.21 0.017 255);
+  --popover-foreground: oklch(0.96 0.008 240);
+  --primary: #38bdf8;
+  --primary-foreground: #04121f;
+  --secondary: oklch(0.26 0.018 255);
+  --secondary-foreground: oklch(0.96 0.008 240);
+  --muted: oklch(0.26 0.018 255);
+  --muted-foreground: oklch(0.72 0.02 245);
+  --accent: oklch(0.28 0.04 240);
+  --accent-foreground: oklch(0.9 0.06 225);
+  --destructive: oklch(0.7 0.19 25);
+  --destructive-foreground: oklch(0.14 0.01 25);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: #38bdf8;
+
+  /* Lightened, not reused: light-mode hues go muddy on near-black. */
+  --status-ok: oklch(0.74 0.12 170);
+  --status-ok-foreground: oklch(0.14 0.01 170);
+  --status-warn: oklch(0.82 0.15 85);
+  --status-warn-foreground: oklch(0.14 0.01 85);
+  --status-danger: oklch(0.7 0.19 25);
+  --status-danger-foreground: oklch(0.14 0.01 25);
+  --status-neutral: oklch(0.45 0.02 250);
+  --status-neutral-foreground: oklch(0.97 0 0);
+
+  /* Brighter tiles with an ink glyph: saturated tiles go muddy on near-black. */
+  --kind-glyph: #0b1220;
+  --kind-folder: #9aa7b8;
+  --kind-note: #2dd4bf;
+  --kind-document: #60a5fa;
+  --kind-spreadsheet: #4ade80;
+  --kind-presentation: #fb923c;
+  --kind-whiteboard: #a8a5ff;
+  --kind-map: #a3e635;
+  --kind-pdf: #f87171;
+  --kind-image: #e879f9;
+  --kind-video: #f472b6;
+  --kind-audio: #22d3ee;
+  --kind-code: #cbd5e1;
+  --kind-archive: #fbbf24;
+  --kind-other: #94a3b8;
+}
+
+@theme inline {
+  /*
+   * One superfamily, three roles (loaded in `styles/fonts.ts`): Condensed 600
+   * for titles only; Sans for UI and prose; Mono marks what the system asserts
+   * (IDs, fingerprints, sizes in detail views, absolute timestamps).
+   */
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --color-chrome: var(--chrome);
+  --color-chrome-foreground: var(--chrome-foreground);
+  --color-chrome-muted: var(--chrome-muted);
+  --color-chrome-accent: var(--chrome-accent);
+  --color-chrome-border: var(--chrome-border);
+  --color-chrome-active: var(--chrome-active);
+
+  --color-stage: var(--stage);
+  --color-stage-foreground: var(--stage-foreground);
+  --color-stage-muted: var(--stage-muted);
+  --color-stage-accent: var(--stage-accent);
+  --color-stage-active: var(--stage-active);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-status-ok: var(--status-ok);
+  --color-status-ok-foreground: var(--status-ok-foreground);
+  --color-status-warn: var(--status-warn);
+  --color-status-warn-foreground: var(--status-warn-foreground);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-foreground: var(--status-danger-foreground);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-foreground: var(--status-neutral-foreground);
+
+  --color-kind-glyph: var(--kind-glyph);
+  --color-kind-folder: var(--kind-folder);
+  --color-kind-note: var(--kind-note);
+  --color-kind-document: var(--kind-document);
+  --color-kind-spreadsheet: var(--kind-spreadsheet);
+  --color-kind-presentation: var(--kind-presentation);
+  --color-kind-whiteboard: var(--kind-whiteboard);
+  --color-kind-map: var(--kind-map);
+  --color-kind-pdf: var(--kind-pdf);
+  --color-kind-image: var(--kind-image);
+  --color-kind-video: var(--kind-video);
+  --color-kind-audio: var(--kind-audio);
+  --color-kind-code: var(--kind-code);
+  --color-kind-archive: var(--kind-archive);
+  --color-kind-other: var(--kind-other);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    /* Columns of sizes and dates must not jitter. */
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* 600 is this product's bold; 700 is not loaded (see fonts.ts). */
+  b,
+  strong {
+    font-weight: 600;
+  }
+}

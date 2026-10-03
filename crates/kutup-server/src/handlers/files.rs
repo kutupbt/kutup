@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -25,8 +25,11 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::models::{FileRow, MessageResponse, UploadResult};
+use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
+
+/// The largest non-file form field: ids and sealed metadata / key envelopes.
+pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
@@ -47,8 +50,24 @@ pub(crate) fn validate_envelope(value: &str, expected: DriveEnvelopeContextV1) -
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
-    if STANDARD.encode(&bytes) != value || drive_envelope::validate(&bytes, expected).is_err() {
+    if STANDARD.encode(&bytes) != value {
         return Err(AppError::bad_request("invalid Drive envelope"));
+    }
+    if drive_envelope::validate(&bytes, expected).is_err() {
+        // Well-formed but sealed at an older epoch: the folder's key rotated
+        // since the client read it (docs/plans/drive-share-revocation.md).
+        // Reload and retry, rather than a malformed request.
+        let stale = drive_envelope::inspect(&bytes).is_ok_and(|header| {
+            let mut context = header.context;
+            let sealed_epoch = context.epoch;
+            context.epoch = expected.epoch;
+            sealed_epoch < expected.epoch && context == expected
+        });
+        return Err(if stale {
+            AppError::conflict("folder key changed")
+        } else {
+            AppError::bad_request("invalid Drive envelope")
+        });
     }
     Ok(())
 }
@@ -103,46 +122,7 @@ pub async fn list_files(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    type Row = (
-        Uuid,
-        Uuid,
-        Uuid,
-        String,
-        String,
-        i32,
-        i64,
-        i64,
-        time::OffsetDateTime,
-        time::OffsetDateTime,
-    );
-    let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT id, collection_id, uploader_user_id,
-                  metadata_envelope, file_key_envelope, key_epoch, metadata_revision,
-                  encrypted_size_bytes, created_at, updated_at
-           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
-           ORDER BY created_at DESC"#,
-    )
-    .bind(coll_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let out: Vec<FileRow> = rows
-        .into_iter()
-        .map(
-            |(id, cid, uid, metadata, file_key, epoch, revision, size, created, updated)| FileRow {
-                id: id.to_string(),
-                collection_id: cid.to_string(),
-                uploader_user_id: uid.to_string(),
-                metadata_envelope: metadata,
-                file_key_envelope: file_key,
-                key_epoch: epoch,
-                metadata_revision: revision,
-                encrypted_size_bytes: size,
-                created_at: created,
-                updated_at: updated,
-            },
-        )
-        .collect();
+    let out = file_rows(&state.pool, "f.collection_id = $1", coll_id, user_id).await?;
     Ok(Json(out).into_response())
 }
 
@@ -192,7 +172,20 @@ pub async fn upload(
             }
             tmp = Some((file, size));
         } else {
-            let val = field.text().await.unwrap_or_default();
+            // The other fields are ids and small envelopes.
+            let mut val = Vec::new();
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|_| AppError::bad_request("invalid multipart form"))?
+            {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 8 {
+                    return Err(AppError::bad_request("form field too large"));
+                }
+                val.extend_from_slice(&chunk);
+            }
+            let val = String::from_utf8(val)
+                .map_err(|_| AppError::bad_request("invalid multipart form"))?;
             fields.insert(name, val);
         }
     }
@@ -226,80 +219,56 @@ pub async fn upload(
         return Err(AppError::forbidden("forbidden"));
     };
     let is_owner = owner_user_id == user_id;
-    let mut share_quota: Option<i64> = None;
     if !is_owner {
-        let row: Option<(bool, Option<i64>)> = sqlx::query_as(
-            "SELECT can_upload, upload_quota_bytes FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        let can_upload: Option<bool> = sqlx::query_scalar(
+            "SELECT can_upload FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
         )
         .bind(coll_id)
         .bind(user_id)
         .fetch_optional(&state.pool)
         .await?;
-        match row {
-            Some((true, quota)) => share_quota = quota,
-            _ => return Err(AppError::forbidden("forbidden")),
+        if can_upload != Some(true) {
+            return Err(AppError::forbidden("forbidden"));
         }
     }
 
     let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    // A new file's key is generation 1, wrapped at the folder's epoch.
     validate_envelope(
         &file_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            epoch,
-            1,
-            &file_id_str,
-            &coll_id_str,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_key(&file_id_str, &coll_id_str, epoch, 1)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     validate_envelope(
         &metadata_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            epoch,
-            1,
-            &file_id_str,
-            &coll_id_str,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_metadata(&file_id_str, 1, 1)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    let blob_context = DriveFileBlobContextV1::new(&file_id_str, &coll_id_str, epoch)
+    let blob_context = DriveFileBlobContextV1::new(&file_id_str, 1)
         .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
     validate_file_blob_file(&tmp_file, blob_context)?;
     let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
 
-    // Atomic quota check + reserve under FOR UPDATE.
+    // Claim the id, then check room — both held until commit, so neither a
+    // retry with the same id nor a concurrent write can slip past.
     let mut tx = state.pool.begin().await?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
+    if !crate::drive_writes::claim_file_id(&mut tx, file_id, None).await? {
+        return Err(AppError::conflict("file id already in use"));
+    }
+    // The folder must still be live, at the epoch the envelopes were bound
+    // to, until the file row is in (a key rotation updates this row).
+    let live_epoch: Option<i32> = sqlx::query_scalar(
+        "SELECT key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
     )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
+    .bind(coll_id)
+    .fetch_optional(&mut *tx)
     .await?;
-    if used + file_size > quota {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
+    if live_epoch != Some(key_epoch) {
+        return Err(AppError::conflict("folder changed during upload"));
     }
-    if !is_owner {
-        if let Some(limit) = share_quota {
-            let used_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
-            )
-            .bind(coll_id)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if used_share + file_size > limit {
-                return Err(AppError::new(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "share upload quota exceeded",
-                ));
-            }
-        }
-    }
+    crate::drive_writes::check_room(&mut tx, user_id, coll_id, file_size, None)
+        .await?
+        .into_result()?;
 
     // Stream the temp file to S3 (still holding the row lock, like Go).
     let body = ByteStream::from_path(tmp_file.path())
@@ -317,9 +286,9 @@ pub async fn upload(
     let insert = sqlx::query(
         r#"INSERT INTO files (id, collection_id, uploader_user_id,
                               metadata_envelope, file_key_envelope,
-                              key_epoch, metadata_revision,
-                              storage_path, encrypted_size_bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)"#,
+                              key_epoch, key_generation, metadata_revision,
+                              storage_path, encrypted_size_bytes, original_key_generation)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -379,22 +348,60 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<(Uuid, String, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, storage_path, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(file_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((coll_id, storage_path, _uploader)) = row else {
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
+            .bind(file_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if exists.is_none() {
         return Err(AppError::not_found("not found"));
-    };
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    }
+    // The folder's people, or someone the file itself is shared with.
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let (body, size) = state
-        .storage
-        .get_object(&storage_path)
+    // What the file holds now: its latest whole-file version, else the upload.
+    let content = crate::file_content::current_content(&state.pool, file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (body, size) = content
+        .open(&state.storage)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
+    Ok(octet_stream_response(body, size, &[]))
+}
+
+/// `GET /api/files/{id}/original` — the original upload, while it is kept:
+/// the base of an office editing session that began before the file's first
+/// saved version.
+#[utoipa::path(
+    get,
+    path = "/api/files/{id}/original",
+    tag = "files",
+    operation_id = "downloadFileOriginal",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses(
+        (status = 200, description = "The encrypted original upload (application/octet-stream)"),
+        (status = 404, description = "No such file, or its original was pruned")
+    )
+)]
+pub async fn download_original(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+        return Err(AppError::not_found("not found"));
+    }
+    let content = crate::file_content::original_content(&state.pool, file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (body, size) = content
+        .open(&state.storage)
         .await
         .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(body, size, &[]))
@@ -427,17 +434,23 @@ pub async fn update_metadata(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
-        r#"SELECT collection_id, uploader_user_id, key_epoch, metadata_revision
+        r#"SELECT collection_id, uploader_user_id, key_generation, metadata_revision
            FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((coll_id, uploader_id, key_epoch, current_revision)) = row else {
+    let Some((coll_id, uploader_id, key_generation, current_revision)) = row else {
         return Err(AppError::not_found("not found"));
     };
-    require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
+    // The folder's owner, an uploader who may delete, or someone the file
+    // itself is shared with for editing.
+    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await {
+        require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
+    }
 
+    // A new name is new content: never under a key the folder has left.
+    crate::drive_writes::lock_file_key(&mut tx, file_id, key_generation).await?;
     let expected_revision = current_revision
         .checked_add(1)
         .ok_or_else(|| AppError::conflict("metadata revision exhausted"))?;
@@ -446,19 +459,14 @@ pub async fn update_metadata(
             "metadata revision must advance exactly once",
         ));
     }
-    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    let generation =
+        u32::try_from(key_generation).map_err(|_| AppError::conflict("invalid key generation"))?;
     let revision = u64::try_from(req.metadata_revision)
         .map_err(|_| AppError::bad_request("invalid metadata revision"))?;
     validate_envelope(
         &req.metadata_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            epoch,
-            revision,
-            &file_id.to_string(),
-            &coll_id.to_string(),
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_metadata(&file_id.to_string(), generation, revision)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
     sqlx::query(
@@ -533,16 +541,8 @@ pub async fn claim_seed(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-
-    let coll_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(coll_id) = coll_id else {
-        return Err(AppError::not_found("not found"));
-    };
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    // Seeding writes the document's first state: an editor's job.
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -590,4 +590,104 @@ async fn require_owner_or_uploader_with_delete(
     } else {
         Err(AppError::forbidden("forbidden"))
     }
+}
+
+/// File records as the folder listing returns them, for the files matching
+/// `filter` (an SQL condition on `f` with one UUID parameter, `$1`): a
+/// folder's files, or the files shared with someone by themselves.
+/// The files matching `filter` (on `f`, with `$1` = `id`), as `viewer` sees
+/// them.
+pub(crate) async fn file_rows(
+    pool: &sqlx::PgPool,
+    filter: &str,
+    id: Uuid,
+    viewer: Uuid,
+) -> Result<Vec<FileRow>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        collection_id: Uuid,
+        uploader_user_id: Uuid,
+        metadata_envelope: String,
+        file_key_envelope: String,
+        key_epoch: i32,
+        key_generation: i32,
+        metadata_revision: i64,
+        encrypted_size_bytes: i64,
+        created_at: time::OffsetDateTime,
+        updated_at: time::OffsetDateTime,
+        thumb_sm: Option<time::OffsetDateTime>,
+        thumb_lg: Option<time::OffsetDateTime>,
+        thumb_sm_generation: Option<i32>,
+        thumb_lg_generation: Option<i32>,
+        thumb_stale: bool,
+        original_key_generation: i32,
+        content_key_generation: i32,
+        key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
+        shared: bool,
+    }
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        r#"SELECT f.id, f.collection_id, f.uploader_user_id,
+                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
+                  f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
+                  f.original_key_generation,
+                  {} AS key_history, {} AS content_key_generation,
+                  sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                  sm.key_generation AS thumb_sm_generation,
+                  lg.key_generation AS thumb_lg_generation,
+                  -- Drawn from something other than the latest version (or,
+                  -- with no versions, from a version at all).
+                  EXISTS (
+                    SELECT 1 FROM file_thumbnails t
+                    WHERE t.file_id = f.id
+                      AND t.source_version IS DISTINCT FROM (
+                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
+                        ORDER BY v.created_at DESC LIMIT 1)
+                  ) AS thumb_stale,
+                  -- Only the owner learns whom a file is shared with.
+                  EXISTS (
+                    SELECT 1 FROM file_shares fs JOIN collections oc ON oc.id = f.collection_id
+                    WHERE fs.file_id = f.id AND oc.owner_user_id = $2
+                  ) AS shared
+           FROM files f
+           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           WHERE {} AND f.deleted_at IS NULL
+           ORDER BY f.created_at DESC"#,
+        crate::models::FILE_KEY_HISTORY_SQL,
+        crate::models::CONTENT_KEY_GENERATION_SQL,
+        filter
+    ))
+    .bind(id)
+    .bind(viewer)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| FileRow {
+            id: r.id.to_string(),
+            collection_id: r.collection_id.to_string(),
+            uploader_user_id: r.uploader_user_id.to_string(),
+            metadata_envelope: r.metadata_envelope,
+            file_key_envelope: r.file_key_envelope,
+            key_epoch: r.key_epoch,
+            key_generation: r.key_generation,
+            metadata_revision: r.metadata_revision,
+            encrypted_size_bytes: r.encrypted_size_bytes,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            thumbnails: FileThumbnails {
+                sm: r.thumb_sm,
+                lg: r.thumb_lg,
+                sm_key_generation: r.thumb_sm_generation,
+                lg_key_generation: r.thumb_lg_generation,
+            },
+            thumbnail_stale: r.thumb_stale,
+            original_key_generation: r.original_key_generation,
+            content_key_generation: r.content_key_generation,
+            key_history: r.key_history.0,
+            shared: r.shared,
+        })
+        .collect())
 }

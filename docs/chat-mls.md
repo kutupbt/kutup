@@ -7,11 +7,13 @@ remains a later suite upgrade after the relevant IETF work and interoperable
 library support stabilize.
 
 Private MLS groups are **advertised and enabled** when the server has a
-federation-identity-authenticated MLS ordering policy and the administrator has
-publicly enabled Chat in the shared federation control plane. The same
-fail-closed gate drives `/api/auth/settings` and the administrative MLS status;
-disabling Chat withdraws the browser capability without deleting durable group
-state. Note to Self and 1:1 Chat use libsignal and have no MLS fallback.
+federation-identity-authenticated MLS ordering policy. A server with no
+federation or MLS settings has one: it makes its own identity and control key
+(kept in `server_generated_keys`) and publishes the standard v1 policy, so
+groups among its own accounts work out of the box. The same fail-closed gate
+drives `/api/auth/settings` and the administrative MLS status. Federation
+admission does not withdraw groups: it decides which other servers members may
+come from, and the signed transport enforces it on every remote call. Note to Self and 1:1 Chat use libsignal and have no MLS fallback.
 
 Protocol types, durable storage, authenticated federation routes, OpenMLS
 client state, WASM bindings, anonymous delivery, authority catch-up,
@@ -142,9 +144,12 @@ Every incarnation begins with two canonical, sequence-one policies carried
 only in the mandatory MLS GroupContext extension:
 
 - `MlsGroupAuthorizationPolicyV1` selects whether all members or only
-  administrators may send user-visible application messages.
+  administrators may send user-visible application messages, and whether all
+  members or only administrators may change the group information
+  (`groupInfoEditors`; omitted while it is the default, administrators, so
+  earlier policies keep their canonical bytes).
 - `MlsGroupCryptographicPolicyV1` fixes suite `0x0003`, private-control
-  extension `0xff4b`, anonymous delivery, 1024-byte padding, two retained past
+  extension `0xff4b`, anonymous delivery, 160-byte padding steps, two retained past
   epochs, and a maximum canonical user-application plaintext size. Typed MLS
   governance controls are exempt from that configurable user-message ceiling
   so a tightened policy cannot deadlock recovery or reconfiguration; they
@@ -158,7 +163,8 @@ only the action class, ciphertext digest, delivery commitment, and
 pseudonymous owner certificate.
 
 V1 authorization policy may switch between all-member and
-administrator-only sending. Group-control approval messages remain permitted
+administrator-only sending or group-information editing; a change must alter
+at least one of them. Group-control approval messages remain permitted
 so governance cannot deadlock. The shared Rust engine enforces the sender role
 on encryption and after authenticating an inbound MLS sender leaf. The
 cryptographic policy may only lower the user-application plaintext maximum
@@ -173,6 +179,31 @@ the exact pending operation. Public history replay counts each typed policy
 action and requires the private policy sequences to match, while recipients
 independently verify that only the selected policy changed and that a
 cryptographic change tightened the previous pin.
+
+### Group information
+
+The group's name (1–32 characters, no surrounding spaces), optional
+description (≤ 480 characters) and optional picture (JPEG, PNG or WebP,
+≤ 48 KiB; clients re-encode to 256×256 WebP) live in `groupInfo` of the
+private control state, as Signal keeps them in its encrypted group state. It
+may be set at genesis (sequence one) and is otherwise changed only by a
+`GroupInfoChange` (action 11): one unchanged-roster Commit that carries the
+next information with the next sequence and must change its content. Every
+other action must leave it byte-for-byte unchanged, and recovery carries it
+into the new incarnation with its sequence reset to one.
+
+Administrators may always send it; members may when the authorization policy
+says so. Because the policy is private, the ordering server accepts action 11
+from any active member and every member's engine enforces the role when it
+applies the ordered Commit (the sender leaf is authenticated first). Ordering
+authorities see that a group-information change happened, when, and from
+which pseudonymous proposer, never its content.
+
+The group information also carries the group link while it is on
+(`inviteLink`: secret, host, whether requests need approval). Changing it
+takes an administrator whatever the editing policy, checked the same way
+when the ordered Commit is applied; see
+[`chat-invite-links.md`](chat-invite-links.md).
 
 ### Conversation closure
 
@@ -453,6 +484,42 @@ control pin, and stores the mailbox id/cursor/send id receipt atomically.
 Only afterward may the browser acknowledge the row. A crash replay reads that
 receipt and acknowledges without attempting to process the old Commit again.
 
+### Leaving
+
+An MLS member cannot commit its own removal, so leaving takes two steps, as
+Signal does with its server-held group state:
+
+1. The member sends a `leaveRequest` group control (conversation,
+   incarnation, time) to the group, authenticated by its MLS sender leaf.
+   Its devices mark the record `left`: the group is read-only there, and what
+   arrives until the removal is decrypted (the epoch must advance) but not
+   kept. The account's other devices do the same when they receive the
+   request from their own account.
+2. Every other member records the account in `departingMembers`. The first
+   administrator by canonical address among those staying commits an
+   ordinary removal; any administrator can also remove the member by hand.
+   The removal's timeline notice then reads "left" rather than "removed".
+
+The engine refuses a leave, with a reason the app shows, for an owner (who
+must hand ownership over first: removing an owner needs the owners'
+approval), for the last administrator of a group with other members (who
+picks a successor first; the app then makes that member an administrator
+and leaves), and for the only member (who closes the group instead).
+
+### Timeline notices
+
+When the engine applies an ordered Commit (its own after finalization, or an
+inbound one after authentication), it compares the pinned record before and
+after and writes one `groupUpdate` history row naming the Commit's sender
+and each visible change: name, description, picture, members added, removed
+or left, administrators and owners, the two sender and editor rules, and
+closure. The row's id derives from the block, so a replay writes nothing new.
+`groupUpdate` is a local-only content kind: every send path refuses it and
+every receive path (Direct, sync transcript, MLS application) rejects it, so a
+member cannot forge a notice. Device syncs and authority changes write no
+notice. "You left the group." is written when leaving, since the removal
+Commit never reaches the member it removes.
+
 ### Linked devices
 
 One account may occupy multiple distinct MLS leaves. Kutup never copies an
@@ -460,7 +527,9 @@ OpenMLS provider snapshot, group secret, or leaf private key into a newly
 linked installation. The new installation independently creates its MLS
 credential and KeyPackage, publishes their binding in the next signed device
 manifest, and waits for an already-enrolled device to author one ordered
-`DeviceSync` transition.
+`DeviceSync` transition. An enrolled browser checks the signed manifest when it opens,
+reconnects or regains focus, and every two minutes while open, so a new
+device joins the account's groups within minutes.
 
 `DeviceSync` is a typed membership action that may be initiated by any active
 member only for that member's own canonical account. Its private transition
@@ -509,7 +578,8 @@ Anonymous established delivery uses:
   `DHKEM(X25519, HKDF-SHA256)/HKDF-SHA256/ChaCha20-Poly1305`;
 - a fresh encapsulation per destination device;
 - authenticated recipient/device/send-ID/suite AAD;
-- padding inside HPKE to 1024-byte buckets.
+- padding inside HPKE to multiples of 160 bytes (Signal's step; the policy's
+  `paddingBlockBytes`).
 
 The destination transaction and anonymous mailbox contain recipient, send ID,
 and opaque per-device envelopes, but no sender, sender device, conversation,

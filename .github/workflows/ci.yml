@@ -128,7 +128,7 @@ jobs:
       - name: Verify generated crypto WASM vectors
         run: pnpm -C frontend run test:crypto-wasm
       - name: Build production web app
-        run: pnpm -C frontend run build:web
+        run: pnpm -C frontend run build
 
   chat-backup-integration:
     name: Chat backup lifecycle (Postgres and SeaweedFS)
@@ -160,6 +160,13 @@ jobs:
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
       APP_ENV: test
+      # One app per hostname; *.localhost resolves to this machine.
+      KUTUP_ACCOUNT_URL: https://account.localhost:38443
+      KUTUP_DRIVE_URL: https://drive.localhost:38443
+      KUTUP_CHAT_URL: https://chat.localhost:38443
+      KUTUP_OFFICE_URL: https://office.localhost:38443
+      KUTUP_MAPS_URL: https://maps.localhost:38443
+      KUTUP_PHOTOS_URL: https://photos.localhost:38443
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -179,7 +186,7 @@ jobs:
             -keyout nginx/certs/privkey.pem \
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
-            -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:maps.localhost,DNS:photos.localhost,IP:127.0.0.1
       - name: Start the single-server stack
         run: docker compose up --detach --build --wait
       - name: Wait for the browser application route
@@ -187,9 +194,13 @@ jobs:
           curl --fail --silent --show-error --insecure \
             --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
             https://localhost:38443/api/auth/settings >/dev/null
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            --resolve account.localhost:38443:127.0.0.1 \
+            https://account.localhost:38443/register >/dev/null
       - name: Run clean-browser recovery
         working-directory: tests/e2e
-        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts --project=chromium
+        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts specs/36-chat-local-groups.spec.ts --project=chromium
       - name: Collect sanitized backup diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

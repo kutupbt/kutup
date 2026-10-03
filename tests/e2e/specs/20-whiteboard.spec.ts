@@ -1,43 +1,45 @@
-import { test, expect } from '@playwright/test'
-import { signInOrBootstrap } from '../fixtures/auth'
+import { expect, test } from '@playwright/test'
+import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { addRectangle, createWhiteboard, elementCount, historyPanel, saveState, whiteboardReady } from '../fixtures/whiteboard'
 
-// Whiteboard MVP: create from New menu → editor mounts → save persists
-// across reload. Excalidraw is a React canvas (no nested iframe), so the
-// scene is reachable via window.* probes if the API was exposed; we
-// simplify by asserting the editor's canvas element exists post-reload.
+const PASSWORD = 'Deneme123*WhiteboardPassword'
 
-test('whiteboard — create, save, reload persists', async ({ context }) => {
-  const page = await signInOrBootstrap(context)
+test('a saved whiteboard keeps its version and survives a reload', async ({ browser }) => {
+  const context = await browser.newContext()
+  await registerAccount(context, newAccount('wboard', PASSWORD))
+  const page = await openDrive(context)
+  await createWhiteboard(page)
+  await addRectangle(page)
+  await saveState(page)
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await expect(historyPanel(page).getByRole('button', { name: 'Restore', exact: true }).first()).toBeVisible({ timeout: 30_000 })
 
-  const tabAPromise = context.waitForEvent('page', { timeout: 30_000 })
-  await page.locator('button:has-text("New")').first().click()
-  await page.waitForTimeout(500)
-  await page.locator('[role=menuitem]:has-text("Whiteboard")').first().click()
-  const editor = await tabAPromise
-  await editor.waitForLoadState('domcontentloaded')
+  await page.reload()
+  await whiteboardReady(page)
+  await expect.poll(() => elementCount(page), { timeout: 30_000 }).toBe(1)
+  await context.close()
+})
 
-  // Excalidraw mount + lazy chunk + initial render
-  await editor.waitForTimeout(8_000)
+test('restoring an older version brings back that scene, not the latest', async ({ browser }) => {
+  test.slow()
+  const context = await browser.newContext()
+  await registerAccount(context, newAccount('wbrestore', PASSWORD))
+  const page = await openDrive(context)
+  await createWhiteboard(page)
+  await saveState(page)
+  await addRectangle(page)
+  await expect.poll(() => elementCount(page)).toBe(1)
+  await saveState(page)
 
-  // Excalidraw renders a <canvas> (potentially multiple). Presence is
-  // enough to confirm the editor mounted.
-  const canvasCount = await editor.locator('canvas').count()
-  expect(canvasCount, 'whiteboard canvas mounted').toBeGreaterThan(0)
-
-  // Click Save to create the first version.
-  await editor.locator('header button[title="Save current state (⌘/Ctrl+S)"]').click()
-  await editor.waitForTimeout(3_000)
-
-  // Open History → at least one row
-  await editor.locator('header button:has-text("History")').click()
-  await editor.waitForTimeout(2_000)
-  await expect(editor.locator('aside h2:has-text("Version history")')).toBeVisible()
-  const restoreBtns = editor.locator('aside button:has-text("Restore")')
-  expect(await restoreBtns.count(), 'at least 1 version row').toBeGreaterThanOrEqual(1)
-
-  // Reload — editor should remount and pick up the saved (latest) version.
-  await editor.reload()
-  await editor.waitForLoadState('domcontentloaded')
-  await editor.waitForTimeout(8_000)
-  expect(await editor.locator('canvas').count(), 'whiteboard canvas after reload').toBeGreaterThan(0)
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  const restore = historyPanel(page).getByRole('button', { name: 'Restore', exact: true })
+  await expect.poll(() => restore.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
+  await restore.last().click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Restore only' }).click()
+  // The empty first version, not overwritten by replaying later changes.
+  await expect.poll(() => elementCount(page).catch(() => -1), { timeout: 30_000 }).toBe(0)
+  await page.reload()
+  await whiteboardReady(page)
+  await expect.poll(() => elementCount(page), { timeout: 30_000 }).toBe(0)
+  await context.close()
 })

@@ -296,6 +296,9 @@ impl MlsClient {
             genesis_cryptographic_policy: private_control.genesis_cryptographic_policy.clone(),
             current_authorization_policy: private_control.authorization_policy.clone(),
             current_cryptographic_policy: private_control.cryptographic_policy.clone(),
+            current_group_info: private_control.group_info.clone(),
+            left: false,
+            departing_members: BTreeSet::new(),
         };
         let receipt = ProcessedMlsControlEnvelope {
             envelope_id: envelope.envelope_id,
@@ -476,13 +479,17 @@ impl MlsClient {
         let sender_identity = std::str::from_utf8(processed.credential().serialized_content())
             .map_err(|_| ChatError::Trust("MLS Commit sender identity is not UTF-8".into()))?;
         let (sender_address, _) = parse_device_credential_identity(sender_identity)?;
+        // Which role the sender needs depends on the ordered block's action
+        // (a member may sync their own devices, or change the group's
+        // information when its policy allows); the apply step checks that
+        // against the block. Here the sender must at least be a member.
         if !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == sender_address && member.is_admin)
+            .any(|member| member.address.canonical() == sender_address)
         {
             return Err(ChatError::Trust(
-                "MLS roster Commit sender is not an administrator in the pinned roster".into(),
+                "MLS roster Commit sender is not a member of the pinned roster".into(),
             ));
         }
         let staged = match processed.into_content() {

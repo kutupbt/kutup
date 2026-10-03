@@ -1,100 +1,69 @@
 // E2E coverage for the tus.io streaming upload path.
 //
-// The unit tests (frontend/src/crypto/streamEncryptor.test.ts) prove the
-// wire format. The MSW integration test we wanted to write hit a
-// jsdom-vs-libsodium realm collision, so the protocol-level coverage
-// (POST + N PATCHes + finaliser + DB row) lives here, where a real
-// Chromium loads the production bundle against the running docker
-// stack on https://localhost:38443.
+// Unit tests prove the wire format; this spec proves the protocol against a
+// real server: a real Chromium loads the production Drive bundle, encrypts a
+// multi-chunk file and sends it as one tus POST plus PATCHes.
 //
 // Confidence we want from this spec:
-//   1. A multi-chunk upload (≥ 2× 5 MB) completes — exercises the
-//      PATCH loop, not just the single-shot path.
-//   2. The file appears in the Drive list with the original filename
-//      and a plausible size readout.
-//   3. The previous in-memory `encryptStream(buffer)` path is gone
-//      (proxy: confirm the /api/uploads POST happened, /api/files/
-//      upload didn't).
+//   1. A multi-chunk upload (≥ 2× 5 MB) completes — exercises the PATCH
+//      loop, not just the single-shot path.
+//   2. The file appears in the Drive list under its original name.
+//   3. The bounded-memory multipart fallback (/api/files/upload) is not
+//      used for an ordinary upload.
 
-import { test, expect } from '@playwright/test'
-import { signInOrBootstrap } from '../fixtures/auth'
+import { expect, test } from '@playwright/test'
+import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 
-const FILE_NAME = `tus-12mb-${Date.now()}.bin`
-// 12 MB plaintext → 3 secretstream chunks → 4 tus PATCHes
-// (header+chunk1, chunk2, chunk3-final). Sized just over 2 × 5 MB so
-// non-final 5-MB-minimum part rules get exercised.
+const PASSWORD = 'Deneme123*TusUploadPassword'
+// 12 MB plaintext → 3 secretstream chunks, sized just over 2 × 5 MB so the
+// non-final 5 MB part rules are exercised.
 const FILE_BYTES = 12 * 1024 * 1024
 
-test.describe('tus.io streaming upload', () => {
-  test.beforeAll(async ({ browser }) => {
-    const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
-    await signInOrBootstrap(ctx)
-    await ctx.close()
+test('uploads a 12 MB file via the tus endpoint and lands it in Drive', async ({ browser }) => {
+  test.slow()
+  const account = newAccount('tus', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, account)
+  const page = await openDrive(context)
+
+  const tusPosts: string[] = []
+  const tusPatches: string[] = []
+  const multipart: string[] = []
+  page.on('request', (request) => {
+    const { pathname } = new URL(request.url())
+    if (request.method() === 'POST' && /^\/api\/uploads\/?$/.test(pathname)) tusPosts.push(pathname)
+    if (request.method() === 'POST' && pathname === '/api/files/upload') multipart.push(pathname)
+  })
+  page.on('response', (response) => {
+    const { pathname } = new URL(response.url())
+    if (response.request().method() === 'PATCH' && /^\/api\/uploads\/[^/]+$/.test(pathname) && response.ok()) {
+      tusPatches.push(pathname)
+    }
   })
 
-  test('uploads a 12 MB file via the tus endpoint and lands it in Drive', async ({ context }) => {
-    const page = await signInOrBootstrap(context)
-    await page.waitForURL(/\/drive/, { timeout: 30_000 })
+  // A deterministic pattern (byte i = (i * 31 + 7) & 0xff) catches sloppy
+  // zero-fill bugs that pass on all-zeros input.
+  const fileName = `tus-12mb-${Date.now()}.bin`
+  const buffer = Buffer.alloc(FILE_BYTES)
+  for (let i = 0; i < FILE_BYTES; i++) buffer[i] = (i * 31 + 7) & 0xff
 
-    // Wait for Drive to finish hydrating the My Files collection — the
-    // upload handler bails silently if currentFolder.collectionKey is
-    // not yet decrypted. The "Folders" heading appears once the listing
-    // is in.
-    // Drive is ready once the My Files listing renders: a Folders/Files section
-    // heading (populated drive) or the empty-state dropzone. The old /folders/i-only
-    // proxy hung forever on a folder-less account (drive loaded, but no Folders heading).
-    await expect(
-      page
-        .getByRole('heading', { name: /folders|files/i })
-        .or(page.getByText(/drop files here/i))
-        .first(),
-    ).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'New' }).first().click()
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('menuitem', { name: 'Upload files' }).click(),
+  ])
+  await chooser.setFiles({ name: fileName, mimeType: 'application/octet-stream', buffer })
 
-    // Track which upload endpoint(s) get hit. We want the new tus path
-    // (/api/uploads) and explicitly *not* the bounded-memory fallback
-    // multipart route (/api/files/upload). Federated Drive uses signed
-    // multipart with the same V2 envelopes, but we don't trigger that here.
-    const tusPostCount: number[] = []
-    const tusPatchCount: number[] = []
-    const legacyMultipartCount: number[] = []
-    page.on('request', (req) => {
-      const url = req.url()
-      const method = req.method()
-      if (method === 'POST' && /\/api\/uploads\/?$/.test(url)) tusPostCount.push(1)
-      if (method === 'PATCH' && /\/api\/uploads\/[\w-]+$/.test(url)) tusPatchCount.push(1)
-      if (method === 'POST' && /\/api\/files\/upload$/.test(url)) legacyMultipartCount.push(1)
-    })
+  await expect(page.getByText(fileName, { exact: true }).first()).toBeVisible({ timeout: 90_000 })
+  // One secretstream chunk per PATCH: three for 12 MB, the last one
+  // finalising the file.
+  await expect.poll(() => tusPatches.length, { timeout: 90_000 }).toBeGreaterThanOrEqual(3)
+  expect(tusPosts.length).toBe(1)
+  expect(new Set(tusPatches).size).toBe(1)
+  expect(multipart).toEqual([])
 
-    // Build a deterministic 12 MB blob. Pattern: byte i = (i * 31 + 7)
-    // & 0xff — same shape the streamEncryptor test uses, catches
-    // sloppy zero-fill bugs that pass on all-zeros input.
-    const fileBuffer = Buffer.alloc(FILE_BYTES)
-    for (let i = 0; i < FILE_BYTES; i++) fileBuffer[i] = (i * 31 + 7) & 0xff
-
-    // The Upload button wires fileInputRef.onchange THEN clicks the
-    // hidden input — directly calling setInputFiles on the hidden input
-    // wouldn't fire the React handler (no onchange installed yet).
-    // Playwright's filechooser pattern hooks the click and feeds files.
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
-      page.getByRole('button', { name: /^upload$/i }).click(),
-    ])
-    await fileChooser.setFiles({
-      name: FILE_NAME,
-      mimeType: 'application/octet-stream',
-      buffer: fileBuffer,
-    })
-
-    // Wait for the upload to complete: the new file row appears in the
-    // Drive list, and the tus PATCH count stops increasing. Generous
-    // timeout because 12 MB through libsodium-WASM + 3 PATCHes can
-    // take a few seconds.
-    await expect(page.getByText(FILE_NAME, { exact: false })).toBeVisible({ timeout: 60_000 })
-
-    // Sanity: at least one tus POST + at least one PATCH happened.
-    expect(tusPostCount.length).toBeGreaterThanOrEqual(1)
-    expect(tusPatchCount.length).toBeGreaterThanOrEqual(1)
-    // And the legacy multipart path was NOT used.
-    expect(legacyMultipartCount.length).toBe(0)
-  })
+  // The listing comes from the server, not the upload's optimistic state.
+  await page.reload()
+  await expect(page.getByText(fileName, { exact: true }).first()).toBeVisible({ timeout: 60_000 })
+  await context.close()
 })

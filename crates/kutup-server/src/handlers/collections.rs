@@ -38,6 +38,8 @@ struct SharedCollectionDbRow {
     can_upload: bool,
     can_delete: bool,
     upload_quota_bytes: Option<i64>,
+    created_at: time::OffsetDateTime,
+    updated_at: time::OffsetDateTime,
     owner_username: Option<String>,
     owner_incarnation_id: String,
     owner_signing_public_key: String,
@@ -57,7 +59,10 @@ fn canonical_uuid(value: &str) -> AppResult<Uuid> {
     Ok(parsed)
 }
 
-fn validate_drive_envelope(envelope: &str, expected: DriveEnvelopeContextV1) -> AppResult<()> {
+pub(crate) fn validate_drive_envelope(
+    envelope: &str,
+    expected: DriveEnvelopeContextV1,
+) -> AppResult<()> {
     let bytes = STANDARD
         .decode(envelope)
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
@@ -91,7 +96,17 @@ pub async fn list_collections(
     user: AuthUser,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    // Albums are the Photos app's (GET /api/albums), never Drive folders.
+    Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
+}
 
+/// The collections of `kind` this account owns or has been given, as the
+/// listing returns them.
+pub(crate) async fn collection_rows(
+    state: &AppState,
+    user_id: Uuid,
+    kind: &str,
+) -> AppResult<Vec<CollectionRow>> {
     type OwnRow = (
         Uuid,
         Uuid,
@@ -103,15 +118,24 @@ pub async fn list_collections(
         String,
         Option<Uuid>,
         Option<String>,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
-        r#"SELECT id, owner_user_id, name_envelope, owner_key_envelope,
-                  key_epoch, name_revision, epoch_statement, epoch_statement_hash,
-                  parent_collection_id, color
-           FROM collections WHERE owner_user_id = $1 AND deleted_at IS NULL
-           ORDER BY created_at ASC"#,
+        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.parent_collection_id, c.color, c.created_at,
+                  GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+           FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
+             AND c.kind = $2
+           ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
+    .bind(kind)
     .fetch_all(&state.pool)
     .await?;
 
@@ -129,6 +153,8 @@ pub async fn list_collections(
                 statement_hash,
                 parent,
                 color,
+                created_at,
+                updated_at,
             )| CollectionRow {
                 id: id.to_string(),
                 owner_user_id: owner.to_string(),
@@ -150,6 +176,8 @@ pub async fn list_collections(
                 upload_quota_bytes: None,
                 upload_used_bytes: None,
                 is_shared: false,
+                created_at,
+                updated_at,
             },
         )
         .collect();
@@ -159,6 +187,11 @@ pub async fn list_collections(
                   c.name_revision, c.epoch_statement, c.epoch_statement_hash,
                   c.parent_collection_id, c.color, cs.named_share_envelope,
                   cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+                  c.created_at, GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
@@ -166,10 +199,11 @@ pub async fn list_collections(
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
            JOIN users owner ON owner.id = c.owner_user_id
-           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL
+           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL AND c.kind = $2
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
+    .bind(kind)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -218,10 +252,12 @@ pub async fn list_collections(
             upload_quota_bytes: row.upload_quota_bytes,
             upload_used_bytes,
             is_shared: true,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         });
     }
 
-    Ok(Json(out).into_response())
+    Ok(out)
 }
 
 /// `POST /api/collections` — mirrors `CreateCollection`.
@@ -239,6 +275,17 @@ pub async fn create_collection(
     Json(req): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    create_owned_collection(&state, user_id, req, "folder").await
+}
+
+/// A new collection of `kind` (`folder`, or `album` for the Photos app):
+/// its envelopes and first epoch checked, then stored with its history.
+pub(crate) async fn create_owned_collection(
+    state: &AppState,
+    user_id: Uuid,
+    req: CreateCollectionRequest,
+    kind: &str,
+) -> AppResult<Response> {
     let id = canonical_uuid(&req.id)?;
     let parent = req
         .parent_collection_id
@@ -247,6 +294,9 @@ pub async fn create_collection(
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| AppError::bad_request("invalid request"))?;
+    if kind == "album" && parent.is_some() {
+        return Err(AppError::bad_request("an album is not inside a folder"));
+    }
 
     let authority_public_key: String =
         sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
@@ -289,7 +339,7 @@ pub async fn create_collection(
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL AND c.kind = 'folder')",
         )
         .bind(parent_id)
         .bind(user_id)
@@ -302,8 +352,8 @@ pub async fn create_collection(
     sqlx::query(
         r#"INSERT INTO collections
               (id, owner_user_id, name_envelope, owner_key_envelope, key_epoch,
-               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7)"#,
+               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind)
+           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -312,6 +362,7 @@ pub async fn create_collection(
     .bind(&req.epoch_statement)
     .bind(&statement_hash)
     .bind(parent)
+    .bind(kind)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -362,12 +413,19 @@ pub async fn get_collection(
         String,
         Option<Uuid>,
         Option<String>,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, owner_user_id, name_envelope, owner_key_envelope,
-                  key_epoch, name_revision, epoch_statement, epoch_statement_hash,
-                  parent_collection_id, color
-           FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"#,
+        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.parent_collection_id, c.color, c.created_at,
+                  GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+           FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -385,6 +443,8 @@ pub async fn get_collection(
         statement_hash,
         parent,
         color,
+        created_at,
+        updated_at,
     )) = row
     {
         return Ok(Json(CollectionRow {
@@ -408,6 +468,8 @@ pub async fn get_collection(
             upload_quota_bytes: None,
             upload_used_bytes: None,
             is_shared: false,
+            created_at,
+            updated_at,
         })
         .into_response());
     }
@@ -420,6 +482,11 @@ pub async fn get_collection(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.key_epoch, c.name_revision,
                   c.epoch_statement, c.epoch_statement_hash, c.parent_collection_id, c.color,
                   cs.named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+                  c.created_at, GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
@@ -464,6 +531,8 @@ pub async fn get_collection(
         upload_quota_bytes: row.upload_quota_bytes,
         upload_used_bytes: None,
         is_shared: true,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     })
     .into_response())
 }
@@ -557,11 +626,18 @@ pub async fn update_collection_color(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
+    // `#rrggbb`, stored lowercase; null or "" clears it. Every client (web,
+    // CLI) writes the same form, so a colour set in one shows in the other.
+    let color = match req.color.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(c) if super::auth::is_valid_hex_color(c) => Some(c.to_ascii_lowercase()),
+        Some(_) => return Err(AppError::bad_request("color must be #rrggbb")),
+    };
 
     let res = sqlx::query(
         "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL",
     )
-    .bind(req.color)
+    .bind(color)
     .bind(coll_id)
     .bind(user_id)
     .execute(&state.pool)
@@ -597,7 +673,8 @@ pub async fn delete_collection(
     let subtree: Vec<Uuid> = sqlx::query_scalar(
         r#"WITH RECURSIVE subtree AS (
              SELECT id FROM collections
-             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+             -- An album is deleted with DELETE /api/albums/{id}, not trashed.
+             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL AND kind = 'folder'
              UNION ALL
              SELECT c.id FROM collections c
              JOIN subtree s ON c.parent_collection_id = s.id

@@ -7,17 +7,14 @@
 #                          and (for the collab envelope) the server.
 #   crates/kutup-cli     — the `kutup` CLI         (binary `kutup`)
 #   crates/kutup-server  — the backend API binary  (binary `kutup-server`; Axum + sqlx)
-#
-# src-tauri/ is its own standalone crate and is intentionally NOT a member of this
-# workspace; `exclude` keeps `cargo build` there independent of this tree.
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-# Excluded like src-tauri: kutup-chat-core pulls the whole libsignal dependency
+# kutup-chat-core pulls the whole libsignal dependency
 # tree (git, ~large) and needs protoc at build time, so it must not tax the
 # app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
 # and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
-exclude = ["src-tauri", "crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz"]
+exclude = ["crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz"]
 
 [workspace.package]
 edition = "2021"

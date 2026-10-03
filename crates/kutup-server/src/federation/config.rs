@@ -15,6 +15,8 @@ pub(crate) struct FederationRuntimeConfig {
     pub signing_key: SigningKey,
     pub next_signing_key: Option<SigningKey>,
     pub allow_private_test_network: bool,
+    /// The key was made by this server (`crate::server_keys`), not configured.
+    pub generated: bool,
 }
 
 impl FederationRuntimeConfig {
@@ -27,6 +29,37 @@ impl FederationRuntimeConfig {
             config.federation_test_allow_private,
             &config.app_env,
         )
+    }
+
+    /// The identity a server uses when its operator configures no federation:
+    /// named after its Chat server name, with a key it made and stored
+    /// (`crate::server_keys`). Groups need it even among local members, since
+    /// clients verify each ordering server's signed policy history. It
+    /// admits no peer by itself: federation admission is unchanged.
+    ///
+    /// Returns the server name and API base, or `None` when the configured
+    /// `SERVER_URL` cannot anchor an identity (plain HTTP in production).
+    pub fn generated_identity(config: &Config) -> anyhow::Result<Option<(String, String)>> {
+        Ok(generated_identity(
+            &config.chat_server_name,
+            &config.server_url,
+            &config.app_env,
+        ))
+    }
+
+    pub fn with_generated_key(
+        server_name: String,
+        api_base: String,
+        signing_key: SigningKey,
+    ) -> Self {
+        Self {
+            server_name,
+            api_base,
+            signing_key,
+            next_signing_key: None,
+            allow_private_test_network: false,
+            generated: true,
+        }
     }
 
     fn parse(
@@ -75,6 +108,7 @@ impl FederationRuntimeConfig {
             signing_key,
             next_signing_key,
             allow_private_test_network,
+            generated: false,
         }))
     }
 
@@ -93,6 +127,25 @@ impl FederationRuntimeConfig {
                 "FEDERATION_NEXT_SIGNING_KEY is required by `federation-identity rotate`"
             )
         })
+    }
+}
+
+fn generated_identity(
+    server_name: &str,
+    server_url: &str,
+    app_env: &str,
+) -> Option<(String, String)> {
+    // Plain HTTP anchors an identity only outside production (development
+    // stacks); a production identity needs its canonical HTTPS address.
+    match canonical_api_base(server_url, app_env != "production") {
+        Ok(api_base) => Some((server_name.to_string(), api_base)),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "no server identity: set SERVER_URL to this server's canonical HTTPS address to enable Chat groups"
+            );
+            None
+        }
     }
 }
 
@@ -163,6 +216,26 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn generated_identity_uses_the_chat_name_and_needs_https_in_production() {
+        assert_eq!(
+            generated_identity("kutup.example", "https://kutup.example", "production"),
+            Some(("kutup.example".into(), "https://kutup.example".into()))
+        );
+        assert_eq!(
+            generated_identity("kutup.example", "http://kutup.example", "production"),
+            None
+        );
+        assert_eq!(
+            generated_identity("kutup.local", "http://kutup.local", "development"),
+            Some(("kutup.local".into(), "http://kutup.local".into()))
+        );
+        assert_eq!(
+            generated_identity("kutup.local", "https://kutup.local/", "development"),
+            None
+        );
     }
 
     #[test]

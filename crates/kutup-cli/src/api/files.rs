@@ -8,6 +8,23 @@ use reqwest::Method;
 
 use super::{Client, UploadResponse};
 
+/// `POST /files/{id}/move` result.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveFileResponse {
+    pub collection_id: String,
+    pub key_epoch: u32,
+}
+
+/// What `POST /files/{id}/move` answered.
+#[derive(Debug)]
+pub enum MoveOutcome {
+    Moved(MoveFileResponse),
+    /// 409: the server's reason (`file needs a re-key`, `folder key
+    /// changed`, `the file moved`).
+    Conflict(String),
+}
+
 impl Client {
     /// Multipart-uploads an already-encrypted blob to `/files/upload`.
     /// Mirrors `UploadFile`.
@@ -33,6 +50,43 @@ impl Client {
             .multipart(form)
             .send()?;
         super::decode_json(resp)
+    }
+
+    /// Moves a file to its folder's current key (docs/plans/drive-share-revocation.md).
+    /// `Ok(false)`: another editor moved it first; list it again.
+    pub fn rekey_file(&self, file_id: &str, req: &super::RekeyRequest) -> Result<bool> {
+        let resp = self.post_json(&format!("/files/{file_id}/rekey"), req)?;
+        if resp.status().as_u16() == 409 {
+            return Ok(false);
+        }
+        super::check_ok(resp)?;
+        Ok(true)
+    }
+
+    /// Moves a file to another folder of the same owner
+    /// (docs/plans/drive-move.md). A 409 — the file needs a re-key, the
+    /// destination's key changed, or the file moved — comes back as
+    /// `MoveOutcome::Conflict` so the caller can reload and seal again.
+    pub fn move_file(&self, file_id: &str, req: &super::MoveFileRequest) -> Result<MoveOutcome> {
+        let resp = self.post_json(&format!("/files/{file_id}/move"), req)?;
+        if resp.status().as_u16() == 409 {
+            let super::ApiError { message, .. } = super::api_error(resp).downcast()?;
+            return Ok(MoveOutcome::Conflict(message));
+        }
+        let moved: MoveFileResponse = super::decode_json(resp)?;
+        Ok(MoveOutcome::Moved(moved))
+    }
+
+    /// Puts a folder under another of the owner's folders, or at the top
+    /// level (`None`). Owner only.
+    pub fn move_collection(&self, collection_id: &str, parent: Option<&str>) -> Result<()> {
+        let resp = self.post_json(
+            &format!("/collections/{collection_id}/move"),
+            &super::MoveCollectionRequest {
+                parent_collection_id: parent.map(str::to_string),
+            },
+        )?;
+        super::check_ok(resp)
     }
 
     /// Reads the latest encrypted content fully into memory (snapshot-preferred).

@@ -19,10 +19,13 @@
 //! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
-//! - [`drive_object`] — the Drive suite registry and typed, context-bound file-blob framing.
+//! - [`drive_object`] — the Drive suite registry and typed, file-bound file-blob framing.
+//! - [`file_metadata`] — a Drive file's metadata (name, type, size, photo details), canonical JSON.
+//! - [`file_keyring`] — a file's key generations, each sealing the one before.
+//! - [`photos_library`] — an account's own marks on photos (favourites, archived, hidden).
 //! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
 //! - [`stream`] — XChaCha20-Poly1305 secretstream (file content, 5 MiB chunks).
-//! - [`asset`] — XChaCha20-Poly1305-IETF asset blobs.
+//! - [`asset`] — whiteboard asset envelopes under the file key.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
 
@@ -33,16 +36,23 @@ pub mod chat_backup;
 pub mod chat_backup_media;
 pub mod chat_media;
 pub mod collection_epoch;
+pub mod collection_keyring;
 pub mod drive_envelope;
 pub mod drive_object;
 pub mod envelope;
 pub mod error;
+pub mod file_keyring;
+pub mod file_metadata;
 pub mod identity;
 pub mod kdf;
+pub mod live_location;
 pub mod local_state;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod photos_library;
+pub mod profile_key_share;
 pub mod stream;
+pub mod thumbnail;
 
 pub use error::{CryptoError, Result};
