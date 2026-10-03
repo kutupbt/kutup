@@ -285,6 +285,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         kutup_chat_proto::ChatBackupManifestV1,
         kutup_chat_proto::ChatBackupStorageUsageV1,
         kutup_chat_proto::ChatBackupStatusV1,
+        kutup_chat_proto::ChatBackupDeviceHeadV1,
         kutup_chat_proto::ProvisionChatBackupRequestV1,
         kutup_chat_proto::AppendChatBackupSegmentRequestV1,
         kutup_chat_proto::ChatBackupSegmentReceiptV1,

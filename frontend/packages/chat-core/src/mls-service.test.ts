@@ -618,6 +618,7 @@ function harness(
         deviceId: 7,
       },
     ]),
+    verifiedManifestMlsDeviceIds: vi.fn().mockResolvedValue([]),
     prepareMlsDeviceSync: vi.fn().mockResolvedValue({
       pending: {
         mlsGroupId: [...genesisGroupBytes],
@@ -1714,6 +1715,109 @@ describe('MlsConversationService', () => {
     expect(removalCall[2]).toEqual([])
     expect(removalCall[3]).toEqual([8])
     expect(removalCall[4]).toMatch(/^[0-9]+$/)
+  })
+
+  describe('a fellow member whose devices changed', () => {
+    const alice = { username: 'alice', server: 'alpha.example' }
+    const bob = { username: 'bob', server: 'alpha.example' }
+    const carol = { username: 'carol', server: 'alpha.example' }
+    const group = (members: Array<typeof alice>) => ({
+      ...activeGenesis(),
+      currentRoster: members.map((address, index) => ({
+        address,
+        isAdmin: index === 0,
+        ...(index === 0 ? { ownerId: '22'.repeat(32) } : {}),
+      })),
+    })
+    const packageFor = (address: typeof alice, deviceId: number) => ({
+      wire: {
+        deviceId,
+        manifestVersion: 2,
+        suite: 3,
+        keyPackageRef: '66'.repeat(32),
+        keyPackage: btoa('package'),
+        expiresAt: 1_800_000_000,
+      },
+      credential: {
+        credentialIdentity: `${address.username}@${address.server}#${deviceId}`,
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
+      },
+      anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
+    })
+
+    it('drops the device they no longer have and admits the one they do', async () => {
+      vi.stubGlobal('crypto', { randomUUID: () => proposalId, getRandomValues: (value: Uint8Array) => value })
+      const { client, service } = harness(null, [group([alice, bob])], alice)
+      vi.mocked(client.mlsGroupDevices).mockResolvedValue([
+        { address: alice, deviceId: 7 },
+        { address: bob, deviceId: 1 },
+      ])
+      // Bob replaced his only device: his signed manifest now lists device 2.
+      vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([2])
+      vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([packageFor(bob, 2)])
+
+      await expect(service.reconcileMemberDevices()).resolves.toHaveLength(1)
+      expect(client.verifiedManifestMlsDeviceIds).toHaveBeenCalledWith('bob@alpha.example')
+      const call = vi.mocked(client.prepareMlsDeviceSync).mock.calls[0]
+      expect((call[2] as Array<{ wire: { deviceId: number } }>).map(added => added.wire.deviceId)).toEqual([2])
+      expect(call[3]).toEqual([1])
+      expect(call[5]).toBe('bob@alpha.example')
+    })
+
+    it('leaves a group alone whose members\' devices are in line, or not ready', async () => {
+      const { client, service } = harness(null, [group([alice, bob])], alice)
+      vi.mocked(client.mlsGroupDevices).mockResolvedValue([
+        { address: alice, deviceId: 7 },
+        { address: bob, deviceId: 1 },
+      ])
+      vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([1])
+      await expect(service.reconcileMemberDevices()).resolves.toEqual([])
+      // A device of theirs that has not finished setting up: wait.
+      vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([])
+      await expect(service.reconcileMemberDevices()).resolves.toEqual([])
+      // A manifest that cannot be verified is not acted on, and is not fatal.
+      vi.mocked(client.verifiedManifestMlsDeviceIds).mockRejectedValue(new Error('untrusted'))
+      await expect(service.reconcileMemberDevices()).resolves.toEqual([])
+      expect(client.prepareMlsDeviceSync).not.toHaveBeenCalled()
+      expect(client.fetchVerifiedIdentifiedMlsKeyPackages).not.toHaveBeenCalled()
+    })
+
+    it('waits its turn, so two members do not commit the same correction', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.stubGlobal('crypto', { randomUUID: () => proposalId, getRandomValues: (value: Uint8Array) => value })
+        // Carol's device changed. Alice is first by address; this is Bob.
+        const { client, service } = harness(null, [group([alice, bob, carol])], bob)
+        vi.mocked(client.mlsGroupDevices).mockResolvedValue([
+          { address: alice, deviceId: 1 },
+          { address: bob, deviceId: 7 },
+          { address: carol, deviceId: 1 },
+        ])
+        vi.mocked(client.verifiedManifestMlsDeviceIds).mockImplementation(async (account: string) =>
+          account === 'carol@alpha.example' ? [2] : [1])
+        vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([packageFor(carol, 2)])
+
+        await expect(service.reconcileMemberDevices()).resolves.toEqual([])
+        expect(client.prepareMlsDeviceSync).not.toHaveBeenCalled()
+        // Alice has not done it within her turn: Bob does.
+        vi.advanceTimersByTime(3 * 60 * 1000)
+        await expect(service.reconcileMemberDevices()).resolves.toHaveLength(1)
+        expect(vi.mocked(client.prepareMlsDeviceSync).mock.calls[0][5]).toBe('carol@alpha.example')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does nothing from a device that is not itself in the group', async () => {
+      const { client, service } = harness(null, [group([alice, bob])], alice)
+      vi.mocked(client.mlsGroupDevices).mockResolvedValue([
+        { address: alice, deviceId: 3 },
+        { address: bob, deviceId: 1 },
+      ])
+      vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([2])
+      await expect(service.reconcileMemberDevices()).resolves.toEqual([])
+      expect(client.verifiedManifestMlsDeviceIds).not.toHaveBeenCalled()
+    })
   })
 
   it('auto-installs a linked-device Welcome only for an already-active account', async () => {

@@ -17,6 +17,7 @@ import {
   putValue,
   replaceBackupMedia,
   replaceRestoredRecords,
+  resetBackupDeviceChain,
 } from './backup-store'
 import type {
   BackupOutboxEntry as OutboxEntry,
@@ -72,6 +73,8 @@ export interface BackupStatusResponse {
   currentCursor: number
   latestProtectedAtUnix?: number
   storage: BackupStorageUsage
+  /** Where each source device's segment chain stands on the server. */
+  deviceHeads?: Array<{ deviceId: number; sequence: number; digest: string }>
 }
 
 export interface BackupStorageUsage {
@@ -444,6 +447,7 @@ export class ChatBackupCoordinator {
     )
     await coordinator.loadMediaState()
     await coordinator.rejectRollbackAndPin()
+    await coordinator.adoptDeviceChain()
     await coordinator.restore()
     await coordinator.collectAndQueue()
     await coordinator.refreshView()
@@ -964,6 +968,43 @@ export class ChatBackupCoordinator {
     }
     await this.refreshServerStatus(this.mediaViewState())
     await this.maybeCompact()
+  }
+
+  /**
+   * Make sure what this browser holds continues the server's segment chain
+   * for this device, and start over from the server's position if not.
+   *
+   * The server keeps one chain per device number and refuses a segment that
+   * does not follow its last one. This browser's bookkeeping can be another
+   * device's: "Repair this browser" keeps the backup database while the
+   * device gets a new number, and a number is given out again after a
+   * revocation. Left alone, every upload would then be refused and the
+   * history would stop being protected.
+   */
+  private async adoptDeviceChain(): Promise<void> {
+    // A server that does not report chains gives nothing to compare with.
+    if (!this.status.deviceHeads) return
+    const head = this.status.deviceHeads.find(value => value.deviceId === this.options.deviceId)
+    const sequence = head?.sequence ?? 0
+    const digest = head?.digest ?? ZERO_DIGEST
+    const [state, outbox] = await Promise.all([
+      loadState(this.db, this.runtime.clock.now()),
+      getAll<OutboxEntry>(this.db, 'outbox'),
+    ])
+    outbox.sort((left, right) => left.deviceSequence - right.deviceSequence)
+    // An entry at the head was accepted but its acknowledgement was lost;
+    // the flush settles it. Anything older, or a gap, is not this chain.
+    const settled = outbox.filter(entry => entry.deviceSequence <= sequence)
+    const pending = outbox.filter(entry => entry.deviceSequence > sequence)
+    const settledMatches = settled.length === 0
+      || (settled.length === 1
+        && settled[0].deviceSequence === sequence
+        && settled[0].ciphertextSha256 === digest)
+    const pendingFollows = pending.length === 0
+      ? settled.length > 0 || (state.deviceSequence === sequence && state.lastSegmentDigest === digest)
+      : pending[0].deviceSequence === sequence + 1 && pending[0].previousSegmentDigest === digest
+    if (settledMatches && pendingFollows) return
+    await resetBackupDeviceChain(this.db, sequence, digest, this.runtime.clock.now())
   }
 
   private async restore(force = false, persist = true): Promise<StoredRecord[] | undefined> {

@@ -876,6 +876,7 @@ impl WasmChatClient {
         additions: JsValue,
         removed_device_ids: JsValue,
         now_seconds: String,
+        account: Option<String>,
     ) -> std::result::Result<JsValue, JsValue> {
         let proposal_id = uuid::Uuid::parse_str(&proposal_id)
             .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
@@ -888,6 +889,7 @@ impl WasmChatClient {
             .prepare_device_sync(
                 &mls_group_id,
                 proposal_id,
+                account.as_deref(),
                 &additions,
                 &removed_device_ids,
                 parse_i64_string("MLS clock", &now_seconds)?,
@@ -1719,6 +1721,19 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         to_output(&verified)
+    }
+
+    #[wasm_bindgen(js_name = verifiedManifestMlsDeviceIds)]
+    pub async fn verified_manifest_mls_device_ids(
+        &mut self,
+        account: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let device_ids = self
+            .engine
+            .verified_manifest_mls_device_ids(&account)
+            .await
+            .map_err(chat_error)?;
+        to_output(&device_ids)
     }
 
     #[wasm_bindgen(js_name = processedMlsControlEnvelope)]
