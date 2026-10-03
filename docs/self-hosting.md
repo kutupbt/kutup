@@ -606,6 +606,79 @@ durable operator backups.
 
 ---
 
+## Database backups
+
+`scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
+machine, and stores it in the object store Kutup already uses (`S3_*` in
+`.env`), under `database-backups/`. It works with the bundled SeaweedFS and
+with an external store; with an external store the backups survive the loss
+of the server, which is the point.
+
+Set a passphrase in `.env` and **keep a copy of it somewhere else**. Without
+it the backups cannot be read, and it is lost with the server otherwise.
+
+```
+KUTUP_BACKUP_PASSPHRASE=<openssl rand -hex 32>
+# KUTUP_BACKUP_KEEP_DAYS=30
+# KUTUP_BACKUP_PREFIX=database-backups
+```
+
+```sh
+scripts/backup-postgres.sh                      # back up, then prune
+scripts/backup-postgres.sh --list               # what is stored
+scripts/backup-postgres.sh --fetch <name> kutup.dump   # download and decrypt
+```
+
+Backups older than `KUTUP_BACKUP_KEEP_DAYS` are removed after each run; the
+newest is never removed. To run it nightly with systemd, from the
+deployment's directory (here `/opt/kutup`):
+
+```ini
+# /etc/systemd/system/kutup-backup.service
+[Unit]
+Description=Back up the Kutup database to object storage
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kutup
+ExecStart=/opt/kutup/scripts/backup-postgres.sh
+
+# /etc/systemd/system/kutup-backup.timer
+[Unit]
+Description=Nightly Kutup database backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl daemon-reload && systemctl enable --now kutup-backup.timer
+journalctl -u kutup-backup.service      # each run's result
+```
+
+To restore onto a fresh server: set up `.env` with the same store, the same
+`JWT_SECRET` and server names, and the passphrase, then
+
+```sh
+docker compose up -d --wait postgres
+scripts/backup-postgres.sh --fetch <name> kutup.dump
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+docker compose up -d --wait
+```
+
+The dump holds accounts, key envelopes and object references; the files'
+ciphertext stays in the object store. A restore therefore returns to the
+moment of the dump: files deleted since then are listed but gone, and files
+added since then are in the store but no longer listed (`kutup-server
+orphan-sweep` finds those).
+
 ## Updating
 
 ```sh
