@@ -161,7 +161,10 @@ export async function signIn(context: BrowserContext, account: Account): Promise
 async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
   const limited = page.getByRole('alert').filter({ hasText: 'Too many attempts' })
   for (let attempt = 1; ; attempt++) {
+    const retrying = await limited.isVisible()
     await page.getByRole('button', { name: button, exact: true }).click()
+    // The previous attempt's message stays until this one is under way.
+    if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })
     await expect(done.or(limited).first()).toBeVisible({ timeout: 120_000 })
     if (await done.isVisible()) return
     if (attempt === 8) throw new Error(`${button}: still rate limited after ${attempt} attempts`)

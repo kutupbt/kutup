@@ -1,7 +1,7 @@
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { hasStructure, htmlToMarkdown, isLinkTarget, linkMarkdown, pasteMarkdown } from './pasteMarkdown'
 
 describe('htmlToMarkdown', () => {
@@ -52,11 +52,20 @@ describe('what a paste becomes', () => {
     expect(linkMarkdown('a [b]', 'https://x.y')).toBe('[a \\[b\\]](https://x.y)')
   })
 
-  const view = (doc: string, from: number, to = from) =>
-    new EditorView({
+  // Each view is destroyed after its test: a live one schedules a layout
+  // measurement, which jsdom cannot do.
+  const views: EditorView[] = []
+  afterEach(() => {
+    for (const v of views.splice(0)) v.destroy()
+  })
+  const view = (doc: string, from: number, to = from) => {
+    const v = new EditorView({
       state: EditorState.create({ doc, selection: EditorSelection.range(from, to), extensions: [markdown({ base: markdownLanguage })] }),
       parent: document.createElement('div'),
     })
+    views.push(v)
+    return v
+  }
 
   it('starts pasted blocks after a blank line', () => {
     const v = view('text\n', 5)
