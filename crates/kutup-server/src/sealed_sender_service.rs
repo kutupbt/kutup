@@ -76,7 +76,14 @@ pub(crate) struct SealedSenderService {
 }
 
 impl SealedSenderService {
-    pub fn from_config(config: &Config, now: OffsetDateTime) -> anyhow::Result<Option<Arc<Self>>> {
+    /// `server_name` is the name of this server's federation identity, when
+    /// it has one: configured (`FEDERATION_SERVER_NAME`) or the one the
+    /// server made for itself.
+    pub fn from_config(
+        config: &Config,
+        server_name: Option<&str>,
+        now: OffsetDateTime,
+    ) -> anyhow::Result<Option<Arc<Self>>> {
         let has_policy = !config.chat_sealed_sender_policy.trim().is_empty();
         let has_key = !config
             .chat_sealed_sender_online_private_key
@@ -85,15 +92,15 @@ impl SealedSenderService {
         if !has_policy && !has_key {
             return Ok(None);
         }
-        if !has_policy || !has_key || config.federation_server_name.is_empty() {
+        let (true, true, Some(server_name)) = (has_policy, has_key, server_name) else {
             anyhow::bail!(
-                "sealed sender requires federation, a complete service policy, and an online private key"
+                "sealed sender requires a server identity, a complete service policy, and an online private key"
             );
-        }
+        };
         let policy: SealedSenderServicePolicyV1 =
             serde_json::from_str(&config.chat_sealed_sender_policy)?;
         policy.validate().map_err(anyhow::Error::msg)?;
-        if policy.canonical_domain != config.federation_server_name {
+        if policy.canonical_domain != server_name {
             anyhow::bail!(
                 "sealed sender policy canonical domain does not match federation identity"
             );
