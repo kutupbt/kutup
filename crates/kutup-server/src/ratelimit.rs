@@ -100,6 +100,14 @@ pub static FORK: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Opening and joining a call through a link, which need no account: 60 /
+/// minute / IP (`RATE_LIMIT_CALL_LINK_PER_MIN`).
+pub static CALL_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CALL_LINK_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
 /// Login preflight: 20 / minute / IP (`RATE_LIMIT_PREFLIGHT_PER_MIN`).
 pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
@@ -333,6 +341,8 @@ pub fn spawn_cleanup() {
             FED_USERS.cleanup();
             LOGIN.cleanup();
             PREFLIGHT.cleanup();
+            FORK.cleanup();
+            CALL_LINK.cleanup();
             USER_LOOKUP.cleanup();
             REGISTER.cleanup();
             ADMIN.cleanup();

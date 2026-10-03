@@ -1,7 +1,6 @@
-import { Mic, MicOff, Phone, PhoneOff, Video, VideoOff } from 'lucide-react'
+import { Mic, MicOff, MonitorOff, MonitorUp, Phone, PhoneOff, Video, VideoOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
 import { getChatState, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
@@ -11,7 +10,11 @@ import { notificationsAllowed } from '../../lib/notificationPermission'
 import { startRingtone } from '../../lib/ringtone'
 import { useNow } from '../../lib/useNow'
 import { getAlwaysRelayCalls, getNotifications } from '../../state/prefs'
-import { CallController, type CallState } from './callController'
+import { parseAccountAddress } from '@kutup/chat-core/identity'
+import type { ConversationId } from '@kutup/chat-core/types'
+import { ConversationView } from '../thread/ConversationView'
+import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from './CallFrame'
+import { CallController, canShareScreen, reportShareFailure, type CallState } from './callController'
 import { callController, setCallController, setGroupCallController, useCall } from './callStore'
 import { GroupCallController } from './groupCallController'
 import { GroupCallRinger } from './GroupCallRinger'
@@ -57,6 +60,7 @@ function CallScreen({ call }: { call: CallState }) {
   const localVideo = useRef<HTMLVideoElement>(null)
   const remoteAudio = useRef<HTMLAudioElement>(null)
   const [busy, setBusy] = useState(false)
+  const [panel, setPanel] = useState<CallPanel | null>(null)
   const now = useNow(1000)
   const controller = callController()
 
@@ -125,41 +129,42 @@ function CallScreen({ call }: { call: CallState }) {
   }
 
   const status = statusText(call, now, t)
+  const peerAddress = parseAccountAddress(call.peer)
+  // The conversation exists once the call was answered (calls ring only
+  // between accepted contacts), so the chat opens then.
+  const conversation: ConversationId | null = peerAddress && call.phase !== 'incoming' ? { kind: 'direct', address: peerAddress } : null
+  const showRemoteVideo = remoteHasVideo && call.phase === 'active'
+  const live = call.phase === 'outgoing' || call.phase === 'connecting' || call.phase === 'active'
+  const people: CallPerson[] = [
+    {
+      key: 'self',
+      name: t('chat.you'),
+      avatarName: snapshot.profile?.displayName || self?.address || t('chat.you'),
+      avatar: snapshot.profile?.avatar,
+      avatarContentType: snapshot.profile?.avatarContentType,
+      muted: call.muted,
+      cameraOn: call.cameraOn,
+      sharing: call.screenOn,
+    },
+    ...(call.phase === 'active'
+      ? [{ key: 'peer', name, avatarName: name, avatar: profile?.avatar, avatarContentType: profile?.avatarContentType, cameraOn: remoteHasVideo, sharing: false }]
+      : []),
+  ]
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-stage text-stage-foreground" role="dialog" aria-modal aria-label={t('chat.calls.screen', { name })} data-testid="chat-call-screen" data-phase={call.phase}>
-      <audio ref={remoteAudio} autoPlay />
-      <div className="relative flex min-h-0 flex-1 items-center justify-center">
-        <video
-          ref={remoteVideo}
-          autoPlay
-          playsInline
-          muted
-          className={cn('absolute inset-0 size-full object-contain', !(remoteHasVideo && call.phase === 'active') && 'invisible')}
-          data-testid="chat-call-remote-video"
-        />
-        {!(remoteHasVideo && call.phase === 'active') ? (
-          <div className="flex flex-col items-center gap-3 text-center">
-            <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={80} />
-            <h2 className="text-2xl font-semibold">{name}</h2>
-            <p className="text-sm text-stage-muted" data-testid="chat-call-status">{status}</p>
-          </div>
-        ) : (
-          <p className="absolute left-4 top-4 rounded bg-black/50 px-2 py-1 text-sm" data-testid="chat-call-status">{name} · {status}</p>
-        )}
-        {call.cameraOn && call.localStream ? (
-          <video
-            ref={localVideo}
-            autoPlay
-            playsInline
-            muted
-            className="absolute bottom-4 right-4 h-32 w-48 rounded-lg border border-white/20 bg-black object-cover [transform:scaleX(-1)]"
-            data-testid="chat-call-local-video"
-          />
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center justify-center gap-4 pb-10 pt-4">
-        {call.phase === 'incoming' ? (
+    <CallFrame
+      label={t('chat.calls.screen', { name })}
+      title={name}
+      status={status}
+      phase={call.phase}
+      testId="chat-call-screen"
+      statusTestId="chat-call-status"
+      people={people}
+      chat={conversation ? <ConversationView conversation={conversation} embedded /> : null}
+      panel={live ? panel : null}
+      onPanel={setPanel}
+      controls={
+        call.phase === 'incoming' ? (
           <>
             <RoundButton label={t('chat.calls.decline')} tone="danger" onClick={() => void act(() => controller?.decline())} testId="chat-call-decline">
               <PhoneOff />
@@ -181,13 +186,63 @@ function CallScreen({ call }: { call: CallState }) {
             <RoundButton label={call.cameraOn ? t('chat.calls.cameraOff') : t('chat.calls.cameraOn')} onClick={() => void act(() => controller?.toggleCamera())} pressed={!call.cameraOn} testId="chat-call-camera">
               {call.cameraOn ? <Video /> : <VideoOff />}
             </RoundButton>
+            {canShareScreen() && call.localStream ? (
+              <RoundButton
+                label={call.screenOn ? t('chat.calls.stopSharing') : t('chat.calls.shareScreen')}
+                onClick={() => void act(() => controller?.toggleScreen().catch((error: unknown) => reportShareFailure(error, t('chat.calls.shareFailed'))))}
+                pressed={call.screenOn}
+                testId="chat-call-screen-share"
+              >
+                {call.screenOn ? <MonitorOff /> : <MonitorUp />}
+              </RoundButton>
+            ) : null}
+            <PanelButtons panel={panel} onPanel={setPanel} chat={conversation !== null} />
             <RoundButton label={t('chat.calls.hangUp')} tone="danger" onClick={() => void act(() => controller?.hangUp())} testId="chat-call-hangup">
               <PhoneOff />
             </RoundButton>
           </>
-        )}
+        )
+      }
+    >
+      <audio ref={remoteAudio} autoPlay />
+      <div className="relative flex min-h-0 flex-1 items-center justify-center">
+        <video
+          ref={remoteVideo}
+          autoPlay
+          playsInline
+          muted
+          className={cn('absolute inset-0 size-full object-contain', !showRemoteVideo && 'invisible')}
+          data-testid="chat-call-remote-video"
+        />
+        {!showRemoteVideo ? (
+          <div className="flex flex-col items-center gap-3 text-center">
+            <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={80} />
+            <p className="text-2xl font-semibold">{name}</p>
+            <p className="text-sm text-stage-muted">{status}</p>
+          </div>
+        ) : null}
+        {call.screenOn ? (
+          <p className="absolute left-4 top-2 rounded bg-black/50 px-2 py-1 text-sm" data-testid="chat-call-sharing">
+            {t('chat.calls.youAreSharing')}
+          </p>
+        ) : null}
+        {(call.cameraOn || call.screenOn) && call.localStream ? (
+          <video
+            ref={localVideo}
+            autoPlay
+            playsInline
+            muted
+            className={cn(
+              'absolute bottom-4 right-4 h-24 w-36 rounded-lg border border-white/20 bg-black md:h-32 md:w-48',
+              // A camera shows as a mirror; a shared screen as it is.
+              call.screenOn ? 'object-contain' : 'object-cover [transform:scaleX(-1)]',
+            )}
+            data-testid="chat-call-local-video"
+            data-source={call.screenOn ? 'screen' : 'camera'}
+          />
+        ) : null}
       </div>
-    </div>
+    </CallFrame>
   )
 }
 
@@ -204,40 +259,4 @@ function statusText(call: CallState, now: number, t: (key: string, options?: Rec
     case 'ended':
       return t(`chat.calls.ended.${call.endReason ?? 'hungUp'}`)
   }
-}
-
-function RoundButton({
-  label,
-  onClick,
-  children,
-  tone,
-  pressed,
-  testId,
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-  tone?: 'danger' | 'accept'
-  pressed?: boolean
-  testId: string
-}) {
-  return (
-    <Button
-      type="button"
-      size="icon"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      aria-pressed={pressed}
-      className={cn(
-        'size-14 rounded-full [&_svg]:size-6',
-        tone === 'danger' && 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-        tone === 'accept' && 'bg-status-ok text-status-ok-foreground hover:bg-status-ok/90',
-        !tone && (pressed ? 'bg-stage-foreground text-stage hover:bg-stage-foreground/90' : 'bg-stage-accent text-stage-foreground hover:bg-stage-active'),
-      )}
-      data-testid={testId}
-    >
-      {children}
-    </Button>
-  )
 }

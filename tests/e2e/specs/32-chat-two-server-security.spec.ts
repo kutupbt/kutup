@@ -286,7 +286,9 @@ test.describe('two-server secure chat', () => {
     await registerAccount(contextB, bob)
 
     // An installation whose first manifest never reaches the server leaves an
-    // unmanifested registration behind and says chat is unavailable.
+    // unmanifested registration behind. A request that fails to connect is
+    // the server being out of reach: Chat says so and keeps retrying, and
+    // offers no repair.
     const abandonedPageA = await abandonedContextA.newPage()
     let interruptedManifestAttempts = 0
     await abandonedPageA.route('**/api/chat/manifest', async (route) => {
@@ -298,7 +300,8 @@ test.describe('two-server secure chat', () => {
       await route.continue()
     })
     await abandonedPageA.goto(appUrl('chat', '/', 'primary'))
-    await expect(abandonedPageA.getByText('Secure chat is temporarily unavailable.').first()).toBeVisible({ timeout: 90_000 })
+    await expect(abandonedPageA.getByText("The server can't be reached").first()).toBeVisible({ timeout: 90_000 })
+    await expect(abandonedPageA.getByRole('button', { name: 'Repair this browser' })).toHaveCount(0)
     expect(interruptedManifestAttempts).toBeGreaterThan(0)
     await abandonedContextA.close()
 

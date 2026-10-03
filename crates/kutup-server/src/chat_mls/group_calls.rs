@@ -97,15 +97,21 @@ struct Claims<'a> {
     nbf: i64,
     exp: i64,
     jti: String,
+    /// Handed by the SFU to the room's other participants, unread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a str>,
     video: VideoGrant<'a>,
 }
 
 /// A LiveKit access token (HS256 with the API secret) for one room.
-fn livekit_token(
+/// `metadata` is an opaque value the SFU shows the other participants (a
+/// call link's sealed participant name).
+pub(super) fn livekit_token(
     api_key: &str,
     api_secret: &str,
     room_id: &str,
     participant_id: &str,
+    metadata: Option<&str>,
     now: i64,
 ) -> AppResult<String> {
     let claims = Claims {
@@ -114,6 +120,7 @@ fn livekit_token(
         nbf: now - 10,
         exp: now + TOKEN_TTL_SECONDS,
         jti: Uuid::new_v4().to_string(),
+        metadata,
         video: VideoGrant {
             room: room_id,
             room_join: true,
@@ -148,6 +155,7 @@ fn mint(
             &config.chat_sfu_api_secret,
             room_id,
             participant_id,
+            None,
             time::OffsetDateTime::now_utc().unix_timestamp(),
         )?,
     })
@@ -311,6 +319,7 @@ mod tests {
             "a-secret-of-some-length-0123456789",
             "0123456789abcdef0123456789abcdef",
             "fedcba9876543210fedcba9876543210",
+            None,
             1_700_000_000,
         )
         .unwrap();
@@ -330,6 +339,33 @@ mod tests {
         assert_eq!(decoded["exp"], 1_700_000_000 + TOKEN_TTL_SECONDS);
         assert_eq!(decoded["video"]["room"], "0123456789abcdef0123456789abcdef");
         assert_eq!(decoded["video"]["roomJoin"], true);
+        assert!(decoded["video"].get("roomAdmin").is_none());
+        assert!(decoded.get("metadata").is_none());
+    }
+
+    #[test]
+    fn a_label_rides_in_the_token_as_metadata() {
+        let token = livekit_token(
+            "APIkey",
+            "a-secret-of-some-length-0123456789",
+            "0123456789abcdef0123456789abcdef",
+            "fedcba9876543210fedcba9876543210",
+            Some("c2VhbGVk"),
+            1_700_000_000,
+        )
+        .unwrap();
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
+        validation.required_spec_claims.clear();
+        let decoded = jsonwebtoken::decode::<serde_json::Value>(
+            &token,
+            &jsonwebtoken::DecodingKey::from_secret(b"a-secret-of-some-length-0123456789"),
+            &validation,
+        )
+        .unwrap()
+        .claims;
+        assert_eq!(decoded["metadata"], "c2VhbGVk");
         assert!(decoded["video"].get("roomAdmin").is_none());
     }
 }

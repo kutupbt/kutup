@@ -30,7 +30,9 @@ import { callController, groupCallController, useCall, useGroupCall } from '../c
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
-import { setOpenConversation } from '../../state/openConversation'
+import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { useMeetings } from '../callLinks/useMeetings'
+import { openConversation } from '../../state/openConversation'
 import { useLinkPreviews, useTypingIndicators } from '../../state/prefs'
 import { useReadThrough } from '../../state/useAccountState'
 import { timelineRows } from '../../state/timeline'
@@ -63,7 +65,14 @@ import { useConversationModel } from './useConversationModel'
  * nothing can be written, what to do instead: accept a request, unblock…).
  * The details panel slides over it, as in Signal Desktop.
  */
-export function ConversationView({ conversation }: { conversation: ConversationId }) {
+export function ConversationView({
+  conversation,
+  embedded = false,
+}: {
+  conversation: ConversationId
+  /** Inside the call view: the timeline and composer only, without the header. */
+  embedded?: boolean
+}) {
   const { t, i18n } = useTranslation()
   const chat = useChat()
   const service = chat.service!
@@ -163,6 +172,20 @@ export function ConversationView({ conversation }: { conversation: ConversationI
       toast.error(chatErrorMessage(error, t))
     }
   }
+  // A meeting made from here: its link goes into this conversation, where
+  // the people in it (and anyone they pass it to) can join from.
+  const meetings = useMeetings(false)
+  async function startMeeting() {
+    let url: string
+    try {
+      url = (await meetings.create.mutateAsync({ title: t('chat.meetings.defaultTitle') })).url
+    } catch (error) {
+      toast.error(apiErrorCode(error) === 'conflict' ? t('chat.meetings.tooMany') : t('chat.meetings.createFailed'))
+      return
+    }
+    // A failed send says so itself; the meeting stays in the Meetings list.
+    await actions.send(t('chat.meetings.invitation', { url })).catch(() => undefined)
+  }
   const linkPreviewsOn = useLinkPreviews()
   const listActions = useListActions()
   const navigate = useNavigate()
@@ -171,10 +194,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [unread] = useState(() => ({ after: readThrough[model.key] ?? 0, openedAt: Date.now() }))
   const expiryStarted = useRef(new Set<string>())
 
-  useEffect(() => {
-    setOpenConversation(model.key)
-    return () => setOpenConversation(null)
-  }, [model.key])
+  useEffect(() => openConversation(model.key), [model.key])
 
   // A search result opens here highlighted, briefly.
   useEffect(() => {
@@ -259,6 +279,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+      {embedded ? null : (
       <header className="flex h-[3.25rem] shrink-0 items-center gap-3 border-b border-border px-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)]">
         <Button variant="ghost" size="icon" className="md:hidden" asChild>
           <Link to="/" aria-label={t('chat.backToList')}>
@@ -353,6 +374,12 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               onDelete={() => setDeletingChat(true)}
               onMarkUnread={() => void navigate('/')}
             />
+            {chat.capabilities?.callLinks && !model.readOnly && !model.note ? (
+              <DropdownMenuItem onSelect={() => void startMeeting()} disabled={meetings.create.isPending} data-testid="chat-start-meeting">
+                <Video />
+                {t('chat.meetings.startHere')}
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setExporting(true)} data-testid="chat-export">
               <Download />
@@ -361,6 +388,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      )}
       {joinRequests > 0 ? (
         <button
           type="button"
@@ -614,10 +642,12 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           send={actions.send}
           members={conversation.kind === 'group' ? members : undefined}
           linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
-          onCreatePoll={model.note ? undefined : () => setNewPoll(true)}
-          onShareLocation={() => setNewLocation(true)}
+          // Beside a call there is room for the message box and attachments;
+          // polls, places and stickers stay in the conversation itself.
+          onCreatePoll={model.note || embedded ? undefined : () => setNewPoll(true)}
+          onShareLocation={embedded ? undefined : () => setNewLocation(true)}
           onSendSticker={
-            model.canSendMedia && chat.capabilities?.media && (conversation.kind === 'group' || model.note || chat.capabilities.sealedSender)
+            !embedded && model.canSendMedia && chat.capabilities?.media && (conversation.kind === 'group' || model.note || chat.capabilities.sealedSender)
               ? (sticker) => {
                   const bytes = Uint8Array.from(atob(sticker.data), (c) => c.charCodeAt(0))
                   const file = new File([bytes], sticker.contentType === 'image/png' ? 'sticker.png' : 'sticker.webp', { type: sticker.contentType })

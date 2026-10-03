@@ -10,6 +10,8 @@ import { LiveShareRunner } from './features/location/LiveShareRunner'
 import { ChatJobs } from './app/ChatJobs'
 import { ChatShell } from './app/ChatShell'
 import { SettingsPage } from './features/settings/SettingsPage'
+import { LinkCallRoute } from './features/callLinks/LinkCallRoute'
+import { MeetingsPage } from './features/callLinks/MeetingsPage'
 import { JoinLinkRoute } from './features/groupLink/JoinLinkRoute'
 import { SharePlaceRoute } from './features/location/SharePlaceRoute'
 import { NotFoundPage } from './NotFoundPage'
@@ -23,28 +25,40 @@ function UnauthenticatedHandler() {
   return null
 }
 
+/** The chat itself: everything that needs the account's session. */
+function SignedIn() {
+  return (
+    <Boot>
+      <UnauthenticatedHandler />
+      <ChatGate>
+        <ChatJobs />
+        <LiveShareRunner />
+        <Routes>
+          <Route element={<ChatShell />}>
+            <Route index element={<ChatsPage />} />
+            <Route path="/c/:key" element={<ChatsPage />} />
+            <Route path="/meetings" element={<MeetingsPage />} />
+            <Route path="/join" element={<JoinLinkRoute />} />
+            <Route path="/share-place" element={<SharePlaceRoute />} />
+            <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
+            <Route path="/settings/:section" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+        </Routes>
+      </ChatGate>
+    </Boot>
+  )
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <TooltipProvider delayDuration={300}>
-        <Boot>
-          <UnauthenticatedHandler />
-          <ChatGate>
-            <ChatJobs />
-            <LiveShareRunner />
-            <Routes>
-              <Route element={<ChatShell />}>
-                <Route index element={<ChatsPage />} />
-                <Route path="/c/:key" element={<ChatsPage />} />
-                <Route path="/join" element={<JoinLinkRoute />} />
-                <Route path="/share-place" element={<SharePlaceRoute />} />
-                <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
-                <Route path="/settings/:section" element={<SettingsPage />} />
-                <Route path="*" element={<NotFoundPage />} />
-              </Route>
-            </Routes>
-          </ChatGate>
-        </Boot>
+        <Routes>
+          {/* A call link needs no account, so it opens before any sign-in. */}
+          <Route path="/call" element={<LinkCallRoute />} />
+          <Route path="*" element={<SignedIn />} />
+        </Routes>
         {/* Outside the routes so a toast survives navigation. */}
         <Toaster />
       </TooltipProvider>

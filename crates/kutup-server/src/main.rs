@@ -854,6 +854,32 @@ fn build_router(state: AppState) -> Router {
             post(chat_mls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/chat/call-links",
+            post(chat_mls::call_links::create)
+                .get(chat_mls::call_links::list)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/chat/call-links/token",
+            post(chat_mls::call_links::token)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link)),
+        )
+        .route(
+            "/api/chat/call-links/info",
+            post(chat_mls::call_links::info)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link)),
+        )
+        .route(
+            "/api/chat/call-links/:room_id",
+            delete(chat_mls::call_links::delete),
+        )
+        .route(
+            "/api/chat/call-links/:room_id/info",
+            put(chat_mls::call_links::update_info).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
             "/api/chat/push-subscription",
             put(web_push::put_subscription)
                 .delete(web_push::delete_subscription)

@@ -903,6 +903,10 @@ pub struct ChatCapabilities {
     /// This server hosts group calls on its SFU (accounts can start them).
     #[serde(default)]
     pub group_calls: bool,
+    /// This server hosts call links on its SFU: accounts can make links that
+    /// anyone, with or without an account, joins a call through.
+    #[serde(default)]
+    pub call_links: bool,
     /// Immutable E2EE attachment upload, local/federated durable delivery,
     /// encrypted ledger and browser download are complete. Omitted until the
     /// entire Phase 6 path passes its gates.
@@ -938,6 +942,7 @@ impl Default for ChatCapabilities {
             link_previews: false,
             web_push_public_key: None,
             group_calls: false,
+            call_links: false,
             media: None,
             backup: None,
             sealed_sender_policy: None,

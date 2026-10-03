@@ -326,6 +326,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .as_ref()
             .map(|push| push.public_key().to_owned()),
         group_calls: mls_groups && crate::chat_mls::hosts_group_calls(&state),
+        call_links: crate::chat_mls::hosts_group_calls(&state),
         media: Some(
             kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
                 state.config.chat_media_max_plaintext_bytes,

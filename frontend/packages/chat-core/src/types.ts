@@ -492,6 +492,8 @@ export interface ChatCapabilities {
   linkPreviews?: boolean
   /** This server's SFU hosts group calls, so accounts here can start them. */
   groupCalls?: boolean
+  /** This server's SFU hosts call links: calls anyone holding the link can join. */
+  callLinks?: boolean
   /** VAPID key for Web Push wake-ups (base64url), when the server sends them. */
   webPushPublicKey?: string
   /** Present only after immutable media works locally, federated, and in the browser. */
@@ -732,6 +734,58 @@ export type InviteLinkResult =
   | { result: 'requested'; requestId: string }
   | { result: 'requests'; requests: InviteLinkRequestEntry[] }
   | { result: 'status'; status: InviteRequestStatus }
+
+/** What a call link's secret gives its holder (docs/chat-calls.md). */
+export interface CallLinkKeys {
+  /** The SFU room: 32 lowercase hex characters. */
+  roomId: string
+  /** Presented to the host for an SFU token (standard base64). */
+  accessToken: string
+  /** What the host stores of the access token (standard base64). */
+  accessTokenHash: string
+  /** The media frame key (standard base64, 32 bytes). */
+  frameKey: string
+}
+
+/** What a meeting is called and when it is, as its owner set them. */
+export interface CallLinkInfo {
+  title: string
+  /** When it is planned to start (Unix milliseconds), if it is scheduled. */
+  startsAtMs?: number
+  /** How long it is planned to last; only with a start. */
+  durationMinutes?: number
+}
+
+/** One message written during a meeting. */
+export interface CallLinkMessage {
+  /** 32 lowercase hex characters, chosen by the sender. */
+  id: string
+  text: string
+  sentAtMs: number
+}
+
+/** The call link functions of the chat WASM module. Secrets are standard base64. */
+export interface CallLinkCrypto {
+  /** A fresh public nonce for a new link (32 lowercase hex characters). */
+  callLinkNonce(): string
+  /** The secret of the link its owner made with `nonce`, from the account master key (base64). */
+  callLinkOwnerSecret(masterKey: string, nonce: string): string
+  callLinkKeys(secret: string): CallLinkKeys
+  /** The part of the link's URL after `#`. */
+  callLinkFragment(secret: string): string
+  /** The secret a fragment carries; throws when it is not a call link. */
+  callLinkParse(fragment: string): string
+  /** Seal a participant's chosen name for the others in the call. */
+  callLinkSealName(secret: string, name: string): string
+  /** The name a participant sealed; throws when it was not made with this link. */
+  callLinkOpenName(secret: string, sealed: string): string
+  /** Seal the meeting's title and time for the host to keep. */
+  callLinkSealInfo(secret: string, info: CallLinkInfo): string
+  callLinkOpenInfo(secret: string, sealed: string): CallLinkInfo
+  /** Seal a message written during the meeting, for the others in it. */
+  callLinkSealMessage(secret: string, message: CallLinkMessage): string
+  callLinkOpenMessage(secret: string, sealed: string): CallLinkMessage
+}
 
 /** The link functions of the chat WASM module. */
 export interface InviteLinkCrypto {
@@ -1879,7 +1933,7 @@ export interface ProfileLookup {
   accessKey: string
 }
 
-export interface ChatWasmModule extends InviteLinkCrypto {
+export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
   /** The account's own profile key, from the master key. */
   accountProfileKey(masterKey: Uint8Array, current: unknown, account: string): ProfileLookup
   /** Where to fetch a profile, from its key (standard base64). */
