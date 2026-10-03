@@ -547,6 +547,35 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   microphone button in a direct chat (Note to Self and groups have them),
   with no explanation. Either provision it automatically, as the server
   identity and ordering key already are, or tell the person why.
+- **Screen sharing in calls.** A call carries the camera and microphone
+  only; there is no way to share a screen or a window. Wanted for one-to-one
+  calls (a second video track, or the camera's replaced, on the existing
+  peer connection) and for group calls (a screen-share track through the
+  SFU, encrypted with the call's frame key like the others). Needs a share
+  control, a layout that gives the shared screen the large tile, and a
+  clear "you are sharing" state. Browsers that cannot capture a screen
+  (most phones) should still be able to watch one. Design in
+  `docs/chat-calls.md` before building.
+- **A side panel in the call view: participants and chat.** The call view
+  shows only the video tiles and the three controls (microphone, camera,
+  hang up). Wanted: a panel beside the video with two parts, the people in
+  the call (who is muted, whose camera is off) and the conversation's chat,
+  so messages can be read and sent without leaving the call. Collapsible,
+  and a sheet on a phone.
+- **The Kutup Chat logo in the call view.** The call view's top-left corner
+  carries only the peer's name and the timer; it should show the Kutup Chat
+  mark as the other views do.
+- **Call links, and joining without an account.** There is no way to invite
+  someone to a call except by calling an account. Wanted, as in Zoom and
+  Google Meet: a link that starts or joins a call, and guests who can join
+  from it with only a name. This is a design question before it is a
+  feature: calls are keyed from the conversation's own encryption (an MLS
+  exporter secret for group calls), which a guest without an account is not
+  part of, so a linked call needs its own key carried in the link's
+  fragment, a lobby where a member admits guests, and limits on what a guest
+  sees (the call, not the conversation). The SFU token for a guest must come
+  from the host's server without an account session. Design in
+  `docs/chat-calls.md` and its threat model first.
 
 ### Files workspace follow-up
 
