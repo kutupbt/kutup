@@ -1108,8 +1108,13 @@ export class MlsConversationService {
       }),
       this.deviceId,
     )
-    if (response.available < target) {
-      throw new Error('MLS KeyPackage publication did not reach the requested target')
+    // Fewer than the target afterwards is not a failure: KeyPackages are
+    // taken one at a time by whoever adds this device to a group, and one
+    // taken between the count and the publication leaves the stock short
+    // until the next top-up. What must hold is that the publication counted:
+    // a server that stored none of them is a failure.
+    if (response.available < packages.length && response.available <= count.available) {
+      throw new Error('MLS KeyPackage publication was not stored')
     }
     return response.available
   }
