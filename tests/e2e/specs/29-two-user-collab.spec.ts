@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { apiUrl, appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { backFromEditor, createFolder, createNote, item, itemAction, noteLive, noteText, openItem, typeAtEnd } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*TwoUserCollabPassword'
@@ -42,6 +42,28 @@ test('a note in a shared folder is edited together by two people', async ({ brow
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect.poll(() => localShare, { timeout: 30_000 }).toBe(201)
   expect(federated).toEqual([])
+  await a.keyboard.press('Escape')
+
+  // The same with Bob's Kutup address on this server (user@server), which
+  // looks like an email address but is not one. It is still a share within
+  // the server.
+  const settings = await a.request.get(apiUrl('/auth/settings'))
+  const serverName = ((await settings.json()) as { chat: { serverName: string } }).chat.serverName
+  const second = `by-address-${tag}`
+  await createFolder(a, second)
+  localShare = 0
+  await itemAction(a, second, 'Share')
+  await dialog.getByLabel('Email or Kutup address').fill(`${bob.username}@${serverName}`)
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect.poll(() => localShare, { timeout: 30_000 }).toBe(201)
+  expect(federated).toEqual([])
+  await a.keyboard.press('Escape')
+
+  // An address here that nobody has is "no account", not a failed share.
+  await itemAction(a, second, 'Share')
+  await dialog.getByLabel('Email or Kutup address').fill(`nobody-${tag}@${serverName}`)
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText(/no account|not found|No one/i, { timeout: 30_000 })
   await a.keyboard.press('Escape')
 
   // Bob finds it under Shared with me and opens the note.

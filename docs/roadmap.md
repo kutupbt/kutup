@@ -539,6 +539,15 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Direct-chat media without sealed sender says nothing.** Attachments,
+  stickers, view-once media and voice notes to another person travel by
+  sealed delivery, which a server offers only once its operator has
+  provisioned it (`docs/self-hosting.md`, "Contacts-only sealed sender").
+  On a server without it the composer simply has no attach, sticker or
+  microphone button in a direct chat (Note to Self and groups have them),
+  with no explanation. Either provision it automatically, as the server
+  identity and ordering key already are, or tell the person why.
+
 ### Files workspace follow-up
 
 The Polar Workspace redesign now provides the responsive Files header,

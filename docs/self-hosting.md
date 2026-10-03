@@ -502,6 +502,11 @@ charged Chat bytes.
 
 ## Contacts-only sealed sender
 
+Without this, people can still message each other, but attachments, stickers,
+view-once media and voice notes work only in Note to Self and in groups: in a
+direct chat they travel by sealed delivery, and the app hides those controls
+on a server that does not offer it.
+
 Provision the trust root on a machine that is not the Kutup application server.
 The image contains an offline helper; copying that binary to the offline system
 does not require copying the server configuration or database:

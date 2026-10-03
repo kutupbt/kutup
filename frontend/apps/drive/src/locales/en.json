@@ -166,7 +166,7 @@
       "title": "Share “{{name}}”",
       "description": "People you share with get their own sealed copy of this folder's key. Subfolders are shared separately.",
       "recipient": "Email or Kutup address",
-      "recipientHint": "An email for someone on this server, or user@other-server.",
+      "recipientHint": "A Kutup address (user@server), here or on another server, or the email of someone on this server.",
       "canUpload": "Can add and edit files",
       "canUploadHint": "Without this they can only view. What they add counts against their own storage.",
       "quota": "Upload limit (GiB)",
