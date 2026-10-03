@@ -18,6 +18,7 @@ import type {
 import { privateCiphertextCacheForAccountV1, type PrivateCiphertextCacheV1 } from '@kutup/files/mediaCache'
 import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
+import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
  * One chat connection per signed-in tab, outside React: `ChatService.open`
@@ -28,7 +29,11 @@ import type { ChatData } from '../state/views'
  * newer one.
  */
 
-export type ChatFailure = 'capabilities' | 'serverUnsupported' | 'browserUnsupported' | 'unavailable'
+/**
+ * `unreachable`: the server could not be reached; Chat opens again by itself.
+ * `unavailable`: this browser's own Chat state would not open.
+ */
+export type ChatFailure = 'capabilities' | 'serverUnsupported' | 'browserUnsupported' | 'unreachable' | 'unavailable'
 
 export interface ChatSelf {
   account: AccountAddress
@@ -103,6 +108,8 @@ const listeners = new Set<() => void>()
 let openedFor: string | null = null
 let generation = 0
 let teardown: (() => void) | null = null
+let reopenTimer: number | null = null
+let reopenAttempt = 0
 
 function set(patch: Partial<ChatState>): void {
   state = { ...state, ...patch }
@@ -220,8 +227,10 @@ export function openChat(session: Session): void {
     let capabilities: ChatCapabilities | null
     try {
       capabilities = await fetchChatCapabilities()
-    } catch {
-      if (openedFor === sessionId) set({ status: 'failed', failure: 'capabilities' })
+    } catch (error) {
+      if (openedFor !== sessionId) return
+      if (isServerUnreachable(error)) reopenLater(session, null)
+      else set({ status: 'failed', failure: 'capabilities' })
       return
     }
     if (openedFor !== sessionId) return
@@ -248,6 +257,10 @@ export function openChat(session: Session): void {
     } catch (error) {
       if (openedFor !== sessionId) return
       console.error('chat: could not open', error)
+      if (!(error instanceof ChatServiceError) && isServerUnreachable(error)) {
+        reopenLater(session, capabilities)
+        return
+      }
       set({
         status: 'failed',
         failure: error instanceof ChatServiceError ? error.code : 'unavailable',
@@ -274,6 +287,7 @@ export function openChat(session: Session): void {
       for (const unsubscribe of unsubscribers) unsubscribe()
       service.dispose()
     }
+    reopenAttempt = 0
     set({
       status: 'ready',
       service,
@@ -286,8 +300,37 @@ export function openChat(session: Session): void {
   })()
 }
 
+/**
+ * The server cannot be reached: say so, and open again by itself, sooner at
+ * first and then every half minute, and at once when the browser comes back
+ * online. Nothing about this browser's state is in doubt, so no repair is
+ * offered (openFailure.ts).
+ */
+function reopenLater(session: Session, capabilities: ChatCapabilities | null): void {
+  set({ status: 'failed', failure: 'unreachable', capabilities })
+  const delay = REOPEN_DELAYS_MS[Math.min(reopenAttempt, REOPEN_DELAYS_MS.length - 1)]
+  reopenAttempt += 1
+  const reopen = () => {
+    if (openedFor !== session.sessionId || state.failure !== 'unreachable') return
+    reopenChat(session)
+  }
+  reopenTimer = window.setTimeout(reopen, delay)
+  window.addEventListener('online', reopen, { once: true })
+}
+
+/** Try to open Chat again now (the "Try now" button, the retry timer). */
+export function reopenChat(session: Session): void {
+  const attempt = reopenAttempt
+  closeChat()
+  reopenAttempt = attempt
+  openChat(session)
+}
+
 /** Close the chat (sign-out, another account). */
 export function closeChat(): void {
+  if (reopenTimer !== null) window.clearTimeout(reopenTimer)
+  reopenTimer = null
+  reopenAttempt = 0
   teardown?.()
   teardown = null
   openedFor = null

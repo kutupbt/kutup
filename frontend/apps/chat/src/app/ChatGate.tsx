@@ -6,9 +6,9 @@ import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
 import { loadReadMarks } from '../state/readState'
-import { openChat, useChat } from './chatStore'
+import { openChat, reopenChat, useChat } from './chatStore'
 
 /**
  * Opens the chat for the signed-in account and holds everything back until
@@ -31,6 +31,24 @@ export function ChatGate({ children }: { children: ReactNode }) {
   if (chat.status !== 'failed') return <LoadingPanel label={t('chat.preparing')} />
 
   const failure = chat.failure ?? 'unavailable'
+  // The server is out of reach, which is nobody's device at fault: wait and
+  // retry, and offer nothing destructive.
+  if (failure === 'unreachable') {
+    return (
+      <div className="mx-auto flex min-h-svh max-w-md flex-col justify-center gap-4 p-6">
+        <Alert variant="warn" title={t('chat.unreachable.title')}>
+          {t('chat.unreachable.body')}
+        </Alert>
+        <div className="flex items-center gap-3">
+          <Button onClick={() => reopenChat(session)}>{t('chat.unreachable.tryNow')}</Button>
+          <span className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+            <Spinner label={t('chat.unreachable.retrying')} className="size-4" />
+            {t('chat.unreachable.retrying')}
+          </span>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="mx-auto flex min-h-svh max-w-md flex-col justify-center gap-4 p-6">
       <Alert variant="error" title={t('chat.failed.title')}>

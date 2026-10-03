@@ -539,6 +539,14 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Groups are to be rebuilt.** Group chats (MLS with a federated ordering
+  service) proved fragile on the first live server when devices changed, and
+  the plan is to rebuild them on an architecture that heals by itself in a
+  federation of browsers (see the research report "Self healing encrypted
+  group chat"). Until then a server can run without them (`CHAT_GROUPS=false`:
+  direct chats only, no group calls), and direct chats get the self-healing
+  first: pushed device-list changes, healing on send, undecryptable messages
+  as placeholders that fill in, automatic session repair.
 - **Group device repair: what is left.** A group now recovers when a
   member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
   Still open: it takes up to two minutes (the device check's period), plus
@@ -546,8 +554,7 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   replaced device sees the group read-only; a non-administrator cannot
   repair a member who lives on another server; messages sent to the account
   before its new device was admitted are lost to that device and linger in
-  its mailbox until they expire; and "Repair this browser" is still offered
-  when the server is only unreachable, where retrying is the right answer.
+  its mailbox until they expire.
   The server rule and the engine's cross-account path are covered by browser
   tests (38) and TypeScript unit tests, not yet by Rust unit tests.
 - **Direct-chat media without sealed sender says nothing.** Attachments,

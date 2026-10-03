@@ -322,6 +322,12 @@
       "title": "Chat could not open",
       "toDrive": "Go to Drive"
     },
+    "unreachable": {
+      "title": "The server can't be reached",
+      "body": "Chat opens by itself as soon as the server answers. Nothing on this device is lost.",
+      "tryNow": "Try now",
+      "retrying": "Retrying…"
+    },
     "list": {
       "label": "Conversations",
       "blocked": "Blocked",

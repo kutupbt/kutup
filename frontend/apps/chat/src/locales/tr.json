@@ -322,6 +322,12 @@
       "title": "Sohbet açılamadı",
       "toDrive": "Drive’a git"
     },
+    "unreachable": {
+      "title": "Sunucuya ulaşılamıyor",
+      "body": "Sunucu yanıt verir vermez Sohbet kendiliğinden açılır. Bu cihazdaki hiçbir şey kaybolmaz.",
+      "tryNow": "Şimdi dene",
+      "retrying": "Yeniden deneniyor…"
+    },
     "list": {
       "label": "Sohbetler",
       "blocked": "Engellendi",
