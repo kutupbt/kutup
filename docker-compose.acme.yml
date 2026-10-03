@@ -1,0 +1,48 @@
+# Automatic HTTPS certificates from Let's Encrypt for Kutup's hostnames,
+# renewed without attention. Add it to the other compose files:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
+#
+# Needs KUTUP_BASE_DOMAIN in .env, every app hostname (account, drive, chat,
+# photos, maps, office) pointing at this machine, and ports 80 and 443
+# reachable from the internet. docs/self-hosting.md, "Automatic certificates".
+
+services:
+  acme:
+    image: certbot/certbot:v5.8.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/acme.sh"]
+    environment:
+      KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}
+      # Other names to certify instead of the six app hostnames (comma-separated).
+      KUTUP_ACME_DOMAINS: ${KUTUP_ACME_DOMAINS:-}
+      # Where Let's Encrypt sends expiry warnings. Optional.
+      KUTUP_ACME_EMAIL: ${KUTUP_ACME_EMAIL:-}
+      # 1 gets untrusted test certificates, for trying a setup out.
+      KUTUP_ACME_STAGING: ${KUTUP_ACME_STAGING:-0}
+    volumes:
+      - ./nginx/acme.sh:/acme.sh:ro
+      - ./nginx/certs:/certs
+      - acme_state:/etc/letsencrypt
+      - acme_webroot:/var/www/acme
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /certs/fullchain.pem && test -s /certs/privkey.pem"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  nginx:
+    # Let's Encrypt checks on port 80, and browsers expect 443.
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - acme_webroot:/var/www/acme:ro
+      - ./nginx/90-reload-on-new-certificate.sh:/docker-entrypoint.d/90-reload-on-new-certificate.sh:ro
+    depends_on:
+      acme:
+        condition: service_healthy
+
+volumes:
+  acme_state:
+  acme_webroot:

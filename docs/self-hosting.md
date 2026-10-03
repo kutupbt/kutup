@@ -300,7 +300,33 @@ renewing or replacing them, reload Nginx:
 docker compose exec nginx nginx -s reload
 ```
 
-### Using Certbot (Let's Encrypt)
+### Automatic certificates
+
+`docker-compose.acme.yml` adds a small companion that gets a Let's Encrypt
+certificate for the app hostnames, renews it, and has Nginx pick each new
+one up without a restart. It needs:
+
+- `KUTUP_BASE_DOMAIN` in `.env` (the certificate covers `account`, `drive`,
+  `chat`, `photos`, `maps` and `office` under it; `KUTUP_ACME_DOMAINS`, a
+  comma-separated list, names other hostnames instead);
+- each of those hostnames pointing at this machine;
+- ports 80 and 443 reachable from the internet. Let's Encrypt proves
+  ownership by fetching a file over port 80, so no DNS credentials are kept
+  on the server.
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
+```
+
+The overlay publishes Nginx on 80 and 443. On the very first start Nginx
+serves a self-signed certificate for the few seconds until the real one
+arrives. `KUTUP_ACME_EMAIL` (optional) is where Let's Encrypt sends expiry
+warnings; `KUTUP_ACME_STAGING=1` gets untrusted test certificates for trying
+a setup out. Follow it with `docker compose ... logs acme`; a failed check is
+tried again every 15 minutes. The certificate and Let's Encrypt account live
+in the `acme_state` volume and `nginx/certs/`.
+
+### Using Certbot (Let's Encrypt) by hand
 
 Obtain the initial certificate before starting the Compose Nginx, or stop it so
 Certbot's standalone listener can own ports 80/443. Copy the live material into
