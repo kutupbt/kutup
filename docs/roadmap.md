@@ -539,6 +539,21 @@ later.
 Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
 (required before deployment).
 
+- **Call links: admission and moderation.** A call link is the whole
+  capability (`docs/chat-calls.md`, "Call links"): whoever has it joins.
+  Not built yet: a waiting room where the owner admits each joiner; removing
+  someone from the call and ending it for everyone (the server would have to
+  act on the SFU as the room's administrator, and the frame key would have
+  to change, since a removed person still holds the link); an expiry; and a
+  name for a link in the owner's list.
+- **Call links: joining as yourself.** Everyone in a link call shows the
+  name they typed, including people with accounts. A signed-in person could
+  instead join with a name the others can verify against their contact, and
+  a link from another server could open inside their own Chat.
+- **Call links: chat in the call.** A link call has no conversation behind
+  it, so its call view has no Chat panel. Messages for the call's duration
+  would travel through the SFU, sealed under a key from the link.
+
 ### Files workspace follow-up
 
 The Polar Workspace redesign now provides the responsive Files header,

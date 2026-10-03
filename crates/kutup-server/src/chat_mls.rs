@@ -8,6 +8,7 @@ mod admin_routes;
 mod anonymous_federation;
 mod anonymous_routes;
 mod authority_bootstrap;
+pub(crate) mod call_links;
 mod control_federation;
 mod control_history;
 mod control_routes;

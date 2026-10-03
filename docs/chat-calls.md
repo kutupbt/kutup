@@ -158,6 +158,71 @@ message. The timeline shows each call's start once.
 **Group calls in the timeline:** the start notice, and the list preview
 ("Group call started" / "Group call ended").
 
+## Call links
+
+A call link is a call anyone holding the link can join, with or without a
+Kutup account, as in Signal's call links or a meeting link. An account makes
+one in Chat ("New chat" → "Call links") and sends it however it likes. It
+needs the server's SFU (the capability `chat.callLinks`).
+
+**The link:** `https://<chat app>/call#<fragment>`, where the fragment is
+base64url (no padding) of `0x01 || secret (32 bytes)`. Browsers never send
+the fragment to a server. The page at `/call` sits outside the app's
+sign-in: it asks for a name and joins.
+
+**Keys:** from the secret, HKDF-SHA256 (salt `kutup/chat/call-link/v1`)
+derives:
+
+| Label | Value | Used for |
+| --- | --- | --- |
+| `room id` | 16 bytes, as 32 hex characters | the SFU room, and what the host files the link under |
+| `access token` | 32 bytes | presented to the host for an SFU token; the host stores only its SHA-256 |
+| `frame key` | 32 bytes | media frames are encrypted under it in the browser (key index 0) |
+| `name key` | 32 bytes | XChaCha20-Poly1305 over each participant's chosen name |
+
+A sealed name is `nonce (24) || ciphertext` over `length (u32 BE) || name ||
+zeros`, always 128 bytes of plaintext (168 sealed), with the associated data
+`kutup/chat/call-link/v1/name 0x00 roomId`. A name is 1 to 124 bytes of
+UTF-8 without control characters. The Rust engine (`kutup-chat-core`
+`call_link.rs`) owns these formats, with a fixed test vector; the browser
+reaches it through WASM.
+
+**The owner's links:** the owner's secret for a link is itself derived:
+HKDF-SHA256 over the account master key with the same salt and the info
+`owner secret 0x00 nonce`, where `nonce` is 16 random bytes the host stores
+with the link. Any of the owner's devices lists its links and derives each
+one again; the host never holds a secret. An account keeps at most 50.
+
+**The host stores**, per link: the room id, the nonce, the SHA-256 of the
+access token, the owner and the time. It offers:
+
+- to the owner: create, list and delete (`/api/chat/call-links`);
+- to anyone: `POST /api/chat/call-links/token` with the room id, the access
+  token, a random participant identity and the joiner's sealed name. It
+  answers with a 6-hour LiveKit token for that one room (join, publish,
+  subscribe; never room admin), carrying the sealed name as the
+  participant's metadata. A wrong token and an unknown room are answered
+  alike. The route needs no account, so it is limited to 30 a minute per
+  address (`RATE_LIMIT_CALL_LINK_PER_MIN`), and the SFU is never open to
+  rooms nobody registered.
+
+**In the call:** media goes through the host's SFU, each frame encrypted
+under the link's frame key, so the SFU forwards what it cannot read. The SFU
+sees each participant as a random identity and an opaque label; the others
+open the label with the name key. Screen sharing and the People panel work
+as in a group call. There is no chat panel: a link call has no conversation
+behind it.
+
+**What a link is, and is not:**
+- The link is the whole capability. Whoever has it can join, hear and see
+  the call, and hand it on. There is no waiting room and no approval.
+- Names are what people typed. Nothing ties a name to an account, including
+  for people who have one; the join page says so.
+- Deleting a link stops new joins. People already in the call stay until
+  they leave (their SFU token lasts up to six hours).
+- A link is one room: everyone who opens it while others are there is in
+  the same call.
+
 ## The call view
 
 Both kinds of call open the same view over the app: the Kutup Chat mark, the
@@ -205,6 +270,11 @@ For group calls, the host's SFU sees:
 It never sees who the participants are, the group, or the media. Other
 servers see only the federated token request (room id and tag) from their
 accounts.
+
+For call links, the host additionally learns that a link exists, which
+account made it and when, and the network address of each joiner when it
+asks for a token. It never learns the link, the names people chose, or the
+media. Someone who gets the link learns all three.
 
 
 - **Kutup servers:** they carry the signals as ordinary encrypted Direct

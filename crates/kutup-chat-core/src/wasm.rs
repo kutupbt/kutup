@@ -3714,6 +3714,74 @@ struct InviteLinkFragmentOutput {
     host: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CallLinkKeysOutput {
+    room_id: String,
+    access_token: String,
+    access_token_hash: String,
+    frame_key: String,
+}
+
+/// A fresh public nonce for a new call link (docs/chat-calls.md).
+#[wasm_bindgen(js_name = callLinkNonce)]
+pub fn call_link_nonce() -> String {
+    crate::call_link::new_call_link_nonce()
+}
+
+/// The secret of the link its owner made with `nonce`.
+#[wasm_bindgen(js_name = callLinkOwnerSecret)]
+pub fn call_link_owner_secret(
+    master_key: String,
+    nonce: String,
+) -> std::result::Result<String, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    crate::call_link::owner_call_link_secret(&master_key, &nonce)
+        .map(|secret| secret.to_string())
+        .map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkKeys)]
+pub fn call_link_keys(secret: String) -> std::result::Result<JsValue, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    let keys = crate::call_link::CallLinkKeys::derive(&secret).map_err(chat_error)?;
+    to_output(&CallLinkKeysOutput {
+        room_id: keys.room_id.clone(),
+        access_token: keys.access_token.clone(),
+        access_token_hash: keys.access_token_hash.clone(),
+        frame_key: keys.frame_key.to_string(),
+    })
+}
+
+#[wasm_bindgen(js_name = callLinkFragment)]
+pub fn call_link_fragment_js(secret: String) -> std::result::Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    crate::call_link::call_link_fragment(&secret).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkParse)]
+pub fn call_link_parse(fragment: String) -> std::result::Result<String, JsValue> {
+    crate::call_link::parse_call_link_fragment(&fragment)
+        .map(|secret| secret.to_string())
+        .map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkSealName)]
+pub fn call_link_seal_name(secret: String, name: String) -> std::result::Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.seal_name(&name))
+        .map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkOpenName)]
+pub fn call_link_open_name(secret: String, sealed: String) -> std::result::Result<String, JsValue> {
+    let secret = zeroize::Zeroizing::new(secret);
+    crate::call_link::CallLinkKeys::derive(&secret)
+        .and_then(|keys| keys.open_name(&sealed))
+        .map_err(chat_error)
+}
+
 fn invite_link_input(
     link: JsValue,
 ) -> std::result::Result<kutup_chat_proto::MlsGroupInviteLinkV1, JsValue> {

@@ -1,14 +1,7 @@
-import {
-  BaseKeyProvider,
-  createKeyMaterialFromBuffer,
-  Room,
-  RoomEvent,
-  Track,
-  type Participant,
-} from 'livekit-client'
 import type { ChatService } from '@kutup/chat-core/service'
 import type { ChatCallMedia, ChatGroupCall, LocalMlsConversationRecord } from '@kutup/chat-core/types'
 import { canonicalAccountAddress } from '@kutup/chat-core/identity'
+import { SfuRoom, type SfuParticipant } from './sfuRoom'
 
 // Group calls through the SFU of the server that started them, end-to-end
 // encrypted (docs/chat-calls.md):
@@ -22,24 +15,13 @@ import { canonicalAccountAddress } from '@kutup/chat-core/identity'
 //   roster; the SFU cannot.
 // - "Started" and "ended" travel to the group over MLS.
 
-/** Key indexes the E2EE keyring holds (livekit-client's default). */
-const KEYRING_SIZE = 16
 /** How often the group's epoch is checked for a new key. */
 const KEY_CHECK_MS = 3_000
 const ENDED_SCREEN_MS = 2_000
 
-export interface GroupCallParticipant {
-  /** The SFU identity (a tag). */
-  identity: string
+export interface GroupCallParticipant extends Omit<SfuParticipant, 'label'> {
   /** Who it is, when the tag matches a member. */
   address: string | null
-  local: boolean
-  audio: MediaStreamTrack | null
-  video: MediaStreamTrack | null
-  /** The screen this participant is sharing, beside the camera. */
-  screen: MediaStreamTrack | null
-  muted: boolean
-  speaking: boolean
 }
 
 export interface GroupCallState {
@@ -54,24 +36,12 @@ export interface GroupCallState {
   failed?: boolean
 }
 
-class EpochKeyProvider extends BaseKeyProvider {
-  constructor() {
-    super({ sharedKey: true, ratchetWindowSize: 0, failureTolerance: -1, keyringSize: KEYRING_SIZE })
-  }
-
-  async setEpochKey(key: Uint8Array, epoch: number): Promise<void> {
-    const material = await createKeyMaterialFromBuffer(toArrayBuffer(key))
-    this.onSetEncryptionKey(material, undefined, epoch % KEYRING_SIZE)
-  }
-}
-
 type Listener = () => void
 
 export class GroupCallController {
   private state: GroupCallState | null = null
   private readonly listeners = new Set<Listener>()
-  private room: Room | null = null
-  private keys: EpochKeyProvider | null = null
+  private room: SfuRoom | null = null
   private keyEpoch = -1
   private keyTimer: ReturnType<typeof setInterval> | null = null
   private clearTimer: ReturnType<typeof setTimeout> | null = null
@@ -128,46 +98,18 @@ export class GroupCallController {
       this.tags = await memberTags(tagKey, this.roster(groupId))
       const identity = (await tag(tagKey, this.account)) + hex(crypto.getRandomValues(new Uint8Array(4)))
       const { url, token } = await this.service.groupCallToken(call.host, call.roomId, identity)
-      const keys = new EpochKeyProvider()
-      this.keys = keys
-      await this.refreshKey()
-      const room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
-        e2ee: {
-          keyProvider: keys,
-          worker: new Worker(new URL('livekit-client/e2ee-worker', import.meta.url), { type: 'module' }),
-        },
-      })
-      this.room = room
-      for (const event of [
-        RoomEvent.ParticipantConnected,
-        RoomEvent.ParticipantDisconnected,
-        RoomEvent.TrackPublished,
-        RoomEvent.TrackUnpublished,
-        RoomEvent.TrackSubscribed,
-        RoomEvent.TrackUnsubscribed,
-        RoomEvent.TrackMuted,
-        RoomEvent.TrackUnmuted,
-        RoomEvent.LocalTrackPublished,
-        RoomEvent.LocalTrackUnpublished,
-        RoomEvent.ActiveSpeakersChanged,
-      ]) {
-        room.on(event, () => {
+      const room = new SfuRoom({
+        changed: () => {
           this.syncScreen()
           this.refreshParticipants()
-        })
-      }
-      room.on(RoomEvent.Disconnected, () => void this.ended(false))
-      room.on(RoomEvent.EncryptionError, (error) => {
-        console.warn('chat: group call frame decryption failed', error)
+        },
+        disconnected: () => void this.ended(false),
         // A member a key ahead: our epoch may be behind.
-        void this.refreshKey()
+        decryptionFailed: () => void this.refreshKey(),
       })
-      await room.setE2EEEnabled(true)
-      await room.connect(url, token)
-      await room.localParticipant.setMicrophoneEnabled(true)
-      if (withVideo) await room.localParticipant.setCameraEnabled(true)
+      this.room = room
+      await this.refreshKey()
+      await room.connect(url, token, withVideo)
       this.keyTimer = setInterval(() => void this.refreshKey(), KEY_CHECK_MS)
       this.patch({ phase: 'active' })
       this.refreshParticipants()
@@ -182,7 +124,7 @@ export class GroupCallController {
   /** Leave; the last one out tells the group the call ended. */
   async leave(): Promise<void> {
     if (!this.state || this.state.phase === 'ended') return
-    const alone = (this.room?.remoteParticipants.size ?? 0) === 0
+    const alone = (this.room?.remoteCount ?? 0) === 0
     await this.ended(alone)
   }
 
@@ -191,7 +133,7 @@ export class GroupCallController {
     const state = this.state
     if (!room || !state) return
     const muted = !state.muted
-    void room.localParticipant.setMicrophoneEnabled(!muted)
+    void room.setMicrophone(!muted)
     this.patch({ muted })
   }
 
@@ -199,7 +141,7 @@ export class GroupCallController {
     const room = this.room
     const state = this.state
     if (!room || !state) return
-    await room.localParticipant.setCameraEnabled(!state.cameraOn)
+    await room.setCamera(!state.cameraOn)
     this.patch({ cameraOn: !state.cameraOn })
     this.refreshParticipants()
   }
@@ -213,7 +155,7 @@ export class GroupCallController {
     const room = this.room
     const state = this.state
     if (!room || !state) return
-    await room.localParticipant.setScreenShareEnabled(!state.screenOn, { audio: false })
+    await room.setScreen(!state.screenOn)
     this.syncScreen()
   }
 
@@ -221,7 +163,7 @@ export class GroupCallController {
   private syncScreen(): void {
     const room = this.room
     if (!room || !this.state) return
-    const screenOn = room.localParticipant.isScreenShareEnabled
+    const screenOn = room.screenOn
     if (screenOn !== this.state.screenOn) this.patch({ screenOn })
   }
 
@@ -239,12 +181,14 @@ export class GroupCallController {
   /** Take the key of the group's current epoch, when it changed. */
   private async refreshKey(): Promise<void> {
     const state = this.state
-    const keys = this.keys
+    const keys = this.room?.keys
     if (!state || !keys) return
     const { epoch, key } = await this.service.groupCallKey(state.groupId, state.call.callId)
     if (epoch === this.keyEpoch) return
     this.keyEpoch = epoch
-    await keys.setEpochKey(key, epoch)
+    // Each epoch's key at its own index, so frames from a member a step
+    // behind still decrypt.
+    await keys.set(key, epoch)
     console.debug('chat: group call key for epoch', epoch)
     if (state.phase !== 'active') return
     // New members since the call began can be named too.
@@ -257,8 +201,7 @@ export class GroupCallController {
     // tells the group again, so they can join.
     const room = this.room
     if (added && room) {
-      const identities = [room.localParticipant.identity, ...room.remoteParticipants.keys()].sort()
-      if (identities[0] === room.localParticipant.identity) {
+      if (room.identities().sort()[0] === room.localIdentity) {
         await this.service.sendGroupCall(state.groupId, state.call).catch((error: unknown) =>
           console.warn('chat: could not announce the call to new members', error))
       }
@@ -268,27 +211,11 @@ export class GroupCallController {
   private refreshParticipants(): void {
     const room = this.room
     if (!room || !this.state) return
-    const speaking = new Set(room.activeSpeakers.map((participant) => participant.identity))
-    const describe = (participant: Participant, local: boolean): GroupCallParticipant => {
-      const audio = participant.getTrackPublication(Track.Source.Microphone)
-      const video = participant.getTrackPublication(Track.Source.Camera)
-      const screen = participant.getTrackPublication(Track.Source.ScreenShare)
-      return {
-        identity: participant.identity,
-        address: local ? this.account : (this.tags.get(participant.identity.slice(0, 24)) ?? null),
-        local,
-        audio: local ? null : (audio?.track?.mediaStreamTrack ?? null),
-        video: video && !video.isMuted ? (video.track?.mediaStreamTrack ?? null) : null,
-        screen: screen && !screen.isMuted ? (screen.track?.mediaStreamTrack ?? null) : null,
-        muted: !audio || audio.isMuted,
-        speaking: speaking.has(participant.identity),
-      }
-    }
     this.patch({
-      participants: [
-        describe(room.localParticipant, true),
-        ...[...room.remoteParticipants.values()].map((participant) => describe(participant, false)),
-      ],
+      participants: room.participants().map(({ label: _label, ...participant }) => ({
+        ...participant,
+        address: participant.local ? this.account : (this.tags.get(participant.identity.slice(0, 24)) ?? null),
+      })),
     })
   }
 
@@ -300,7 +227,7 @@ export class GroupCallController {
     this.keyTimer = null
     const room = this.room
     this.room = null
-    await room?.disconnect().catch(() => undefined)
+    await room?.disconnect()
     this.releaseInCall?.()
     this.releaseInCall = null
     if (announce) {
@@ -318,7 +245,6 @@ export class GroupCallController {
     if (this.keyTimer) clearInterval(this.keyTimer)
     this.clearTimer = null
     this.keyTimer = null
-    this.keys = null
     this.keyEpoch = -1
     this.tags = new Map()
     this.state = null
@@ -381,10 +307,4 @@ function hex(bytes: Uint8Array): string {
 
 function base64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes))
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new ArrayBuffer(bytes.byteLength)
-  new Uint8Array(copy).set(bytes)
-  return copy
 }

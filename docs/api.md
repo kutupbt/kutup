@@ -1745,6 +1745,37 @@ mints it; another host is asked over signed federation
 `429` over 30 per minute per account (300 per origin server), `502` when
 the host cannot be reached.
 
+### POST /api/chat/call-links
+
+`{ "roomId", "nonce", "accessTokenHash" }` → `201` with
+`{ "roomId", "nonce", "createdAt" }`: register a call link
+([`chat-calls.md`](chat-calls.md) "Call links"). `roomId` and `nonce` are 32
+lowercase hex characters; `accessTokenHash` is the SHA-256 of the link's
+access token (standard base64). The link's secret never reaches the server.
+`404` when the server has no SFU, `409` when the link exists or the account
+already has 50.
+
+### GET /api/chat/call-links
+
+→ `{ "links": [{ "roomId", "nonce", "createdAt" }] }`: the account's call
+links, newest first. Its clients derive each link again from the nonce.
+
+### DELETE /api/chat/call-links/:roomId
+
+→ `204`: nobody can join through the link any more. `404` when the account
+has no such link.
+
+### POST /api/chat/call-links/token
+
+**No authentication.** `{ "roomId", "accessToken", "participantId", "label" }`
+→ `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
+for the link's room, for whoever holds the link. `accessToken` is 32 bytes
+of standard base64, `participantId` 32 lowercase hex characters, and
+`label` the joiner's sealed name (168 bytes of standard base64), which the
+token carries to the other participants as metadata. `404` for an unknown
+room and for a wrong access token alike, `429` over 30 a minute per address
+(`RATE_LIMIT_CALL_LINK_PER_MIN`).
+
 ### PUT /api/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device

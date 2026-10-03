@@ -1,4 +1,4 @@
-import { Link2, NotebookPen, Users } from 'lucide-react'
+import { Link2, NotebookPen, Users, Video } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -10,6 +10,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { useChat } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
+import { CallLinksDialog } from '../callLinks/CallLinksDialog'
 import { NewGroupDialog } from './NewGroupDialog'
 import { pathForAddress } from './paths'
 
@@ -25,6 +26,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | undefined>()
   const [group, setGroup] = useState(false)
+  const [callLinks, setCallLinks] = useState(false)
 
   function close() {
     onOpenChange(false)
@@ -114,6 +116,20 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                   {t('chat.groupLink.joinWithLink')}
                 </Button>
               ) : null}
+              {chat.capabilities?.callLinks ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    close()
+                    setCallLinks(true)
+                  }}
+                  data-testid="chat-open-call-links"
+                >
+                  <Video />
+                  {t('chat.callLinks.title')}
+                </Button>
+              ) : null}
             </span>
             <Button type="submit" disabled={!value.trim()}>
               {t('chat.start')}
@@ -123,6 +139,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       </DialogContent>
     </Dialog>
     <NewGroupDialog open={group} onOpenChange={setGroup} />
+    <CallLinksDialog open={callLinks} onOpenChange={setCallLinks} />
     </>
   )
 }

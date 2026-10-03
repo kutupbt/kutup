@@ -190,6 +190,9 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   needs an SFU reachable from this machine (`docker compose --profile sfu`,
   with `CHAT_SFU_URL=wss://sfu.localhost:<port>` and a certificate that
   names `sfu.localhost`) and skips on a stack without one.
+- spec 39: call links: an account makes a link, a browser with no account
+  joins through it by name, both see each other and a shared screen, and
+  deleting the link stops new joins. Needs the same SFU as spec 38.
 - spec 36: a group chat on a server with no federation settings.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.
