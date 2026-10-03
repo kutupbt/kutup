@@ -152,16 +152,24 @@ receipt, or advance a mailbox cursor. New and overlapping live messages
 deduplicate against stable backup record IDs. Deletes and expiry tombstones are
 irreversible in reduction, so an older edit, reaction, or message cannot
 resurrect removed content. Each record's mutation sequence is checked per
-device chain: within a chain every mutation follows the previous one. A chain
-starts at one, or continues a sequence its device had seen of the record: at
-most one past the latest reduced mutation, and possibly equal to or below it,
-because two devices of the account can change the same record from the same
-state (both apply a group closing, both prune the same superseded control)
-without seeing each other's change first. A chain may also start with a
-tombstone at any sequence, for the same reason (a delete-for-me, a superseded
-conversation-state or read-position control). Concurrent chains reduce
-deterministically: a tombstone wins, then the highest mutation, then a
-confirmed delivery, then a canonical order.
+device chain against what that device can have seen. A device numbers a
+change one past the record's state in its own store, which is its own last
+mutation or, once it has merged the account's other devices (every start
+does), the reduced one. So a mutation must be past its device's own previous
+one and at most one past the highest sequence the record has reached on any
+chain. That admits a chain starting at one or continuing a state the device
+had seen, two devices repeating a number because they changed the record from
+the same state (both apply a group closing, both prune the same superseded
+control), and a device jumping ahead to continue a state another device moved
+on. It refuses a device repeating its own number and a number past anything
+that exists. Tombstones are exempt in both directions (a tombstone at any
+sequence, and any change to a record already removed): a tombstone only
+removes and always wins. Concurrent chains reduce deterministically: a
+tombstone wins, then the highest mutation, then a confirmed delivery, then a
+canonical order.
+
+A failed check stops Chat from opening on that account's devices, so the
+rule must admit everything a correct device can emit.
 
 ## Protected media
 
