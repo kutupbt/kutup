@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { createOffice, officeReady } from '../fixtures/office'
 import { backFromEditor, createFolder, createNote, item, itemAction, noteLive, noteText, openItem, typeAtEnd } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*TwoUserCollabPassword'
@@ -90,6 +91,58 @@ test('a note in a shared folder is edited together by two people', async ({ brow
   await expect.poll(() => noteText(b), { timeout: 30_000 }).toContain(`FROM-A-${tag}`)
   await typeAtEnd(b, ` FROM-B-${tag}`)
   await expect.poll(() => noteText(noteA), { timeout: 30_000 }).toContain(`FROM-B-${tag}`)
+  await contextA.close()
+  await contextB.close()
+})
+
+// Sharing a file does not need a trip back to the folder: the file's own
+// view has a Share button, for its owner and for editors allowed to share.
+test('a file is shared from its own view', async ({ browser }) => {
+  test.slow()
+  const alice = newAccount('viewalice', PASSWORD)
+  const bob = newAccount('viewbob', PASSWORD)
+  const contextA = await browser.newContext()
+  const contextB = await browser.newContext()
+  await registerAccount(contextA, alice)
+  await registerAccount(contextB, bob)
+
+  const a = await openDrive(contextA)
+  const note = await createNote(a)
+  await noteLive(a)
+
+  await a.getByRole('button', { name: 'Share', exact: true }).click()
+  const dialog = a.getByRole('dialog').filter({ hasText: "They get this file's own key" })
+  await expect(dialog.getByRole('heading').first()).toContainText(note)
+  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(a.getByText(`Shared with ${bob.username}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+  // Still in the editor.
+  await expect(a.locator('.cm-content')).toBeVisible()
+
+  // Bob has the file, and no Share button of his own: a viewer cannot share.
+  const b = await contextB.newPage()
+  await b.goto(appUrl('drive', '/shared'))
+  await expect(item(b, note)).toBeVisible({ timeout: 60_000 })
+  await openItem(b, note)
+  await expect(b.locator('.cm-content')).toBeVisible({ timeout: 60_000 })
+  await expect(b.getByRole('button', { name: 'Share', exact: true })).toHaveCount(0)
+
+  // The same button in the office editor.
+  await a.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await backFromEditor(a)
+  const logs: string[] = []
+  a.on('console', (line) => {
+    if (line.text().includes('[kutup-bridge]')) logs.push(line.text())
+  })
+  await createOffice(a, 'Document')
+  await officeReady({ page: a, logs })
+  await a.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(dialog.getByRole('heading').first()).toContainText('.docx')
+  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(a.getByText(`Shared with ${bob.username}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+
   await contextA.close()
   await contextB.close()
 })
