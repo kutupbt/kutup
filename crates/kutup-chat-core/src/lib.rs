@@ -54,7 +54,8 @@ pub use db::{
     PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
-    ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
+    ChatEvent, Engine, EngineState, InboundFailure, OutboxFailure, OutboxFlush,
+    PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};
 pub use history_transfer::{

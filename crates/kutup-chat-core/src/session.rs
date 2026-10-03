@@ -1044,6 +1044,11 @@ impl Session {
         mut inbound: InboundEnvelope,
         error: &ChatError,
     ) -> Result<InboundState> {
+        // Whatever the failed attempt staged goes: a ratchet that advanced
+        // for a message whose handling then failed must not be committed with
+        // the failure, or the retry would find the message already consumed,
+        // take it for a duplicate, and acknowledge it away unread.
+        self.store.discard();
         let failure_kind = error.inbound_failure_kind();
         inbound.state = if failure_kind == InboundFailureKind::Duplicate {
             InboundState::PendingAck

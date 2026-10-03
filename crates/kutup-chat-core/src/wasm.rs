@@ -2841,10 +2841,16 @@ impl WasmChatClient {
     /// of-truth reconciliation path.
     pub async fn reconcile(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
-        self.engine
-            .flush_outbox_deferring_optional_failures(&mut rng)
+        // A message the server will not take right now stays queued and is
+        // reported below; it must not keep the mailbox from being read, or
+        // one stuck send would cut this device off from everything incoming
+        // (and stop Chat from opening at all).
+        let send_failures = self
+            .engine
+            .flush_outbox_collecting_failures(&mut rng)
             .await
-            .map_err(chat_error)?;
+            .map_err(chat_error)?
+            .failed;
         // Contact controls are durable best-effort account sync. A temporary
         // failure must not prevent mailbox decrypt/ack; the marker/outbox retry.
         let _ = self
@@ -2864,7 +2870,16 @@ impl WasmChatClient {
             .flush_contact_syncs(&now_rfc3339(), &mut rng)
             .await;
         report.profiles_refreshed = self.engine.refresh_profiles().await.unwrap_or_default();
-        to_output(&ReceiveReportView::from(report))
+        let mut view = ReceiveReportView::from(report);
+        view.send_failures = send_failures
+            .into_iter()
+            .map(|failure| SendFailureView {
+                send_id: failure.send_id,
+                peer: failure.peer,
+                error: failure.error.to_string(),
+            })
+            .collect();
+        to_output(&view)
     }
 
     #[wasm_bindgen(js_name = maintainPrekeys)]
@@ -3188,6 +3203,16 @@ struct ReceiveReportView {
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
+    /// Queued messages that could not be delivered on this pass.
+    send_failures: Vec<SendFailureView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendFailureView {
+    send_id: String,
+    peer: String,
+    error: String,
 }
 
 impl From<ReceiveReport> for ReceiveReportView {
@@ -3210,6 +3235,7 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .map(InboundFailureView::from)
                 .collect(),
             duplicates: report.duplicates,
+            send_failures: Vec::new(),
         }
     }
 }

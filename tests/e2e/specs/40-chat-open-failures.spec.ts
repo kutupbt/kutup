@@ -4,8 +4,8 @@
 // device, is only for a failure of the browser's own state.
 
 import { expect, test } from '@playwright/test'
-import { newAccount, registerAccount } from '../fixtures/apps'
-import { openChat, openChats } from '../fixtures/chat'
+import { newAccount, registerAccount, signIn } from '../fixtures/apps'
+import { openChat, openChats, openSettings, revokeOtherDevices } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*OpenFailurePassword'
 
@@ -46,4 +46,31 @@ test('a failure of this browser\'s own state offers the repair', async ({ browse
   await expect(page.getByRole('button', { name: 'Repair this browser' })).toBeVisible()
 
   await context.close()
+})
+
+// A device revoked from another browser used to sit on "Reconnecting…"
+// for ever. It is told what happened and can register afresh.
+test('a browser whose device was removed elsewhere says so and can be set up again', async ({ browser }) => {
+  test.slow()
+  const account = newAccount('removed', PASSWORD)
+  const contextA = await browser.newContext()
+  await registerAccount(contextA, account)
+  const pageA = await openChat(contextA)
+
+  const contextB = await browser.newContext()
+  await signIn(contextB, account)
+  const pageB = await openChat(contextB)
+  await revokeOtherDevices(pageB, 1)
+
+  await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toBeVisible({ timeout: 120_000 })
+  await pageA.getByRole('button', { name: 'Set up again' }).click()
+  await openChats(pageA)
+  await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toHaveCount(0)
+
+  // It is a device of the account again: the other browser now lists it.
+  await openSettings(pageB, 'Devices')
+  await expect(pageB.locator('[data-testid^="chat-device-revoke-"]')).toHaveCount(1, { timeout: 60_000 })
+
+  await contextA.close()
+  await contextB.close()
 })

@@ -45,6 +45,21 @@ const DRAIN_LIMIT: u32 = 500;
 /// Keep used EC prekey private material for late concurrent prekey messages.
 const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 
+/// The outcome of one pass over the durable outbox.
+#[derive(Default)]
+pub struct OutboxFlush {
+    pub delivered: Vec<SendSummary>,
+    /// Ordinary messages still queued because delivery failed this time.
+    pub failed: Vec<OutboxFailure>,
+}
+
+/// A queued message that could not be delivered on this pass.
+pub struct OutboxFailure {
+    pub send_id: String,
+    pub peer: String,
+    pub error: ChatError,
+}
+
 /// The outcome of a reconciliation pass. Decrypt failures remain in the durable
 /// inbound journal and are reported here; they are never silently acknowledged.
 #[derive(Debug, Default)]
@@ -1508,13 +1523,34 @@ impl Engine {
     /// Retry durable sends while treating hidden optional controls as
     /// best-effort. Receipts retain their exact ciphertext for a later retry;
     /// typing is discarded after its short usefulness window. Neither may
-    /// prevent inbound mailbox processing. Ordinary messages and malformed
-    /// outbox content remain fail-closed.
+    /// prevent inbound mailbox processing. An ordinary message that fails is
+    /// an error here, after everything else was attempted.
     pub async fn flush_outbox_deferring_optional_failures<R: Rng + CryptoRng>(
         &mut self,
         rng: &mut R,
     ) -> Result<Vec<SendSummary>> {
-        let mut summaries = Vec::new();
+        let flush = self.flush_outbox_collecting_failures(rng).await?;
+        match flush.failed.into_iter().next() {
+            Some(failure) => Err(failure.error),
+            None => Ok(flush.delivered),
+        }
+    }
+
+    /// Retry every durable send and report what could not be delivered,
+    /// instead of stopping at the first failure. One message that the server
+    /// keeps refusing must not keep every other conversation's messages from
+    /// going out, nor the mailbox from being read: the caller receives next,
+    /// whatever this returns. A failed entry stays queued with its exact
+    /// ciphertext. Later messages to the same peer wait behind it, so a peer
+    /// never sees them out of order because of a retry.
+    ///
+    /// The error is for the local store only.
+    pub async fn flush_outbox_collecting_failures<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<OutboxFlush> {
+        let mut flush = OutboxFlush::default();
+        let mut waiting_peers = std::collections::BTreeSet::new();
         for entry in self.session.pending_outbox().await? {
             let content = serde_json::from_slice::<ChatContent>(&entry.content).ok();
             let is_receipt = content
@@ -1537,16 +1573,29 @@ impl Engine {
                     .await?;
                 continue;
             }
+            let optional = is_receipt || is_typing || is_call;
+            if !optional && waiting_peers.contains(&entry.peer) {
+                continue;
+            }
+            let send_id = entry.send_id.clone();
+            let peer = entry.peer.clone();
             match self
                 .deliver_outbox_entry(entry, SendSummary::default(), rng)
                 .await
             {
-                Ok(summary) => summaries.push(summary),
-                Err(_) if is_receipt || is_typing || is_call => {}
-                Err(error) => return Err(error),
+                Ok(summary) => flush.delivered.push(summary),
+                Err(_) if optional => {}
+                Err(error) => {
+                    waiting_peers.insert(peer.clone());
+                    flush.failed.push(OutboxFailure {
+                        send_id,
+                        peer,
+                        error,
+                    });
+                }
             }
         }
-        Ok(summaries)
+        Ok(flush)
     }
 
     /// Reconcile the durable local inbound journal and the server mailbox. Raw

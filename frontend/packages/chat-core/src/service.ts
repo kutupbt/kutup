@@ -1,4 +1,5 @@
 import api from '@kutup/session/client'
+import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport } from './transport'
 import type {
@@ -83,7 +84,12 @@ type TypingListener = (event: ChatTypingEvent) => void
 /** How often a tab checks for newly linked devices to add to its groups. */
 const LINKED_DEVICE_CHECK_MS = 2 * 60_000
 
-export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline'
+/**
+ * `deviceRemoved`: the server no longer knows this browser's Chat device (it
+ * was revoked from another device, or expired unused). Nothing reconnects
+ * it; it has to be set up again.
+ */
+export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline' | 'deviceRemoved'
 
 /** The protocol's limit on messages per delete-for-me control. */
 const DELETE_FOR_ME_BATCH = 64
@@ -146,6 +152,7 @@ export class ChatService {
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private reconcileAgain = false
+  private readonly reportedSendFailures = new Set<string>()
   private readonly mls: MlsConversationService | null
   private readonly invites: InviteLinkService | null
   private inviteTimer: ReturnType<typeof setInterval> | null = null
@@ -271,6 +278,7 @@ export class ChatService {
       await service.revokeReplacedDevice(options.userId)
       rememberLocalChatDevice(options.userId, service.deviceId)
       await service.reconcile()
+      requestPersistentStorage()
       void service.maintainPrekeys()
       void service.connectSocket()
       service.startInviteLinks()
@@ -303,7 +311,7 @@ export class ChatService {
       this.socketRetry = null
     }
     this.retryAttempt = 0
-    void this.reconcile()
+    this.reconcileInBackground()
     void this.connectSocket()
   }
 
@@ -1033,6 +1041,15 @@ export class ChatService {
    * into it: one more drain follows, so the message shows without waiting
    * for the next hint.
    */
+  /**
+   * Reconcile where nobody waits for the result (a socket nudge, a timer, a
+   * tab coming back). A failure is not the person's to handle: the next
+   * nudge or retry runs it again.
+   */
+  private reconcileInBackground(): void {
+    this.reconcile().catch(reportBackgroundFailure)
+  }
+
   reconcile(): Promise<ReceiveReport> {
     if (this.reconcilePromise) {
       this.reconcileAgain = true
@@ -1047,6 +1064,13 @@ export class ChatService {
         const mlsTyping = await this.withMlsWorkflow(async () => {
           return await this.mls?.reconcile() ?? []
         })
+        // A queued message the server would not take stays queued, behind
+        // nothing but its own conversation; it is tried again on every pass.
+        for (const failure of report.sendFailures ?? []) {
+          if (this.reportedSendFailures.has(failure.sendId)) continue
+          this.reportedSendFailures.add(failure.sendId)
+          console.warn('chat: a queued message could not be sent yet', failure.error)
+        }
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
@@ -1079,7 +1103,7 @@ export class ChatService {
         this.reconcilePromise = null
         if (this.reconcileAgain && !this.disposed) {
           this.reconcileAgain = false
-          void this.reconcile()
+          this.reconcileInBackground()
         }
       })
     return this.reconcilePromise
@@ -1635,7 +1659,7 @@ export class ChatService {
 
   private wentOnline(): void {
     this.backup?.online()
-    void this.initializeMls().then(() => this.reconcile())
+    void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
     this.reconnect()
   }
 
@@ -1673,7 +1697,7 @@ export class ChatService {
   private readonly handleVisibilityChange = (): void => {
     this.backup?.pageHidden()
     if (document.visibilityState === 'visible') {
-      void this.initializeMls().then(() => this.reconcile())
+      void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
       void this.refreshOwnProfile()
     }
   }
@@ -1711,7 +1735,7 @@ export class ChatService {
         this.setConnection('connected')
         this.startHeartbeat(socket)
         void this.maintainPrekeys()
-        void this.initializeMls().then(() => this.reconcile())
+        void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
       }
       socket.onmessage = (event: MessageEvent<unknown>) => {
         if (isPong(event.data)) {
@@ -1719,7 +1743,7 @@ export class ChatService {
           this.pongDeadline = null
           return
         }
-        void this.reconcile()
+        this.reconcileInBackground()
       }
       socket.onerror = () => socket.close()
       socket.onclose = () => {
@@ -1729,7 +1753,13 @@ export class ChatService {
         this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
         this.scheduleSocketRetry()
       }
-    } catch {
+    } catch (error) {
+      // The server answered that this device does not exist: retrying will
+      // not bring it back, and "reconnecting" forever would hide that.
+      if (isAxiosError(error) && error.response?.status === 404) {
+        this.setConnection('deviceRemoved')
+        return
+      }
       this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
       this.scheduleSocketRetry()
     }
@@ -1740,10 +1770,29 @@ export class ChatService {
     const delay = Math.min(30_000, 500 * 2 ** this.retryAttempt++)
     this.socketRetry = setTimeout(() => {
       this.socketRetry = null
-      void this.reconcile()
+      this.reconcileInBackground()
       void this.connectSocket()
     }, delay)
   }
+}
+
+/**
+ * Ask the browser to keep this origin's storage. Without it Chat's keys and
+ * sessions are "best effort": the browser may evict them under disk
+ * pressure, and Safari clears script-written storage of sites left unvisited
+ * for a week. Browsers grant it by their own rules (engagement, an installed
+ * app, a prompt in Firefox); a refusal changes nothing.
+ */
+function requestPersistentStorage(): void {
+  try {
+    void navigator.storage?.persist?.().catch(() => undefined)
+  } catch {
+    // Not available here.
+  }
+}
+
+function reportBackgroundFailure(error: unknown): void {
+  console.warn('chat: background sync failed; it runs again on the next update', error)
 }
 
 function isPong(data: unknown): boolean {
