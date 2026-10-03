@@ -23,6 +23,8 @@ else
   echo "acme: set KUTUP_BASE_DOMAIN (or KUTUP_ACME_DOMAINS) to the hostnames to certify" >&2
   exit 1
 fi
+# Names beside the apps: the group-call SFU's, say.
+domains="$domains $(printf '%s' "${KUTUP_ACME_EXTRA_DOMAINS:-}" | tr ',' ' ')"
 # shellcheck disable=SC2086
 set -- $domains
 first="$1"

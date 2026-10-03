@@ -174,6 +174,9 @@ services:
     ports:
       - "${KUTUP_HTTP_PORT:-38080}:80"
       - "${KUTUP_HTTPS_PORT:-38443}:443"
+    # The SFU for group calls runs on the host network (nginx.conf).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
@@ -212,8 +215,9 @@ services:
         --denied-peer-ip=169.254.0.0-169.254.255.255
 
   # SFU for group calls (optional: `docker compose --profile sfu up`). Frames
-  # arrive end-to-end encrypted; put port 7880 behind the TLS proxy as
-  # CHAT_SFU_URL (wss://) and open UDP 50000-60000 and TCP 7881.
+  # arrive end-to-end encrypted. The bundled nginx serves it at
+  # wss://sfu.<domain> (set that as CHAT_SFU_URL; the name needs DNS and a
+  # place on the certificate); open UDP 50000-60000 and TCP 7881.
   livekit:
     image: livekit/livekit-server:v1.13
     profiles: ["sfu"]

@@ -16,6 +16,8 @@ services:
       KUTUP_BASE_DOMAIN: ${KUTUP_BASE_DOMAIN:-}
       # Other names to certify instead of the six app hostnames (comma-separated).
       KUTUP_ACME_DOMAINS: ${KUTUP_ACME_DOMAINS:-}
+      # Names to certify beside those (comma-separated), such as sfu.<domain>.
+      KUTUP_ACME_EXTRA_DOMAINS: ${KUTUP_ACME_EXTRA_DOMAINS:-}
       # Where Let's Encrypt sends expiry warnings. Optional.
       KUTUP_ACME_EMAIL: ${KUTUP_ACME_EMAIL:-}
       # 1 gets untrusted test certificates, for trying a setup out.

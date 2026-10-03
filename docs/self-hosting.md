@@ -92,7 +92,8 @@ CHAT_WEB_PUSH=true
 # CHAT_TURN_REALM=turn.example.com
 
 # Group calls: a LiveKit SFU (`docker compose --profile sfu up`). Browsers
-# connect to CHAT_SFU_URL (wss:, proxied by TLS to the SFU's port 7880); UDP
+# connect to CHAT_SFU_URL; the bundled nginx serves the SFU at
+# wss://sfu.<domain>, which needs DNS and a place on the certificate. UDP
 # 50000-60000 and TCP 7881 must be reachable. Frames are end-to-end
 # encrypted, so the SFU forwards what it cannot read. Without these, accounts
 # here can join group calls other servers host but not start one.
@@ -308,7 +309,9 @@ one up without a restart. It needs:
 
 - `KUTUP_BASE_DOMAIN` in `.env` (the certificate covers `account`, `drive`,
   `chat`, `photos`, `maps` and `office` under it; `KUTUP_ACME_DOMAINS`, a
-  comma-separated list, names other hostnames instead);
+  comma-separated list, names other hostnames instead, and
+  `KUTUP_ACME_EXTRA_DOMAINS` adds names beside them, such as the group-call
+  SFU's `sfu.<domain>`);
 - each of those hostnames pointing at this machine;
 - ports 80 and 443 reachable from the internet. Let's Encrypt proves
   ownership by fetching a file over port 80, so no DNS credentials are kept
