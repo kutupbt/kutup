@@ -1,0 +1,11 @@
+{
+  "name": "kutup",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Kutup workspace root: pins pnpm for commands run from here (pnpm -C frontend …). The web apps live in frontend/.",
+  "scripts": {
+    "build": "pnpm -C frontend build"
+  },
+  "packageManager": "pnpm@10.28.2"
+}
