@@ -1647,6 +1647,12 @@ describe('MlsConversationService', () => {
     })
   })
 
+  it('accepts a KeyPackage count another member already claimed from', async () => {
+    const { transport, service } = harness()
+    vi.mocked(transport.publishMlsKeyPackages).mockResolvedValueOnce({ deviceId: 7, available: 19 })
+    await expect(service.maintainKeyPackages(4)).resolves.toBe(19)
+  })
+
   it('adds and removes only the local account linked-device leaves', async () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => proposalId,
