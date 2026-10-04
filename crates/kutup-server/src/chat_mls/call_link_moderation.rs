@@ -16,7 +16,9 @@
 //!
 //! Removing someone does not change the meeting's keys: they still hold the
 //! link. It disconnects them at the SFU and turns the waiting room on, so
-//! they cannot come straight back in.
+//! they cannot come straight back in. The SFU token they hold cannot be
+//! withdrawn either, so the removed identity is remembered and removed
+//! again whenever it is found back in the room (`keep_removed_out`).
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -35,6 +37,9 @@ pub(super) const OWNER: i16 = 1;
 pub(super) const CO_HOST: i16 = 2;
 /// Roles of stays that ended long ago are swept when a new one is recorded.
 const FORGET_ROLES_SECONDS: i64 = 24 * 60 * 60;
+/// A removed identity is remembered this long after it was last removed:
+/// longer than any SFU token it could hold stays valid.
+const REMEMBER_REMOVED_SECONDS: i64 = 24 * 60 * 60;
 /// An SFU admin token is used at once.
 const ADMIN_TOKEN_TTL_SECONDS: i64 = 60;
 
@@ -234,6 +239,19 @@ async fn room_service<T: Serialize>(
     grant: AdminGrant<'_>,
     body: &T,
 ) -> AppResult<()> {
+    room_service_answer(state, method, grant, body)
+        .await
+        .map(|_| ())
+}
+
+/// Call one method of LiveKit's room service and return what it answered;
+/// `None` when the room or participant is not there.
+async fn room_service_answer<T: Serialize>(
+    state: &AppState,
+    method: &str,
+    grant: AdminGrant<'_>,
+    body: &T,
+) -> AppResult<Option<serde_json::Value>> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
@@ -264,11 +282,105 @@ async fn room_service<T: Serialize>(
         .await
         .map_err(|error| unreachable(error.to_string()))?;
     let status = response.status();
-    if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
-        return Ok(());
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if status.is_success() {
+        return response
+            .json()
+            .await
+            .map(Some)
+            .map_err(|error| unreachable(error.to_string()));
     }
     let detail = response.text().await.unwrap_or_default();
     Err(unreachable(format!("{status}: {detail}")))
+}
+
+/// The identities in an SFU answer to `ListParticipants`.
+fn identities(answer: &serde_json::Value) -> Vec<&str> {
+    answer["participants"]
+        .as_array()
+        .map(|participants| {
+            participants
+                .iter()
+                .filter_map(|participant| participant["identity"].as_str())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn disconnect(state: &AppState, room_id: &str, participant_id: &str) -> AppResult<()> {
+    room_service(
+        state,
+        "RemoveParticipant",
+        AdminGrant {
+            room: Some(room_id),
+            room_admin: true,
+            ..AdminGrant::default()
+        },
+        &RoomParticipant {
+            room: room_id,
+            identity: participant_id,
+        },
+    )
+    .await
+}
+
+/// Remove again whoever was removed from this meeting and is back in its
+/// room: the SFU token they held still let them connect. Run whenever
+/// someone in the meeting asks who its hosts are (every browser does when
+/// the people in the room change) or a host looks at who is waiting, so it
+/// needs no host present. It costs one query for a meeting nobody was
+/// removed from. A failure is logged and tried again at the next question.
+pub(super) async fn keep_removed_out(state: &AppState, room_id: &str) {
+    let outcome: AppResult<()> = async {
+        let removed: Vec<String> = sqlx::query_scalar(
+            "SELECT participant_id FROM chat_call_link_removed
+             WHERE room_id = $1 AND removed_at > NOW() - make_interval(secs => $2)",
+        )
+        .bind(room_id)
+        .bind(REMEMBER_REMOVED_SECONDS as f64)
+        .fetch_all(&state.pool)
+        .await?;
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let Some(answer) = room_service_answer(
+            state,
+            "ListParticipants",
+            AdminGrant {
+                room: Some(room_id),
+                room_admin: true,
+                ..AdminGrant::default()
+            },
+            &RoomName { room: room_id },
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        for identity in identities(&answer) {
+            if !removed.iter().any(|id| id == identity) {
+                continue;
+            }
+            tracing::info!(room_id, "a removed participant was back in the meeting");
+            // Remembered from now, so they are kept out while they keep trying.
+            sqlx::query(
+                "UPDATE chat_call_link_removed SET removed_at = NOW()
+                 WHERE room_id = $1 AND participant_id = $2",
+            )
+            .bind(room_id)
+            .bind(identity)
+            .execute(&state.pool)
+            .await?;
+            disconnect(state, room_id, identity).await?;
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = outcome {
+        tracing::warn!(?error, room_id, "could not keep removed participants out");
+    }
 }
 
 #[derive(Serialize)]
@@ -328,6 +440,7 @@ pub(crate) async fn roles(
     Json(credentials): Json<HostCredentials>,
 ) -> AppResult<Json<MeetingRoles>> {
     let (_, asker) = asker(&state, &credentials).await?;
+    keep_removed_out(&state, &credentials.room_id).await;
     let rows: Vec<(String, i16)> = sqlx::query_as(
         "SELECT participant_id, role FROM chat_call_link_roles
          WHERE room_id = $1 ORDER BY role, created_at",
@@ -508,20 +621,25 @@ pub(crate) async fn remove_participant(
     .bind(&request.participant_id)
     .execute(&state.pool)
     .await?;
-    room_service(
-        &state,
-        "RemoveParticipant",
-        AdminGrant {
-            room: Some(room_id),
-            room_admin: true,
-            ..AdminGrant::default()
-        },
-        &RoomParticipant {
-            room: room_id,
-            identity: &request.participant_id,
-        },
+    // Their SFU token still works: remember the identity, to remove it again
+    // if it comes back.
+    sqlx::query(
+        "DELETE FROM chat_call_link_removed
+         WHERE room_id = $1 AND removed_at < NOW() - make_interval(secs => $2)",
     )
+    .bind(room_id)
+    .bind(REMEMBER_REMOVED_SECONDS as f64)
+    .execute(&state.pool)
     .await?;
+    sqlx::query(
+        "INSERT INTO chat_call_link_removed (room_id, participant_id) VALUES ($1, $2)
+         ON CONFLICT (room_id, participant_id) DO UPDATE SET removed_at = NOW()",
+    )
+    .bind(room_id)
+    .bind(&request.participant_id)
+    .execute(&state.pool)
+    .await?;
+    disconnect(&state, room_id, &request.participant_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -607,6 +725,15 @@ mod tests {
         assert!(may(&co_host, None));
         assert!(!may(&co_host, Some(CO_HOST)));
         assert!(!may(&co_host, Some(OWNER)));
+    }
+
+    #[test]
+    fn identities_are_read_from_a_participant_list() {
+        let answer = serde_json::json!({
+            "participants": [{ "identity": "aa", "state": "ACTIVE" }, { "sid": "PA_x" }, { "identity": "bb" }]
+        });
+        assert_eq!(identities(&answer), ["aa", "bb"]);
+        assert!(identities(&serde_json::json!({})).is_empty());
     }
 
     #[test]

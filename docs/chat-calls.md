@@ -353,11 +353,17 @@ the room's administrator, through LiveKit's room service
 - **What removal is not.** It is not a change of keys: a removed person
   still holds the link, and so the keys the media, names and chat are
   sealed under. It keeps them out of the room, which is where those travel.
-  The SFU token they were given cannot be withdrawn and lasts up to six
-  hours; a modified client could use it to connect again. A host's browser
-  that removed someone removes that identity again whenever it reappears,
-  for as long as that host stays. A meeting that must exclude someone for
-  good needs a new link.
+  A meeting that must exclude someone for good needs a new link.
+- **A removed person's SFU token.** The SFU cannot take back the token they
+  were given, which lasts up to six hours; a modified client could connect
+  with it again. So the server remembers each removed identity (for a day
+  after it was last removed) and removes it again when it is back: whenever
+  a browser in the meeting asks who the hosts are, which each does when the
+  people in the room change, and whenever a host looks at who is waiting,
+  the server asks the SFU who is in the room and disconnects a removed
+  identity it finds there. No host has to be present. Someone who gets
+  back in this way is in the room for the moment it takes the others to
+  notice them.
 
 **What a meeting is, and is not:**
 - Without a waiting room the link is the whole capability: whoever has it

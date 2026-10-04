@@ -103,9 +103,6 @@ export class LinkCallController {
   private rolesStale = false
   /** The identities in the room when the hosts were last asked for. */
   private rolesFor = ''
-  /** Identities a host here removed: one that comes back is removed again. */
-  private readonly removed = new Set<string>()
-  private readonly removing = new Set<string>()
   /** This browser is ending the meeting: its own disconnection is no surprise. */
   private ending = false
 
@@ -265,7 +262,6 @@ export class LinkCallController {
     const proof = this.hostProof()
     if (!proof) return
     await removeParticipant(this.link, proof, identity)
-    this.removed.add(identity)
   }
 
   /** As the owner: make a participant a co-host, or stop them being one. */
@@ -452,28 +448,12 @@ export class LinkCallController {
       })),
     })
     // Someone came or went: the hosts may have with them (the owner joining
-    // late, say).
+    // late, say). Asking is also what has the server remove again someone
+    // who was removed and is back with the SFU token they still hold.
     const present = participants.map((participant) => participant.identity).sort().join(' ')
     if (present !== this.rolesFor && this.state.phase === 'active') {
       this.rolesFor = present
       void this.askRoles()
-    }
-    this.removeAgain(participants)
-  }
-
-  /**
-   * Removing someone does not undo the SFU token they hold, which works
-   * until it runs out: a removed identity that reconnects is removed again.
-   */
-  private removeAgain(participants: SfuParticipant[]): void {
-    const proof = this.hostProof()
-    if (!proof) return
-    for (const { identity } of participants) {
-      if (!this.removed.has(identity) || this.removing.has(identity)) continue
-      this.removing.add(identity)
-      void removeParticipant(this.link, proof, identity)
-        .catch((error: unknown) => console.warn('chat: could not remove someone who came back', error))
-        .finally(() => this.removing.delete(identity))
     }
   }
 

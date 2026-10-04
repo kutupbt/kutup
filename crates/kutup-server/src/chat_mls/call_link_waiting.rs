@@ -25,7 +25,7 @@ use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::call_link_moderation::{host, HostCredentials};
+use super::call_link_moderation::{host, keep_removed_out, HostCredentials};
 use super::call_links::{
     admitted, base64_exact, hex32, owner, require_sfu, room_token, SEALED_NAME_BYTES,
 };
@@ -339,6 +339,7 @@ pub(crate) async fn knocks(
     Json(request): Json<HostCredentials>,
 ) -> AppResult<Json<WaitingKnocks>> {
     host(&state, &request).await?;
+    keep_removed_out(&state, &request.room_id).await;
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
         "SELECT id, label, created_at FROM chat_call_link_knocks
          WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)

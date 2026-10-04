@@ -597,10 +597,11 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   - Admitting people without being in the meeting (from the Meetings page
     or a notification) is deliberately not built: a host lets people in
     from inside the meeting.
-- **Meetings: moderation, what is left.** A removed person's SFU token
-  cannot be withdrawn and lasts up to six hours (a host's browser removes
-  that identity again if it comes back; shorter tokens with renewal would
-  close it properly). Also not built: a new link for a meeting that must
+  - A removed person's SFU token cannot be withdrawn, so the server
+    remembers removed identities and removes one again when it is back in
+    the room. This was chosen over short-lived tokens with renewal, which
+    would only shorten the time the token works.
+- **Meetings: moderation, what is left.** Not built: a new link for a meeting that must
   exclude someone for good; an expiry for a meeting; letting everyone
   waiting in at once; muting someone else, or stopping their screen share.
 - **Meetings: joining as yourself.** Everyone in a meeting shows the name

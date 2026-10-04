@@ -371,6 +371,11 @@ test('hosts remove people, the owner names co-hosts and ends the meeting for eve
   await join(helper, 'Helper Hale', false)
   const pestContext = await browser.newContext()
   const pest = await pestContext.newPage()
+  // The SFU token this one is given is kept, to try it again once removed.
+  let pestAccess: { url: string; token: string } | null = null
+  pest.on('response', async (response) => {
+    if (new URL(response.url()).pathname === '/api/chat/call-links/token' && response.ok()) pestAccess = (await response.json()) as typeof pestAccess
+  })
   await pest.goto(url)
   await expect(pest.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
   await join(pest, 'Pest', false)
@@ -416,6 +421,24 @@ test('hosts remove people, the owner names co-hosts and ends the meeting for eve
   await expect(pest.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'removed', { timeout: 45_000 })
   await expect(tile(ownerCall, 'Pest')).toHaveCount(0, { timeout: 45_000 })
   await expect(pest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 30_000 })
+
+  // The SFU token they were given still works at the SFU, which cannot take
+  // it back. Connecting with it again gets them removed again by the server,
+  // without a host doing anything.
+  expect(pestAccess).not.toBeNull()
+  const back = await pest.evaluate(
+    ({ url: sfu, token }) =>
+      new Promise<string>((resolve) => {
+        const socket = new WebSocket(`${sfu}/rtc?access_token=${encodeURIComponent(token)}&auto_subscribe=1&protocol=9`)
+        let opened = false
+        socket.onopen = () => (opened = true)
+        socket.onclose = () => resolve(opened ? 'removed again' : 'refused')
+        setTimeout(() => resolve('still connected'), 40_000)
+      }),
+    pestAccess!,
+  )
+  expect(back).toBe('removed again')
+  await expect(tile(ownerCall, 'Pest')).toHaveCount(0)
 
   // They ask again; the co-host sees them waiting and lets them in.
   await pest.getByTestId('chat-link-call-join').click()
