@@ -896,6 +896,30 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
+            "/api/chat/call-links/roles",
+            post(chat_mls::call_link_moderation::roles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/co-hosts",
+            post(chat_mls::call_link_moderation::set_co_host)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/participants/remove",
+            post(chat_mls::call_link_moderation::remove_participant)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/end",
+            post(chat_mls::call_link_moderation::end)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
             "/api/chat/call-links/:room_id",
             delete(chat_mls::call_links::delete),
         )

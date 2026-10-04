@@ -73,6 +73,9 @@ services:
       context: .
       dockerfile: Dockerfile.server
     restart: unless-stopped
+    # The bundled SFU runs on the host network (CHAT_SFU_API_URL).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
@@ -131,6 +134,10 @@ services:
       CHAT_TURN_URLS: ${CHAT_TURN_URLS:-}
       CHAT_TURN_SECRET: ${CHAT_TURN_SECRET:-}
       CHAT_SFU_URL: ${CHAT_SFU_URL:-}
+      # Where this server reaches the SFU's API to remove a participant or end
+      # a meeting. Blank: CHAT_SFU_URL. With the bundled LiveKit (host network):
+      # http://host.docker.internal:7880
+      CHAT_SFU_API_URL: ${CHAT_SFU_API_URL:-}
       CHAT_SFU_API_KEY: ${CHAT_SFU_API_KEY:-}
       CHAT_SFU_API_SECRET: ${CHAT_SFU_API_SECRET:-}
       # Per-IP/account rate limits + per-account login lockout (blank → server defaults).

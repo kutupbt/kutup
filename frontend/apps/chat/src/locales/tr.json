@@ -878,7 +878,9 @@
         "gone": "Bu toplantı bağlantısı artık çalışmıyor. Gönderen kişiden yenisini isteyin.",
         "busy": "Çok fazla deneme. Bir dakika bekleyip yeniden deneyin.",
         "unavailable": "Toplantıya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
-        "media": "Kutup mikrofonunuzu ya da kameranızı kullanamıyor. Katılmak için tarayıcıda izin verin."
+        "media": "Kutup mikrofonunuzu ya da kameranızı kullanamıyor. Katılmak için tarayıcıda izin verin.",
+        "removed": "Bir toplantı sahibi sizi toplantıdan çıkardı.",
+        "endedByHost": "Toplantı sahibi toplantıyı bitirdi."
       }
     },
     "meetings": {
@@ -946,7 +948,24 @@
       "decideFailed": "İşlem gerçekleşmedi. Beklemeyi bırakmış olabilirler.",
       "chatNotice": "Buradaki mesajları toplantıdaki herkes görür ve mesajlar saklanmaz: ayrıldığınızda kaybolur, sonradan katılanlar göremez.",
       "chatPlaceholder": "Herkese mesaj",
-      "chatFailed": "Mesaj gönderilemedi."
+      "chatFailed": "Mesaj gönderilemedi.",
+      "roleOwner": "Toplantı sahibi",
+      "roleCoHost": "Yardımcı sahip",
+      "personActions": "{{name}} için işlemler",
+      "makeCoHost": "Yardımcı sahip yap",
+      "removeCoHost": "Yardımcı sahipliği kaldır",
+      "coHostFailed": "Yardımcı sahip değiştirilemedi.",
+      "remove": "Toplantıdan çıkar",
+      "removeTitle": "{{name}} çıkarılsın mı?",
+      "removeDescription": "{{name}} toplantıdan çıkarılır.",
+      "removeWarning": "Bağlantı hâlâ onda olduğu için bekleme odası açılır: bundan sonra herkesi bir toplantı sahibi içeri alır.",
+      "removeFailed": "Kişi çıkarılamadı.",
+      "leave": "Toplantıdan ayrıl",
+      "endForAll": "Toplantıyı herkes için bitir",
+      "endTitle": "Toplantı herkes için bitirilsin mi?",
+      "endDescription": "Herkesin bağlantısı kesilir, bekleyenler geri çevrilir. Bağlantı çalışmaya devam eder; toplantı yeniden yapılabilir.",
+      "endSubmit": "Toplantıyı bitir",
+      "endFailed": "Toplantı bitirilemedi."
     },
     "shortcuts": {
       "title": "Klavye kısayolları",

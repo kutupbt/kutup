@@ -139,6 +139,8 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-chat')).toBeVisible()
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
+  // The owner's leave button asks which: leave, or end it for everyone.
+  await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
   await ownerCall.close()
@@ -309,6 +311,124 @@ test('a meeting with a waiting room lets in only whom its owner admits', async (
 
   await strangerContext.close()
   await guestContext.close()
+  await ownerContext.close()
+})
+
+function person(page: Page, name: string) {
+  return page.locator(`[data-testid="chat-call-person"][data-name="${name}"]`)
+}
+
+test('hosts remove people, the owner names co-hosts and ends the meeting for everyone', async ({ browser }) => {
+  test.slow()
+  const owner = newAccount('hostowner', PASSWORD)
+  const ownerContext = await browser.newContext()
+  await registerAccount(ownerContext, owner)
+  const chat = await openChat(ownerContext)
+  test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
+
+  // A meeting anyone with the link walks into.
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await chat.getByTestId('chat-meeting-schedule').click()
+  const title = `Town hall ${Date.now()}`
+  await chat.getByTestId('chat-meeting-title').fill(title)
+  await chat.getByTestId('chat-meeting-timed').uncheck()
+  await chat.getByTestId('chat-meeting-save').click()
+  await expect(meeting(chat, title)).toBeVisible({ timeout: 30_000 })
+  const url = (await meeting(chat, title).getByTestId('chat-meeting-url').textContent())!.trim()
+  const popup = ownerContext.waitForEvent('page')
+  await meeting(chat, title).getByTestId('chat-meeting-join').click()
+  const ownerCall = await popup
+  await join(ownerCall, 'Owner Ada', false)
+
+  // Two people join with the link. What one of them shows the server to ask
+  // who the hosts are is kept, to try as a co-host what a co-host may not do.
+  const helperContext = await browser.newContext()
+  const helper = await helperContext.newPage()
+  let asHelper: { roomId: string; accessToken: string; sfuToken: string } | null = null
+  let ownerId: string | null = null
+  helper.on('response', async (response) => {
+    if (new URL(response.url()).pathname !== '/api/chat/call-links/roles' || !response.ok()) return
+    asHelper = response.request().postDataJSON() as typeof asHelper
+    const { roles } = (await response.json()) as { roles: { participantId: string; role: string }[] }
+    ownerId = roles.find((entry) => entry.role === 'owner')?.participantId ?? ownerId
+  })
+  await helper.goto(url)
+  await expect(helper.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await join(helper, 'Helper Hale', false)
+  const pestContext = await browser.newContext()
+  const pest = await pestContext.newPage()
+  await pest.goto(url)
+  await expect(pest.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await join(pest, 'Pest', false)
+  await expect(tile(ownerCall, 'Pest')).toBeVisible({ timeout: 60_000 })
+
+  // Everyone sees who the host is; someone who is not a host can act on nobody.
+  await helper.getByTestId('chat-call-people-button').click()
+  await expect(person(helper, 'Owner Ada').getByTestId('chat-call-person-badge')).toHaveText('Host', { timeout: 30_000 })
+  await expect(person(helper, 'Pest')).toBeVisible({ timeout: 30_000 })
+  await expect(helper.getByTestId('chat-meeting-person-menu')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-link-call-leave-menu')).toHaveCount(0)
+  expect(asHelper).not.toBeNull()
+  expect(ownerId).not.toBeNull()
+  const refused = await helper.request.post(apiUrl('/chat/call-links/participants/remove'), {
+    data: { ...asHelper!, participantId: ownerId! },
+  })
+  expect(refused.status()).toBe(404)
+
+  // The owner makes one of them a co-host.
+  await ownerCall.getByTestId('chat-call-people-button').click()
+  await person(ownerCall, 'Helper Hale').getByTestId('chat-meeting-person-menu').click()
+  await ownerCall.getByTestId('chat-meeting-co-host').click()
+  await expect(person(ownerCall, 'Helper Hale').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+  await expect(person(helper, 'You').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+
+  // A co-host acts on those who are not hosts, never on the owner, and does
+  // not end the meeting.
+  await expect(person(helper, 'Pest').getByTestId('chat-meeting-person-menu')).toBeVisible({ timeout: 30_000 })
+  await expect(person(helper, 'Owner Ada').getByTestId('chat-meeting-person-menu')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-link-call-leave-menu')).toHaveCount(0)
+  const notTheOwner = await helper.request.post(apiUrl('/chat/call-links/participants/remove'), {
+    data: { ...asHelper!, participantId: ownerId! },
+  })
+  expect(notTheOwner.status()).toBe(403)
+  const notTheirs = await helper.request.post(apiUrl('/chat/call-links/end'), { data: asHelper! })
+  expect(notTheirs.status()).toBe(404)
+
+  // The co-host removes someone: they are told, and the meeting now has a
+  // waiting room, so the link alone no longer lets them back in.
+  await person(helper, 'Pest').getByTestId('chat-meeting-person-menu').click()
+  await helper.getByTestId('chat-meeting-remove').click()
+  await helper.getByRole('alertdialog').getByRole('button', { name: 'Remove from meeting' }).click()
+  await expect(pest.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'removed', { timeout: 45_000 })
+  await expect(tile(ownerCall, 'Pest')).toHaveCount(0, { timeout: 45_000 })
+  await expect(pest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 30_000 })
+
+  // They ask again; the co-host sees them waiting and lets them in.
+  await pest.getByTestId('chat-link-call-join').click()
+  await expect(pest.getByTestId('chat-link-call-waiting')).toBeVisible({ timeout: 30_000 })
+  const knock = helper.locator('[data-testid="chat-meeting-knock"][data-name="Pest"]')
+  await expect(knock).toBeVisible({ timeout: 30_000 })
+  await knock.getByTestId('chat-meeting-admit').click()
+  await expect(pest.getByTestId('chat-link-call-screen')).toHaveAttribute('data-phase', 'active', { timeout: 60_000 })
+  await expect(tile(ownerCall, 'Pest')).toBeVisible({ timeout: 60_000 })
+
+  // The owner takes the co-host's role back: they can act on nobody again.
+  await person(ownerCall, 'Helper Hale').getByTestId('chat-meeting-person-menu').click()
+  await ownerCall.getByTestId('chat-meeting-co-host').click()
+  await expect(person(ownerCall, 'Helper Hale').getByTestId('chat-call-person-badge')).toHaveCount(0, { timeout: 30_000 })
+  await expect(helper.getByTestId('chat-meeting-person-menu')).toHaveCount(0, { timeout: 30_000 })
+
+  // The owner ends the meeting: everyone is out and told why.
+  await ownerCall.getByTestId('chat-link-call-leave-menu').click()
+  await ownerCall.getByTestId('chat-meeting-end').click()
+  await ownerCall.getByRole('alertdialog').getByRole('button', { name: 'End meeting' }).click()
+  await expect(helper.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'endedByHost', { timeout: 45_000 })
+  await expect(pest.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'endedByHost', { timeout: 45_000 })
+  await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
+  await expect(ownerCall.getByTestId('chat-link-call-failure')).toHaveCount(0)
+
+  await pestContext.close()
+  await helperContext.close()
   await ownerContext.close()
 })
 

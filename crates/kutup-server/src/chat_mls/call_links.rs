@@ -443,10 +443,21 @@ pub(crate) async fn token(
     let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
     // With a waiting room, holding the link is not enough: only the owner
     // comes straight in. Everyone else knocks (call_link_waiting.rs).
-    if meeting.waiting_room && !meeting.is_host(request.host_token.as_deref())? {
+    let is_owner = meeting.is_host(request.host_token.as_deref())?;
+    if meeting.waiting_room && !is_owner {
         return Err(AppError::forbidden(
             "this meeting has a waiting room: knock and wait to be admitted",
         ));
+    }
+    if is_owner {
+        // So the others can be shown who the host is, and a co-host cannot
+        // remove them.
+        super::call_link_moderation::record_owner(
+            &state,
+            &request.room_id,
+            &request.participant_id,
+        )
+        .await?;
     }
     Ok(Json(room_token(
         &state,

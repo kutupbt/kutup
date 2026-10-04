@@ -1,10 +1,12 @@
-import { CalendarPlus, DoorOpen, Loader2, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Video, VideoOff } from 'lucide-react'
+import { CalendarPlus, DoorOpen, Loader2, LogOut, Mic, MicOff, MonitorOff, MonitorUp, MoreVertical, PhoneOff, ShieldCheck, ShieldOff, UserX, Video, VideoOff } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
+import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { LoadingPanel } from '@kutup/ui/components/states'
@@ -12,7 +14,7 @@ import { canShareScreen, reportShareFailure } from '../calls/callController'
 import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from '../calls/CallFrame'
 import { CallStage, type StageParticipant } from '../calls/CallStage'
 import { LinkCallController, type LinkCallState } from '../calls/linkCallController'
-import { CallLinkRefused, fetchMeetingInfo, openCallLink, type CallLinkRefusal, type MeetingInfo, type OpenCallLink } from './callLinks'
+import { CallLinkRefused, fetchMeetingInfo, openCallLink, type CallLinkRefusal, type MeetingInfo, type MeetingRole, type OpenCallLink } from './callLinks'
 import { MAX_CALL_NAME_LENGTH, rememberCallName, rememberedCallName } from './callName'
 import { hostTokenFor } from './hostTokens'
 import { downloadMeetingIcs } from './ics'
@@ -67,18 +69,19 @@ function LinkCall({ link }: { link: OpenCallLink }) {
   useEffect(() => () => controller.dispose(), [controller])
   const call = useSyncExternalStore(controller.subscribe, controller.current)
   // What the meeting is called, when it is and whether joiners wait to be
-  // let in: asked once, before joining.
+  // let in: asked before joining, and again after each stay (a host who
+  // removes someone turns the waiting room on).
   const [info, setInfo] = useState<Meeting | CallLinkRefusal | null>(null)
+  const stayed = call?.phase === 'ended'
   useEffect(() => {
     let current = true
-    setInfo(null)
     fetchMeetingInfo(link)
       .then((fetched) => current && setInfo(fetched))
       .catch((error: unknown) => current && setInfo(error instanceof CallLinkRefused ? error.reason : 'unavailable'))
     return () => {
       current = false
     }
-  }, [link])
+  }, [link, stayed])
   const title = typeof info === 'object' && info ? info.info.title : t('chat.meetings.defaultTitle')
 
   // Each stay in the meeting goes into this browser's history when it ends.
@@ -143,7 +146,7 @@ function JoinForm({
   const trimmed = name.trim()
   const meeting = typeof info === 'object' ? info.info : null
   // Whether pressing Join knocks: a waiting room, and not the owner.
-  const knocks = typeof info === 'object' && info.waitingRoom && !controller.isHost
+  const knocks = typeof info === 'object' && info.waitingRoom && !controller.isOwner
   // The link itself was refused (deleted, say): nothing to join.
   const refused = typeof info === 'string' ? info : null
   const failure = last?.failure ?? refused
@@ -256,7 +259,29 @@ function InCall({ controller, call, title }: { controller: LinkCallController; c
       toast.error(t('chat.meetings.decideFailed'))
     }
   }
-  const participants: StageParticipant[] = call.participants.map((participant) => {
+  // What a host is being asked to confirm: removing someone, or ending the
+  // meeting for everyone.
+  const [confirming, setConfirming] = useState<{ remove: { identity: string; name: string } } | 'end' | null>(null)
+  const [pending, setPending] = useState(false)
+  const [failed, setFailed] = useState<unknown>(null)
+  function ask(what: typeof confirming) {
+    setFailed(null)
+    setConfirming(what)
+  }
+  async function confirmed(work: () => Promise<void>) {
+    setPending(true)
+    setFailed(null)
+    try {
+      await work()
+      setConfirming(null)
+    } catch (error) {
+      setFailed(error)
+    } finally {
+      setPending(false)
+    }
+  }
+  const owner = call.role === 'owner'
+  const participants: (StageParticipant & { role: MeetingRole | null })[] = call.participants.map((participant) => {
     const name = participant.local ? t('chat.you') : (participant.name ?? t('chat.callLinks.unnamed'))
     return { ...participant, name, avatarName: participant.name ?? name }
   })
@@ -267,7 +292,49 @@ function InCall({ controller, call, title }: { controller: LinkCallController; c
     muted: participant.muted,
     cameraOn: participant.video !== null,
     sharing: participant.screen !== null,
+    badge: participant.role === 'owner' ? t('chat.meetings.roleOwner') : participant.role === 'coHost' ? t('chat.meetings.roleCoHost') : undefined,
+    actions:
+      // The owner acts on anyone else; a co-host on those who are not hosts.
+      !participant.local && call.role && participant.role !== 'owner' && (owner || participant.role === null) ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              aria-label={t('chat.meetings.personActions', { name: participant.name })}
+              data-testid="chat-meeting-person-menu"
+            >
+              <MoreVertical />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {owner ? (
+              <DropdownMenuItem
+                onSelect={() => {
+                  const coHost = participant.role !== 'coHost'
+                  void controller.setCoHost(participant.identity, coHost).catch(() => toast.error(t('chat.meetings.coHostFailed')))
+                }}
+                data-testid="chat-meeting-co-host"
+              >
+                {participant.role === 'coHost' ? <ShieldOff /> : <ShieldCheck />}
+                {participant.role === 'coHost' ? t('chat.meetings.removeCoHost') : t('chat.meetings.makeCoHost')}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem
+              destructive
+              onSelect={() => ask({ remove: { identity: participant.identity, name: participant.name } })}
+              data-testid="chat-meeting-remove"
+            >
+              <UserX />
+              {t('chat.meetings.remove')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : undefined,
   }))
+  const removing = confirming !== null && confirming !== 'end' ? confirming.remove : null
   const status = call.phase === 'connecting' ? t('chat.calls.connecting') : t('chat.calls.inCall', { count: call.participants.length })
 
   return (
@@ -306,12 +373,57 @@ function InCall({ controller, call, title }: { controller: LinkCallController; c
             </RoundButton>
           ) : null}
           <PanelButtons panel={panel} onPanel={setPanel} chat unread={unread} />
-          <RoundButton label={t('chat.calls.leave')} tone="danger" onClick={() => void controller.leave()} testId="chat-link-call-leave">
-            <PhoneOff />
-          </RoundButton>
+          {owner ? (
+            // The owner chooses: leave the others to it, or end it for all.
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <RoundButton label={t('chat.calls.leave')} tone="danger" testId="chat-link-call-leave-menu">
+                  <PhoneOff />
+                </RoundButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" side="top">
+                <DropdownMenuItem onSelect={() => void controller.leave()} data-testid="chat-link-call-leave">
+                  <LogOut />
+                  {t('chat.meetings.leave')}
+                </DropdownMenuItem>
+                <DropdownMenuItem destructive onSelect={() => ask('end')} data-testid="chat-meeting-end">
+                  <PhoneOff />
+                  {t('chat.meetings.endForAll')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <RoundButton label={t('chat.calls.leave')} tone="danger" onClick={() => void controller.leave()} testId="chat-link-call-leave">
+              <PhoneOff />
+            </RoundButton>
+          )}
         </>
       }
     >
+      <ConfirmDestructive
+        open={confirming !== null && confirming !== 'end'}
+        onOpenChange={(open) => !open && setConfirming(null)}
+        title={t('chat.meetings.removeTitle', { name: removing?.name ?? '' })}
+        description={t('chat.meetings.removeDescription', { name: removing?.name ?? '' })}
+        warning={t('chat.meetings.removeWarning')}
+        warningVariant="warn"
+        submit={t('chat.meetings.remove')}
+        pending={pending}
+        error={failed}
+        errorFallback={t('chat.meetings.removeFailed')}
+        onConfirm={() => removing && void confirmed(() => controller.remove(removing.identity))}
+      />
+      <ConfirmDestructive
+        open={confirming === 'end'}
+        onOpenChange={(open) => !open && setConfirming(null)}
+        title={t('chat.meetings.endTitle')}
+        description={t('chat.meetings.endDescription')}
+        submit={t('chat.meetings.endSubmit')}
+        pending={pending}
+        error={failed}
+        errorFallback={t('chat.meetings.endFailed')}
+        onConfirm={() => void confirmed(() => controller.endForAll())}
+      />
       <CallStage participants={participants} />
       {call.waiting.length > 0 ? (
         <aside

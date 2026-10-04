@@ -3,18 +3,24 @@ import {
   callLinkToken,
   CallLinkRefused,
   decideKnock,
+  endMeeting,
   knockMeeting,
   knockStatus,
+  meetingRoles,
   NoWaitingRoom,
+  removeParticipant,
+  setCoHost,
   waitingPeople,
   WaitingRoomRequired,
   type CallLinkRefusal,
+  type HostProof,
   type Knock,
+  type MeetingRole,
   type OpenCallLink,
   type SfuAccess,
   type WaitingPerson,
 } from '../callLinks/callLinks'
-import { SfuRoom, type SfuParticipant } from './sfuRoom'
+import { CHAT_TOPIC, ROLES_TOPIC, SfuRoom, type SfuParticipant } from './sfuRoom'
 
 // A call through a link (docs/chat-calls.md): anyone holding the link joins,
 // with or without an account.
@@ -25,10 +31,15 @@ import { SfuRoom, type SfuParticipant } from './sfuRoom'
 // - A participant is a random identity to the SFU. The name each one chose
 //   travels sealed under another key from the link; the others open it.
 //   Names are what people typed: nothing verifies them.
+// - The meeting's hosts (its owner, and the co-hosts the owner names) are
+//   what the server says they are. A host removes people; the owner ends
+//   the meeting for everyone. Both act at the SFU, through the server.
 
 export interface LinkCallParticipant extends Omit<SfuParticipant, 'label'> {
   /** The name this participant chose; null when its label does not open. */
   name: string | null
+  /** Whether this participant hosts the meeting. */
+  role: MeetingRole | null
 }
 
 /** A message written in the meeting, while this browser was in it. */
@@ -55,7 +66,9 @@ export interface LinkCallState {
   /** `waiting`: knocked, and waiting for the host to let this browser in. */
   phase: 'waiting' | 'connecting' | 'active' | 'ended'
   participants: LinkCallParticipant[]
-  /** For the host: who is waiting to be let in, oldest first. */
+  /** This browser's role in the meeting, once it is in. */
+  role: MeetingRole | null
+  /** For a host: who is waiting to be let in, oldest first. */
   waiting: WaitingPerson[]
   /** This browser got into the meeting (as opposed to giving up at the door). */
   wasIn: boolean
@@ -82,6 +95,19 @@ export class LinkCallController {
   /** Each join attempt's number: a later one supersedes what an earlier one awaits. */
   private attempt = 0
   private waitingTimer: ReturnType<typeof setInterval> | null = null
+  /** This browser's SFU token: how a co-host says who it is. */
+  private sfuToken: string | null = null
+  /** The meeting's hosts by SFU identity, as the server last said. */
+  private roles = new Map<string, MeetingRole>()
+  private rolesAsked: Promise<void> | null = null
+  private rolesStale = false
+  /** The identities in the room when the hosts were last asked for. */
+  private rolesFor = ''
+  /** Identities a host here removed: one that comes back is removed again. */
+  private readonly removed = new Set<string>()
+  private readonly removing = new Set<string>()
+  /** This browser is ending the meeting: its own disconnection is no surprise. */
+  private ending = false
 
   /**
    * `hostToken` is the owner's proof of being the host, when this browser
@@ -92,8 +118,8 @@ export class LinkCallController {
     private readonly hostToken: string | null = null,
   ) {}
 
-  /** Whether this browser is the meeting's host. */
-  get isHost(): boolean {
+  /** Whether this browser is the meeting's owner. */
+  get isOwner(): boolean {
     return this.hostToken !== null
   }
 
@@ -127,6 +153,7 @@ export class LinkCallController {
     this.set({
       phase: knocking ? 'waiting' : 'connecting',
       participants: [],
+      role: null,
       waiting: [],
       wasIn: false,
       messages: [],
@@ -145,13 +172,22 @@ export class LinkCallController {
       this.leftAtMs = null
       const room = new SfuRoom({
         changed: () => void this.refresh(),
-        disconnected: () => void this.ended(),
+        disconnected: (why) => {
+          if (!this.ending && why !== 'other') this.patch({ failure: why === 'removed' ? 'removed' : 'endedByHost' })
+          void this.ended()
+        },
         // One key for the whole call: a frame that does not decrypt was not
         // encrypted by a holder of this link.
         decryptionFailed: () => undefined,
-        data: (identity, payload) => void this.received(identity, payload),
+        data: (identity, payload, topic) => {
+          if (topic === CHAT_TOPIC) void this.received(identity, payload)
+          // The hint carries nothing and proves nothing: the server is asked.
+          else if (topic === ROLES_TOPIC) void this.askRoles()
+        },
       })
       this.room = room
+      this.sfuToken = access.token
+      this.ending = false
       await room.keys.set(Uint8Array.from(atob(this.link.frameKey), (char) => char.charCodeAt(0)), 0)
       await room.connect(access.url, access.token, withVideo)
       if (!current()) {
@@ -159,6 +195,7 @@ export class LinkCallController {
         return
       }
       this.patch({ phase: 'active', wasIn: true })
+      // Finding who is in the room asks the server who its hosts are.
       await this.refresh()
       this.watchWaiting()
     } catch (error) {
@@ -203,31 +240,112 @@ export class LinkCallController {
     return null
   }
 
-  /** As the host: let in someone who is waiting. */
+  /** As a host: let in someone who is waiting. */
   async admit(knockId: string): Promise<void> {
     await this.decide(knockId, true)
   }
 
-  /** As the host: turn away someone who is waiting. */
+  /** As a host: turn away someone who is waiting. */
   async turnAway(knockId: string): Promise<void> {
     await this.decide(knockId, false)
   }
 
   private async decide(knockId: string, admit: boolean): Promise<void> {
-    if (!this.hostToken || !this.state) return
-    await decideKnock(this.link, this.hostToken, knockId, admit)
+    const proof = this.hostProof()
+    if (!proof || !this.state) return
+    await decideKnock(this.link, proof, knockId, admit)
     this.patch({ waiting: this.state.waiting.filter((person) => person.knockId !== knockId) })
   }
 
-  /** As the host, while in the meeting: keep looking at who is waiting. */
+  /**
+   * As a host: remove someone from the meeting. The server turns the
+   * waiting room on with it, since they still hold the link.
+   */
+  async remove(identity: string): Promise<void> {
+    const proof = this.hostProof()
+    if (!proof) return
+    await removeParticipant(this.link, proof, identity)
+    this.removed.add(identity)
+  }
+
+  /** As the owner: make a participant a co-host, or stop them being one. */
+  async setCoHost(identity: string, enabled: boolean): Promise<void> {
+    if (!this.hostToken) return
+    await setCoHost(this.link, this.hostToken, identity, enabled)
+    // Tell the others to ask the server who the hosts are now.
+    await this.room?.send(new Uint8Array(), ROLES_TOPIC).catch(() => undefined)
+    await this.askRoles()
+  }
+
+  /** As the owner: end the meeting for everyone in it. */
+  async endForAll(): Promise<void> {
+    if (!this.hostToken) return
+    this.ending = true
+    try {
+      await endMeeting(this.link, this.hostToken)
+    } catch (error) {
+      this.ending = false
+      throw error
+    }
+    await this.ended()
+  }
+
+  /** What this browser shows the server to act as a host, if it is one. */
+  private hostProof(): HostProof | null {
+    if (this.hostToken) return { hostToken: this.hostToken }
+    return this.state?.role === 'coHost' && this.sfuToken ? { sfuToken: this.sfuToken } : null
+  }
+
+  /**
+   * Ask the server who the meeting's hosts are. Asks made while one is
+   * under way become a single further one.
+   */
+  private askRoles(): Promise<void> {
+    if (this.rolesAsked) {
+      this.rolesStale = true
+      return this.rolesAsked
+    }
+    const room = this.room
+    const ask = async () => {
+      do {
+        this.rolesStale = false
+        if (!room || this.room !== room || this.state?.phase !== 'active') return
+        try {
+          const proof: HostProof | null = this.hostToken ? { hostToken: this.hostToken } : this.sfuToken ? { sfuToken: this.sfuToken } : null
+          const { me, roles } = await meetingRoles(this.link, proof)
+          if (this.room !== room || !this.state) return
+          this.roles = roles
+          this.patch({
+            role: me,
+            participants: this.state.participants.map((participant) => ({ ...participant, role: roles.get(participant.identity) ?? null })),
+          })
+          this.watchWaiting()
+        } catch (error) {
+          console.warn('chat: could not learn who hosts the meeting', error)
+        }
+      } while (this.rolesStale)
+    }
+    this.rolesAsked = ask().finally(() => {
+      this.rolesAsked = null
+    })
+    return this.rolesAsked
+  }
+
+  /** While a host in the meeting: keep looking at who is waiting. */
   private watchWaiting(): void {
-    const hostToken = this.hostToken
-    if (!hostToken || this.waitingTimer) return
+    if (!this.hostProof()) {
+      if (this.waitingTimer) clearInterval(this.waitingTimer)
+      this.waitingTimer = null
+      if (this.state?.waiting.length) this.patch({ waiting: [] })
+      return
+    }
+    if (this.waitingTimer) return
     const look = async () => {
-      if (this.state?.phase !== 'active') return
+      const proof = this.hostProof()
+      if (!proof || this.state?.phase !== 'active') return
       try {
-        const waiting = await waitingPeople(this.link, hostToken)
-        if (this.state?.phase === 'active') this.patch({ waiting })
+        const waiting = await waitingPeople(this.link, proof)
+        if (this.state?.phase === 'active' && this.hostProof()) this.patch({ waiting })
       } catch (error) {
         console.warn('chat: could not see who is waiting', error)
       }
@@ -330,8 +448,33 @@ export class LinkCallController {
       participants: participants.map(({ label, ...participant }) => ({
         ...participant,
         name: participant.local ? this.ownName : (this.names.get(label) ?? null),
+        role: this.roles.get(participant.identity) ?? null,
       })),
     })
+    // Someone came or went: the hosts may have with them (the owner joining
+    // late, say).
+    const present = participants.map((participant) => participant.identity).sort().join(' ')
+    if (present !== this.rolesFor && this.state.phase === 'active') {
+      this.rolesFor = present
+      void this.askRoles()
+    }
+    this.removeAgain(participants)
+  }
+
+  /**
+   * Removing someone does not undo the SFU token they hold, which works
+   * until it runs out: a removed identity that reconnects is removed again.
+   */
+  private removeAgain(participants: SfuParticipant[]): void {
+    const proof = this.hostProof()
+    if (!proof) return
+    for (const { identity } of participants) {
+      if (!this.removed.has(identity) || this.removing.has(identity)) continue
+      this.removing.add(identity)
+      void removeParticipant(this.link, proof, identity)
+        .catch((error: unknown) => console.warn('chat: could not remove someone who came back', error))
+        .finally(() => this.removing.delete(identity))
+    }
   }
 
   private async ended(): Promise<void> {
@@ -340,9 +483,12 @@ export class LinkCallController {
     this.leftAtMs = Date.now()
     if (this.waitingTimer) clearInterval(this.waitingTimer)
     this.waitingTimer = null
-    this.patch({ phase: 'ended', participants: [], waiting: [] })
+    this.patch({ phase: 'ended', participants: [], waiting: [], role: null })
     const room = this.room
     this.room = null
+    this.sfuToken = null
+    this.roles = new Map()
+    this.rolesFor = ''
     await room?.disconnect()
   }
 }

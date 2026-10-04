@@ -198,7 +198,12 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   meeting" in the sidebar, "Start a meeting" in a conversation, and the
   waiting room: the link alone is refused an SFU token, a guest waits until
   the owner lets them in, one turned away is told so, and one who gives up
-  leaves the owner's list. Needs the same SFU as spec 42.
+  leaves the owner's list. And hosts: everyone sees who the host is, the
+  owner makes a guest a co-host and takes it back, a co-host removes a
+  guest (who is told, and must then ask to come back in) but cannot remove
+  the owner or end the meeting, and the owner ends the meeting for
+  everyone. Needs the same SFU as spec 42, with its API reachable from the
+  server (`CHAT_SFU_API_URL`).
 - spec 36: a group chat on a server with no federation settings.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.

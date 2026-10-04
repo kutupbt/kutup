@@ -585,13 +585,20 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   - The waiting room is optional and off by default, because it needs its
     host present: the owner admits people from inside the meeting, in a
     browser where they are signed in to Chat.
-- **Meetings: moderation (next).** A waiting room decides who comes in. Not
-  built yet: removing someone and ending the meeting for everyone (the
-  server would have to act on the SFU as the room's administrator, and the
-  keys would have to change, since a removed person still holds the link
-  and a valid SFU token); an expiry for a meeting; co-hosts who can admit;
-  admitting from the Meetings page or a notification without being in the
-  meeting; and letting everyone waiting in at once.
+  - Hosts remove people and the owner ends a meeting for everyone and
+    names co-hosts (`docs/chat-calls.md`, "Hosts"). Removing someone turns
+    the waiting room on rather than changing the meeting's keys: they still
+    hold the link, so the door is what keeps them out. A co-host is a
+    participant for one stay, not an account.
+  - Admitting people without being in the meeting (from the Meetings page
+    or a notification) is deliberately not built: a host lets people in
+    from inside the meeting.
+- **Meetings: moderation, what is left.** A removed person's SFU token
+  cannot be withdrawn and lasts up to six hours (a host's browser removes
+  that identity again if it comes back; shorter tokens with renewal would
+  close it properly). Also not built: a new link for a meeting that must
+  exclude someone for good; an expiry for a meeting; letting everyone
+  waiting in at once; muting someone else, or stopping their screen share.
 - **Meetings: joining as yourself.** Everyone in a meeting shows the name
   they typed, including people with accounts. A signed-in person could
   instead join with a name the others can verify against their contact, and

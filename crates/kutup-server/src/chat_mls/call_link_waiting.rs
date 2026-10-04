@@ -25,6 +25,7 @@ use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::call_link_moderation::{host, HostCredentials};
 use super::call_links::{
     admitted, base64_exact, hex32, owner, require_sfu, room_token, SEALED_NAME_BYTES,
 };
@@ -94,15 +95,6 @@ pub struct KnockStatusResponse {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostRequest {
-    pub room_id: String,
-    pub access_token: String,
-    /// The owner's host token (standard base64, 32 bytes).
-    pub host_token: String,
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitingKnock {
@@ -125,7 +117,12 @@ pub struct WaitingKnocks {
 pub struct DecideKnockRequest {
     pub room_id: String,
     pub access_token: String,
-    pub host_token: String,
+    /// The owner's host token, or
+    #[serde(default)]
+    pub host_token: Option<String>,
+    /// a co-host's own SFU token.
+    #[serde(default)]
+    pub sfu_token: Option<String>,
     pub knock_id: Uuid,
     pub admit: bool,
 }
@@ -324,29 +321,13 @@ pub(crate) async fn knock_status(
     }))
 }
 
-/// The meeting, for its owner: a wrong host token is answered like an
-/// unknown room.
-async fn hosted(
-    state: &AppState,
-    room_id: &str,
-    access_token: &str,
-    host_token: &str,
-) -> AppResult<()> {
-    let meeting = admitted(state, room_id, access_token).await?;
-    if meeting.is_host(Some(host_token))? {
-        Ok(())
-    } else {
-        Err(AppError::not_found("this call link does not work"))
-    }
-}
-
-/// Who is waiting to be let in, oldest first, for the owner.
+/// Who is waiting to be let in, oldest first, for the meeting's hosts.
 #[utoipa::path(
     post,
     path = "/api/chat/call-links/knocks",
     tag = "chat",
     operation_id = "listChatCallLinkKnocks",
-    request_body = HostRequest,
+    request_body = HostCredentials,
     responses(
         (status = 200, description = "The people waiting", body = WaitingKnocks),
         (status = 404, description = "No such link, or the wrong access or host token"),
@@ -355,15 +336,9 @@ async fn hosted(
 )]
 pub(crate) async fn knocks(
     State(state): State<AppState>,
-    Json(request): Json<HostRequest>,
+    Json(request): Json<HostCredentials>,
 ) -> AppResult<Json<WaitingKnocks>> {
-    hosted(
-        &state,
-        &request.room_id,
-        &request.access_token,
-        &request.host_token,
-    )
-    .await?;
+    host(&state, &request).await?;
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
         "SELECT id, label, created_at FROM chat_call_link_knocks
          WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)
@@ -386,7 +361,7 @@ pub(crate) async fn knocks(
     }))
 }
 
-/// Admit or turn away one person waiting, as the owner.
+/// Admit or turn away one person waiting, as a host.
 #[utoipa::path(
     post,
     path = "/api/chat/call-links/knocks/decide",
@@ -403,11 +378,14 @@ pub(crate) async fn decide(
     State(state): State<AppState>,
     Json(request): Json<DecideKnockRequest>,
 ) -> AppResult<StatusCode> {
-    hosted(
+    host(
         &state,
-        &request.room_id,
-        &request.access_token,
-        &request.host_token,
+        &HostCredentials {
+            room_id: request.room_id.clone(),
+            access_token: request.access_token.clone(),
+            host_token: request.host_token.clone(),
+            sfu_token: request.sfu_token.clone(),
+        },
     )
     .await?;
     let decided = sqlx::query(

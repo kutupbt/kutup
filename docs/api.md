@@ -1823,17 +1823,51 @@ the two routes below are limited to 600 a minute per address
 
 ### POST /api/chat/call-links/knocks
 
-**No authentication; the owner's host token.**
-`{ "roomId", "accessToken", "hostToken" }` →
+**No authentication; a host's proof.** A host is the owner, who sends
+`hostToken`, or a co-host, who sends `sfuToken`: the SFU token this server
+minted for them ([`chat-calls.md`](chat-calls.md) "Hosts").
+`{ "roomId", "accessToken", "hostToken" | "sfuToken" }` →
 `{ "knocks": [{ "knockId", "label", "createdAt" }] }`: who is waiting,
-oldest first, each with their sealed name. `404` for a wrong host token, as
-for an unknown room.
+oldest first, each with their sealed name. `404` for anyone who is not a
+host, as for an unknown room.
 
 ### POST /api/chat/call-links/knocks/decide
 
+**No authentication; a host's proof.**
+`{ "roomId", "accessToken", "hostToken" | "sfuToken", "knockId", "admit" }`
+→ `204`. `404` when nobody is waiting under that knock.
+
+### POST /api/chat/call-links/roles
+
+**No authentication.** `{ "roomId", "accessToken", "hostToken"?, "sfuToken"? }`
+→ `{ "me"?, "roles": [{ "participantId", "role" }] }`: the meeting's hosts
+by SFU identity, `role` being `owner` or `coHost`, for anyone holding the
+link. `me` is the asker's own role when the token they sent carries one.
+The four routes here are limited like the knock routes.
+
+### POST /api/chat/call-links/co-hosts
+
 **No authentication; the owner's host token.**
-`{ "roomId", "accessToken", "hostToken", "knockId", "admit" }` → `204`. `404`
-when nobody is waiting under that knock.
+`{ "roomId", "accessToken", "hostToken", "participantId", "enabled" }` →
+`204`: make that participant a co-host, or stop them being one. `409` when
+it is the owner's own identity; `404` for anyone but the owner.
+
+### POST /api/chat/call-links/participants/remove
+
+**No authentication; a host's proof.**
+`{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId" }` →
+`204`: disconnect that participant at the SFU and turn the meeting's
+waiting room on. `403` when a co-host names a host, or anyone names the
+owner; `404` for anyone who is not a host; `502` when the SFU's API
+(`CHAT_SFU_API_URL`) cannot be reached.
+
+### POST /api/chat/call-links/end
+
+**No authentication; the owner's host token.**
+`{ "roomId", "accessToken", "hostToken" }` → `204`: end the meeting for
+everyone in it. Whoever is waiting is turned away and the co-hosts are
+forgotten; the link keeps working. `404` for anyone but the owner, `502`
+when the SFU's API cannot be reached.
 
 ### PUT /api/chat/push-subscription
 

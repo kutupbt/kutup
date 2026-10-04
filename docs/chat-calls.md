@@ -297,8 +297,49 @@ changing one). With it on, holding the link is not enough to join.
   browser where they are signed in to Chat; in any other browser they are a
   guest like everyone else, and wait. Someone has to be the host in the
   meeting for anyone to be let in.
-- What it does not do: it admits, it does not remove. Someone let in stays
-  until they leave, and their SFU token lasts up to six hours.
+- A co-host (below) lets people in and turns them away too.
+
+**Hosts:** the meeting's **owner**, and the **co-hosts** the owner names
+while it is running. Until here this server only minted tokens to enter the
+SFU's room; removing someone and ending a meeting act on the SFU itself, as
+the room's administrator, through LiveKit's room service
+(`CHAT_SFU_API_URL`, by default the SFU's URL with `ws` read as `http`).
+
+- **Who is who.** The owner proves it with the host token. When they ask
+  for an SFU token with it, the server records the identity they joined
+  under as the owner's. A co-host is a participant's SFU identity the owner
+  named (`…/co-hosts`); they prove who they are with their own SFU token,
+  which this server minted and so can check (signature, room, identity).
+  Anyone holding the link can ask who the hosts are (`…/roles`): the People
+  list marks them "Host" and "Co-host". These roles are the server's word,
+  not something a participant can claim. A browser learns of a change by a
+  contentless hint sent through the SFU (topic `kutup-roles`), and then asks
+  the server; the hint itself proves nothing.
+- **A co-host lasts one stay.** The role belongs to the identity they
+  joined with; leaving and joining again is a new identity without it.
+- **What each may do.** The owner: everything. A co-host: let people in,
+  turn them away, and remove participants who are not hosts. Nobody removes
+  the owner; only the owner names co-hosts or ends the meeting.
+- **Removing someone** (`…/participants/remove`, from their row in the
+  People list): the server turns the waiting room on, marks the knock they
+  came in by as turned away, and disconnects them at the SFU. Their page
+  says a host removed them. They still hold the link, which is why the
+  waiting room goes on: to come back they have to ask, and a host decides.
+  It stays on until the owner turns it off.
+- **Ending the meeting for everyone** (`…/end`, from the owner's leave
+  button, which then offers "Leave meeting" and "End meeting for
+  everyone"): the server turns away everyone waiting, forgets the co-hosts,
+  and deletes the SFU room, which disconnects everybody; their pages say
+  the host ended it. The link keeps working: the meeting can be held again.
+  When the owner merely leaves, the meeting goes on without a host.
+- **What removal is not.** It is not a change of keys: a removed person
+  still holds the link, and so the keys the media, names and chat are
+  sealed under. It keeps them out of the room, which is where those travel.
+  The SFU token they were given cannot be withdrawn and lasts up to six
+  hours; a modified client could use it to connect again. A host's browser
+  that removed someone removes that identity again whenever it reappears,
+  for as long as that host stays. A meeting that must exclude someone for
+  good needs a new link.
 
 **What a meeting is, and is not:**
 - Without a waiting room the link is the whole capability: whoever has it
@@ -308,7 +349,8 @@ changing one). With it on, holding the link is not enough to join.
 - Names are what people typed. Nothing ties a name to an account, including
   for people who have one; the join page says so.
 - Deleting a meeting stops new joins. People already in it stay until they
-  leave (their SFU token lasts up to six hours).
+  leave or the owner ends it for everyone first (their SFU token lasts up
+  to six hours).
 - A meeting is one room: everyone who opens the link while others are there
   is in the same call.
 
@@ -365,7 +407,8 @@ accounts.
 For meetings, the host additionally learns that a meeting exists, which
 account made it and when, when its sealed details change, whether it has a
 waiting room, how many people knock and when each is let in or turned away,
-and the network address of each joiner when it asks for the details or a
+which SFU identities are its hosts, which identity is removed and when the
+meeting is ended, and the network address of each joiner when it asks for the details or a
 token. It never
 learns the link, the title or time, the names people chose, the chat, or
 the media. Someone who gets the link learns all of them.

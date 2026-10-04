@@ -93,6 +93,10 @@ pub struct Config {
     /// (`CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET`). Without them, accounts
     /// here can join group calls other servers host but not start one.
     pub chat_sfu_url: String,
+    /// Where this server reaches the SFU's own API (`CHAT_SFU_API_URL`), to
+    /// remove a participant or end a meeting. Empty: `CHAT_SFU_URL` with
+    /// `ws` read as `http`.
+    pub chat_sfu_api_url: String,
     pub chat_sfu_api_key: String,
     pub chat_sfu_api_secret: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
@@ -293,6 +297,7 @@ impl Config {
             chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
             chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
             chat_sfu_url: get_env("CHAT_SFU_URL", ""),
+            chat_sfu_api_url: get_env("CHAT_SFU_API_URL", ""),
             chat_sfu_api_key: get_env("CHAT_SFU_API_KEY", ""),
             chat_sfu_api_secret: get_env("CHAT_SFU_API_SECRET", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),

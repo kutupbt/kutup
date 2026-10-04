@@ -1,7 +1,8 @@
 import { MessageSquare, Mic, MicOff, MonitorUp, Users, Video, VideoOff, X } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Avatar } from '@kutup/ui/components/avatar'
+import { Badge } from '@kutup/ui/components/badge'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
@@ -23,6 +24,10 @@ export interface CallPerson {
   muted?: boolean
   cameraOn: boolean
   sharing: boolean
+  /** What this person is in the call ("Host"), when it is worth saying. */
+  badge?: string
+  /** What can be done about this person: a menu, at the end of their row. */
+  actions?: ReactNode
 }
 
 export function CallFrame({
@@ -113,7 +118,14 @@ export function CallFrame({
                 {people.map((person) => (
                   <li key={person.key} className="flex items-center gap-3 rounded-lg px-2 py-2" data-testid="chat-call-person" data-name={person.name}>
                     <Avatar name={person.avatarName} image={person.avatar} contentType={person.avatarContentType} size={32} />
-                    <span className="min-w-0 flex-1 truncate text-sm">{person.name}</span>
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="min-w-0 truncate text-sm">{person.name}</span>
+                      {person.badge ? (
+                        <Badge variant="neutral" className="shrink-0" data-testid="chat-call-person-badge">
+                          {person.badge}
+                        </Badge>
+                      ) : null}
+                    </span>
                     {person.sharing ? (
                       <MonitorUp className="size-4 shrink-0 text-primary" aria-label={t('chat.calls.isSharing')} />
                     ) : null}
@@ -127,6 +139,7 @@ export function CallFrame({
                     ) : (
                       <Mic className="size-4 shrink-0 text-muted-foreground" aria-label={t('chat.calls.micIsOn')} />
                     )}
+                    {person.actions}
                   </li>
                 ))}
               </ul>
@@ -198,29 +211,23 @@ export function PanelButtons({
   )
 }
 
-export function RoundButton({
-  label,
-  onClick,
-  children,
-  tone,
-  pressed,
-  disabled,
-  testId,
-}: {
-  label: string
-  onClick: () => void
-  children: ReactNode
-  tone?: 'danger' | 'accept'
-  pressed?: boolean
-  disabled?: boolean
-  testId: string
-}) {
+/** A call control. It takes a ref and further props, so it can open a menu. */
+export const RoundButton = forwardRef<
+  HTMLButtonElement,
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'className'> & {
+    label: string
+    children: ReactNode
+    tone?: 'danger' | 'accept'
+    pressed?: boolean
+    testId: string
+  }
+>(function RoundButton({ label, children, tone, pressed, testId, ...props }, ref) {
   return (
     <Button
+      {...props}
+      ref={ref}
       type="button"
       size="icon"
-      onClick={onClick}
-      disabled={disabled}
       aria-label={label}
       title={label}
       aria-pressed={pressed}
@@ -235,4 +242,4 @@ export function RoundButton({
       {children}
     </Button>
   )
-}
+})

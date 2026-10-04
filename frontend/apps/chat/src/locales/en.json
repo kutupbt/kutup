@@ -878,7 +878,9 @@
         "gone": "This meeting link no longer works. Ask the person who sent it for a new one.",
         "busy": "Too many attempts. Wait a minute, then try again.",
         "unavailable": "The meeting could not be reached. Check your connection and try again.",
-        "media": "Kutup can't use your microphone or camera. Allow them in the browser to join."
+        "media": "Kutup can't use your microphone or camera. Allow them in the browser to join.",
+        "removed": "A host removed you from the meeting.",
+        "endedByHost": "The host ended the meeting."
       }
     },
     "meetings": {
@@ -946,7 +948,24 @@
       "decideFailed": "That didn't go through. They may have stopped waiting.",
       "chatNotice": "Messages here are seen by everyone in the meeting and are not kept: they are gone when you leave, and people who join later do not see them.",
       "chatPlaceholder": "Message everyone",
-      "chatFailed": "The message could not be sent."
+      "chatFailed": "The message could not be sent.",
+      "roleOwner": "Host",
+      "roleCoHost": "Co-host",
+      "personActions": "Actions for {{name}}",
+      "makeCoHost": "Make co-host",
+      "removeCoHost": "Remove as co-host",
+      "coHostFailed": "The co-host could not be changed.",
+      "remove": "Remove from meeting",
+      "removeTitle": "Remove {{name}}?",
+      "removeDescription": "{{name}} is disconnected from the meeting.",
+      "removeWarning": "They still have the link, so the waiting room is turned on: from now on a host lets each person in.",
+      "removeFailed": "They could not be removed.",
+      "leave": "Leave meeting",
+      "endForAll": "End meeting for everyone",
+      "endTitle": "End the meeting for everyone?",
+      "endDescription": "Everyone is disconnected, and whoever is waiting is turned away. The link keeps working, so the meeting can be held again.",
+      "endSubmit": "End meeting",
+      "endFailed": "The meeting could not be ended."
     },
     "shortcuts": {
       "title": "Keyboard shortcuts",
