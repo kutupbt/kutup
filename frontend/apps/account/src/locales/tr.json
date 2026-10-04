@@ -100,7 +100,7 @@
   "register": {
     "title": "Kutup hesabınızı oluşturun",
     "description": "Anahtarlarınız bu cihazda oluşturulur ve şifrelenmeden cihazdan çıkmaz.",
-    "usernameHint": "Sohbet'te sizi bu adla bulurlar.",
+    "usernameHint": "İleti'de sizi bu adla bulurlar.",
     "closedTitle": "Kayıt kapalı",
     "closedDescription": "Bu sunucu yeni hesap kabul etmiyor. Yöneticisinden bir hesap isteyin.",
     "backToSignIn": "Girişe dön",
@@ -146,8 +146,8 @@
       "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
       "profile": "Profil",
       "noUsername": "Belirlenmedi",
-      "driveStorage": "Drive depolama",
-      "chatStorage": "Sohbet depolama",
+      "driveStorage": "Depo alanı",
+      "chatStorage": "İleti alanı",
       "usage": "{{total}} alanın {{used}} kadarı",
       "colour": "Varlık rengi",
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
@@ -241,18 +241,18 @@
     },
     "devicesSessions": {
       "title": "Cihazlar ve oturumlar",
-      "description": "Hesabınızın oturum açtığı her şey: tarayıcılar ve komut satırı, Sohbet kurulu tarayıcılar ve düzenlemelerinizi imzalayan anahtarlar."
+      "description": "Hesabınızın oturum açtığı her şey: tarayıcılar ve komut satırı, İleti kurulu tarayıcılar ve düzenlemelerinizi imzalayan anahtarlar."
     },
     "chatDevices": {
-      "title": "Sohbet cihazları",
-      "description": "Sohbet'in kurulu olduğu tarayıcılar. Birini kaldırmak onu gruplarınızdan da çıkarır, bu yüzden Sohbet'te yapılır.",
-      "manage": "Sohbet'te yönet",
-      "none": "Sohbet henüz hiçbir tarayıcıda kurulu değil.",
+      "title": "İleti cihazları",
+      "description": "İleti'nin kurulu olduğu tarayıcılar. Birini kaldırmak onu gruplarınızdan da çıkarır, bu yüzden İleti'de yapılır.",
+      "manage": "İleti'de yönet",
+      "none": "İleti henüz hiçbir tarayıcıda kurulu değil.",
       "unnamed": "Tarayıcı"
     },
     "maps": {
       "title": "Haritalar",
-      "description": "Haritalar, Sohbet'te paylaşılan yerleri ve canlı konumları, bir de fotoğrafların çekildiği yerleri gösterir. Siz açana kadar kapalıdır.",
+      "description": "Haritalar, İleti'de paylaşılan yerleri ve canlı konumları, bir de fotoğrafların çekildiği yerleri gösterir. Siz açana kadar kapalıdır.",
       "offByServer": "Bu sunucuda haritalar kapalı.",
       "show": "Haritaları göster",
       "enable": "Kutup'ta haritaları göster",
@@ -285,8 +285,8 @@
       "folders": "Klasörler"
     },
     "quota": {
-      "drive": "Drive kotası (GiB)",
-      "chat": "Sohbet kotası (GiB)",
+      "drive": "Depo kotası (GiB)",
+      "chat": "İleti kotası (GiB)",
       "positive": "Sıfırdan büyük bir boyut girin."
     },
     "users": {
@@ -307,8 +307,8 @@
       "columns": {
         "user": "Kullanıcı",
         "status": "Durum",
-        "drive": "Drive",
-        "chat": "Sohbet",
+        "drive": "Depo",
+        "chat": "İleti",
         "twoFactor": "2FA"
       }
     },
@@ -420,7 +420,7 @@
       "accounts": "Hesaplar",
       "registration": "Açık kayıt",
       "registrationHint": "Bu sunucuya erişebilen herkes hesap oluşturabilir. Kapalıyken hesapları yalnızca yöneticiler oluşturur.",
-      "chat": "Sohbet",
+      "chat": "İleti",
       "chatHint": "Bu sunucuda şifreli mesaj ve medya teslimi.",
       "chatQuota": "Varsayılan sohbet kotası (GiB)",
       "chatQuotaHint": "Yeni hesaplar için.",
@@ -469,7 +469,7 @@
         "peers": "Bilinen sunucular",
         "quarantined": "Karantinada",
         "chatPending": "Bekleyen mesajlar",
-        "driveShares": "Drive paylaşımları"
+        "driveShares": "Depo paylaşımları"
       },
       "rules": "Sunucu kuralları",
       "rulesHint": "Politikaya sunucu bazında istisnalar.",

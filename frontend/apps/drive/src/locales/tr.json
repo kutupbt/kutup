@@ -1,14 +1,14 @@
 {
   "app": {
-    "title": "Kutup Drive"
+    "title": "Kutup Depo"
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
   },
   "boot": {
-    "opening": "Drive'ınız açılıyor…",
-    "failedTitle": "Drive açılamadı",
+    "opening": "Deponuz açılıyor…",
+    "failedTitle": "Depo açılamadı",
     "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin."
   },
   "nav": {
@@ -260,7 +260,7 @@
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
       "title": "Davet bağlantısından ekle",
-      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör, tek dosya veya Fotoğraflar albümü davet bağlantısını yapıştırın.",
+      "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği klasör, tek dosya veya Galeri albümü davet bağlantısını yapıştırın.",
       "link": "Davet bağlantısı",
       "invalid": "Bu bir Kutup davet bağlantısı değil.",
       "submit": "Ekle",
@@ -268,17 +268,17 @@
       "notFound": "Bu davet yok ya da zaten kullanılmış.",
       "notForYou": "Bu davet başka bir hesap için.",
       "failed": "Davet eklenemedi.",
-      "albumAdded": "Albüm eklendi. Fotoğraflar'da.",
-      "openPhotos": "Fotoğraflar'da aç"
+      "albumAdded": "Albüm eklendi. Galeri'de.",
+      "openPhotos": "Galeri'de aç"
     },
     "leave": "Ayrıl",
     "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",
-    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Drive'ınızdan kalkar. Sizi yeniden davet edebilir.",
+    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Deponuzdan kalkar. Sizi yeniden davet edebilir.",
     "leaveFailed": "Klasörden ayrılınamadı.",
     "waitingName": "Sahibi bekleniyor",
     "waiting": "sahibinin erişimi güncellemesi bekleniyor",
     "editsWait": "sahibi erişimi güncelleyene kadar yalnızca görüntüleme",
-    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "waitingHint": "Bu dosya yeni bir anahtara geçti. Sahibi Kutup Depo’yu yeniden açtığında açılır.",
     "goneName": "Artık paylaşılmıyor",
     "gone": "artık paylaşılmıyor ya da sunucusuna ulaşılamıyor",
     "remove": "Kaldır",
@@ -336,7 +336,7 @@
       },
       "waiting": {
         "title": "Sahibi bekleniyor",
-        "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Drive’ı açtığında yeniden çalışır."
+        "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Depo’yu açtığında yeniden çalışır."
       }
     }
   },
@@ -487,7 +487,7 @@
       "foldAll": "Her şeyi katla ya da aç",
       "palette": "Komut paleti",
       "switcher": "Bir dosya ya da klasör aç",
-      "kutupLink": "Drive’ındaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
+      "kutupLink": "Depondaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
       "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
       "title": "Düzenleyici klavye kısayolları",
       "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
@@ -551,7 +551,7 @@
   "file": {
     "opening": "Açılıyor…",
     "failedTitle": "Bu dosya açılamıyor",
-    "backToDrive": "Drive'a dön",
+    "backToDrive": "Depo'ya dön",
     "backTo": "{{folder}} klasörüne dön",
     "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
     "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
@@ -560,12 +560,12 @@
     "noPreviewTitle": "Bu dosya türü için önizleme yok",
     "noPreview": "Cihazında açmak için indir.",
     "restoring": "Geri yükleniyor…",
-    "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Drive’ı yeniden açtığında açılır.",
+    "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Depo’yu yeniden açtığında açılır.",
     "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme"
   },
   "search": {
-    "label": "Drive'da ara",
-    "placeholder": "Drive'da ara",
+    "label": "Depo'da ara",
+    "placeholder": "Depo'da ara",
     "clear": "Aramayı temizle",
     "searching": "“{{query}}” aranıyor…",
     "results_one": "“{{query}}” için {{count}} sonuç",
@@ -594,8 +594,8 @@
     "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
   },
   "settings": {
-    "title": "Drive ayarları",
-    "description": "Drive'ın dosyalarınızı nasıl sakladığı ve klasörleri nasıl açtığı. Profiliniz ve güvenliğiniz hesap ayarlarınızdadır.",
+    "title": "Depo ayarları",
+    "description": "Depo'nun dosyalarınızı nasıl sakladığı ve klasörleri nasıl açtığı. Profiliniz ve güvenliğiniz hesap ayarlarınızdadır.",
     "versions": {
       "title": "Dosya sürümleri",
       "description": "Bir belgenin her kaydı geri yükleyebileceğin bir sürüm tutar. Son gün tamamen, son hafta saatte bir, daha eskileri günde bir sürüm olarak saklanır. Adlandırdığın sürümler süresiz saklanır. Sürümler depolama alanına sayılır.",

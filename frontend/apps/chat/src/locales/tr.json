@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Kutup Sohbet"
+    "title": "Kutup İleti"
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
@@ -156,15 +156,15 @@
     "device": "Cihaz {{device}}",
     "backup": {
       "title": "Şifreli sohbet geçmişi",
-      "recovery": "Drive ile aynı kurtarma ifadesi kullanılarak otomatik geri yüklenir.",
+      "recovery": "Depo ile aynı kurtarma ifadesi kullanılarak otomatik geri yüklenir.",
       "latestProtected": "Son koruma: {{time}}",
       "waiting": "İlk sunucu onayı bekleniyor",
       "pending": "{{count}} mesaj değişikliği ({{bytes}}) hâlâ yalnızca bu cihazda saklanıyor.",
-      "full": "Sohbet depolama alanı dolu. Mesaj veya medya silin ya da sunucu yöneticinizden kotayı artırmasını isteyin. Depolama alanı açılıp sunucu onaylayana kadar yeni yerel değişiklikler korunmaz.",
-      "attention": "Sohbet geçmişi koruması ilgilenmenizi gerektiriyor. Kutup yeniden denemeye devam edecek; sunucu onaylayana kadar yerel değişiklikler korunmaz.",
-      "storageTitle": "Sohbet depolama alanı",
-      "storageDescription": "Sohbet geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Drive ayrıdır. Teslimat kopyaları {{days}} gün sonra silinir, korunan geçmiş kopyaları kalır.",
-      "storageDescriptionUnlimited": "Sohbet geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Drive ayrıdır. Teslimat kopyalarının süresi dolmaz; korunan geçmiş kopyaları bağımsız olarak saklanır.",
+      "full": "İleti depolama alanı dolu. Mesaj veya medya silin ya da sunucu yöneticinizden kotayı artırmasını isteyin. Depolama alanı açılıp sunucu onaylayana kadar yeni yerel değişiklikler korunmaz.",
+      "attention": "İleti geçmişi koruması ilgilenmenizi gerektiriyor. Kutup yeniden denemeye devam edecek; sunucu onaylayana kadar yerel değişiklikler korunmaz.",
+      "storageTitle": "İleti depolama alanı",
+      "storageDescription": "İleti geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Depo ayrıdır. Teslimat kopyaları {{days}} gün sonra silinir, korunan geçmiş kopyaları kalır.",
+      "storageDescriptionUnlimited": "İleti geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Depo ayrıdır. Teslimat kopyalarının süresi dolmaz; korunan geçmiş kopyaları bağımsız olarak saklanır.",
       "loading": "Şifreli kullanım bilgileri yükleniyor…",
       "used": "{{bytes}} kullanılıyor",
       "messageHistory": "Mesaj geçmişi",
@@ -181,24 +181,24 @@
       "stateLabel": "Durum"
     },
     "contact": {
-      "title": "Sohbet adresiniz",
+      "title": "İleti adresiniz",
       "description": "Bu kalıcı kullanıcı@sunucu adresini paylaşın veya QR kodunu taratın.",
       "copy": "Adresi kopyala",
-      "copied": "Sohbet adresi kopyalandı",
-      "qr": "Sohbet adresinin QR kodu"
+      "copied": "İleti adresi kopyalandı",
+      "qr": "İleti adresinin QR kodu"
     },
     "deviceRecovery": {
       "action": "Bu tarayıcıyı onar",
-      "title": "Bu tarayıcının Sohbet cihazı sıfırlansın mı?",
+      "title": "Bu tarayıcının İleti cihazı sıfırlansın mı?",
       "description": "Kutup bu tarayıcıdaki geçersiz şifreleme cihazı durumunu kaldıracak, yeni bir cihaz kaydedecek ve sunucunun onayladığı şifreli geçmişi geri yükleyecek. Hesabınız ve sunucu yedeğiniz silinmez.",
-      "warning": "Yalnızca bu tarayıcıda bulunan ve sunucu tarafından hiç onaylanmamış Sohbet değişiklikleri kaybolabilir. Devam etmeden önce diğer Kutup sekmelerini kapatın.",
+      "warning": "Yalnızca bu tarayıcıda bulunan ve sunucu tarafından hiç onaylanmamış İleti değişiklikleri kaybolabilir. Devam etmeden önce diğer Kutup sekmelerini kapatın.",
       "confirm": "Sıfırla ve geri yükle",
-      "failed": "Bu tarayıcının Sohbet cihazı sıfırlanamadı."
+      "failed": "Bu tarayıcının İleti cihazı sıfırlanamadı."
     },
     "devices": {
-      "title": "Etkin Sohbet kurulumları",
+      "title": "Etkin İleti kurulumları",
       "description": "Her tarayıcı profili, gizli pencere veya temizlenmiş site verisi ayrı bir uçtan uca şifreli kurulumdur. Adlar hesabınıza özeldir ve şifreleme anahtarlarını değiştirmez.",
-      "loading": "Sohbet cihazları yükleniyor…",
+      "loading": "İleti cihazları yükleniyor…",
       "current": "Bu cihaz",
       "id": "Cihaz kimliği {{device}}",
       "name": "Cihaz adı",
@@ -209,7 +209,7 @@
       "neverSeen": "Henüz etkinlik yok",
       "revoke": "İptal et",
       "confirm": "{{device}} iptal edilsin mi? Gelecekteki mesajları artık almayacak.",
-      "revoked": "Sohbet cihazı iptal edildi",
+      "revoked": "İleti cihazı iptal edildi",
       "historyWarning": "İptal etmek gelecekteki teslimatı durdurur. Cihazın yerel mesaj geçmişini kopyalamaz.",
       "thisOne": "Bu tarayıcı {{device}} numaralı sohbet cihazı.",
       "revokeTitle": "Bu cihazın erişimi kaldırılsın mı?"
@@ -257,7 +257,7 @@
       "deleteForMeOnly": "Tüm cihazlarınızdan silinecek. Bu sohbetteki diğerlerinin kopyaları kalır."
     },
     "profile": {
-      "title": "Sohbet profili",
+      "title": "İleti profili",
       "description": "Adınız, resminiz ve hakkında satırınız: tüm Kutup hesabınız için tek profil, hesap ayarlarında düzenlenir.",
       "visibility": "Signal'da olduğu gibi Kutup da bu profili yalnızca mesaj gönderdiğiniz veya kabul ettiğiniz kişilerle paylaşır. Birini engellemek, gelecekteki değişiklikleri alamaması için profil anahtarınızı yeniler.",
       "edit": "Profili düzenle"
@@ -319,12 +319,12 @@
       "address": "Kullanıcı adı ya da adres"
     },
     "failed": {
-      "title": "Sohbet açılamadı",
-      "toDrive": "Drive’a git"
+      "title": "İleti açılamadı",
+      "toDrive": "Depo’ya git"
     },
     "unreachable": {
       "title": "Sunucuya ulaşılamıyor",
-      "body": "Sunucu yanıt verir vermez Sohbet kendiliğinden açılır. Bu cihazdaki hiçbir şey kaybolmaz.",
+      "body": "Sunucu yanıt verir vermez İleti kendiliğinden açılır. Bu cihazdaki hiçbir şey kaybolmaz.",
       "tryNow": "Şimdi dene",
       "retrying": "Yeniden deneniyor…"
     },
@@ -538,7 +538,7 @@
       "title_other": "{{count}} grup daveti"
     },
     "settings": {
-      "title": "Sohbet ayarları",
+      "title": "İleti ayarları",
       "profile": "Profil",
       "privacy": "Gizlilik",
       "devices": "Cihazlar",
@@ -564,7 +564,7 @@
       "connecting": "Yeniden bağlanılıyor…",
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene",
-      "deviceRemoved": "Bu tarayıcı artık Sohbet cihazlarınızdan biri değil",
+      "deviceRemoved": "Bu tarayıcı artık İleti cihazlarınızdan biri değil",
       "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı. Mesajlar buraya ulaşmıyor. Yeniden kurmak onu baştan kaydeder ve geçmişinizi şifreli yedekten geri yükler; bu tarayıcıdan gönderilmeyi bekleyen mesajlar kaybolur.",
       "setUpAgain": "Yeniden kur"
     },
@@ -757,7 +757,7 @@
       "bannerRequests_other": "{{count}} kişi katılmak istiyor"
     },
     "notifications": {
-      "appName": "Kutup Sohbet",
+      "appName": "Kutup İleti",
       "newMessage": "Yeni mesaj",
       "newMessageFrom": "{{name}} adlı kişiden yeni mesaj",
       "reacted": "{{name}} {{emoji}} tepkisi verdi: {{preview}}",
@@ -769,7 +769,7 @@
       "invited_other": "{{count}} gruba davet edildiniz",
       "joinRequest": "{{name}} katılmak istiyor",
       "joinRequestHidden": "Biri bir gruba katılmak istiyor",
-      "settingsDescription": "Sohbet bu tarayıcıda açıkken gösterilen bildirimler.",
+      "settingsDescription": "İleti bu tarayıcıda açıkken gösterilen bildirimler.",
       "allowTitle": "Bildirimlere izin verin",
       "allowDescription": "Tarayıcınız, Kutup'un bildirim gösterip gösteremeyeceğini bir kez sorar.",
       "allow": "Bildirimlere izin ver",
@@ -787,13 +787,13 @@
         "noneHint": "Yalnızca yeni bir şey geldiği."
       },
       "sound": "Ses çal",
-      "soundDescription": "Sohbet odaktayken de, başka sohbetlerdeki mesajlar için.",
+      "soundDescription": "İleti odaktayken de, başka sohbetlerdeki mesajlar için.",
       "sendTest": "Deneme bildirimi gönder",
       "test": "Bildirimler çalışıyor.",
-      "prompt": "Sohbet bu tarayıcıda açıkken yeni mesajlardan haberdar olun.",
+      "prompt": "İleti bu tarayıcıda açıkken yeni mesajlardan haberdar olun.",
       "turnOn": "Aç",
       "notNow": "Şimdi değil",
-      "push": "Sohbet kapalıyken bildir",
+      "push": "İleti kapalıyken bildir",
       "pushDescription": "Tarayıcınızın bildirim hizmeti (Google, Mozilla ya da Apple'ın) yeni bir şey geldiğinde bu tarayıcıyı uyandırır. Yalnızca ne zaman olduğunu öğrenir; sunucu mesajlarınızı okuyamadığı için bildirim kimden ya da ne geldiğini söyleyemez.",
       "pushBody": "Yeni mesajlarınız olabilir.",
       "pushFailed": "Bu tarayıcı anlık bildirimlere abone olamadı."
@@ -944,7 +944,7 @@
     },
     "shortcuts": {
       "title": "Klavye kısayolları",
-      "description": "Sohbette fare olmadan gezinmenin yolları.",
+      "description": "İleti'de fare olmadan gezinmenin yolları.",
       "search": "Ara",
       "newChat": "Yeni sohbet",
       "previousChat": "Önceki sohbet",
@@ -961,7 +961,7 @@
       "description": "Bu sohbeti bir metin dosyası olarak indirir: her mesaj ve bildirim, zamanı ve göndereniyle. Ekler yalnızca adlarıyla yer alır.",
       "warning": "Dosya şifreli değildir. Onu açabilen herkes sohbetin tamamını okuyabilir.",
       "submit": "Dışa aktar",
-      "header": "Kutup Sohbet: {{title}}",
+      "header": "Kutup İleti: {{title}}",
       "exportedAt": "Dışa aktarma: {{date}}.",
       "edited": "(düzenlendi)"
     },
@@ -1015,8 +1015,8 @@
     }
   },
   "boot": {
-    "opening": "Sohbet açılıyor…",
-    "failedTitle": "Sohbet açılamadı",
+    "opening": "İleti açılıyor…",
+    "failedTitle": "İleti açılamadı",
     "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene."
   }
 }
