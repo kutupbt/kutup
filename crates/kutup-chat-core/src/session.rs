@@ -100,6 +100,8 @@ pub(crate) struct UndecryptableRepair {
     /// The sender should be handed a fresh session now rather than with the
     /// next message the user happens to write.
     pub refresh_peer: bool,
+    /// The message to ask the sender for again, when it could be named.
+    pub request: Option<String>,
     /// The record written in the unreadable message's place.
     pub notice: Option<ReceivedMessage>,
 }
@@ -152,6 +154,13 @@ pub(crate) enum ReceiveOutcome {
         id: String,
         /// Present only when this device actually adopted a new peer key.
         peer: Option<String>,
+    },
+    /// The peer could not read some messages and asks for them again. The
+    /// request itself is kept by nobody.
+    ResendRequested {
+        id: String,
+        peer: String,
+        send_ids: Vec<String>,
     },
     /// A blocked peer's envelope was authenticated, decrypted, ratcheted, and
     /// made safe to ack, but its plaintext was deliberately not retained.
@@ -1115,6 +1124,7 @@ impl Session {
         mut inbound: InboundEnvelope,
         sender: &str,
         sender_device_id: u32,
+        send_id: Option<&str>,
         reset: bool,
         error: &ChatError,
     ) -> Result<UndecryptableRepair> {
@@ -1134,13 +1144,45 @@ impl Session {
                         ContactState::PendingOutgoing | ContactState::Accepted
                     )
                 });
-            // One record per reset, not per envelope: an unreadable typing
-            // indicator is indistinguishable from an unreadable message, and
-            // a burst of either says nothing more than the first.
-            let notice = if reset && open_conversation {
+            // The id the server passed along names the message, so the
+            // sender can be asked for exactly it and the record can give way
+            // when it arrives. It is not authenticated; a wrong one gets a
+            // message this device already has, or nothing.
+            let named = send_id
+                .filter(|id| open_conversation && !id.is_empty() && id.len() <= 64)
+                .map(str::to_string);
+            let mut request = named.clone();
+            if let Some(send_id) = named.as_deref() {
+                for message in self.store.db().list_messages().await? {
+                    if message.peer != sender {
+                        continue;
+                    }
+                    let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content)
+                    else {
+                        continue;
+                    };
+                    let waiting = content
+                        .as_undecryptable()
+                        .is_some_and(|body| body.send_id.as_deref() == Some(send_id));
+                    if waiting || content.message_id.as_deref() == Some(send_id) {
+                        // Already here, or already waited for.
+                        request = None;
+                    }
+                }
+            }
+            // Without a name there is one record per reset, not per
+            // envelope: an unreadable typing indicator is indistinguishable
+            // from an unreadable message, and a burst of either says nothing
+            // more than the first.
+            let record = match named {
+                Some(_) => request.is_some(),
+                None => reset && open_conversation,
+            };
+            let notice = if record {
                 let content = ChatContent::undecryptable_with_id(
                     inbound.id.clone(),
                     crate::clock::rfc3339(received_at),
+                    request.clone(),
                 );
                 self.store.stage_message(InboxMessage {
                     id: inbound.id.clone(),
@@ -1169,6 +1211,7 @@ impl Session {
             Ok(UndecryptableRepair {
                 reset,
                 refresh_peer: reset && open_conversation,
+                request,
                 notice,
             })
         }
@@ -1177,6 +1220,47 @@ impl Session {
             self.store.discard();
         }
         result
+    }
+
+    /// What this device sent `peer` as `send_id`, if it is a message that
+    /// may be sent again.
+    pub(crate) async fn resendable_content(
+        &self,
+        peer: &str,
+        send_id: &str,
+    ) -> Result<Option<ChatContent>> {
+        Ok(self
+            .sent_message(send_id)
+            .await?
+            .filter(|sent| sent.peer == peer)
+            .and_then(|sent| serde_json::from_slice::<ChatContent>(&sent.content).ok())
+            .filter(|content| {
+                content.is_resendable() && content.message_id.as_deref() == Some(send_id)
+            }))
+    }
+
+    /// Stage removing the records standing in for `send_ids` from `sender`.
+    async fn stage_filled_in(&mut self, sender: &str, send_ids: &[String]) -> Result<bool> {
+        let mut already_here = false;
+        for message in self.store.db().list_messages().await? {
+            if message.peer != sender {
+                continue;
+            }
+            let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content) else {
+                continue;
+            };
+            match content.as_undecryptable() {
+                Some(body) => {
+                    if body.send_id.is_some_and(|id| send_ids.contains(&id)) {
+                        self.store.delete_message(&message.id);
+                    }
+                }
+                None => {
+                    already_here |= content.message_id.is_some_and(|id| send_ids.contains(&id));
+                }
+            }
+        }
+        Ok(already_here)
     }
 
     pub(crate) async fn finish_acks(&mut self, ids: &[String]) -> Result<()> {
@@ -1627,7 +1711,57 @@ impl Session {
         from: ChatAddress,
         plaintext: Vec<u8>,
     ) -> Result<ReceiveOutcome> {
-        let parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        let mut plaintext = plaintext;
+        let mut parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        // A message sent again is handled as the message inside it, and
+        // takes the place of the record that waited for it.
+        if parsed
+            .as_ref()
+            .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::RESEND)
+        {
+            let body = parsed
+                .as_ref()
+                .and_then(ChatContent::as_resend)
+                .filter(|_| sender != self.user());
+            let Some(body) = body else {
+                self.store.discard();
+                return Err(ChatError::Content("invalid re-sent message".into()));
+            };
+            let already_here = match self
+                .stage_filled_in(&sender, std::slice::from_ref(&body.send_id))
+                .await
+            {
+                Ok(already_here) => already_here,
+                Err(error) => {
+                    self.store.discard();
+                    return Err(error);
+                }
+            };
+            if already_here {
+                // Another device of this account asked; this one read it the
+                // first time.
+                self.store.stage_inbound(InboundEnvelope {
+                    id: envelope.id.clone(),
+                    cursor: envelope.cursor,
+                    envelope: serde_json::to_vec(envelope)
+                        .map_err(|e| ChatError::Wire(e.to_string()))?,
+                    state: InboundState::PendingAck,
+                    attempts: 0,
+                    failure_kind: None,
+                    last_error: None,
+                    received_at: now_millis(),
+                });
+                self.store.commit().await?;
+                return Ok(ReceiveOutcome::Suppressed {
+                    id: envelope.id.clone(),
+                });
+            }
+            plaintext =
+                serde_json::to_vec(&body.content).map_err(|e| ChatError::Content(e.to_string()))?;
+            parsed = Some(*body.content);
+        }
+        let plaintext = plaintext;
+        let parsed = parsed;
         let local_only = |content: &ChatContent| {
             ChatContent::is_local_only_kind(&content.kind)
                 || content.as_sent_transcript().is_some_and(|transcript| {
@@ -1663,6 +1797,7 @@ impl Session {
         let mut profile_control = false;
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
+        let mut resend_request: Option<Vec<String>> = None;
         if let Some(Err(error)) = transcript.as_ref().map(|body| {
             body.content
                 .extras()
@@ -1846,6 +1981,29 @@ impl Session {
                 // It already did its work: decrypting it adopted the session
                 // it carried. Nothing is kept, and it opens no request.
                 suppressed = true;
+                let open_conversation = prior_contact.as_ref().is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
+                let control = parsed
+                    .as_ref()
+                    .and_then(ChatContent::as_session_control)
+                    .filter(|body| open_conversation && !body.send_ids.is_empty());
+                match control {
+                    Some(body)
+                        if body.action == kutup_chat_proto::SessionControlAction::Refresh =>
+                    {
+                        resend_request = Some(body.send_ids);
+                    }
+                    Some(body) => {
+                        // Nothing was lost that a reader would see: the
+                        // records waiting for these simply go.
+                        self.stage_filled_in(&sender, &body.send_ids).await?;
+                    }
+                    None => {}
+                }
             } else if is_typing || is_call {
                 // Typing and calls cannot create/reopen a message request and
                 // are never durable plaintext history (a call from someone
@@ -1922,6 +2080,13 @@ impl Session {
             return Ok(ReceiveOutcome::ProfileKeyUpdate {
                 id: envelope.id.clone(),
                 peer: profile_key_updated,
+            });
+        }
+        if let Some(send_ids) = resend_request {
+            return Ok(ReceiveOutcome::ResendRequested {
+                id: envelope.id.clone(),
+                peer: from.user.clone(),
+                send_ids,
             });
         }
         if suppressed {
@@ -4576,6 +4741,7 @@ mod sealed_tests {
             suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content: outgoing[0].content.clone(),
             server_timestamp: "2026-07-22T00:00:01Z".into(),
+            send_id: None,
         };
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
         assert_eq!(inspection.sender, "alice@chat.example");

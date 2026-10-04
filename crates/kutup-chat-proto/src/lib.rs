@@ -58,6 +58,10 @@ pub use content::{
     ReceiptState, SentTranscriptBody, StickerRemovedBody, StickerSavedBody, TextBody, TypingBody,
     ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };
+pub use content::{
+    ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,
+    MAX_SESSION_CONTROL_SEND_IDS,
+};
 pub use extras::{
     LinkPreviewImageV1, LinkPreviewV1, MentionV1, StickerMarkV1, VisibleMessageExtrasV1,
 };
@@ -798,6 +802,11 @@ pub struct DeliveredEnvelope {
     pub content: String,
     /// Server receive time, RFC 3339 (the server clock, not the sender's).
     pub server_timestamp: String,
+    /// The sender's logical send id, as the server received it. Not
+    /// authenticated: it only lets a device that cannot decrypt this
+    /// envelope name the message when asking its sender for it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_id: Option<String>,
 }
 
 /// `GET /api/chat/messages` — a drain page. `more` tells the client to keep paging

@@ -2114,8 +2114,8 @@ pub(crate) async fn store_sealed_messages(
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
                 (recipient_user_id, recipient_device_id, sender, sealed_sender,
-                 sender_device_id, envelope_type, suite, content)
-             VALUES ($1,$2,NULL,true,0,$3,$4,$5)
+                 sender_device_id, envelope_type, suite, content, send_id)
+             VALUES ($1,$2,NULL,true,0,$3,$4,$5,$6)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -2123,6 +2123,7 @@ pub(crate) async fn store_sealed_messages(
         .bind(envelope_type_code(EnvelopeType::Message))
         .bind(envelope.suite.as_u16() as i16)
         .bind(&envelope.content)
+        .bind(&request.send_id)
         .fetch_one(&mut **tx)
         .await?;
         stored.push((
@@ -2138,6 +2139,7 @@ pub(crate) async fn store_sealed_messages(
                 suite: envelope.suite,
                 content: envelope.content.clone(),
                 server_timestamp: server_ts.format(&Rfc3339).unwrap_or_default(),
+                send_id: Some(request.send_id.clone()),
             },
         ));
     }
@@ -2320,8 +2322,8 @@ async fn deliver_messages(
     for e in &req.envelopes {
         let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender,
-                 sender_device_id, envelope_type, suite, content)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)
+                 sender_device_id, envelope_type, suite, content, send_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -2331,6 +2333,7 @@ async fn deliver_messages(
         .bind(envelope_type_code(e.envelope_type))
         .bind(e.suite.as_u16() as i16)
         .bind(&e.content)
+        .bind(&req.send_id)
         .fetch_one(&mut *tx)
         .await?;
         stored.push((
@@ -2346,6 +2349,7 @@ async fn deliver_messages(
                 suite: e.suite,
                 content: e.content.clone(),
                 server_timestamp: ts.format(&Rfc3339).unwrap_or_default(),
+                send_id: Some(req.send_id.clone()),
             },
         ));
     }
@@ -2484,8 +2488,9 @@ pub async fn drain_mailbox(
         i16,
         String,
         OffsetDateTime,
+        Option<String>,
     )> = sqlx::query_as(
-        "SELECT id, cursor, sender, sealed_sender, sender_device_id, envelope_type, suite, content, server_ts
+        "SELECT id, cursor, sender, sealed_sender, sender_device_id, envelope_type, suite, content, server_ts, send_id
              FROM chat_mailbox
              WHERE recipient_user_id = $1 AND recipient_device_id = $2
                AND ($4::BIGINT IS NULL OR cursor > $4)
@@ -2504,7 +2509,18 @@ pub async fn drain_mailbox(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, cursor, sender, sealed_sender, sender_dev, etype, suite, content, ts)| {
+            |(
+                id,
+                cursor,
+                sender,
+                sealed_sender,
+                sender_dev,
+                etype,
+                suite,
+                content,
+                ts,
+                send_id,
+            )| {
                 Ok(DeliveredEnvelope {
                     id: id.to_string(),
                     cursor: cursor as u64,
@@ -2515,6 +2531,7 @@ pub async fn drain_mailbox(
                     suite: direct_chat_suite_from_db(suite, "chat_mailbox")?,
                     content,
                     server_timestamp: ts.format(&Rfc3339).unwrap_or_default(),
+                    send_id,
                 })
             },
         )

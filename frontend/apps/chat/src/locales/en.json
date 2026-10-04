@@ -554,6 +554,8 @@
       "empty": "No chat attachments stored yet."
     },
     "undecryptable": {
+      "waiting": "Waiting for a message from {{name}}. It could not be read on this browser, so it was asked for again and will appear here when it arrives.",
+      "waitingPreview": "Waiting for a message",
       "notice": "A message from {{name}} could not be read on this browser. The secure connection was refreshed automatically; new messages will arrive as usual. Ask them to send it again.",
       "preview": "A message could not be read"
     },

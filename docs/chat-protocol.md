@@ -273,36 +273,60 @@ authenticate is not retried for ever. In one transaction the receiver:
 - sets the current session with that device aside, at most once an hour per
   device and only if there is one. The old state is kept as a previous
   session, so messages already on their way under it still decrypt;
-- writes a local-only `undecryptable` record in the message's place, once per
-  reset and only in an open conversation (accepted, or a request this side
-  sent). A stranger cannot make records or requests appear this way;
+- writes a local-only `undecryptable` record in the message's place, in an
+  open conversation only (accepted, or a request this side sent). A stranger
+  cannot make records or requests appear this way. The server passes each
+  envelope's `sendId` along; with it there is one record per unreadable
+  message, carrying that id. Without it (a row stored before the server did
+  so) there is one record per reset, which nothing replaces;
 - marks the envelope for acknowledgement.
 
-It then sends the peer a hidden `sessionControl` message, in an open
-conversation only. Encrypting it starts a fresh session from a newly fetched
-bundle, and the peer adopts that session by decrypting it; everything either
-side sends afterwards is readable. `sessionControl` travels like `typing`:
-never history, never a linked-device transcript, kept by nobody, and it
-cannot open or reopen a message request. If it cannot be delivered it stays
-queued without blocking the conversation, and any later message to the peer
-carries the fresh session just the same.
+It then sends the peer a hidden `sessionControl` message
+(`{action: "refresh", sendIds}`), in an open conversation only. Encrypting it
+starts a fresh session from a newly fetched bundle, and the peer adopts that
+session by decrypting it; everything either side sends afterwards is
+readable. `sendIds` (at most 64 per message) names what could not be read.
 
-Within the hour, further unreadable envelopes from the same device are
-acknowledged quietly: no second reset, record or message. The interval is
-kept in memory, so a reload allows one more.
+The peer answers from its sent history. For each named message that it sent
+to that account and that was history on both sides, it sends a hidden
+`resend` wrapping the original content whole, under a new transport id; for
+the rest (a typing indicator, a receipt it no longer has, an id it never
+sent) it sends one `sessionControl` `{action: "unavailable", sendIds}`. A
+message is sent again at most once an hour per peer. The receiver handles a
+`resend` as the message inside it: it is stored and shown with its original
+id and sender time, so it takes its place in the conversation, and the
+record that waited for it is removed. A device that had read the message the
+first time drops the copy. `unavailable` removes the waiting records and
+shows nothing.
 
-The unreadable message itself is lost. The record asks the reader to have it
-sent again; an automatic re-send on request is not built (see
-`docs/roadmap.md`). An envelope that fails for another reason (an untrusted
-identity, an unknown suite, a malformed envelope, a sealed envelope whose
-outer layer or certificate does not verify) is not repaired this way and
-stays in the attention journal as before.
+`sessionControl` and `resend` travel like `typing`: never history on the
+sending side, never a linked-device transcript, and they cannot open or
+reopen a message request. If one cannot be delivered it stays queued without
+blocking the conversation.
+
+The `sendId` on an envelope is not authenticated. A server that changes it
+can make a device ask for, and receive again, a message of the same sender
+it already has (which it drops) or one that does not exist; it cannot make a
+peer send anything that peer did not already send to this account.
+
+Within the hour, further unreadable envelopes from the same device do not
+reset the session again. The interval is kept in memory, so a reload allows
+one more. An envelope that fails for another reason (an untrusted identity,
+an unknown suite, a malformed envelope, a sealed envelope whose outer layer
+or certificate does not verify) is not repaired this way and stays in the
+attention journal as before.
 
 A send reuses the device list it last fetched and verified for an account
 for as long as it has a current session with every listed device under the
 identity key that list served; it then takes no keys from the server. The
 server still checks the exact device set on every send, so a list that went
-stale is corrected by the usual `409` amendment, which fetches again.
+stale is corrected by the usual `409` amendment, which fetches again. Two
+things drop a held list earlier: the server's `devicesChanged` frame (this
+account's own devices changed), and a message whose `deviceListVersion`
+(the sender's signed manifest sequence, a top-level field inside the
+ciphertext of every ordinary Direct message) is above the sequence this
+device has pinned for that sender. The server never learns who an account's
+contacts are; a contact hears of a change with the next message it reads.
 
 ### Disappearing-message V1 contract
 

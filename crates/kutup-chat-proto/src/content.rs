@@ -103,6 +103,9 @@ pub mod kind {
     /// A message from the peer arrived but could not be read; written by this
     /// device's engine in its place. Never travels. [IMPL]
     pub const UNDECRYPTABLE: &str = "undecryptable";
+    /// A message sent once more, at the request of a device that could not
+    /// read it, wrapped whole. [IMPL]
+    pub const RESEND: &str = "resend";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -452,7 +455,10 @@ impl ChatContent {
 
     /// Content that is delivered live and never kept: typing and call signals.
     pub fn is_ephemeral(&self) -> bool {
-        self.as_typing().is_some() || self.as_call().is_some() || self.is_session_control()
+        self.as_typing().is_some()
+            || self.as_call().is_some()
+            || self.is_session_control()
+            || self.kind == kind::RESEND
     }
 
     /// Builds the invisible message that carries a fresh session to a device
@@ -462,6 +468,7 @@ impl ChatContent {
         message_id: impl Into<String>,
         sent_at: impl Into<String>,
         seq: u64,
+        body: &SessionControlBody,
     ) -> Self {
         ChatContent {
             v: Self::VERSION,
@@ -472,7 +479,7 @@ impl ChatContent {
             reply_to: None,
             profile_key: None,
             profile_suite: None,
-            body: serde_json::json!({ "action": "refresh" }),
+            body: serde_json::to_value(body).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
     }
@@ -481,11 +488,80 @@ impl ChatContent {
         self.kind == kind::SESSION_CONTROL
     }
 
+    /// The control's body, when this reader understands it. A control it
+    /// does not understand is still a session control: it is kept by nobody.
+    pub fn as_session_control(&self) -> Option<SessionControlBody> {
+        if !self.is_session_control() || self.v != Self::VERSION {
+            return None;
+        }
+        let body: SessionControlBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
+    /// Wraps `content`, a message already sent once as `content.message_id`,
+    /// to send it again to a device that could not read it. The wrapper is
+    /// never history and never a transcript; the reader stores what is inside.
+    pub fn resend_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        content: ChatContent,
+    ) -> Result<Self, String> {
+        let send_id = content
+            .message_id
+            .clone()
+            .ok_or_else(|| "only a message with an id can be sent again".to_string())?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::RESEND.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(ResendBody {
+                send_id,
+                content: Box::new(content),
+            })
+            .map_err(|error| format!("encode Chat resend: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    /// The message inside a [`kind::RESEND`], when it is one that may be sent
+    /// again: an ordinary message carrying the id it was first sent under.
+    pub fn as_resend(&self) -> Option<ResendBody> {
+        if self.kind != kind::RESEND || self.v != Self::VERSION {
+            return None;
+        }
+        let body: ResendBody = serde_json::from_value(self.body.clone()).ok()?;
+        (body.content.is_resendable()
+            && body.content.message_id.as_deref() == Some(body.send_id.as_str()))
+        .then_some(body)
+    }
+
+    /// Whether this is a message a peer may ask for again: something that
+    /// was history on both sides, not a live signal, a control or a record
+    /// only one device writes.
+    pub fn is_resendable(&self) -> bool {
+        self.message_id.is_some()
+            && !self.is_ephemeral()
+            && !Self::is_local_only_kind(&self.kind)
+            && !Self::is_account_control_kind(&self.kind)
+            && self.kind != kind::SENT_TRANSCRIPT
+            && self.kind != kind::CONTACT_CONTROL
+            && self.kind != kind::PROFILE_KEY_UPDATE
+    }
+
     /// Builds the local record that stands where an unreadable message from
-    /// the peer would have been.
+    /// the peer would have been. `send_id` names that message when the
+    /// server passed its id along; the record goes when it arrives again.
     pub fn undecryptable_with_id(
         message_id: impl Into<String>,
         sent_at: impl Into<String>,
+        send_id: Option<String>,
     ) -> Self {
         ChatContent {
             v: Self::VERSION,
@@ -496,9 +572,27 @@ impl ChatContent {
             reply_to: None,
             profile_key: None,
             profile_suite: None,
-            body: serde_json::json!({}),
+            body: serde_json::to_value(UndecryptableBody { send_id }).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
+    }
+
+    pub fn as_undecryptable(&self) -> Option<UndecryptableBody> {
+        if !self.is_undecryptable() {
+            return None;
+        }
+        serde_json::from_value(self.body.clone()).ok()
+    }
+
+    /// The sender's signed device-list version when this was written, if it
+    /// said. A reader holding an older list for the sender fetches it again.
+    pub fn device_list_version(&self) -> Option<u64> {
+        self.extra.get(DEVICE_LIST_VERSION_FIELD)?.as_u64()
+    }
+
+    pub fn set_device_list_version(&mut self, version: u64) {
+        self.extra
+            .insert(DEVICE_LIST_VERSION_FIELD.to_string(), version.into());
     }
 
     pub fn is_undecryptable(&self) -> bool {
@@ -920,6 +1014,7 @@ impl ChatContent {
                     | kind::GROUP_UPDATE
                     | kind::SESSION_CONTROL
                     | kind::UNDECRYPTABLE
+                    | kind::RESEND
             )
     }
 }
@@ -1007,6 +1102,66 @@ pub enum ReceiptState {
 pub struct ReceiptBody {
     pub message_ids: Vec<String>,
     pub state: ReceiptState,
+}
+
+/// Top-level content field: the sender's signed device-list version.
+pub const DEVICE_LIST_VERSION_FIELD: &str = "deviceListVersion";
+
+/// The most message ids one session control may name.
+pub const MAX_SESSION_CONTROL_SEND_IDS: usize = 64;
+
+/// Body of a [`kind::SESSION_CONTROL`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionControlBody {
+    pub action: SessionControlAction,
+    /// With `refresh`: messages the writer could not read and wants again.
+    /// With `unavailable`: messages asked for that cannot be sent again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub send_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionControlAction {
+    /// The writer started a fresh session; decrypting this adopts it.
+    Refresh,
+    /// The answer to a `refresh` for messages the writer no longer has, or
+    /// never had as history (a typing indicator, a receipt).
+    Unavailable,
+}
+
+impl SessionControlBody {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.send_ids.len() > MAX_SESSION_CONTROL_SEND_IDS {
+            return Err("a session control names too many messages".into());
+        }
+        if self
+            .send_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 64)
+        {
+            return Err("a session control names an invalid message id".into());
+        }
+        Ok(())
+    }
+}
+
+/// Body of a [`kind::RESEND`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResendBody {
+    /// The id the message inside was first sent under.
+    pub send_id: String,
+    pub content: Box<ChatContent>,
+}
+
+/// Body of a local [`kind::UNDECRYPTABLE`] record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndecryptableBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

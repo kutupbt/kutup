@@ -149,6 +149,9 @@ pub struct Engine {
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
+    /// When a message was last sent again at a peer's request, by
+    /// `(account, send id)`.
+    resent: BTreeMap<(String, String), i64>,
 }
 
 impl Engine {
@@ -182,6 +185,7 @@ impl Engine {
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
             session_resets: BTreeMap::new(),
+            resent: BTreeMap::new(),
         }
     }
 
@@ -194,6 +198,19 @@ impl Engine {
         self.session.bind_local_server(server)?;
         self.local_server = Some(server.to_string());
         Ok(())
+    }
+
+    async fn own_device_list_version(&self) -> Result<Option<u64>> {
+        if let Ok(canonical) = self.canonical_self() {
+            if let Some(pinned) = self.session.manifest_trust(&canonical).await? {
+                return Ok(Some(pinned.highest_sequence));
+            }
+        }
+        Ok(self
+            .session
+            .manifest_trust(self.session.user())
+            .await?
+            .map(|pinned| pinned.highest_sequence))
     }
 
     /// Forget every device list held from an earlier fetch, so the next send
@@ -1436,6 +1453,14 @@ impl Engine {
                 }
             }
         }
+        // Tell the reader which signed device list this account is on, so a
+        // list it holds from before a device was added or removed is not
+        // used for the reply.
+        if !ephemeral && peer_user != self.session.user() {
+            if let Some(version) = self.own_device_list_version().await? {
+                content.set_device_list_version(version);
+            }
+        }
         let mut summary = SendSummary::default();
         if peer_user == self.session.user() {
             let bundles = self.bundles_for_send(peer_user).await?;
@@ -1597,7 +1622,10 @@ impl Engine {
             let is_session_control = content
                 .as_ref()
                 .is_some_and(ChatContent::is_session_control);
-            let optional = is_receipt || is_typing || is_call || is_session_control;
+            let is_resend = content
+                .as_ref()
+                .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::RESEND);
+            let optional = is_receipt || is_typing || is_call || is_session_control || is_resend;
             if !optional && waiting_peers.contains(&entry.peer) {
                 continue;
             }
@@ -1665,7 +1693,10 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         let mut ack_ids = Vec::new();
-        let mut refresh_peers: Vec<String> = Vec::new();
+        // Per peer: the unreadable messages to ask for again (possibly none,
+        // when only a fresh session is owed).
+        let mut refresh_peers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut resend_requests: Vec<(String, Vec<String>)> = Vec::new();
         for inbound in self.session.pending_inbound().await? {
             if matches!(
                 inbound.state,
@@ -1734,6 +1765,20 @@ impl Engine {
             };
             match receive_result {
                 Ok(ReceiveOutcome::Message(message)) => {
+                    // The sender's device list moved on since this device
+                    // last verified it: fetch it again at the next send.
+                    if let Some(version) = message.content.device_list_version() {
+                        let peer = message.from.user.as_str();
+                        if self.known_devices.contains_key(peer)
+                            && self
+                                .session
+                                .manifest_trust(peer)
+                                .await?
+                                .is_some_and(|pinned| pinned.highest_sequence < version)
+                        {
+                            self.known_devices.remove(peer);
+                        }
+                    }
                     ack_ids.push(message.id.clone());
                     self.events
                         .push_back(ChatEvent::MessageReceived(Box::new((*message).clone())));
@@ -1761,6 +1806,11 @@ impl Engine {
                     ack_ids.push(id.clone());
                     report.suppressed.push(id);
                 }
+                Ok(ReceiveOutcome::ResendRequested { id, peer, send_ids }) => {
+                    ack_ids.push(id.clone());
+                    report.suppressed.push(id);
+                    resend_requests.push((peer, send_ids));
+                }
                 Ok(ReceiveOutcome::Undecodable { id }) => {
                     ack_ids.push(id.clone());
                     report.undecodable.push(id);
@@ -1786,6 +1836,7 @@ impl Engine {
                                 inbound.clone(),
                                 &sender,
                                 device_id,
+                                envelope.send_id.as_deref(),
                                 reset,
                                 &error,
                             )
@@ -1794,8 +1845,11 @@ impl Engine {
                             self.session_resets.insert(device, now);
                             self.known_devices.remove(&sender);
                         }
-                        if repair.refresh_peer && !refresh_peers.contains(&sender) {
-                            refresh_peers.push(sender);
+                        if repair.refresh_peer || repair.request.is_some() {
+                            refresh_peers
+                                .entry(sender)
+                                .or_default()
+                                .extend(repair.request);
                         }
                         if let Some(notice) = repair.notice {
                             self.events
@@ -1837,23 +1891,99 @@ impl Engine {
             self.session.finish_acks(&ack_ids).await?;
         }
         // Hand each repaired peer a fresh session now, so their next message
-        // is readable without waiting for this side to write first. Failing
-        // to deliver it loses nothing: it stays queued, and any later
-        // message to them carries the fresh session just the same.
-        for peer in refresh_peers {
-            let mut id = [0u8; 16];
-            rng.fill_bytes(&mut id);
-            let send_id = uuid::Builder::from_random_bytes(id)
-                .into_uuid()
-                .hyphenated()
-                .to_string();
+        // is readable without waiting for this side to write first, and ask
+        // for what could not be read. Failing to deliver it loses nothing
+        // but the asking: it stays queued, and any later message to them
+        // carries the fresh session just the same.
+        for (peer, send_ids) in refresh_peers {
+            let mut batches: Vec<Vec<String>> = send_ids
+                .chunks(kutup_chat_proto::MAX_SESSION_CONTROL_SEND_IDS)
+                .map(<[String]>::to_vec)
+                .collect();
+            if batches.is_empty() {
+                batches.push(Vec::new());
+            }
+            for send_ids in batches {
+                self.send_session_control(
+                    &peer,
+                    kutup_chat_proto::SessionControlAction::Refresh,
+                    send_ids,
+                    rng,
+                )
+                .await;
+            }
+        }
+        for (peer, send_ids) in resend_requests {
+            self.answer_resend_request(&peer, send_ids, rng).await?;
+        }
+        Ok(())
+    }
+
+    async fn send_session_control<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        action: kutup_chat_proto::SessionControlAction,
+        send_ids: Vec<String>,
+        rng: &mut R,
+    ) {
+        let send_id = random_send_id(rng);
+        let Ok(seq) = self.session.next_sent_seq().await else {
+            return;
+        };
+        let content = ChatContent::session_control_with_id(
+            send_id.clone(),
+            crate::clock::rfc3339(unix_millis()),
+            seq,
+            &kutup_chat_proto::SessionControlBody { action, send_ids },
+        );
+        let _ = self.send(&send_id, peer, &content, rng).await;
+    }
+
+    /// Send `peer` again what it could not read, from this device's sent
+    /// history, and say which of the messages it named cannot be sent again
+    /// so it stops waiting for them. Each message is sent again at most once
+    /// an hour per peer.
+    async fn answer_resend_request<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        send_ids: Vec<String>,
+        rng: &mut R,
+    ) -> Result<()> {
+        let now = unix_millis();
+        self.resent
+            .retain(|_, at| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS);
+        let mut unavailable = Vec::new();
+        for original in send_ids {
+            let key = (peer.to_string(), original.clone());
+            if self.resent.contains_key(&key) {
+                continue;
+            }
+            self.resent.insert(key, now);
+            let Some(content) = self.session.resendable_content(peer, &original).await? else {
+                unavailable.push(original);
+                continue;
+            };
+            let send_id = random_send_id(rng);
             let seq = self.session.next_sent_seq().await?;
-            let content = ChatContent::session_control_with_id(
+            let Ok(wrapped) = ChatContent::resend_with_id(
                 send_id.clone(),
-                crate::clock::rfc3339(unix_millis()),
+                crate::clock::rfc3339(now),
                 seq,
-            );
-            let _ = self.send(&send_id, &peer, &content, rng).await;
+                content,
+            ) else {
+                unavailable.push(original);
+                continue;
+            };
+            let _ = self.send(&send_id, peer, &wrapped, rng).await;
+        }
+        if !unavailable.is_empty() {
+            self.send_session_control(
+                peer,
+                kutup_chat_proto::SessionControlAction::Unavailable,
+                unavailable,
+                rng,
+            )
+            .await;
         }
         Ok(())
     }
@@ -2496,6 +2626,15 @@ fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
 
 fn unix_millis() -> i64 {
     crate::clock::unix_millis()
+}
+
+fn random_send_id<R: Rng + CryptoRng>(rng: &mut R) -> String {
+    let mut id = [0u8; 16];
+    rng.fill_bytes(&mut id);
+    uuid::Builder::from_random_bytes(id)
+        .into_uuid()
+        .hyphenated()
+        .to_string()
 }
 
 #[cfg(test)]
