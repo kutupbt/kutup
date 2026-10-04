@@ -626,6 +626,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     server.script(vec![vec![new_bundle.clone()]]);
     server.script_manifests(vec![Some(new_manifest.clone())]);
     server.set_active(vec![(1, new_bundle.registration_id)]);
+    let delivered_before_replacement = server.delivered.borrow().len();
     assert!(matches!(
         block_on(alice.send(
             "identity-replaced",
@@ -635,7 +636,16 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         )),
         Err(ChatError::Trust(_))
     ));
-    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+    // Alice held a session with the old identity, so the message was sealed
+    // for it and queued before the server refused it (a re-registered
+    // device) and the fetch that followed met the replaced account. Nothing
+    // was delivered, and nothing is until the new identity is verified: the
+    // queued message can only be re-sealed through that same trust check.
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 1);
+    assert_eq!(
+        server.delivered.borrow().len(),
+        delivered_before_replacement
+    );
     drop(alice);
 
     let reopened_db = Rc::new(SqliteChatDb::open(&path).unwrap());
@@ -761,6 +771,35 @@ fn drops_extra_device() {
 }
 
 #[test]
+fn a_second_message_does_not_fetch_keys_again() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    // One fetch is scripted with Bob's bundle; a second would get no devices
+    // at all and the send would fail.
+    server.script(vec![vec![bundle], vec![]]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let alice_addr = ChatAddress::local("alice", 1);
+
+    for (send_id, seq, text) in [("k1", 1, "first"), ("k2", 2, "second"), ("k3", 3, "third")] {
+        let summary =
+            block_on(alice.send(send_id, "bob", &ChatContent::text("t", seq, text), &mut rng))
+                .unwrap();
+        assert!(summary.delivered);
+        assert_eq!(summary.attempts, 1);
+        assert_eq!(
+            decrypt_for(&mut bob, &alice_addr, &server.last_delivered(), 1, &mut rng)
+                .as_text()
+                .unwrap()
+                .text,
+            text
+        );
+    }
+}
+
+#[test]
 fn reinstalled_peer_rekeys_and_flags_safety_number() {
     let mut rng = test_rng();
     let mut bob_v1 = device("bob", 1, &mut rng);
@@ -799,8 +838,9 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     // Bob reinstalls: brand-new identity + registration id, same device id.
     let mut bob_v2 = device("bob", 1, &mut rng);
     let b_v2 = bundle_of(&bob_v2, 1);
-    // Alice's directory view is still stale (v1) until the 409 makes her re-fetch.
-    server.script(vec![vec![b_v1.clone()], vec![b_v2.clone()]]);
+    // Alice still holds her session with v1 and sends with it, without
+    // fetching; the 409 makes her fetch, and that fetch serves v2.
+    server.script(vec![vec![b_v2.clone()]]);
     server.set_active(vec![(1, reg_id(&bob_v2))]);
 
     let s2 = block_on(alice.send(

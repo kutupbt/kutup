@@ -136,6 +136,9 @@ pub struct Engine {
     manifest_policy: ManifestPolicy,
     local_server: Option<String>,
     sealed_sender_enabled: bool,
+    /// The devices of each account as last fetched and verified this run
+    /// (`bundles_for_send`). Never used to establish a session.
+    known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
 }
 
 impl Engine {
@@ -167,6 +170,7 @@ impl Engine {
             manifest_policy,
             local_server: None,
             sealed_sender_enabled: false,
+            known_devices: BTreeMap::new(),
         }
     }
 
@@ -1416,7 +1420,7 @@ impl Engine {
         }
         let mut summary = SendSummary::default();
         if peer_user == self.session.user() {
-            let bundles = self.fetch_verified_bundles(peer_user).await?;
+            let bundles = self.bundles_for_send(peer_user).await?;
             self.session
                 .enqueue_note_to_self(send_id, &bundles, &content, &mut summary, rng)
                 .await?;
@@ -1439,15 +1443,14 @@ impl Engine {
                 }
             }
             if let Some(capability) = self.media_delivery_capability(peer_user).await? {
-                let recipient_bundles = self
-                    .fetch_verified_sealed_bundles(peer_user, &capability)
-                    .await?;
+                let recipient_bundles =
+                    self.sealed_bundles_for_send(peer_user, &capability).await?;
                 let certificate = self.issue_verified_sender_certificate().await?;
                 let user = self.session.user().to_string();
                 let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
-                    self.fetch_verified_bundles(&user).await?
+                    self.bundles_for_send(&user).await?
                 };
                 self.session
                     .enqueue_sealed_direct_send(
@@ -1465,12 +1468,12 @@ impl Engine {
                     )
                     .await?;
             } else {
-                let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
+                let recipient_bundles = self.bundles_for_send(peer_user).await?;
                 let user = self.session.user().to_string();
                 let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
-                    self.fetch_verified_bundles(&user).await?
+                    self.bundles_for_send(&user).await?
                 };
                 self.session
                     .enqueue_direct_send(
@@ -1947,10 +1950,78 @@ impl Engine {
         Err(ChatError::SendNotConverged(MAX_SEND_ATTEMPTS))
     }
 
+    /// The devices to encrypt a new message for.
+    ///
+    /// A key fetch takes a one-time prekey from every device of the account,
+    /// so fetching for each message would drain a busy correspondent's pool
+    /// (and cost a round trip per send) for keys that are only needed to
+    /// start a session. Once this run has fetched and verified an account's
+    /// devices and holds a session with each under the identity it served,
+    /// they are used as they are. If the account's devices changed meanwhile,
+    /// the server refuses the send and says how (missing, extra, or
+    /// re-registered devices); the amendment then fetches afresh.
+    async fn bundles_for_send(
+        &mut self,
+        peer_user: &str,
+    ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        if let Some(known) = self.known_devices_with_sessions(peer_user).await? {
+            return Ok(known);
+        }
+        self.fetch_verified_bundles(peer_user).await
+    }
+
+    /// [`Self::bundles_for_send`] for sealed delivery.
+    async fn sealed_bundles_for_send(
+        &mut self,
+        peer_user: &str,
+        capability: &[u8; 16],
+    ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        if let Some(known) = self.known_devices_with_sessions(peer_user).await? {
+            return Ok(known);
+        }
+        self.fetch_verified_sealed_bundles(peer_user, capability)
+            .await
+    }
+
+    async fn known_devices_with_sessions(
+        &self,
+        peer_user: &str,
+    ) -> Result<Option<Vec<kutup_chat_proto::DevicePreKeyBundle>>> {
+        let Some(known) = self.known_devices.get(peer_user) else {
+            return Ok(None);
+        };
+        if self.session.has_sessions_with_all(peer_user, known).await? {
+            Ok(Some(known.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Keep what a verified fetch said about an account's devices, without
+    /// the one-time prekey: that was this fetch's to use, once.
+    fn remember_devices(
+        &mut self,
+        peer_user: &str,
+        bundles: &[kutup_chat_proto::DevicePreKeyBundle],
+    ) {
+        self.known_devices.insert(
+            peer_user.to_owned(),
+            bundles
+                .iter()
+                .cloned()
+                .map(|mut bundle| {
+                    bundle.one_time_pre_key = None;
+                    bundle
+                })
+                .collect(),
+        );
+    }
+
     async fn fetch_verified_bundles(
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        self.known_devices.remove(peer_user);
         let transport = Rc::clone(&self.transport);
         let response = if peer_user == self.session.user() {
             transport
@@ -1959,8 +2030,11 @@ impl Engine {
         } else {
             transport.fetch_bundles(peer_user).await?
         };
-        self.accept_verified_bundle_response(peer_user, response)
-            .await
+        let bundles = self
+            .accept_verified_bundle_response(peer_user, response)
+            .await?;
+        self.remember_devices(peer_user, &bundles);
+        Ok(bundles)
     }
 
     async fn fetch_verified_sealed_bundles(
@@ -1968,11 +2042,15 @@ impl Engine {
         peer_user: &str,
         capability: &[u8; 16],
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        self.known_devices.remove(peer_user);
         let response = Rc::clone(&self.transport)
             .fetch_sealed_bundles(peer_user, capability)
             .await?;
-        self.accept_verified_bundle_response(peer_user, response)
-            .await
+        let bundles = self
+            .accept_verified_bundle_response(peer_user, response)
+            .await?;
+        self.remember_devices(peer_user, &bundles);
+        Ok(bundles)
     }
 
     async fn accept_verified_bundle_response(

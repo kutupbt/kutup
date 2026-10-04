@@ -1039,6 +1039,35 @@ impl Session {
         self.store.db().list_inbound().await
     }
 
+    /// Whether a session exists with every one of `bundles`' devices, under
+    /// the identity key each bundle serves. This account's own current
+    /// device is skipped: it is listed among its account's devices but is
+    /// never encrypted to.
+    pub(crate) async fn has_sessions_with_all(
+        &self,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+    ) -> Result<bool> {
+        for bundle in bundles {
+            if peer_user == self.user() && bundle.device_id == self.device_id() {
+                continue;
+            }
+            let key = ChatAddress::from_sender(peer_user, bundle.device_id)?
+                .to_protocol()?
+                .to_string();
+            if !self.store.has_session(&key).await? {
+                return Ok(false);
+            }
+            let served = decode_identity_key(&bundle.identity_key)?
+                .serialize()
+                .to_vec();
+            if self.store.peer_identity(&key).await?.as_deref() != Some(served.as_slice()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) async fn record_inbound_failure(
         &mut self,
         mut inbound: InboundEnvelope,
