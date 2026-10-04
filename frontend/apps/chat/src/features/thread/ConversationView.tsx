@@ -1,4 +1,4 @@
-import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, Timer, UserPlus, Users, Video } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, ShieldAlert, Timer, UserPlus, Users, Video } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -454,6 +454,14 @@ export function ConversationView({
                     {t('chat.calls.callBack')}
                   </Button>
                 ) : null}
+              </div>
+            )
+          }
+          if (row.kind === 'notice' && row.view.undecryptable) {
+            return (
+              <div key={row.key} className="mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-undecryptable-notice">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+                <span>{t('chat.undecryptable.notice', { name: nameOf(row.view) })}</span>
               </div>
             )
           }

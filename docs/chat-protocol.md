@@ -263,6 +263,47 @@ typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
 
+### Unreadable messages and session repair
+
+A Direct envelope from a known sender device (named on an identified
+envelope, or proven by a sealed envelope's certificate) that cannot be
+decrypted because the session is missing or the ciphertext does not
+authenticate is not retried for ever. In one transaction the receiver:
+
+- sets the current session with that device aside, at most once an hour per
+  device and only if there is one. The old state is kept as a previous
+  session, so messages already on their way under it still decrypt;
+- writes a local-only `undecryptable` record in the message's place, once per
+  reset and only in an open conversation (accepted, or a request this side
+  sent). A stranger cannot make records or requests appear this way;
+- marks the envelope for acknowledgement.
+
+It then sends the peer a hidden `sessionControl` message, in an open
+conversation only. Encrypting it starts a fresh session from a newly fetched
+bundle, and the peer adopts that session by decrypting it; everything either
+side sends afterwards is readable. `sessionControl` travels like `typing`:
+never history, never a linked-device transcript, kept by nobody, and it
+cannot open or reopen a message request. If it cannot be delivered it stays
+queued without blocking the conversation, and any later message to the peer
+carries the fresh session just the same.
+
+Within the hour, further unreadable envelopes from the same device are
+acknowledged quietly: no second reset, record or message. The interval is
+kept in memory, so a reload allows one more.
+
+The unreadable message itself is lost. The record asks the reader to have it
+sent again; an automatic re-send on request is not built (see
+`docs/roadmap.md`). An envelope that fails for another reason (an untrusted
+identity, an unknown suite, a malformed envelope, a sealed envelope whose
+outer layer or certificate does not verify) is not repaired this way and
+stays in the attention journal as before.
+
+A send reuses the device list it last fetched and verified for an account
+for as long as it has a current session with every listed device under the
+identity key that list served; it then takes no keys from the server. The
+server still checks the exact device set on every send, so a list that went
+stale is corrected by the usual `409` amendment, which fetches again.
+
 ### Disappearing-message V1 contract
 
 A hidden E2EE `disappearingTimer` operation changes the duration for future
@@ -326,7 +367,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate`. `groupCall`
+local-only record of a finished call, like `groupUpdate` and `undecryptable`:
+none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).
 
@@ -535,7 +577,9 @@ must be atomic:
 Decrypt precedes durable commit; acknowledgement follows it. A crash may cause
 an exact replay, never acknowledgement of uncommitted plaintext or ratchet
 state. Malformed/untrusted envelopes remain in a bounded attention/dead-letter
-journal and are never silently acknowledged.
+journal and are never silently acknowledged. The one exception is an
+unreadable message from a known sender device, which is acknowledged together
+with the session repair and the visible record described in §6.
 
 Network unavailability retains the last valid pin and retries. Cryptographic
 contradictions block. Unknown suites and malformed canonical encodings return

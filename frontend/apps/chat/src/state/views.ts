@@ -191,7 +191,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   for (const message of data.history) {
     // A group change notice counts as the latest activity (Signal shows it
     // as the preview), though it is not a message.
-    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.groupCall) {
+    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.groupCall || message.content.undecryptable) {
       latest.set(conversationKey(message.conversation), message)
     }
   }
@@ -313,6 +313,8 @@ export interface MessageView {
   groupUpdate: ChatGroupUpdate | null
   /** A call in the timeline. */
   callLog: ChatCallLog | null
+  /** A notice where a message could not be read. */
+  undecryptable: boolean
   /** A group call someone started. */
   groupCall: ChatGroupCall | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
@@ -435,7 +437,7 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !(m.content.messageId && opened.has(m.content.messageId)) &&
       !repeatedStart(m),
   )
@@ -460,6 +462,7 @@ export function threadView(
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       callLog: entry.content.callLog ?? null,
+      undecryptable: entry.content.undecryptable === true,
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
@@ -494,6 +497,7 @@ export function threadView(
       timerChange: null,
       groupUpdate: null,
       callLog: null,
+      undecryptable: false,
       groupCall: null,
       viewedOnce: { video: body.video },
       poll: null,

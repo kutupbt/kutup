@@ -475,6 +475,7 @@ pub async fn register_device(
     insert_kem_pool(&mut tx, user_id, device_id, &req.one_time_kyber_pre_keys).await?;
 
     tx.commit().await?;
+    state.chat_hub.notify_devices_changed(user_id);
 
     Ok(Json(RegisterChatDeviceResponse {
         device_id: device_id as u32,
@@ -684,6 +685,7 @@ pub async fn publish_manifest(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    state.chat_hub.notify_devices_changed(user_id);
     Ok(Json(AccountManifestPublicationV1 { manifest }).into_response())
 }
 
@@ -1353,6 +1355,7 @@ pub async fn revoke_device(
         .await?;
     tx.commit().await?;
     state.chat_hub.close_device(user_id, device_id);
+    state.chat_hub.notify_devices_changed(user_id);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

@@ -553,6 +553,10 @@
       "clearDescription": "Mesajlar kalır, ama başka yere kaydedilmemiş dosyalar artık açılmayabilir.",
       "empty": "Henüz saklanan sohbet eki yok."
     },
+    "undecryptable": {
+      "notice": "{{name}} tarafından gönderilen bir mesaj bu tarayıcıda okunamadı. Güvenli bağlantı kendiliğinden yenilendi; yeni mesajlar her zamanki gibi gelecek. Mesajı yeniden göndermesini iste.",
+      "preview": "Bir mesaj okunamadı"
+    },
     "connection": {
       "offline": "Çevrimdışısınız",
       "connecting": "Yeniden bağlanılıyor…",

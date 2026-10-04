@@ -553,6 +553,10 @@
       "clearDescription": "The messages stay, but files not saved elsewhere may no longer open.",
       "empty": "No chat attachments stored yet."
     },
+    "undecryptable": {
+      "notice": "A message from {{name}} could not be read on this browser. The secure connection was refreshed automatically; new messages will arrive as usual. Ask them to send it again.",
+      "preview": "A message could not be read"
+    },
     "connection": {
       "offline": "You're offline",
       "connecting": "Reconnecting…",

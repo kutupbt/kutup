@@ -3114,6 +3114,12 @@ impl WasmChatClient {
         to_output(&ContactRecordView::from(contact))
     }
 
+    /// The next send to anyone fetches and verifies their device list again.
+    #[wasm_bindgen(js_name = forgetKnownDevices)]
+    pub fn forget_known_devices(&mut self) {
+        self.engine.forget_known_devices();
+    }
+
     #[wasm_bindgen(js_name = pendingSendCount)]
     pub async fn pending_send_count(&self) -> std::result::Result<usize, JsValue> {
         self.engine.pending_send_count().await.map_err(chat_error)
@@ -3203,6 +3209,8 @@ struct ReceiveReportView {
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
+    /// Unreadable envelopes given up on, the sender's session refreshed.
+    repaired: Vec<String>,
     /// Queued messages that could not be delivered on this pass.
     send_failures: Vec<SendFailureView>,
 }
@@ -3235,6 +3243,7 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .map(InboundFailureView::from)
                 .collect(),
             duplicates: report.duplicates,
+            repaired: report.repaired,
             send_failures: Vec::new(),
         }
     }
@@ -3425,6 +3434,9 @@ struct ContentView {
     mentions: Vec<kutup_chat_proto::MentionV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     link_preview: Option<kutup_chat_proto::LinkPreviewV1>,
+    /// Stands where a message from the peer could not be read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    undecryptable: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3454,6 +3466,7 @@ impl From<ChatContent> for ContentView {
         let sticker_saved = content.as_sticker_saved();
         let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
+        let undecryptable = content.is_undecryptable();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3496,6 +3509,7 @@ impl From<ChatContent> for ContentView {
             poll_terminate,
             mentions: extras.mentions,
             link_preview: extras.link_preview,
+            undecryptable,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,

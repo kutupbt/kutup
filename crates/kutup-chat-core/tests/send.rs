@@ -799,6 +799,196 @@ fn a_second_message_does_not_fetch_keys_again() {
     }
 }
 
+/// Put `env`, sent by `sender`'s device `sender_device_id`, in the mailbox
+/// `server` drains.
+fn deposit(
+    server: &MockServer,
+    env: &kutup_chat_proto::OutgoingEnvelope,
+    sender: &str,
+    sender_device_id: u32,
+    cursor: u64,
+) -> String {
+    let id = format!("in-{cursor}");
+    server.sync_mailbox.borrow_mut().push(DeliveredEnvelope {
+        id: id.clone(),
+        cursor,
+        sender: Some(sender.to_string()),
+        sealed_sender: false,
+        sender_device_id,
+        envelope_type: env.envelope_type,
+        suite: env.suite,
+        content: env.content.clone(),
+        server_timestamp: "2026-10-04T10:00:00Z".into(),
+    });
+    id
+}
+
+/// The same ciphertext with one byte of its body changed: it still parses,
+/// and no session can authenticate it.
+fn corrupted(env: &kutup_chat_proto::OutgoingEnvelope) -> kutup_chat_proto::OutgoingEnvelope {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut bytes = engine.decode(&env.content).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x01;
+    let mut env = env.clone();
+    env.content = engine.encode(bytes);
+    env
+}
+
+#[test]
+fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    bob_server.script(vec![vec![bundle_of(&alice_session, 1)]]);
+    bob_server.set_active(vec![(1, reg_id(&alice_session))]);
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    // An established conversation: Alice writes, Bob accepts and answers.
+    block_on(alice.send("r1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    deposit(
+        &bob_server,
+        &alice_server.last_delivered()[0],
+        "alice",
+        1,
+        1,
+    );
+    assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
+    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.send("r2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    deposit(&alice_server, &bob_server.last_delivered()[0], "bob", 2, 1);
+    assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
+    let sent_before = bob_server.delivered.borrow().len();
+    let sent_history_before = block_on(bob.session().sent_history()).unwrap().len();
+
+    // Alice's next message reaches Bob unreadable.
+    block_on(alice.send("r3", "bob", &ChatContent::text("t", 2, "lost"), &mut rng)).unwrap();
+    let broken = deposit(
+        &bob_server,
+        &corrupted(&alice_server.last_delivered()[0]),
+        "alice",
+        1,
+        2,
+    );
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(report.errors.is_empty(), "nothing is left to retry forever");
+    assert_eq!(report.repaired, vec![broken.clone()]);
+    assert_eq!(report.messages.len(), 1);
+    assert!(report.messages[0].content.is_undecryptable());
+    assert_eq!(report.messages[0].from, ChatAddress::local("alice", 1));
+    assert!(bob_server.sync_mailbox.borrow().is_empty(), "it was acked");
+    assert!(block_on(bob.inbound_attention()).unwrap().is_empty());
+    let history = block_on(bob.session().history()).unwrap();
+    assert_eq!(history.len(), 2, "the record stands where the message was");
+    assert_eq!(history[1].id, broken);
+
+    // Bob handed Alice a fresh session without anyone writing anything: an
+    // invisible message that is neither history nor a transcript.
+    assert_eq!(bob_server.delivered.borrow().len(), sent_before + 1);
+    assert_eq!(block_on(bob.pending_send_count()).unwrap(), 0);
+    assert_eq!(
+        block_on(bob.session().sent_history()).unwrap().len(),
+        sent_history_before
+    );
+    let refresh = bob_server.last_delivered();
+    assert_eq!(
+        refresh[0].envelope_type,
+        kutup_chat_proto::EnvelopeType::PreKey
+    );
+    deposit(&alice_server, &refresh[0], "bob", 2, 2);
+    let report = block_on(alice.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    assert_eq!(report.suppressed.len(), 1);
+    assert_eq!(block_on(alice.session().history()).unwrap().len(), 1);
+
+    // What Alice writes next travels under the fresh session and reads.
+    block_on(alice.send("r4", "bob", &ChatContent::text("t", 3, "again"), &mut rng)).unwrap();
+    deposit(
+        &bob_server,
+        &alice_server.last_delivered()[0],
+        "alice",
+        1,
+        3,
+    );
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.messages[0].content.as_text().unwrap().text, "again");
+
+    // A second unreadable message within the hour is dropped quietly: no
+    // second reset, no second record, nothing more sent.
+    block_on(alice.send(
+        "r5",
+        "bob",
+        &ChatContent::text("t", 4, "lost too"),
+        &mut rng,
+    ))
+    .unwrap();
+    let broken = deposit(
+        &bob_server,
+        &corrupted(&alice_server.last_delivered()[0]),
+        "alice",
+        1,
+        4,
+    );
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.repaired, vec![broken]);
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    assert_eq!(bob_server.delivered.borrow().len(), sent_before + 1);
+    assert_eq!(block_on(bob.session().history()).unwrap().len(), 3);
+    block_on(alice.send(
+        "r6",
+        "bob",
+        &ChatContent::text("t", 5, "still fine"),
+        &mut rng,
+    ))
+    .unwrap();
+    deposit(
+        &bob_server,
+        &alice_server.last_delivered()[0],
+        "alice",
+        1,
+        5,
+    );
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        report.messages[0].content.as_text().unwrap().text,
+        "still fine"
+    );
+}
+
+#[test]
+fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    block_on(alice.send("s1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    let broken = deposit(
+        &bob_server,
+        &corrupted(&alice_server.last_delivered()[0]),
+        "alice",
+        1,
+        1,
+    );
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.repaired, vec![broken]);
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    assert!(bob_server.delivered.borrow().is_empty());
+    assert!(block_on(bob.session().history()).unwrap().is_empty());
+    assert!(block_on(bob.contacts()).unwrap().is_empty());
+}
+
 #[test]
 fn reinstalled_peer_rekeys_and_flags_safety_number() {
     let mut rng = test_rng();

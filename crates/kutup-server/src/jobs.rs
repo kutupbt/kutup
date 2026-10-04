@@ -191,6 +191,7 @@ pub async fn chat_maintenance_once(
                 if let Some(hub) = chat_hub {
                     for (user_id, device_id) in expired {
                         hub.close_device(user_id, device_id);
+                        hub.notify_devices_changed(user_id);
                     }
                 }
             }

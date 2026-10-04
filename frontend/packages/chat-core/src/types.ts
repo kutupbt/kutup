@@ -40,6 +40,8 @@ export interface ChatContentView {
   pollTerminate?: { targetMessageId: string }
   /** A group change, written by this device's engine from an applied Commit. */
   groupUpdate?: ChatGroupUpdate
+  /** Stands where a message from the peer could not be read. */
+  undecryptable?: boolean
   mentions?: ChatMentionV1[]
   linkPreview?: ChatLinkPreviewV1
   forwarded?: boolean
@@ -331,6 +333,8 @@ export interface ReceiveReport {
   undecodable: string[]
   errors: InboundFailure[]
   duplicates: string[]
+  /** Unreadable envelopes given up on, the sender's session refreshed. */
+  repaired?: string[]
   /** Queued messages that could not be delivered on this pass. */
   sendFailures?: Array<{ sendId: string; peer: string; error: string }>
 }
@@ -1809,6 +1813,8 @@ export interface WasmChatClientHandle {
   unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
+  /** The next send to anyone fetches their device list again. */
+  forgetKnownDevices(): void
   pendingSendCount(): Promise<number>
   quarantineInbound(id: string): Promise<void>
   reconcile(): Promise<ReceiveReport>

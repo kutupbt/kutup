@@ -93,6 +93,17 @@ pub(crate) struct SealedEnvelopeInspection {
     pub certificate: SenderCertificate,
 }
 
+/// What [`Session::repair_undecryptable`] did.
+pub(crate) struct UndecryptableRepair {
+    /// The current session with the sender device was set aside.
+    pub reset: bool,
+    /// The sender should be handed a fresh session now rather than with the
+    /// next message the user happens to write.
+    pub refresh_peer: bool,
+    /// The record written in the unreadable message's place.
+    pub notice: Option<ReceivedMessage>,
+}
+
 pub(crate) struct SendAmendment<'a> {
     pub send_id: &'a str,
     pub peer_user: &'a str,
@@ -1093,6 +1104,81 @@ impl Session {
         Ok(state)
     }
 
+    /// Give up on an envelope from a known sender device that cannot be
+    /// decrypted, and make the conversation work again: with `reset`, the
+    /// current session with that device is set aside so the next message to
+    /// it starts a fresh one, and a local record takes the unreadable
+    /// message's place in an open conversation. The envelope is acknowledged
+    /// either way, since no retry can read it. One atomic unit of work.
+    pub(crate) async fn repair_undecryptable(
+        &mut self,
+        mut inbound: InboundEnvelope,
+        sender: &str,
+        sender_device_id: u32,
+        reset: bool,
+        error: &ChatError,
+    ) -> Result<UndecryptableRepair> {
+        self.store.discard();
+        let result = async {
+            let from = ChatAddress::from_sender(sender, sender_device_id)?;
+            let reset = reset
+                && self
+                    .store
+                    .archive_session(&from.to_protocol()?.to_string())
+                    .await?;
+            let received_at = now_millis();
+            let open_conversation = sender != self.user()
+                && self.contact(sender).await?.is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
+            // One record per reset, not per envelope: an unreadable typing
+            // indicator is indistinguishable from an unreadable message, and
+            // a burst of either says nothing more than the first.
+            let notice = if reset && open_conversation {
+                let content = ChatContent::undecryptable_with_id(
+                    inbound.id.clone(),
+                    crate::clock::rfc3339(received_at),
+                );
+                self.store.stage_message(InboxMessage {
+                    id: inbound.id.clone(),
+                    peer: sender.to_string(),
+                    sender_device_id,
+                    cursor: inbound.cursor,
+                    content: serde_json::to_vec(&content)
+                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                    received_at,
+                });
+                Some(ReceivedMessage {
+                    from,
+                    content,
+                    cursor: inbound.cursor,
+                    id: inbound.id.clone(),
+                })
+            } else {
+                None
+            };
+            inbound.state = InboundState::PendingAck;
+            inbound.attempts = inbound.attempts.saturating_add(1);
+            inbound.failure_kind = Some(error.inbound_failure_kind());
+            inbound.last_error = Some(error.to_string());
+            self.store.stage_inbound(inbound);
+            self.store.commit().await?;
+            Ok(UndecryptableRepair {
+                reset,
+                refresh_peer: reset && open_conversation,
+                notice,
+            })
+        }
+        .await;
+        if result.is_err() {
+            self.store.discard();
+        }
+        result
+    }
+
     pub(crate) async fn finish_acks(&mut self, ids: &[String]) -> Result<()> {
         let inbound = self.store.db().list_inbound().await?;
         for id in ids {
@@ -1420,7 +1506,7 @@ impl Session {
     /// `username@homeserver` addresses. Qualify only bare senders with this
     /// session's already-validated local domain before choosing the ratchet or
     /// comparing a linked-device sender with the local account.
-    fn resolve_delivered_sender(
+    pub(crate) fn resolve_delivered_sender(
         &self,
         sender: &str,
         device_id: u32,
@@ -1644,6 +1730,7 @@ impl Session {
                 None
             } else if transcript.content.kind == kutup_chat_proto::content::kind::TYPING
                 || transcript.content.kind == kutup_chat_proto::content::kind::CALL
+                || transcript.content.is_session_control()
             {
                 // Ephemeral controls are never linked-device history. Current
                 // clients do not sync them, but older/malicious local devices
@@ -1681,6 +1768,7 @@ impl Session {
             let is_disappearing_timer = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_disappearing_timer().is_some());
+            let is_session_control = parsed.as_ref().is_some_and(ChatContent::is_session_control);
             let is_account_control = parsed
                 .as_ref()
                 .is_some_and(|content| ChatContent::is_account_control_kind(&content.kind));
@@ -1754,6 +1842,10 @@ impl Session {
                         }
                     }
                 }
+            } else if is_session_control {
+                // It already did its work: decrypting it adopted the session
+                // it carried. Nothing is kept, and it opens no request.
+                suppressed = true;
             } else if is_typing || is_call {
                 // Typing and calls cannot create/reopen a message request and
                 // are never durable plaintext history (a call from someone
