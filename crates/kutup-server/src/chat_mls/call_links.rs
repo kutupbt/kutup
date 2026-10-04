@@ -19,7 +19,7 @@
 //! chose arrives sealed under a key from the link.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -28,7 +28,12 @@ use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::group_calls::{hosts_group_calls, livekit_token, GroupCallTokenResponse};
+use super::call_link_moderation::{
+    claim_seat, delete_sfu_room, sfu_room, Entry, Seat, TOKEN_SOURCES_WITHOUT_SCREEN,
+};
+use super::group_calls::{
+    hosts_group_calls, livekit_token_with, GroupCallTokenResponse, TokenExtras,
+};
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -85,6 +90,8 @@ pub struct CallLinkInfoResponse {
     pub info: String,
     /// Joiners knock and wait for the owner to admit them.
     pub waiting_room: bool,
+    /// A host locked the meeting: nobody new comes in for now.
+    pub locked: bool,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -118,10 +125,41 @@ pub struct CallLinkTokenRequest {
     /// base64, 168 bytes). The SFU hands it to the other participants, who
     /// open it; this server and the SFU cannot.
     pub label: String,
+    /// The secret of this identity's seat (standard base64, 32 bytes), which
+    /// only the joining browser holds: a token for an identity is minted
+    /// only to whoever first asked with it.
+    pub seat: String,
     /// The owner's host token (standard base64, 32 bytes): joins a meeting
     /// with a waiting room without waiting.
     #[serde(default)]
     pub host_token: Option<String>,
+}
+
+/// The SHA-256 of a seat secret.
+pub(super) fn seat_hash(seat: &str) -> AppResult<[u8; 32]> {
+    Ok(Sha256::digest(base64_exact("seat", seat, 32)?).into())
+}
+
+/// The account address this server vouches for, when the request carries a
+/// signed-in account's access token: the joiner chose to show the others
+/// who they are. Without one, or with one that does not hold, nobody is
+/// vouched for.
+pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?;
+    let user = crate::middleware::authenticate_access_token(state, token)
+        .await
+        .ok()?;
+    let user_id = Uuid::parse_str(&user.user_id).ok()?;
+    let username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()??;
+    Some(format!("{username}@{}", state.config.chat_server_name))
 }
 
 pub(super) fn hex32(name: &str, value: &str) -> AppResult<()> {
@@ -273,7 +311,7 @@ pub(crate) async fn list(
     operation_id = "deleteChatCallLink",
     params(("roomId" = String, Path, description = "The link's room id")),
     responses(
-        (status = 204, description = "Deleted: nobody can join through it any more"),
+        (status = 204, description = "Deleted: nobody can join through it any more, and whoever is in it is disconnected"),
         (status = 404, description = "No such link of this account"),
     ),
     security(("bearerAuth" = []))
@@ -284,15 +322,22 @@ pub(crate) async fn delete(
     Path(room_id): Path<String>,
 ) -> AppResult<StatusCode> {
     hex32("roomId", &room_id)?;
-    let deleted =
-        sqlx::query("DELETE FROM chat_call_links WHERE room_id = $1 AND owner_user_id = $2")
-            .bind(&room_id)
-            .bind(owner(&auth)?)
-            .execute(&state.pool)
-            .await?
-            .rows_affected();
-    if deleted == 0 {
+    let sitting: Option<i64> = sqlx::query_scalar(
+        "DELETE FROM chat_call_links WHERE room_id = $1 AND owner_user_id = $2 RETURNING sitting",
+    )
+    .bind(&room_id)
+    .bind(owner(&auth)?)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(sitting) = sitting else {
         return Err(AppError::not_found("call link not found"));
+    };
+    // A meeting that is on ends with its link. The link is gone either way,
+    // so an SFU that cannot be reached now does not fail the deletion.
+    if hosts_group_calls(&state) {
+        if let Err(error) = delete_sfu_room(&state, &sfu_room(&room_id, sitting)).await {
+            tracing::warn!(?error, "a deleted meeting's SFU room could not be closed");
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -338,6 +383,13 @@ pub(crate) async fn update_info(
 pub(super) struct Admitted {
     pub info: Vec<u8>,
     pub waiting_room: bool,
+    /// Nobody new comes in.
+    pub locked: bool,
+    /// How many times the meeting was ended for everyone: its SFU room is
+    /// named after it (`call_link_moderation::sfu_room`).
+    pub sitting: i64,
+    /// Since when the meeting has been on without a host in it.
+    pub hostless_since: Option<OffsetDateTime>,
     host_token_hash: Option<Vec<u8>>,
 }
 
@@ -367,10 +419,20 @@ pub(super) async fn admitted(
 ) -> AppResult<Admitted> {
     hex32("roomId", room_id)?;
     let presented = base64_exact("accessToken", access_token, 32)?;
-    // access_token_hash, info, waiting_room, host_token_hash
-    type Row = (Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>);
+    // access_token_hash, info, waiting_room, host_token_hash, locked,
+    // sitting, hostless_since
+    type Row = (
+        Vec<u8>,
+        Vec<u8>,
+        bool,
+        Option<Vec<u8>>,
+        bool,
+        i64,
+        Option<OffsetDateTime>,
+    );
     let stored: Option<Row> = sqlx::query_as(
-        "SELECT access_token_hash, info, waiting_room, host_token_hash
+        "SELECT access_token_hash, info, waiting_room, host_token_hash, locked, sitting,
+                hostless_since
          FROM chat_call_links WHERE room_id = $1",
     )
     .bind(room_id)
@@ -383,11 +445,18 @@ pub(super) async fn admitted(
         .unwrap_or([0u8; 32]);
     let matches = kutup_chat_proto::constant_time_capability_hash_eq(&presented_hash, &stored_hash);
     match stored {
-        Some((_, info, waiting_room, host_token_hash)) if matches => Ok(Admitted {
-            info,
-            waiting_room,
-            host_token_hash,
-        }),
+        Some((_, info, waiting_room, host_token_hash, locked, sitting, hostless_since))
+            if matches =>
+        {
+            Ok(Admitted {
+                info,
+                waiting_room,
+                locked,
+                sitting,
+                hostless_since,
+                host_token_hash,
+            })
+        }
         _ => Err(AppError::not_found("this call link does not work")),
     }
 }
@@ -414,12 +483,14 @@ pub(crate) async fn info(
     Ok(Json(CallLinkInfoResponse {
         info: STANDARD.encode(meeting.info),
         waiting_room: meeting.waiting_room,
+        locked: meeting.locked,
     }))
 }
 
-/// An SFU token for whoever holds the link. No account: the route is
-/// rate-limited by address (`middleware::rate_limit_call_link`), and a wrong
-/// token and an unknown room are answered alike.
+/// An SFU token for whoever holds the link. No account is needed: the route
+/// is rate-limited by address (`middleware::rate_limit_call_link`), and a
+/// wrong token and an unknown room are answered alike. A signed-in joiner
+/// who wants the others to see who they are sends their access token too.
 #[utoipa::path(
     post,
     path = "/api/chat/call-links/token",
@@ -430,59 +501,78 @@ pub(crate) async fn info(
         (status = 200, description = "An SFU token for the link's room", body = GroupCallTokenResponse),
         (status = 403, description = "The meeting has a waiting room: knock instead"),
         (status = 404, description = "No such link (deleted, or not this server's), or the wrong access token"),
+        (status = 409, description = "That identity is someone else's seat"),
+        (status = 410, description = "A host removed this participant"),
+        (status = 423, description = "A host locked the meeting"),
         (status = 429, description = "Too many requests"),
     )
 )]
 pub(crate) async fn token(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CallLinkTokenRequest>,
 ) -> AppResult<Json<GroupCallTokenResponse>> {
     require_sfu(&state)?;
     hex32("participantId", &request.participant_id)?;
     base64_exact("label", &request.label, SEALED_NAME_BYTES)?;
+    let seat_hash = seat_hash(&request.seat)?;
     let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
-    // With a waiting room, holding the link is not enough: only the owner
-    // comes straight in. Everyone else knocks (call_link_waiting.rs).
-    let is_owner = meeting.is_host(request.host_token.as_deref())?;
-    if meeting.waiting_room && !is_owner {
-        return Err(AppError::forbidden(
-            "this meeting has a waiting room: knock and wait to be admitted",
-        ));
-    }
-    if is_owner {
-        // So the others can be shown who the host is, and a co-host cannot
-        // remove them.
-        super::call_link_moderation::record_owner(
-            &state,
-            &request.room_id,
-            &request.participant_id,
-        )
-        .await?;
-    }
-    Ok(Json(room_token(
+    // The owner always comes in, and is recorded as the owner so the others
+    // can be shown who the host is. With a waiting room, holding the link is
+    // not enough for anyone else: they knock (call_link_waiting.rs), unless
+    // they are coming back to a seat they were already let into.
+    let entry = if meeting.is_host(request.host_token.as_deref())? {
+        Entry::Owner
+    } else if meeting.waiting_room {
+        Entry::Returning
+    } else {
+        Entry::Open
+    };
+    let account = vouched_account(&state, &headers).await;
+    let seat = claim_seat(
         &state,
+        &meeting,
         &request.room_id,
         &request.participant_id,
+        &seat_hash,
+        entry,
+        account.as_deref(),
+    )
+    .await?;
+    Ok(Json(room_token(
+        &state,
+        &sfu_room(&request.room_id, meeting.sitting),
+        &request.participant_id,
         &request.label,
+        &seat,
+        account.as_deref(),
     )?))
 }
 
-/// An SFU token for the meeting's room, carrying the joiner's sealed name.
+/// An SFU token for one sitting of a meeting, carrying the joiner's sealed
+/// name, the account this server vouches for (if any), and what their seat
+/// lets them publish.
 pub(super) fn room_token(
     state: &AppState,
-    room_id: &str,
+    sfu_room: &str,
     participant_id: &str,
     label: &str,
+    seat: &Seat,
+    account: Option<&str>,
 ) -> AppResult<GroupCallTokenResponse> {
     let config = &state.config;
     Ok(GroupCallTokenResponse {
         url: config.chat_sfu_url.clone(),
-        token: livekit_token(
+        token: livekit_token_with(
             &config.chat_sfu_api_key,
             &config.chat_sfu_api_secret,
-            room_id,
+            sfu_room,
             participant_id,
-            Some(label),
+            &TokenExtras {
+                metadata: Some(label),
+                name: account,
+                publish_sources: seat.no_screen.then_some(TOKEN_SOURCES_WITHOUT_SCREEN),
+            },
             OffsetDateTime::now_utc().unix_timestamp(),
         )?,
     })

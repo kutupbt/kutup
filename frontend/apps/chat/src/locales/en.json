@@ -859,7 +859,8 @@
       "cameraIsOff": "Camera off",
       "micIsOn": "Microphone on",
       "micIsOff": "Microphone off",
-      "groupRinging": "{{name}} is calling the group"
+      "groupRinging": "{{name}} is calling the group",
+      "verifiedAccount": "Account confirmed by the server"
     },
     "callLinks": {
       "joinTitle": "Join the meeting",
@@ -880,7 +881,8 @@
         "unavailable": "The meeting could not be reached. Check your connection and try again.",
         "media": "Kutup can't use your microphone or camera. Allow them in the browser to join.",
         "removed": "A host removed you from the meeting.",
-        "endedByHost": "The host ended the meeting."
+        "endedByHost": "The host ended the meeting.",
+        "locked": "A host locked this meeting: nobody new can join for now."
       }
     },
     "meetings": {
@@ -921,7 +923,7 @@
       "edit": "Change",
       "delete": "Delete",
       "deleteTitle": "Delete \"{{title}}\"?",
-      "deleteDescription": "Nobody will be able to join through its link any more. People already in the meeting stay until they leave.",
+      "deleteDescription": "Nobody will be able to join through its link any more, and anyone in the meeting now is disconnected.",
       "deleteFailed": "The meeting could not be deleted.",
       "history": "Joined meetings",
       "historyDescription": "Meetings you joined, on any of your devices, so you can find one again. The list is encrypted with your account key: the server stores it and cannot read it.",
@@ -963,11 +965,34 @@
       "leave": "Leave meeting",
       "endForAll": "End meeting for everyone",
       "endTitle": "End the meeting for everyone?",
-      "endDescription": "Everyone is disconnected, and whoever is waiting is turned away. The link keeps working, so the meeting can be held again.",
+      "endDescription": "Everyone is disconnected, and whoever is waiting is turned away. The link keeps working, so the meeting can be held again; people who were in it come in like anyone new.",
       "endSubmit": "End meeting",
       "endFailed": "The meeting could not be ended.",
       "historyForgetFailed": "The meeting could not be removed from the list.",
-      "historyClearFailed": "The list could not be cleared."
+      "historyClearFailed": "The list could not be cleared.",
+      "showAccount": "Show my Kutup account to the others",
+      "showAccountHint": "Your account address appears under your name with a check mark: the server confirms it is you. The server then knows your account was in this meeting.",
+      "mute": "Mute",
+      "muteAll": "Mute everyone",
+      "muteFailed": "The microphone could not be muted.",
+      "mutedByHost": "A host muted you. You can turn your microphone back on.",
+      "stopSharing": "Stop their screen sharing",
+      "allowSharing": "Allow screen sharing",
+      "screenFailed": "Screen sharing could not be changed.",
+      "shareStopped": "A host stopped your screen sharing.",
+      "lock": "Lock meeting",
+      "unlock": "Unlock meeting",
+      "lockFailed": "The meeting could not be locked or unlocked.",
+      "isLocked": "The meeting is locked: nobody new can join.",
+      "admitAll": "Let everyone in",
+      "nowCoHost": "You are now a co-host: you can let people in and remove them.",
+      "newLink": "New link",
+      "newLinkTitle": "Make a new link for \"{{title}}\"?",
+      "newLinkDescription": "The meeting keeps its title, time and waiting room, and gets a new link to send to the people you want in it.",
+      "newLinkWarning": "The old link stops working for everyone, and anyone in the meeting now is disconnected.",
+      "newLinkFailed": "A new link could not be made.",
+      "newLinkCopied": "New link copied. Send it to the people you want in the meeting.",
+      "newLinkMade": "The meeting has a new link."
     },
     "shortcuts": {
       "title": "Keyboard shortcuts",

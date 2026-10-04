@@ -88,6 +88,22 @@ struct VideoGrant<'a> {
     can_subscribe: bool,
     #[serde(rename = "canPublishData")]
     can_publish_data: bool,
+    /// The sources this participant may publish; absent means all of them.
+    #[serde(rename = "canPublishSources", skip_serializing_if = "Option::is_none")]
+    can_publish_sources: Option<&'a [&'a str]>,
+}
+
+/// What a token carries beyond the room and the identity.
+#[derive(Default)]
+pub(super) struct TokenExtras<'a> {
+    /// An opaque value the SFU shows the other participants (a call link's
+    /// sealed participant name).
+    pub metadata: Option<&'a str>,
+    /// The participant's name at the SFU. Only this server sets it, so the
+    /// others can rely on it (a meeting's vouched-for account address).
+    pub name: Option<&'a str>,
+    /// The sources this participant may publish; `None` means all of them.
+    pub publish_sources: Option<&'a [&'a str]>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +116,8 @@ struct Claims<'a> {
     /// Handed by the SFU to the room's other participants, unread.
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
     video: VideoGrant<'a>,
 }
 
@@ -114,19 +132,43 @@ pub(super) fn livekit_token(
     metadata: Option<&str>,
     now: i64,
 ) -> AppResult<String> {
+    livekit_token_with(
+        api_key,
+        api_secret,
+        room_id,
+        participant_id,
+        &TokenExtras {
+            metadata,
+            ..TokenExtras::default()
+        },
+        now,
+    )
+}
+
+/// A LiveKit access token for one room, with what `extras` adds to it.
+pub(super) fn livekit_token_with(
+    api_key: &str,
+    api_secret: &str,
+    room_id: &str,
+    participant_id: &str,
+    extras: &TokenExtras<'_>,
+    now: i64,
+) -> AppResult<String> {
     let claims = Claims {
         iss: api_key,
         sub: participant_id,
         nbf: now - 10,
         exp: now + TOKEN_TTL_SECONDS,
         jti: Uuid::new_v4().to_string(),
-        metadata,
+        metadata: extras.metadata,
+        name: extras.name,
         video: VideoGrant {
             room: room_id,
             room_join: true,
             can_publish: true,
             can_subscribe: true,
             can_publish_data: true,
+            can_publish_sources: extras.publish_sources,
         },
     };
     jsonwebtoken::encode(

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useRequiredSession } from '@kutup/session/store'
-import { createCallLink, deleteCallLink, listCallLinks, setWaitingRoom, updateCallLinkInfo, type MeetingInfo, type OwnedCallLink } from './callLinks'
+import { createCallLink, deleteCallLink, listCallLinks, replaceCallLink, setWaitingRoom, updateCallLinkInfo, type MeetingInfo, type OwnedCallLink } from './callLinks'
 import { addJoinedMeeting, clearJoinedMeetings, listJoinedMeetings, removeJoinedMeeting } from './joinedMeetings'
-import { forgetJoinedMeetings, joinedMeetings, setHistoryAccount, subscribeJoinedMeetings, type JoinedMeeting } from './meetingHistory'
+import { forgetJoinedMeetings, joinedMeetings, subscribeJoinedMeetings, type JoinedMeeting } from './meetingHistory'
 
 const QUERY = ['chat-meetings'] as const
 
@@ -41,12 +41,17 @@ export function useMeetings(enabled = true) {
     },
     onSuccess: (meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? meeting : other))),
   })
+  const replace = useMutation({
+    ...settle,
+    mutationFn: (meeting: OwnedCallLink) => replaceCallLink(session.masterKey, meeting),
+    onSuccess: (next, meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? next : other))),
+  })
   const remove = useMutation({
     ...settle,
     mutationFn: (meeting: OwnedCallLink) => deleteCallLink(meeting.roomId),
     onSuccess: (_result, meeting) => update((previous) => previous.filter((other) => other.roomId !== meeting.roomId)),
   })
-  return { list, create, change, remove }
+  return { list, create, change, replace, remove }
 }
 
 let cached: { raw: string; entries: JoinedMeeting[] } = { raw: '', entries: [] }
@@ -61,10 +66,9 @@ function snapshot(): JoinedMeeting[] {
 
 const JOINED_QUERY = ['chat-joined-meetings'] as const
 
-/** The stays in this browser's storage that belong in `userId`'s list. */
+/** The stays in this browser's storage that belong in `userId`'s list: the ones joined while it was signed in here. */
 function theirs(local: JoinedMeeting[], userId: string): JoinedMeeting[] {
-  // Joined while this account was signed in here, or while nobody was.
-  return local.filter((entry) => entry.account === undefined || entry.account === userId)
+  return local.filter((entry) => entry.account === userId)
 }
 
 /**
@@ -79,11 +83,6 @@ export function useJoinedMeetingsSync(): void {
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
   const moving = useRef(false)
   const { userId, masterKey } = session
-
-  useEffect(() => {
-    setHistoryAccount(userId)
-    return () => setHistoryAccount(null)
-  }, [userId])
 
   useEffect(() => {
     const pending = theirs(local, userId)
@@ -119,7 +118,15 @@ export function useJoinedMeetings() {
   const session = useRequiredSession()
   const queryClient = useQueryClient()
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
-  const list = useQuery({ queryKey: JOINED_QUERY, queryFn: () => listJoinedMeetings(session.masterKey) })
+  // Another device of the account may add to the list: it is asked for again
+  // when this window is looked at, and every half minute while it is open.
+  const list = useQuery({
+    queryKey: JOINED_QUERY,
+    queryFn: () => listJoinedMeetings(session.masterKey, session.userId),
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
+    staleTime: 0,
+  })
   const entries = useMemo(() => {
     const byId = new Map<string, JoinedMeeting>()
     for (const entry of [...theirs(local, session.userId), ...(list.data ?? [])]) byId.set(entry.id, entry)

@@ -4,18 +4,25 @@ import {
   CallLinkRefused,
   decideKnock,
   endMeeting,
+  forgetMeetingSeat,
   knockMeeting,
   knockStatus,
+  lockMeeting,
   meetingRoles,
+  meetingSeat,
+  muteParticipant,
   NoWaitingRoom,
   removeParticipant,
+  SeatGone,
   setCoHost,
+  setScreenShare,
   waitingPeople,
   WaitingRoomRequired,
   type CallLinkRefusal,
   type HostProof,
   type Knock,
   type MeetingRole,
+  type MeetingSeat,
   type OpenCallLink,
   type SfuAccess,
   type WaitingPerson,
@@ -28,12 +35,15 @@ import { CHAT_TOPIC, ROLES_TOPIC, SfuRoom, type SfuParticipant } from './sfuRoom
 // - Media goes through the SFU of the link's server, its frames encrypted in
 //   the browser under a key from the link, so the SFU forwards what it
 //   cannot read.
-// - A participant is a random identity to the SFU. The name each one chose
-//   travels sealed under another key from the link; the others open it.
-//   Names are what people typed: nothing verifies them.
-// - The meeting's hosts (its owner, and the co-hosts the owner names) are
-//   what the server says they are. A host removes people; the owner ends
-//   the meeting for everyone. Both act at the SFU, through the server.
+// - A participant is a random identity to the SFU, bound to this browser by
+//   its seat. The name each one chose travels sealed under another key from
+//   the link; the others open it. Names are what people typed: nothing
+//   verifies them. A participant who is signed in can also show their
+//   account, which the server vouches for.
+// - The meeting's hosts (its owner, and co-hosts) are what the server says
+//   they are. A host removes and mutes people, stops a screen share and
+//   locks the meeting; the owner ends it for everyone. All of these act at
+//   the SFU, through the server.
 
 export interface LinkCallParticipant extends Omit<SfuParticipant, 'label'> {
   /** The name this participant chose; null when its label does not open. */
@@ -59,15 +69,22 @@ const MAX_MESSAGES = 500
 
 /** How often someone waiting asks whether they were let in. */
 const KNOCK_POLL_MS = 2_500
-/** How often the host looks at who is waiting. */
+/** How often a host looks at who is waiting. */
 const WAITING_POLL_MS = 3_000
+/**
+ * How long after hearing the meeting has no host to ask again: by then the
+ * server has made its longest-present participant a co-host.
+ */
+const NO_HOST_ASK_MS = 21_000
 
 export interface LinkCallState {
-  /** `waiting`: knocked, and waiting for the host to let this browser in. */
+  /** `waiting`: knocked, and waiting for a host to let this browser in. */
   phase: 'waiting' | 'connecting' | 'active' | 'ended'
   participants: LinkCallParticipant[]
   /** This browser's role in the meeting, once it is in. */
   role: MeetingRole | null
+  /** A host locked the meeting: nobody new comes in. */
+  locked: boolean
   /** For a host: who is waiting to be let in, oldest first. */
   waiting: WaitingPerson[]
   /** This browser got into the meeting (as opposed to giving up at the door). */
@@ -77,8 +94,23 @@ export interface LinkCallState {
   muted: boolean
   cameraOn: boolean
   screenOn: boolean
-  /** Why joining failed, when it did. */
+  /** Whether this browser may share its screen (a host can stop it). */
+  canShare: boolean
+  /** Counts the times a host muted this browser, so the page can say so. */
+  mutedByHost: number
+  /** Why joining failed, or why the stay ended, when it was not by leaving. */
   failure?: CallLinkRefusal | 'media'
+}
+
+export interface JoinOptions {
+  withVideo: boolean
+  /** What the page last heard: the meeting has a waiting room. */
+  waitingRoom: boolean
+  /**
+   * The access token of the account signed in here, when the person chose
+   * to show the others who they are; the server then vouches for it.
+   */
+  vouchFor?: () => Promise<string | null>
 }
 
 type Listener = () => void
@@ -95,6 +127,7 @@ export class LinkCallController {
   /** Each join attempt's number: a later one supersedes what an earlier one awaits. */
   private attempt = 0
   private waitingTimer: ReturnType<typeof setInterval> | null = null
+  private noHostTimer: ReturnType<typeof setTimeout> | null = null
   /** This browser's SFU token: how a co-host says who it is. */
   private sfuToken: string | null = null
   /** The meeting's hosts by SFU identity, as the server last said. */
@@ -105,6 +138,8 @@ export class LinkCallController {
   private rolesFor = ''
   /** This browser is ending the meeting: its own disconnection is no surprise. */
   private ending = false
+  /** This browser is changing its own microphone: the change is not a host's. */
+  private changingMicrophone = false
 
   /**
    * `hostToken` is the owner's proof of being the host, when this browser
@@ -138,31 +173,35 @@ export class LinkCallController {
   }
 
   /**
-   * Join as `name`. With a waiting room (and no host token) this knocks and
-   * waits to be let in first. Throws what stopped it; the state says why too.
+   * Join as `name`. With a waiting room (and neither the host token nor a
+   * seat already let in) this knocks and waits to be let in first. Throws
+   * what stopped it; the state says why too.
    */
-  async join(name: string, withVideo: boolean, waitingRoom: boolean): Promise<void> {
+  async join(name: string, { withVideo, waitingRoom, vouchFor }: JoinOptions): Promise<void> {
     if (this.state && this.state.phase !== 'ended') return
     const attempt = ++this.attempt
     const current = () => this.attempt === attempt && this.state !== null && this.state.phase !== 'ended'
     this.ownName = name.trim()
-    const knocking = waitingRoom && !this.hostToken
     this.set({
-      phase: knocking ? 'waiting' : 'connecting',
+      phase: waitingRoom && !this.hostToken ? 'waiting' : 'connecting',
       participants: [],
       role: null,
+      locked: false,
       waiting: [],
       wasIn: false,
       messages: [],
       muted: false,
       cameraOn: withVideo,
       screenOn: false,
+      canShare: true,
+      mutedByHost: 0,
     })
     try {
       const wasm = await loadChatWasm()
       const label = wasm.callLinkSealName(this.link.secret, this.ownName)
-      const participantId = hex(crypto.getRandomValues(new Uint8Array(16)))
-      const access = await this.access(participantId, label, knocking, current)
+      // An account that cannot be vouched for now joins as a guest.
+      const account = vouchFor ? await vouchFor().catch(() => null) : null
+      const access = await this.access(label, account, current)
       if (!access || !current()) return
       this.patch({ phase: 'connecting' })
       this.joinedAtMs = Date.now()
@@ -171,6 +210,8 @@ export class LinkCallController {
         changed: () => void this.refresh(),
         disconnected: (why) => {
           if (!this.ending && why !== 'other') this.patch({ failure: why === 'removed' ? 'removed' : 'endedByHost' })
+          // Removed, or the meeting ended: this seat is no longer a way in.
+          if (why !== 'other') forgetMeetingSeat(this.link.roomId)
           void this.ended()
         },
         // One key for the whole call: a frame that does not decrypt was not
@@ -206,26 +247,42 @@ export class LinkCallController {
   }
 
   /**
-   * The SFU token: asked for directly, or waited for at the door. Either
-   * way may find the meeting's setting changed meanwhile and take the other.
-   * Null when the attempt was given up while waiting.
+   * The SFU token for this browser's seat. A seat that is gone (a host
+   * removed it, or the meeting ended and started again) is replaced by a
+   * new one, once: that one comes in like anyone new.
    */
-  private async access(participantId: string, label: string, knocking: boolean, current: () => boolean): Promise<SfuAccess | null> {
-    if (!knocking) {
+  private async access(label: string, account: string | null, current: () => boolean): Promise<SfuAccess | null> {
+    try {
+      return await this.accessWith(meetingSeat(this.link.roomId), label, account, current)
+    } catch (error) {
+      if (!(error instanceof SeatGone)) throw error
+      forgetMeetingSeat(this.link.roomId)
       try {
-        return await callLinkToken(this.link, participantId, label, this.hostToken)
-      } catch (error) {
-        // A waiting room was turned on since the page looked.
-        if (!(error instanceof WaitingRoomRequired)) throw error
-        this.patch({ phase: 'waiting' })
+        return await this.accessWith(meetingSeat(this.link.roomId), label, account, current)
+      } catch (again) {
+        throw again instanceof SeatGone ? new CallLinkRefused('unavailable') : again
       }
+    }
+  }
+
+  /**
+   * Asked for directly, or waited for at the door: the server says which
+   * (it lets the owner, and a seat already let in, straight through). Null
+   * when the attempt was given up while waiting.
+   */
+  private async accessWith(seat: MeetingSeat, label: string, account: string | null, current: () => boolean): Promise<SfuAccess | null> {
+    try {
+      return await callLinkToken(this.link, seat, label, this.hostToken, account)
+    } catch (error) {
+      if (!(error instanceof WaitingRoomRequired)) throw error
+      this.patch({ phase: 'waiting' })
     }
     let knock: Knock
     try {
-      knock = await knockMeeting(this.link, participantId, label)
+      knock = await knockMeeting(this.link, seat, label, account)
     } catch (error) {
       // It was turned off since: the link alone lets this browser in.
-      if (error instanceof NoWaitingRoom) return callLinkToken(this.link, participantId, label, this.hostToken)
+      if (error instanceof NoWaitingRoom) return callLinkToken(this.link, seat, label, this.hostToken, account)
       throw error
     }
     while (current()) {
@@ -247,6 +304,14 @@ export class LinkCallController {
     await this.decide(knockId, false)
   }
 
+  /** As a host: let in everyone who is waiting. */
+  async admitAll(): Promise<void> {
+    for (const person of this.state?.waiting ?? []) {
+      // One who stopped waiting meanwhile is not a reason to leave the rest out.
+      await this.decide(person.knockId, true).catch(() => undefined)
+    }
+  }
+
   private async decide(knockId: string, admit: boolean): Promise<void> {
     const proof = this.hostProof()
     if (!proof || !this.state) return
@@ -260,17 +325,47 @@ export class LinkCallController {
    */
   async remove(identity: string): Promise<void> {
     const proof = this.hostProof()
+    if (proof) await removeParticipant(this.link, proof, identity)
+  }
+
+  /** As a host: mute someone's microphone. They can turn it back on. */
+  async mute(identity: string): Promise<void> {
+    const proof = this.hostProof()
+    if (proof) await muteParticipant(this.link, proof, identity)
+  }
+
+  /** As a host: mute everyone who is not a host. */
+  async muteAll(): Promise<void> {
+    const proof = this.hostProof()
+    if (proof) await muteParticipant(this.link, proof, null)
+  }
+
+  /** As a host: stop someone sharing their screen, or allow it again. */
+  async setScreenShare(identity: string, allowed: boolean): Promise<void> {
+    const proof = this.hostProof()
+    if (proof) await setScreenShare(this.link, proof, identity, allowed)
+  }
+
+  /** As a host: lock the meeting (nobody new comes in) or unlock it. */
+  async setLocked(locked: boolean): Promise<void> {
+    const proof = this.hostProof()
     if (!proof) return
-    await removeParticipant(this.link, proof, identity)
+    await lockMeeting(this.link, proof, locked)
+    this.patch({ locked })
+    await this.hint()
   }
 
   /** As the owner: make a participant a co-host, or stop them being one. */
   async setCoHost(identity: string, enabled: boolean): Promise<void> {
     if (!this.hostToken) return
     await setCoHost(this.link, this.hostToken, identity, enabled)
-    // Tell the others to ask the server who the hosts are now.
-    await this.room?.send(new Uint8Array(), ROLES_TOPIC).catch(() => undefined)
+    await this.hint()
     await this.askRoles()
+  }
+
+  /** Tell the others to ask the server how the meeting is set now. */
+  private async hint(): Promise<void> {
+    await this.room?.send(new Uint8Array(), ROLES_TOPIC).catch(() => undefined)
   }
 
   /** As the owner: end the meeting for everyone in it. */
@@ -283,6 +378,7 @@ export class LinkCallController {
       this.ending = false
       throw error
     }
+    forgetMeetingSeat(this.link.roomId)
     await this.ended()
   }
 
@@ -293,8 +389,8 @@ export class LinkCallController {
   }
 
   /**
-   * Ask the server who the meeting's hosts are. Asks made while one is
-   * under way become a single further one.
+   * Ask the server who the meeting's hosts are and how it is set. Asks made
+   * while one is under way become a single further one.
    */
   private askRoles(): Promise<void> {
     if (this.rolesAsked) {
@@ -308,14 +404,18 @@ export class LinkCallController {
         if (!room || this.room !== room || this.state?.phase !== 'active') return
         try {
           const proof: HostProof | null = this.hostToken ? { hostToken: this.hostToken } : this.sfuToken ? { sfuToken: this.sfuToken } : null
-          const { me, roles } = await meetingRoles(this.link, proof)
+          const { me, roles, locked, noHost } = await meetingRoles(this.link, proof)
           if (this.room !== room || !this.state) return
           this.roles = roles
           this.patch({
             role: me,
+            locked,
             participants: this.state.participants.map((participant) => ({ ...participant, role: roles.get(participant.identity) ?? null })),
           })
           this.watchWaiting()
+          if (this.noHostTimer) clearTimeout(this.noHostTimer)
+          // Left without a host: the server names one shortly. Ask then.
+          this.noHostTimer = noHost ? setTimeout(() => void this.askRoles(), NO_HOST_ASK_MS) : null
         } catch (error) {
           console.warn('chat: could not learn who hosts the meeting', error)
         }
@@ -354,13 +454,18 @@ export class LinkCallController {
     await this.ended()
   }
 
-  toggleMute(): void {
+  async toggleMute(): Promise<void> {
     const room = this.room
     const state = this.state
     if (!room || !state) return
     const muted = !state.muted
-    void room.setMicrophone(!muted)
+    this.changingMicrophone = true
     this.patch({ muted })
+    try {
+      await room.setMicrophone(!muted)
+    } finally {
+      this.changingMicrophone = false
+    }
   }
 
   async toggleCamera(): Promise<void> {
@@ -438,9 +543,15 @@ export class LinkCallController {
         this.names.set(label, null)
       }
     }
-    if (this.room !== room || !this.state) return
+    const state = this.state
+    if (this.room !== room || !state) return
+    const own = participants.find((participant) => participant.local)
+    // The microphone went off without this browser turning it off: a host did.
+    const mutedByHost = state.phase === 'active' && !this.changingMicrophone && !state.muted && own?.muted === true && room.microphonePublished
     this.patch({
       screenOn: room.screenOn,
+      canShare: own?.canShare ?? true,
+      ...(mutedByHost ? { muted: true, mutedByHost: state.mutedByHost + 1 } : {}),
       participants: participants.map(({ label, ...participant }) => ({
         ...participant,
         name: participant.local ? this.ownName : (this.names.get(label) ?? null),
@@ -448,10 +559,14 @@ export class LinkCallController {
       })),
     })
     // Someone came or went: the hosts may have with them (the owner joining
-    // late, say). Asking is also what has the server remove again someone
-    // who was removed and is back with the SFU token they still hold.
-    const present = participants.map((participant) => participant.identity).sort().join(' ')
-    if (present !== this.rolesFor && this.state.phase === 'active') {
+    // late, say). Asking is also what has the server look after the meeting:
+    // remove again someone who was removed and is back with the SFU token
+    // they still hold, and name a co-host when no host is left.
+    const present = participants
+      .map((participant) => participant.identity)
+      .sort()
+      .join(' ')
+    if (present !== this.rolesFor && this.state?.phase === 'active') {
       this.rolesFor = present
       void this.askRoles()
     }
@@ -463,6 +578,8 @@ export class LinkCallController {
     this.leftAtMs = Date.now()
     if (this.waitingTimer) clearInterval(this.waitingTimer)
     this.waitingTimer = null
+    if (this.noHostTimer) clearTimeout(this.noHostTimer)
+    this.noHostTimer = null
     this.patch({ phase: 'ended', participants: [], waiting: [], role: null })
     const room = this.room
     this.room = null

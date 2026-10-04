@@ -10,7 +10,7 @@ import type { JoinedMeeting } from './meetingHistory'
 // none of them.
 
 /** The account's joined meetings, as its key opens them. */
-export async function listJoinedMeetings(masterKey: Uint8Array): Promise<JoinedMeeting[]> {
+export async function listJoinedMeetings(masterKey: Uint8Array, account: string): Promise<JoinedMeeting[]> {
   const { data } = await api.get<{ entries: { id: string; entry: string }[] }>('/chat/joined-meetings')
   const wasm = await loadChatWasm()
   const key = toBase64(masterKey)
@@ -18,7 +18,7 @@ export async function listJoinedMeetings(masterKey: Uint8Array): Promise<JoinedM
   for (const { id, entry } of data.entries) {
     try {
       const opened = wasm.callLinkOpenJoined(key, entry)
-      entries.push({ id, ...opened, roomId: callLinkRoomId(wasm, opened.fragment) })
+      entries.push({ id, ...opened, roomId: callLinkRoomId(wasm, opened.fragment), account })
     } catch {
       // A record this account's key does not open is not shown.
     }

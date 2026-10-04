@@ -271,14 +271,17 @@ account, so it is the same on all of its devices:
   recorded a stay and when, which someone watching the server could set
   beside the token requests of that moment.
 - The meeting page sits outside the sign-in, so it cannot write to the
-  account itself. When a stay ends it leaves it in the browser's storage
-  (`kutup-meeting-history`, at most 30), tagged with the account signed in
-  to Chat in that browser at the time, if any. Chat, whenever it is open
-  there, moves those stays into the account and removes them from the
-  browser. A stay joined while nobody was signed in goes to the account
-  that next opens Chat in that browser; one tagged with another account is
-  left for that account.
-- Someone without an account keeps their stays in their browser only.
+  account itself. When a stay ends and an account is signed in to Kutup in
+  that browser, the page leaves the stay in the browser's storage
+  (`kutup-meeting-history`, at most 30), tagged with that account. Chat,
+  whenever it is open there as that account, moves its stays into the
+  account and removes them from the browser.
+- A stay joined while nobody is signed in is not recorded at all. It
+  belongs to no account, and keeping it in the browser would hand it to
+  whoever signs in there next.
+- The Meetings page asks for the list again when its window is looked at
+  and every half minute while it is open, so a meeting joined on another
+  device shows up without a reload.
 - Stays can be taken off the list one by one, or the list cleared.
 
 **The waiting room:** optional, per meeting ("Waiting room" when making or
@@ -306,7 +309,10 @@ changing one). With it on, holding the link is not enough to join.
   they knocked with; one turned away is told so.
 - A knocker who stops asking for 20 s is no longer listed, and knocks are
   forgotten ten minutes after their knocker last asked. At most 50 people
-  wait at one meeting. Leaving and coming back means knocking again.
+  wait at one meeting. Someone let in can leave and come back from the same
+  browser tab without knocking again (their seat, below), until the meeting
+  is ended.
+- With several people waiting, a host can let everyone in at once.
 - Turning the waiting room off lets in everyone still waiting.
 - The meeting page sits outside the sign-in, so it has no session to derive
   the host token from. The signed-in app, which lists the account's
@@ -317,64 +323,122 @@ changing one). With it on, holding the link is not enough to join.
   meeting for anyone to be let in.
 - A co-host (below) lets people in and turns them away too.
 
-**Hosts:** the meeting's **owner**, and the **co-hosts** the owner names
-while it is running. Until here this server only minted tokens to enter the
-SFU's room; removing someone and ending a meeting act on the SFU itself, as
-the room's administrator, through LiveKit's room service
+**Seats:** a browser joins a meeting under a random SFU identity, and binds
+that identity to a secret only it holds (kept per tab, in the browser's
+session storage). The server stores the secret's SHA-256 with the identity
+(a *seat*) and mints an SFU token for an identity only to whoever presents
+its secret.
+
+- Nobody can ask for a token under someone else's identity: that would
+  disconnect them (the SFU allows an identity once) and take their place,
+  and with it their role. A second claim on a taken identity is `409`.
+- A browser that reloads or reconnects presents its seat and is the same
+  participant: still a co-host if it was one, still stopped from sharing if
+  it was, and let straight back into a meeting with a waiting room it had
+  already been let into.
+- A seat nobody asked a token for in a day is forgotten.
+
+**Hosts:** the meeting's **owner**, and its **co-hosts**. Until here this
+server only minted tokens to enter the SFU's room; what hosts do acts on the
+SFU itself, as the room's administrator, through LiveKit's room service
 (`CHAT_SFU_API_URL`, by default the SFU's URL with `ws` read as `http`).
 
-- **Who is who.** The owner proves it with the host token. When they ask
-  for an SFU token with it, the server records the identity they joined
-  under as the owner's. A co-host is a participant's SFU identity the owner
-  named (`…/co-hosts`); they prove who they are with their own SFU token,
-  which this server minted and so can check (signature, room, identity).
-  Anyone holding the link can ask who the hosts are (`…/roles`): the People
-  list marks them "Host" and "Co-host". These roles are the server's word,
-  not something a participant can claim. A browser learns of a change by a
-  contentless hint sent through the SFU (topic `kutup-roles`), and then asks
-  the server; the hint itself proves nothing.
-- **A co-host lasts one stay.** The role belongs to the identity they
-  joined with; leaving and joining again is a new identity without it.
-- **What each may do.** The owner: everything. A co-host: let people in,
-  turn them away, and remove participants who are not hosts. Nobody removes
-  the owner; only the owner names co-hosts or ends the meeting.
+- **Who is who.** The owner proves it with the host token; asking for an
+  SFU token with it marks their seat as the owner's. A co-host is a seat the
+  owner named (`…/co-hosts`); they prove who they are with their own SFU
+  token, which this server minted and so can check (signature, sitting,
+  identity). Anyone holding the link can ask who the hosts are (`…/roles`):
+  the People list marks them "Host" and "Co-host". These roles are the
+  server's word, not something a participant can claim. A browser learns
+  of a change by a contentless hint sent through the SFU (topic
+  `kutup-roles`), and then asks the server; the hint itself proves nothing.
+- **What each may do.** The owner: everything. A co-host: let people in and
+  turn them away, lock the meeting, and remove, mute or stop the screen
+  share of participants who are not hosts. Nobody acts on the owner; only
+  the owner names co-hosts or ends the meeting.
+- **A meeting left without a host.** When no host is in the room while
+  other people are, nobody could let anyone in (a removal turns the waiting
+  room on). After 20 seconds without one (long enough for a host to reload
+  their page) the server makes the participant who has been in the meeting
+  longest a co-host, and their page tells them. They get a co-host's
+  powers, not the owner's. The owner, back in the meeting, is the owner as
+  before and can take the role away.
 - **Removing someone** (`…/participants/remove`, from their row in the
-  People list): the server turns the waiting room on, marks the knock they
-  came in by as turned away, and disconnects them at the SFU. Their page
-  says a host removed them. They still hold the link, which is why the
-  waiting room goes on: to come back they have to ask, and a host decides.
-  It stays on until the owner turns it off.
+  People list): the server turns the waiting room on, marks their seat and
+  the knock they came in by as removed, and disconnects them at the SFU.
+  Their page says a host removed them. They still hold the link, which is
+  why the waiting room goes on: to come back they have to ask, and a host
+  decides. It stays on until the owner turns it off.
+- **Muting someone** (`…/participants/mute`): the server mutes their
+  microphone track at the SFU; their page says so, and they can turn it
+  back on. A host mutes, and never unmutes. "Mute everyone" mutes
+  everybody who is not a host.
+- **Stopping a screen share** (`…/participants/screen`): the server takes
+  away that participant's permission to publish a screen, which ends what
+  they are sharing and keeps them from starting again until a host allows
+  it. The setting is kept with their seat: a token minted when they
+  reconnect says the same, and if they come back with an SFU token from
+  before (which still allows it), the server stops them again when it looks
+  after the meeting, as for a removed person below.
+- **Locking the meeting** (`…/lock`): nobody new comes in, not by the link
+  and not by knocking (the join page says the meeting is locked; whoever
+  was waiting is turned away). People already in it can reconnect, and the
+  owner always comes in. Ending the meeting unlocks it.
 - **Ending the meeting for everyone** (`…/end`, from the owner's leave
   button, which then offers "Leave meeting" and "End meeting for
-  everyone"): the server turns away everyone waiting, forgets the co-hosts,
-  and deletes the SFU room, which disconnects everybody; their pages say
-  the host ended it. The link keeps working: the meeting can be held again.
-  When the owner merely leaves, the meeting goes on without a host.
+  everyone"): a new **sitting** begins. The SFU room is named after the
+  room id and the sitting number, and every SFU token names its room, so
+  the tokens of the sitting that ended open nothing that anyone is in. The
+  server deletes the old SFU room (which disconnects everybody; their pages
+  say the host ended it), forgets every seat and role, and turns away
+  whoever was waiting. The link keeps working: the meeting can be held
+  again, and everyone comes in like anyone new. When the owner merely
+  leaves, the meeting goes on.
 - **What removal is not.** It is not a change of keys: a removed person
   still holds the link, and so the keys the media, names and chat are
   sealed under. It keeps them out of the room, which is where those travel.
-  A meeting that must exclude someone for good needs a new link.
 - **A removed person's SFU token.** The SFU cannot take back the token they
   were given, which lasts up to six hours; a modified client could connect
-  with it again. So the server remembers each removed identity (for a day
+  with it again. The server therefore remembers a removed seat (for a day
   after it was last removed) and removes it again when it is back: whenever
-  a browser in the meeting asks who the hosts are, which each does when the
-  people in the room change, and whenever a host looks at who is waiting,
-  the server asks the SFU who is in the room and disconnects a removed
-  identity it finds there. No host has to be present. Someone who gets
-  back in this way is in the room for the moment it takes the others to
-  notice them.
+  a browser in the meeting asks who the hosts are, which each does the
+  moment the people in the room change, and whenever a host looks at who is
+  waiting, the server asks the SFU who is in the room and disconnects a
+  removed identity it finds there. No host has to be present. Such a client
+  is in the room until the others' browsers notice it: the SFU tells them
+  of a newcomer within about three seconds, and a host's browser looks
+  every three seconds anyway. In those seconds it can receive media, and it
+  holds the link's keys. Closing that window entirely would mean moving
+  everyone to a new SFU room on every removal, which would interrupt the
+  whole meeting (and drop every screen share) each time; it was judged not
+  worth it. The SFU's own "participant joined" notice to this server
+  (a webhook) would shorten it to the moment their media connects.
+- **Excluding someone for good** takes a new link: "New link" on the
+  Meetings page makes one for the same meeting (same title, time and
+  waiting room, a new secret and so new keys), deletes the old one and
+  disconnects whoever is in it. Only the people the new link is sent to
+  come back.
+
+**Names and accounts:** the name a participant shows is what they typed;
+nothing verifies it, and a guest has nothing else. Someone signed in to
+Kutup in the browser they join from can also show their **account**: the
+join page offers "Show my Kutup account to the others" (on by default, and
+remembered). The page then sends the account's access token with the token
+or knock request, and the server puts the account address
+(`username@server`) in the SFU token as the participant's name. Only this
+server sets that field, so the others can rely on it: it appears under the
+typed name with a check mark, in the People list and beside a knock. The
+cost is that the server then knows that account is in that meeting; with
+the box unticked it learns nothing of the kind.
 
 **What a meeting is, and is not:**
 - Without a waiting room the link is the whole capability: whoever has it
   can join. With one, they can still read the title and time and ask to
   join, and the host decides. Either way, someone in the meeting sees,
   hears and reads its chat, and can hand the link on.
-- Names are what people typed. Nothing ties a name to an account, including
-  for people who have one; the join page says so.
-- Deleting a meeting stops new joins. People already in it stay until they
-  leave or the owner ends it for everyone first (their SFU token lasts up
-  to six hours).
+- Names are what people typed; the join page says so. A person signed in to
+  Kutup can also show their account, which the server vouches for (above).
+- Deleting a meeting stops new joins and disconnects whoever is in it.
 - A meeting is one room: everyone who opens the link while others are there
   is in the same call.
 
@@ -432,8 +496,9 @@ For meetings, the host additionally learns that a meeting exists, which
 account made it and when, when its sealed details change, whether it has a
 waiting room, how many people knock and when each is let in or turned away,
 that an account recorded a joined meeting and when (not which), which SFU
-identities are its hosts, which identity is removed and when the
-meeting is ended, and the network address of each joiner when it asks for the details or a
+identities are its hosts, which identity is removed, muted or stopped from
+sharing, when the meeting is locked or ended, which account a participant
+is when they chose to show it, and the network address of each joiner when it asks for the details or a
 token. It never
 learns the link, the title or time, the names people chose, the chat, or
 the media. Someone who gets the link learns all of them.

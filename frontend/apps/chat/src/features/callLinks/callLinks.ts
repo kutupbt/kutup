@@ -138,7 +138,18 @@ export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink,
   return { ...link, waitingRoom: enabled }
 }
 
-/** Delete a meeting: nobody can join through its link any more. */
+/**
+ * Give a meeting a new link: the same title, time and waiting room under a
+ * new secret. The old link stops working and whoever is in the meeting is
+ * disconnected, so only the people the new link is sent to come back.
+ */
+export async function replaceCallLink(masterKey: Uint8Array, link: OwnedCallLink): Promise<OwnedCallLink> {
+  const next = await createCallLink(masterKey, link.info, link.waitingRoom)
+  await deleteCallLink(link.roomId)
+  return next
+}
+
+/** Delete a meeting: nobody can join through its link any more, and it ends for whoever is in it. */
 export async function deleteCallLink(roomId: string): Promise<void> {
   await api.delete(`/chat/call-links/${roomId}`)
   forgetHostToken(roomId)
@@ -150,7 +161,7 @@ export function callLinkRoomId(wasm: Pick<CallLinkCrypto, 'callLinkParse' | 'cal
 }
 
 /** Why the host refused, for the page to explain. */
-export type CallLinkRefusal = 'gone' | 'busy' | 'unavailable' | 'turnedAway' | 'full' | 'removed' | 'endedByHost'
+export type CallLinkRefusal = 'gone' | 'busy' | 'unavailable' | 'turnedAway' | 'full' | 'removed' | 'endedByHost' | 'locked'
 
 export class CallLinkRefused extends Error {
   constructor(readonly reason: CallLinkRefusal) {
@@ -162,17 +173,79 @@ export class CallLinkRefused extends Error {
 export class WaitingRoomRequired extends Error {}
 /** The meeting has no waiting room (any more): ask for a token. */
 export class NoWaitingRoom extends Error {}
+/**
+ * The seat this browser presented is no longer its own to use: a host
+ * removed it, or the identity is someone else's. A new seat is needed.
+ */
+export class SeatGone extends Error {
+  constructor(readonly removed: boolean) {
+    super('this seat in the meeting is gone')
+  }
+}
+
+/**
+ * This browser's place in a meeting: the random identity it joins under,
+ * and the secret that binds the identity to this browser. The server mints
+ * tokens for an identity only to the holder of its secret, so nobody takes
+ * someone else's identity, and a reload comes back as the same participant
+ * (still a co-host, if it was one). Kept per tab.
+ */
+export interface MeetingSeat {
+  participantId: string
+  seat: string
+}
+
+const seatKey = (roomId: string) => `kutup-meeting-seat:${roomId}`
+
+function randomBytes(length: number): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(length))
+}
+
+export function meetingSeat(roomId: string): MeetingSeat {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(seatKey(roomId)) ?? 'null') as Partial<MeetingSeat> | null
+    if (stored && typeof stored.participantId === 'string' && /^[0-9a-f]{32}$/.test(stored.participantId) && typeof stored.seat === 'string') {
+      return { participantId: stored.participantId, seat: stored.seat }
+    }
+  } catch {
+    // Unreadable: a new seat.
+  }
+  const seat: MeetingSeat = {
+    participantId: Array.from(randomBytes(16), (byte) => byte.toString(16).padStart(2, '0')).join(''),
+    seat: toBase64(randomBytes(32)),
+  }
+  try {
+    sessionStorage.setItem(seatKey(roomId), JSON.stringify(seat))
+  } catch {
+    // Private browsing: the seat lasts as long as the page.
+  }
+  return seat
+}
+
+export function forgetMeetingSeat(roomId: string): void {
+  try {
+    sessionStorage.removeItem(seatKey(roomId))
+  } catch {
+    // Nothing was kept.
+  }
+}
 
 /**
  * Ask the host as a holder of the link. No account is involved, so this
  * does not go through the signed-in API client.
  */
-async function asHolder<T>(path: string, body: Record<string, unknown>, context: 'token' | 'knock' | 'other' = 'other'): Promise<T> {
+async function asHolder<T>(
+  path: string,
+  body: Record<string, unknown>,
+  context: 'token' | 'knock' | 'other' = 'other',
+  /** A signed-in joiner's access token, when they chose to show who they are. */
+  vouchFor?: string | null,
+): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/chat/call-links/${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(vouchFor ? { Authorization: `Bearer ${vouchFor}` } : {}) },
       credentials: 'omit',
       body: JSON.stringify(body),
     })
@@ -180,7 +253,10 @@ async function asHolder<T>(path: string, body: Record<string, unknown>, context:
     throw new CallLinkRefused('unavailable')
   }
   if (response.status === 403 && context === 'token') throw new WaitingRoomRequired()
+  if (response.status === 409 && context === 'token') throw new SeatGone(false)
+  if (response.status === 410 && context === 'token') throw new SeatGone(true)
   if (response.status === 409 && context === 'knock') throw new NoWaitingRoom()
+  if (response.status === 423) throw new CallLinkRefused('locked')
   if (response.status === 403) throw new CallLinkRefused('unavailable')
   if (response.status === 404) throw new CallLinkRefused('gone')
   if (response.status === 429) throw new CallLinkRefused(context === 'knock' ? 'full' : 'busy')
@@ -188,14 +264,14 @@ async function asHolder<T>(path: string, body: Record<string, unknown>, context:
   return (response.status === 204 ? undefined : await response.json()) as T
 }
 
-/** What the meeting is called and when it is, and whether joiners wait to be let in. */
-export async function fetchMeetingInfo(link: OpenCallLink): Promise<{ info: MeetingInfo; waitingRoom: boolean }> {
-  const { info, waitingRoom } = await asHolder<{ info: string; waitingRoom: boolean }>('info', {
+/** What the meeting is called and when it is, whether joiners wait to be let in, and whether it is locked. */
+export async function fetchMeetingInfo(link: OpenCallLink): Promise<{ info: MeetingInfo; waitingRoom: boolean; locked: boolean }> {
+  const { info, waitingRoom, locked } = await asHolder<{ info: string; waitingRoom: boolean; locked: boolean }>('info', {
     roomId: link.roomId,
     accessToken: link.accessToken,
   })
   try {
-    return { info: (await loadChatWasm()).callLinkOpenInfo(link.secret, info), waitingRoom }
+    return { info: (await loadChatWasm()).callLinkOpenInfo(link.secret, info), waitingRoom, locked }
   } catch {
     // Sealed by someone who does not hold this link: not a meeting to join.
     throw new CallLinkRefused('gone')
@@ -208,15 +284,24 @@ export interface SfuAccess {
 }
 
 /**
- * An SFU token for the meeting's room. With a waiting room only the owner's
- * host token gets one this way; anyone else is told to knock
- * (`WaitingRoomRequired`).
+ * An SFU token for the meeting's room, for this browser's seat. With a
+ * waiting room only the owner's host token, or a seat already let in, gets
+ * one this way; anyone else is told to knock (`WaitingRoomRequired`).
+ * `vouchFor` is the joiner's access token when they are signed in and chose
+ * to show the others their account.
  */
-export function callLinkToken(link: OpenCallLink, participantId: string, label: string, hostToken?: string | null): Promise<SfuAccess> {
+export function callLinkToken(
+  link: OpenCallLink,
+  seat: MeetingSeat,
+  label: string,
+  hostToken?: string | null,
+  vouchFor?: string | null,
+): Promise<SfuAccess> {
   return asHolder(
     'token',
-    { roomId: link.roomId, accessToken: link.accessToken, participantId, label, ...(hostToken ? { hostToken } : {}) },
+    { roomId: link.roomId, accessToken: link.accessToken, ...seat, label, ...(hostToken ? { hostToken } : {}) },
     'token',
+    vouchFor,
   )
 }
 
@@ -227,8 +312,8 @@ export interface Knock {
 }
 
 /** Ask to be let into a meeting with a waiting room. */
-export function knockMeeting(link: OpenCallLink, participantId: string, label: string): Promise<Knock> {
-  return asHolder('knock', { roomId: link.roomId, accessToken: link.accessToken, participantId, label }, 'knock')
+export function knockMeeting(link: OpenCallLink, seat: MeetingSeat, label: string, vouchFor?: string | null): Promise<Knock> {
+  return asHolder('knock', { roomId: link.roomId, accessToken: link.accessToken, ...seat, label }, 'knock', vouchFor)
 }
 
 export type KnockStatus = { status: 'waiting' } | { status: 'turnedAway' } | ({ status: 'admitted' } & SfuAccess)
@@ -243,6 +328,8 @@ export interface WaitingPerson {
   knockId: string
   /** The name they chose; null when their label does not open. */
   name: string | null
+  /** The account the server vouches for, when they are signed in and show it. */
+  account: string | null
 }
 
 /**
@@ -258,13 +345,13 @@ function proven(link: OpenCallLink, proof: HostProof | null): Record<string, str
 
 /** Who is waiting, oldest first, for a host. */
 export async function waitingPeople(link: OpenCallLink, proof: HostProof): Promise<WaitingPerson[]> {
-  const { knocks } = await asHolder<{ knocks: { knockId: string; label: string }[] }>('knocks', proven(link, proof))
+  const { knocks } = await asHolder<{ knocks: { knockId: string; label: string; account?: string }[] }>('knocks', proven(link, proof))
   const wasm = await loadChatWasm()
-  return knocks.map(({ knockId, label }) => {
+  return knocks.map(({ knockId, label, account }) => {
     try {
-      return { knockId, name: wasm.callLinkOpenName(link.secret, label) }
+      return { knockId, name: wasm.callLinkOpenName(link.secret, label), account: account ?? null }
     } catch {
-      return { knockId, name: null }
+      return { knockId, name: null, account: account ?? null }
     }
   })
 }
@@ -276,13 +363,30 @@ export function decideKnock(link: OpenCallLink, proof: HostProof, knockId: strin
 
 export type MeetingRole = 'owner' | 'coHost'
 
-/** The meeting's hosts by SFU identity, and this browser's own role. */
-export async function meetingRoles(link: OpenCallLink, proof: HostProof | null): Promise<{ me: MeetingRole | null; roles: Map<string, MeetingRole> }> {
-  const { me, roles } = await asHolder<{ me?: MeetingRole; roles: { participantId: string; role: MeetingRole }[] }>(
-    'roles',
-    proven(link, proof),
-  )
-  return { me: me ?? null, roles: new Map(roles.map(({ participantId, role }) => [participantId, role])) }
+/** Who hosts a meeting that is on, and how it is set. */
+export interface MeetingState {
+  /** This browser's own role. */
+  me: MeetingRole | null
+  /** The hosts, by SFU identity. */
+  roles: Map<string, MeetingRole>
+  locked: boolean
+  waitingRoom: boolean
+  /**
+   * No host is in the meeting right now. If it stays so for a short while,
+   * the server makes its longest-present participant a co-host: ask again.
+   */
+  noHost: boolean
+}
+
+export async function meetingRoles(link: OpenCallLink, proof: HostProof | null): Promise<MeetingState> {
+  const { me, roles, locked, waitingRoom, noHost } = await asHolder<{
+    me?: MeetingRole
+    roles: { participantId: string; role: MeetingRole }[]
+    locked: boolean
+    waitingRoom: boolean
+    noHost: boolean
+  }>('roles', proven(link, proof))
+  return { me: me ?? null, roles: new Map(roles.map(({ participantId, role }) => [participantId, role])), locked, waitingRoom, noHost }
 }
 
 /** As the owner: make a participant a co-host, or stop them being one. */
@@ -301,4 +405,19 @@ export function removeParticipant(link: OpenCallLink, proof: HostProof, particip
 /** As the owner: end the meeting for everyone in it. */
 export function endMeeting(link: OpenCallLink, hostToken: string): Promise<void> {
   return asHolder('end', { roomId: link.roomId, accessToken: link.accessToken, hostToken })
+}
+
+/** As a host: mute a participant's microphone, or (with no one named) everyone's who is not a host. */
+export function muteParticipant(link: OpenCallLink, proof: HostProof, participantId: string | null): Promise<void> {
+  return asHolder('participants/mute', { ...proven(link, proof), ...(participantId ? { participantId } : {}) })
+}
+
+/** As a host: stop a participant sharing their screen, or allow it again. */
+export function setScreenShare(link: OpenCallLink, proof: HostProof, participantId: string, allowed: boolean): Promise<void> {
+  return asHolder('participants/screen', { ...proven(link, proof), participantId, allowed })
+}
+
+/** As a host: lock the meeting (nobody new comes in) or unlock it. */
+export function lockMeeting(link: OpenCallLink, proof: HostProof, locked: boolean): Promise<void> {
+  return asHolder('lock', { ...proven(link, proof), locked })
 }

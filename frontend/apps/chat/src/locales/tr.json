@@ -859,7 +859,8 @@
       "cameraIsOff": "Kamera kapalı",
       "micIsOn": "Mikrofon açık",
       "micIsOff": "Mikrofon kapalı",
-      "groupRinging": "{{name}} grubu arıyor"
+      "groupRinging": "{{name}} grubu arıyor",
+      "verifiedAccount": "Hesap sunucu tarafından doğrulandı"
     },
     "callLinks": {
       "joinTitle": "Toplantıya katılın",
@@ -880,7 +881,8 @@
         "unavailable": "Toplantıya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
         "media": "Kutup mikrofonunuzu ya da kameranızı kullanamıyor. Katılmak için tarayıcıda izin verin.",
         "removed": "Bir toplantı sahibi sizi toplantıdan çıkardı.",
-        "endedByHost": "Toplantı sahibi toplantıyı bitirdi."
+        "endedByHost": "Toplantı sahibi toplantıyı bitirdi.",
+        "locked": "Bir toplantı sahibi bu toplantıyı kilitledi: şimdilik yeni kimse katılamaz."
       }
     },
     "meetings": {
@@ -921,7 +923,7 @@
       "edit": "Değiştir",
       "delete": "Sil",
       "deleteTitle": "\"{{title}}\" silinsin mi?",
-      "deleteDescription": "Artık kimse bağlantısıyla katılamayacak. Toplantıda olanlar ayrılana kadar kalır.",
+      "deleteDescription": "Bağlantısıyla artık kimse katılamaz ve şu anda toplantıda olan herkesin bağlantısı kesilir.",
       "deleteFailed": "Toplantı silinemedi.",
       "history": "Katıldığınız toplantılar",
       "historyDescription": "Herhangi bir cihazınızdan katıldığınız toplantılar; birini yeniden bulabilmeniz için. Liste hesap anahtarınızla şifrelenir: sunucu onu saklar ama okuyamaz.",
@@ -963,11 +965,34 @@
       "leave": "Toplantıdan ayrıl",
       "endForAll": "Toplantıyı herkes için bitir",
       "endTitle": "Toplantı herkes için bitirilsin mi?",
-      "endDescription": "Herkesin bağlantısı kesilir, bekleyenler geri çevrilir. Bağlantı çalışmaya devam eder; toplantı yeniden yapılabilir.",
+      "endDescription": "Herkesin bağlantısı kesilir, bekleyenler geri çevrilir. Bağlantı çalışmaya devam eder; toplantı yeniden yapılabilir ve daha önce içinde olanlar da yeni gelen herkes gibi katılır.",
       "endSubmit": "Toplantıyı bitir",
       "endFailed": "Toplantı bitirilemedi.",
       "historyForgetFailed": "Toplantı listeden kaldırılamadı.",
-      "historyClearFailed": "Liste temizlenemedi."
+      "historyClearFailed": "Liste temizlenemedi.",
+      "showAccount": "Kutup hesabımı diğerlerine göster",
+      "showAccountHint": "Hesap adresiniz, adınızın altında bir onay işaretiyle görünür: sunucu sizin olduğunuzu doğrular. Sunucu bu durumda hesabınızın bu toplantıda olduğunu bilir.",
+      "mute": "Sessize al",
+      "muteAll": "Herkesi sessize al",
+      "muteFailed": "Mikrofon sessize alınamadı.",
+      "mutedByHost": "Bir toplantı sahibi sizi sessize aldı. Mikrofonunuzu yeniden açabilirsiniz.",
+      "stopSharing": "Ekran paylaşımını durdur",
+      "allowSharing": "Ekran paylaşımına izin ver",
+      "screenFailed": "Ekran paylaşımı değiştirilemedi.",
+      "shareStopped": "Bir toplantı sahibi ekran paylaşımınızı durdurdu.",
+      "lock": "Toplantıyı kilitle",
+      "unlock": "Toplantının kilidini aç",
+      "lockFailed": "Toplantı kilitlenemedi veya kilidi açılamadı.",
+      "isLocked": "Toplantı kilitli: yeni kimse katılamaz.",
+      "admitAll": "Herkesi içeri al",
+      "nowCoHost": "Artık yardımcı sahipsiniz: kişileri içeri alabilir ve çıkarabilirsiniz.",
+      "newLink": "Yeni bağlantı",
+      "newLinkTitle": "\"{{title}}\" için yeni bağlantı oluşturulsun mu?",
+      "newLinkDescription": "Toplantının başlığı, zamanı ve bekleme odası aynı kalır; toplantıda olmasını istediğiniz kişilere göndermeniz için yeni bir bağlantı oluşturulur.",
+      "newLinkWarning": "Eski bağlantı herkes için çalışmaz olur ve şu anda toplantıda olan herkesin bağlantısı kesilir.",
+      "newLinkFailed": "Yeni bağlantı oluşturulamadı.",
+      "newLinkCopied": "Yeni bağlantı kopyalandı. Toplantıda olmasını istediğiniz kişilere gönderin.",
+      "newLinkMade": "Toplantının yeni bir bağlantısı var."
     },
     "shortcuts": {
       "title": "Klavye kısayolları",

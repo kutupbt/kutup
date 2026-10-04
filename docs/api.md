@@ -1771,25 +1771,37 @@ when the account has no such meeting.
 
 ### DELETE /api/chat/call-links/:roomId
 
-→ `204`: nobody can join through the link any more. `404` when the account
-has no such meeting.
+→ `204`: nobody can join through the link any more, and whoever is in the
+meeting is disconnected. `404` when the account has no such meeting.
 
 ### POST /api/chat/call-links/info
 
-**No authentication.** `{ "roomId", "accessToken" }` → `{ "info" }`: the
-meeting's sealed title and time, for whoever holds the link. `404` for an
+**No authentication.** `{ "roomId", "accessToken" }` →
+`{ "info", "waitingRoom", "locked" }`: the meeting's sealed title and time,
+whether joiners wait to be let in and whether a host locked it, for whoever
+holds the link. `404` for an
 unknown room and for a wrong access token alike, `429` over 60 a minute per
 address (`RATE_LIMIT_CALL_LINK_PER_MIN`, shared with the token route).
 
 ### POST /api/chat/call-links/token
 
-**No authentication.** `{ "roomId", "accessToken", "participantId", "label" }`
+**No authentication needed.**
+`{ "roomId", "accessToken", "participantId", "seat", "label", "hostToken"? }`
 → `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
-for the meeting's room, for whoever holds the link. `accessToken` is 32
-bytes of standard base64, `participantId` 32 lowercase hex characters, and
-`label` the joiner's sealed name (168 bytes of standard base64), which the
-token carries to the other participants as metadata. `404` and `429` as
-above.
+for the meeting's current sitting, for whoever holds the link. `accessToken`
+is 32 bytes of standard base64, `participantId` 32 lowercase hex characters,
+`seat` a 32-byte secret (standard base64) only the joining browser holds,
+and `label` the joiner's sealed name (168 bytes of standard base64), which
+the token carries to the other participants as metadata
+([`chat-calls.md`](chat-calls.md) "Seats"). A token for an identity is
+minted only to the holder of its seat: `409` when the identity is someone
+else's, `410` when a host removed it. `423` when a host locked the meeting.
+`404` and `429` as above.
+
+Sent with a signed-in account's `Authorization: Bearer` access token, the
+SFU token also carries that account's address as the participant's name,
+which the others see as vouched for by this server. Without it the joiner
+is a guest. The same holds for `…/knock`.
 
 ### PUT /api/chat/call-links/:roomId/waiting-room
 
@@ -1803,14 +1815,15 @@ such meeting. `POST /api/chat/call-links` takes the same two fields
 sealed info.
 
 With a waiting room, `POST /api/chat/call-links/token` answers `403` unless
-its optional `hostToken` is the owner's.
+its optional `hostToken` is the owner's, or the seat was already let in.
 
 ### POST /api/chat/call-links/knock
 
-**No authentication.** `{ "roomId", "accessToken", "participantId", "label" }`
-→ `201` with `{ "knockId", "ticket" }`: ask to be let in. `409` when the
-meeting has no waiting room, `429` when 50 people are already waiting or
-over 60 a minute per address.
+**No authentication needed.**
+`{ "roomId", "accessToken", "participantId", "seat", "label" }` → `201` with
+`{ "knockId", "ticket" }`: ask to be let in. `409` when the meeting has no
+waiting room, `423` when it is locked, `429` when 50 people are already
+waiting or over 60 a minute per address.
 
 ### POST /api/chat/call-links/knock/status
 
@@ -1827,8 +1840,9 @@ the two routes below are limited to 600 a minute per address
 `hostToken`, or a co-host, who sends `sfuToken`: the SFU token this server
 minted for them ([`chat-calls.md`](chat-calls.md) "Hosts").
 `{ "roomId", "accessToken", "hostToken" | "sfuToken" }` →
-`{ "knocks": [{ "knockId", "label", "createdAt" }] }`: who is waiting,
-oldest first, each with their sealed name. `404` for anyone who is not a
+`{ "knocks": [{ "knockId", "label", "account"?, "createdAt" }] }`: who is
+waiting, oldest first, each with their sealed name and, when they showed
+it, the account this server vouches for. `404` for anyone who is not a
 host, as for an unknown room.
 
 ### POST /api/chat/call-links/knocks/decide
@@ -1840,17 +1854,22 @@ host, as for an unknown room.
 ### POST /api/chat/call-links/roles
 
 **No authentication.** `{ "roomId", "accessToken", "hostToken"?, "sfuToken"? }`
-→ `{ "me"?, "roles": [{ "participantId", "role" }] }`: the meeting's hosts
-by SFU identity, `role` being `owner` or `coHost`, for anyone holding the
-link. `me` is the asker's own role when the token they sent carries one.
-The four routes here are limited like the knock routes.
+→ `{ "me"?, "roles": [{ "participantId", "role" }], "locked", "waitingRoom",
+"noHost" }`: the meeting's hosts by SFU identity, `role` being `owner` or
+`coHost`, and how the meeting is set, for anyone holding the link. `me` is
+the asker's own role when the token they sent carries one. `noHost` says no
+host is in the meeting now: if that lasts 20 seconds the longest-present
+participant becomes a co-host, so ask again then. Asking also has the
+server remove again anyone who was removed and is back in the room. The
+routes from here to `…/end` are limited like the knock routes.
 
 ### POST /api/chat/call-links/co-hosts
 
 **No authentication; the owner's host token.**
 `{ "roomId", "accessToken", "hostToken", "participantId", "enabled" }` →
 `204`: make that participant a co-host, or stop them being one. `409` when
-it is the owner's own identity; `404` for anyone but the owner.
+it is the owner's own identity; `404` for anyone but the owner, or when
+nobody in the meeting has that identity.
 
 ### POST /api/chat/call-links/participants/remove
 
@@ -1859,14 +1878,37 @@ it is the owner's own identity; `404` for anyone but the owner.
 `204`: disconnect that participant at the SFU and turn the meeting's
 waiting room on. `403` when a co-host names a host, or anyone names the
 owner; `404` for anyone who is not a host; `502` when the SFU's API
-(`CHAT_SFU_API_URL`) cannot be reached.
+(`CHAT_SFU_API_URL`) cannot be reached. The same answers apply to the two
+routes below.
+
+### POST /api/chat/call-links/participants/mute
+
+**No authentication; a host's proof.**
+`{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId"? }` →
+`204`: mute that participant's microphone, or, with nobody named, the
+microphone of everyone who is not a host. They can turn it back on.
+
+### POST /api/chat/call-links/participants/screen
+
+**No authentication; a host's proof.**
+`{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId",
+"allowed" }` → `204`: stop that participant sharing their screen (what they
+share ends, and they cannot start again), or allow it again.
+
+### POST /api/chat/call-links/lock
+
+**No authentication; a host's proof.**
+`{ "roomId", "accessToken", "hostToken" | "sfuToken", "locked" }` → `204`:
+lock the meeting (nobody new comes in; whoever is waiting is turned away) or
+unlock it.
 
 ### POST /api/chat/call-links/end
 
 **No authentication; the owner's host token.**
 `{ "roomId", "accessToken", "hostToken" }` → `204`: end the meeting for
-everyone in it. Whoever is waiting is turned away and the co-hosts are
-forgotten; the link keeps working. `404` for anyone but the owner, `502`
+everyone in it and begin a new sitting, which the SFU tokens of the ended
+one do not open. Every seat and role is forgotten and whoever is waiting is
+turned away; the link keeps working. `404` for anyone but the owner, `502`
 when the SFU's API cannot be reached.
 
 ### GET /api/chat/joined-meetings
