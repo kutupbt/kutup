@@ -9,6 +9,11 @@ kutup uses a **CryptPad-pinned bundle** of OnlyOffice — not the upstream `@onl
 
 ---
 
+> **Where it runs.** The editor's code runs in a frame on its own hostname,
+> `editor.<domain>` (`KUTUP_EDITOR_URL`), which holds no session and no keys
+> and which only Drive may embed. `office.<domain>` is a different thing: the
+> Office home, a signed-in app that lists documents and opens them in Drive.
+
 ## Why pin to CryptPad's bundle
 
 OnlyOffice upstream assumes a **server that reads document plaintext**:
@@ -63,7 +68,7 @@ frontend/public/onlyoffice/
 
 **Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. Kutup builds them itself from its forks of CryptPad's build repositories, [`kutupbt/onlyoffice-editor`](https://github.com/kutupbt/onlyoffice-editor) and [`kutupbt/onlyoffice-x2t-wasm`](https://github.com/kutupbt/onlyoffice-x2t-wasm) (branch `kutup`), and releases them as `kutup-<version>.<n>`: currently `kutup-v9.4.0.131.3` (editor, with the PDF editor) and `kutup-v9.4.0.131.1` (x2t), **ONLYOFFICE 9.4.0**, pulled from ONLYOFFICE (`git subtree pull`) with CryptPad's changes carried over and Kutup's own (each fork's `MODIFICATIONS.md`; docs/plans/onlyoffice-default-bundling.md). Kutup follows ONLYOFFICE: CryptPad's `v9.3.2+` editor builds are based on Euro-Office, a separate fork of OnlyOffice, and are not merged.
 
-**Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. The editor's own ONLYOFFICE logo is hidden (not required from 9.4; decided 2026-09-28). Keep both notices in place when changing the editor (`frontend/apps/office/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
+**Licence terms (from 9.4):** ONLYOFFICE's `LICENSE` files add terms under AGPLv3 Section 7: keep notices and attribution, mark modified versions (with dates, as based on ONLYOFFICE by Ascensio System SIA), show Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0 for non-code content. Kutup meets them with the forks' `MODIFICATIONS.md` (shipped in the asset package under `LICENSES/`) and the **About this editor** button in the office editor's header (`EditorNotice.tsx`), which names ONLYOFFICE and Ascensio System SIA as the original developer, says the version is modified, and links the licence, the additional terms and both forks' source. The editor's own ONLYOFFICE logo is hidden (not required from 9.4; decided 2026-09-28). Keep both notices in place when changing the editor (`frontend/apps/editor/public/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md`).
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
 
@@ -188,4 +193,4 @@ updates. Each fork's `KUTUP.md` says how to build and release.
 - [`docs/research/05-cryptpad-onlyoffice-integration.md`](research/05-cryptpad-onlyoffice-integration.md) — deep code-level analysis of CryptPad's integration (May 2026 snapshot).
 - [`docs/research/04-office-collab-engines.md`](research/04-office-collab-engines.md) — original engine-selection rationale.
 - [`frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx`](../frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx) — host-side React wrapper.
-- [`frontend/apps/office/public/onlyoffice/inner.html`](../frontend/apps/office/public/onlyoffice/inner.html) — postMessage bridge.
+- [`frontend/apps/editor/public/onlyoffice/inner.html`](../frontend/apps/editor/public/onlyoffice/inner.html) — postMessage bridge.

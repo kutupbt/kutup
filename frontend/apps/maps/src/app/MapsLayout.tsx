@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, HardDrive, Images, Map as MapIcon, MapPinPlus, MessagesSquare, UserRound } from 'lucide-react'
+import { ChevronDown, ChevronUp, FileType, HardDrive, Images, Map as MapIcon, MapPinPlus, MessagesSquare, UserRound } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -165,6 +165,7 @@ export function MapsLayout() {
               currentId="maps"
               apps={[
                 { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
+                { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
                 { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
                 { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },
                 { id: 'maps', name: t('apps.maps'), href: appUrl('maps'), icon: <MapIcon /> },

@@ -2,7 +2,7 @@ import { Lock } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { KindIcon } from '../../../explorer/KindIcon'
+import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { folderPath, openFile } from '../../../drive/paths'
 import type { KutupItem } from './useKutupItems'
 

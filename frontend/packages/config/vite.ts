@@ -9,7 +9,7 @@ import type { Plugin, UserConfig } from 'vite'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office'
 export type WasmModule = 'crypto' | 'chat'
 
 /**
@@ -56,7 +56,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'office', number> = { account: 5173, drive: 5174, chat: 5175, office: 5176, maps: 5177, photos: 5178 }
+export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own
@@ -97,7 +97,7 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
 }
 
 /**
- * The OnlyOffice sandbox (office.<domain>): static files only — the bridge
+ * The OnlyOffice sandbox (editor.<domain>): static files only — the bridge
  * page, x2t and the OnlyOffice client — with no API, no session and no
  * cookies, embedded by Drive and nothing else.
  *
@@ -106,7 +106,7 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
  * OnlyOffice needs eval and inline script, which is exactly why it gets an
  * origin that holds nothing worth stealing.
  */
-export function officeSandboxCsp(driveOrigin: string): string {
+export function editorSandboxCsp(driveOrigin: string): string {
   return [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
@@ -125,18 +125,18 @@ export function officeSandboxCsp(driveOrigin: string): string {
   ].join('; ')
 }
 
-export function kutupOffice(): UserConfig {
+export function kutupEditorSandbox(): UserConfig {
   const drive = process.env.KUTUP_DRIVE_URL ?? `http://drive.localhost:${DEV_PORTS.drive}`
   const headers = {
-    'Content-Security-Policy': officeSandboxCsp(new URL(drive).origin),
+    'Content-Security-Policy': editorSandboxCsp(new URL(drive).origin),
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
   }
   const server = {
-    host: 'office.localhost',
-    port: DEV_PORTS.office,
+    host: 'editor.localhost',
+    port: DEV_PORTS.editor,
     strictPort: true,
-    allowedHosts: ['office.localhost'],
+    allowedHosts: ['editor.localhost'],
     headers,
   }
   return {

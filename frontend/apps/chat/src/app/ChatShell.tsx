@@ -1,4 +1,4 @@
-import { HardDrive, Images, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound, Video } from 'lucide-react'
+import { FileType, HardDrive, Images, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound, Video } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
@@ -79,6 +79,7 @@ export function ChatShell() {
           currentId="chat"
           apps={[
             { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
+            { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
             { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },
             { id: 'maps', name: t('apps.maps'), href: appUrl('maps'), icon: <MapIcon /> },

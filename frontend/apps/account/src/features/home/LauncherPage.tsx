@@ -1,4 +1,4 @@
-import { HardDrive, Images, Map, MessagesSquare } from 'lucide-react'
+import { FileType, HardDrive, Images, Map, MessagesSquare } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { appUrl } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
@@ -6,6 +6,7 @@ import { PageBody, PageHeader } from '@kutup/ui/components/page'
 
 const APPS = [
   { id: 'drive', Icon: HardDrive },
+  { id: 'office', Icon: FileType },
   { id: 'chat', Icon: MessagesSquare },
   { id: 'photos', Icon: Images },
   { id: 'maps', Icon: Map },

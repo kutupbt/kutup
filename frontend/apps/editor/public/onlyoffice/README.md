@@ -31,7 +31,7 @@ Normal Docker builds consume the immutable package produced by the
 (TypeScript / React) lives in
 `frontend/apps/drive/src/features/editor/office/`; only the third-party
 static assets land here. They are served from the office sandbox origin
-(`office.<domain>`, `pnpm -C frontend dev:office` in development), which
+(`editor.<domain>`, `pnpm -C frontend dev:editor` in development), which
 holds no session or keys; Drive embeds `inner.html` from there.
 
 [kutupbt/onlyoffice-editor]: https://github.com/kutupbt/onlyoffice-editor

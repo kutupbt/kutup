@@ -1,10 +1,10 @@
 {
   "app": {
-    "title": "Kutup Fotoğraflar"
+    "title": "Kutup Galeri"
   },
   "boot": {
     "opening": "Fotoğraflarınız açılıyor…",
-    "failedTitle": "Fotoğraflar açılamadı",
+    "failedTitle": "Galeri açılamadı",
     "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
   },
   "notFound": {
@@ -29,7 +29,7 @@
     "failedTitle": "Kitaplığınız yüklenemedi",
     "failedDescription": "Kutup'a ulaşılamadı. Bağlantınızı kontrol edip sayfayı yenileyin.",
     "emptyTitle": "Henüz fotoğraf yok",
-    "emptyDescription": "Fotoğraf ve video yükleyin ya da buraya bırakın. Drive'da tuttuğunuz fotoğraflar, klasörlerini Ayarlar'dan eklediğinizde burada görünür.",
+    "emptyDescription": "Fotoğraf ve video yükleyin ya da buraya bırakın. Depo'da tuttuğunuz fotoğraflar, klasörlerini Ayarlar'dan eklediğinizde burada görünür.",
     "chooseFolders": "Klasör seçin",
     "select": "{{name}} öğesini seç",
     "selectDay": "{{day}} gününün tümünü seç",
@@ -57,8 +57,8 @@
     "tooLargeForBrowser": "Bu indirme bu tarayıcı için fazla büyük. Chrome ya da Edge kullanın veya bir seferde daha azını indirin.",
     "trashTitle_one": "{{count}} öğe çöpe taşınsın mı?",
     "trashTitle_other": "{{count}} öğe çöpe taşınsın mı?",
-    "trashDescription_one": "Bulunduğu Drive klasörünün çöpüne gider ve oradan geri yüklenebilir.",
-    "trashDescription_other": "Bulundukları Drive klasörlerinin çöpüne gider ve oradan geri yüklenebilir.",
+    "trashDescription_one": "Bulunduğu Depo klasörünün çöpüne gider ve oradan geri yüklenebilir.",
+    "trashDescription_other": "Bulundukları Depo klasörlerinin çöpüne gider ve oradan geri yüklenebilir.",
     "trashSome_one": "Seçili {{count}} öğe başkasına ait ve yerinde kalır.",
     "trashSome_other": "Seçili {{count}} öğe başkasına ait ve yerinde kalır.",
     "trashed_one": "{{count}} öğe çöpe taşındı",
@@ -117,7 +117,7 @@
     "pixels": "{{width}} × {{height}} ({{megapixels}} MP)",
     "length": "Süre",
     "file": "Dosya",
-    "folder": "Drive'daki klasörü",
+    "folder": "Depo'daki klasörü",
     "myFiles": "Dosyalarım",
     "mapsOff": "Haritalar kapalı. Yerleri haritada görmek için açın.",
     "edit": "Düzenle",
@@ -126,12 +126,12 @@
   },
   "settings": {
     "title": "Ayarlar",
-    "description": "Fotoğraflar Drive dosyalarıdır. Yüklemelerin nereye gideceğini ve kitaplığınızın hangi klasörleri göstereceğini seçin.",
+    "description": "Fotoğraflar Depo dosyalarıdır. Yüklemelerin nereye gideceğini ve kitaplığınızın hangi klasörleri göstereceğini seçin.",
     "loading": "Ayarlar yükleniyor…",
     "saved": "Kaydedildi",
     "saveFailed": "Kaydedilemedi. Yeniden deneyin.",
     "uploadTitle": "Yükleme klasörü",
-    "uploadDescription": "Yeni fotoğraf ve videolar buraya gider. Drive'daki kendi klasörlerinizden biridir.",
+    "uploadDescription": "Yeni fotoğraf ve videolar buraya gider. Depo'daki kendi klasörlerinizden biridir.",
     "uploadDefault": "Dosyalarım içinde {{folder}}",
     "uploadNotYet": "Siz seçene kadar, ilk yüklemenizde Dosyalarım içinde {{folder}} adlı bir klasör oluşturulur.",
     "libraryTitle": "Kitaplığınızdaki klasörler",
@@ -142,7 +142,7 @@
     "remove": "{{folder}} klasörünü çıkar",
     "sharedBy": "{{folder}}, paylaşan {{owner}}",
     "subfoldersTitle": "Alt klasörler de sayılır",
-    "subfolders": "Bir klasörün alt klasörleri de ona dahildir. Bir klasörü kitaplıktan çıkarmak fotoğraflarını Drive'da bırakır."
+    "subfolders": "Bir klasörün alt klasörleri de ona dahildir. Bir klasörü kitaplıktan çıkarmak fotoğraflarını Depo'da bırakır."
   },
   "favourites": {
     "title": "Favoriler",
@@ -152,12 +152,12 @@
   "archive": {
     "title": "Arşiv",
     "emptyTitle": "Arşivlenen bir şey yok",
-    "emptyDescription": "Arşivlenen fotoğraflar kitaplığınızda ve Drive'da kalır; zaman çizelgesinde ve Yerler'de görünmez."
+    "emptyDescription": "Arşivlenen fotoğraflar kitaplığınızda ve Depo'da kalır; zaman çizelgesinde ve Yerler'de görünmez."
   },
   "hidden": {
     "title": "Gizli",
     "emptyTitle": "Gizlenen bir şey yok",
-    "emptyDescription": "Gizlenen fotoğraflar yalnızca burada görünür: zaman çizelgesinde, Favoriler'de, Arşiv'de ya da Yerler'de görünmez. Drive'da kalırlar."
+    "emptyDescription": "Gizlenen fotoğraflar yalnızca burada görünür: zaman çizelgesinde, Favoriler'de, Arşiv'de ya da Yerler'de görünmez. Depo'da kalırlar."
   },
   "edit": {
     "title": "Ayrıntıları düzenle",
@@ -194,13 +194,13 @@
     "select": "{{name}} öğesini seç, {{when}} çöpe taşındı",
     "loading": "Çöp açılıyor…",
     "title": "Çöp",
-    "description": "Klasörlerinizin çöpüne taşınan fotoğraf ve videolar. Çöp Drive'ınkidir: geri yüklemek onları bulundukları yere koyar.",
+    "description": "Klasörlerinizin çöpüne taşınan fotoğraf ve videolar. Çöp Depo'nunkidir: geri yüklemek onları bulundukları yere koyar.",
     "failed": "Çöp yüklenemedi",
     "restore": "Geri yükle",
     "deleteForever": "Kalıcı olarak sil",
     "emptyTitle": "Çöpte fotoğraf yok",
-    "emptyDescription": "Çöpteki diğer dosyalar ve bütün klasörler Drive'dadır.",
-    "openDrive": "Drive'ın çöpünü aç",
+    "emptyDescription": "Çöpteki diğer dosyalar ve bütün klasörler Depo'dadır.",
+    "openDrive": "Depo'nun çöpünü aç",
     "deleteTitle_one": "{{count}} öğe kalıcı olarak silinsin mi?",
     "deleteTitle_other": "{{count}} öğe kalıcı olarak silinsin mi?",
     "deleteDescription_one": "Sürümleri ve küçük resimleriyle silinir ve kapladığı alanı boşaltır.",
@@ -217,7 +217,7 @@
   },
   "albums": {
     "title": "Albümler",
-    "description": "Albümler kitaplığınızın her yerinden fotoğrafları bir araya getirir. Fotoğraf Drive'da olduğu yerde kalır; albüme koymak hiçbir şeyi kopyalamaz.",
+    "description": "Albümler kitaplığınızın her yerinden fotoğrafları bir araya getirir. Fotoğraf Depo'da olduğu yerde kalır; albüme koymak hiçbir şeyi kopyalamaz.",
     "loading": "Albümleriniz açılıyor…",
     "new": "Yeni albüm",
     "name": "Albüm adı",
@@ -246,7 +246,7 @@
     "rename": "Albümü yeniden adlandır",
     "delete": "Albümü sil",
     "deleteTitle": "{{name}} silinsin mi?",
-    "deleteDescription": "Albüm gider. Fotoğrafları kitaplığınızda ve Drive'da kalır.",
+    "deleteDescription": "Albüm gider. Fotoğrafları kitaplığınızda ve Depo'da kalır.",
     "share": "Albümü paylaş",
     "leave": "Albümden ayrıl",
     "leaveTitle": "{{name}} albümünden ayrılınsın mı?",
@@ -259,7 +259,7 @@
       "description": "Başka bir Kutup sunucusundaki birinin size gönderdiği albüm davet bağlantısını yapıştırın. Fotoğraflarını görürsünüz; fotoğraflar onların sunucusunda kalır.",
       "link": "Davet bağlantısı",
       "invalid": "Bu bir Kutup davet bağlantısı değil.",
-      "notAlbum": "Bu davet bir klasör veya dosya için: Drive'da ekleyin.",
+      "notAlbum": "Bu davet bir klasör veya dosya için: Depo'da ekleyin.",
       "submit": "Albümü ekle",
       "added": "Albüm eklendi",
       "notFound": "Bu davet yok ya da kaldırılmış.",
@@ -304,7 +304,7 @@
     "otherServer": "Başka bir sunucuda · görüntüleyebilir",
     "notFound": "Bu adrese sahip bir hesap yok. Başka bir sunucudaki biri için kullanıcı@sunucu yazın.",
     "inviteLink": "{{account}} için davet bağlantısı",
-    "inviteHint": "Bunu gönderin: albümü Fotoğraflar'da bu bağlantıdan ekler. Yalnızca onların hesabı için çalışır.",
+    "inviteHint": "Bunu gönderin: albümü Galeri'de bu bağlantıdan ekler. Yalnızca onların hesabı için çalışır.",
     "copyInvite": "Davet bağlantısını kopyala"
   },
   "public": {

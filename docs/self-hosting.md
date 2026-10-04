@@ -253,17 +253,19 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
-| `frontend` | The web apps — account, Drive, Chat, Photos, Maps and the OnlyOffice sandbox — each on its own hostname (Nginx) |
+| `frontend` | The web apps — account, Drive, Chat, Photos, Maps and Office — and the OnlyOffice editor sandbox, each on its own hostname (Nginx) |
 | `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
 
 **The web apps and their hostnames.** Each app has its own origin:
 `account.`, `drive.`, `chat.`, `photos.`, `maps.` and `office.` under
 `KUTUP_BASE_DOMAIN` (or the explicit
-`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE}_URL`). The backend and the
+`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE}_URL`). A seventh name,
+`editor.` (`KUTUP_EDITOR_URL`), is not an app: it is the sandbox the
+OnlyOffice editor runs in, which holds no session and no keys. The backend and the
 `frontend` container read the same settings: the backend publishes the map to
 the apps, and the `frontend` container serves one app per hostname (any other
 hostname gets `404`) and sends the OnlyOffice sandbox's Content Security
-Policy, which only Drive may embed. Point all six names at the server, cover
+Policy, which only Drive may embed. Point all seven names at the server, cover
 them with the certificate, and keep the `Host` header when proxying; the
 bundled `nginx` does.
 
@@ -314,7 +316,7 @@ certificate for the app hostnames, renews it, and has Nginx pick each new
 one up without a restart. It needs:
 
 - `KUTUP_BASE_DOMAIN` in `.env` (the certificate covers `account`, `drive`,
-  `chat`, `photos`, `maps` and `office` under it; `KUTUP_ACME_DOMAINS`, a
+  `chat`, `photos`, `maps`, `office` and `editor` under it; `KUTUP_ACME_DOMAINS`, a
   comma-separated list, names other hostnames instead, and
   `KUTUP_ACME_EXTRA_DOMAINS` adds names beside them, such as the group-call
   SFU's `sfu.<domain>`);

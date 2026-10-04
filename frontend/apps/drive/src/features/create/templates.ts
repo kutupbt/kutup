@@ -1,62 +1,18 @@
+import { DOCUMENT_KINDS, newDocument, uniqueName, type DocumentKind } from '@kutup/drive-core/documents'
 import { encodeListJson, LIST_EXTENSION, LIST_MIME } from '@kutup/map/list'
 
 // What "New → …" creates. Each is an ordinary encrypted upload of a small
-// starting file; the editors take it from there.
+// starting file; the editors take it from there. The documents are the
+// Office home's too (@kutup/drive-core/documents); a map is Drive's and
+// Maps' alone.
 
-export const NEW_DOCUMENTS = ['note', 'document', 'spreadsheet', 'presentation', 'whiteboard', 'map'] as const
+export const NEW_DOCUMENTS = [...DOCUMENT_KINDS, 'map'] as const
 export type NewDocument = (typeof NEW_DOCUMENTS)[number]
 
-const EXTENSION: Record<NewDocument, string> = {
-  note: 'md',
-  document: 'docx',
-  spreadsheet: 'xlsx',
-  presentation: 'pptx',
-  whiteboard: 'excalidraw',
-  map: LIST_EXTENSION,
-}
-
-const MIME: Record<NewDocument, string> = {
-  note: 'text/markdown',
-  document: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  spreadsheet: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  presentation: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  whiteboard: 'application/vnd.excalidraw+json',
-  map: LIST_MIME,
-}
-
-/** `Untitled.docx`, then `Untitled (1).docx`, … — never an existing name (case-insensitive). */
-export function uniqueName(base: string, extension: string, taken: Iterable<string>): string {
-  const names = new Set([...taken].map((n) => n.toLocaleLowerCase()))
-  for (let n = 0; ; n++) {
-    const candidate = n === 0 ? `${base}.${extension}` : `${base} (${n}).${extension}`
-    if (!names.has(candidate.toLocaleLowerCase())) return candidate
-  }
-}
-
-/** The starting bytes. Office files start as a 1-byte placeholder: the editor opens an empty template and the first save writes real OOXML. */
-function initialBytes(type: NewDocument, name: string): Uint8Array {
-  switch (type) {
-    case 'note':
-      return new TextEncoder().encode(`# ${name.replace(/\.md$/i, '')}\n\n`)
-    case 'whiteboard':
-      return new TextEncoder().encode(
-        JSON.stringify({
-          type: 'excalidraw',
-          version: 2,
-          source: 'kutup',
-          elements: [],
-          appState: { gridSize: null, viewBackgroundColor: '#ffffff' },
-          files: {},
-        }),
-      )
-    case 'map':
-      return encodeListJson([])
-    default:
-      return new Uint8Array([0])
-  }
-}
+export { uniqueName }
 
 export function newDocumentFile(type: NewDocument, baseName: string, taken: Iterable<string>): File {
-  const name = uniqueName(baseName, EXTENSION[type], taken)
-  return new File([initialBytes(type, name).slice()], name, { type: MIME[type] })
+  if (type !== 'map') return newDocument(type satisfies DocumentKind, baseName, taken)
+  const name = uniqueName(baseName, LIST_EXTENSION, taken)
+  return new File([encodeListJson([]).slice()], name, { type: LIST_MIME })
 }

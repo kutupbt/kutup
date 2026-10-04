@@ -41,6 +41,7 @@ const WORKSPACES: Array<{ app: App; path: string; ready: (page: Page) => ReturnT
   { app: 'chat', path: '/settings/devices', ready: (page) => page.getByTestId('chat-device-status') },
   { app: 'photos', path: '/', ready: (page) => page.getByRole('main').getByRole('heading').first() },
   { app: 'maps', path: '/', ready: (page) => page.getByRole('heading', { name: 'Your maps', exact: true }) },
+  { app: 'office', path: '/', ready: (page) => page.getByRole('heading', { name: 'Start something new', exact: true }) },
 ]
 
 test.describe('Responsive and accessibility gate', () => {

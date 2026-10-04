@@ -1,0 +1,66 @@
+{
+  "app": {
+    "title": "Kutup Office"
+  },
+  "boot": {
+    "opening": "Opening your documents…",
+    "failedTitle": "Office could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The address may be mistyped, or the page may have moved."
+  },
+  "nav": {
+    "all": "All documents",
+    "notes": "Notes",
+    "documents": "Documents",
+    "spreadsheets": "Spreadsheets",
+    "presentations": "Presentations",
+    "whiteboards": "Whiteboards"
+  },
+  "home": {
+    "startNew": "Start something new",
+    "blank": {
+      "note": "Blank note",
+      "document": "Blank document",
+      "spreadsheet": "Blank spreadsheet",
+      "presentation": "Blank presentation",
+      "whiteboard": "Blank whiteboard"
+    },
+    "untitled": {
+      "note": "Untitled note",
+      "document": "Untitled document",
+      "spreadsheet": "Untitled spreadsheet",
+      "presentation": "Untitled presentation",
+      "whiteboard": "Untitled whiteboard"
+    },
+    "savedTo": "Saved to My files in Drive",
+    "creating": "Creating…",
+    "createFailed": "Could not create it. Try again.",
+    "recent": {
+      "all": "Recent documents",
+      "note": "Recent notes",
+      "document": "Recent documents",
+      "spreadsheet": "Recent spreadsheets",
+      "presentation": "Recent presentations",
+      "whiteboard": "Recent whiteboards"
+    },
+    "search": "Search by name",
+    "order": {
+      "recent": "Last changed",
+      "name": "Name"
+    },
+    "changed": "Changed {{when}}",
+    "changedBy": "Changed {{when}} · {{owner}}",
+    "unnamed": "A document that could not be read",
+    "loading": "Loading your documents…",
+    "loadFailedTitle": "Your documents could not be loaded",
+    "loadFailed": "Check your connection and reload the page.",
+    "emptyTitle": "Nothing here yet",
+    "empty": "Start something above, or upload files in Drive: every note, document, spreadsheet, presentation and whiteboard you can open shows up here.",
+    "noMatchTitle": "No match",
+    "noMatch": "Nothing with that in its name.",
+    "openDrive": "Open Drive"
+  }
+}

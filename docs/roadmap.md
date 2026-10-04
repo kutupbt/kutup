@@ -547,6 +547,14 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   direct chats only, no group calls), and direct chats get the self-healing
   first: pushed device-list changes, healing on send, undecryptable messages
   as placeholders that fill in, automatic session repair.
+- **Office home: what is left.** `office.<domain>` lists the notes, office
+  documents and whiteboards an account can open and starts new ones in My
+  files; they are Drive files and open in Drive's editors. Still open:
+  "recent" means last changed, since nothing records when a file was last
+  opened; there is no template gallery, only blank documents; a new
+  document always goes to My files; files in folders on other servers are
+  left out until the editors can open them; a document shows its preview
+  only after the editor has saved one.
 - **Direct chats: self-healing.** Worked through in the order of the
   research report "Self healing encrypted group chat" and an audit of the
   direct-chat code against it.
@@ -662,7 +670,7 @@ shared files in Drive search.
 On roughly one warm reload in four, ONLYOFFICE's own editor frame loads its
 scripts but never reports `onAppReady`, so `api.js` never sends it its
 configuration and the loading skeleton stays. The bridge
-(`frontend/apps/office/public/onlyoffice/inner.html`) recovers by mounting the
+(`frontend/apps/editor/public/onlyoffice/inner.html`) recovers by mounting the
 editor again after 7 seconds, at most twice, so the document opens, but
 late. The cause is inside the vendored editor build
 (`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office

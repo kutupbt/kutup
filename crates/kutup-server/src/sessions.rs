@@ -3,7 +3,7 @@
 //! Design: `docs/plans/multi-app-web-rewrite.md` ("Sessions and forking").
 //!
 //! - Every sign-in creates an `auth_sessions` row with a client type
-//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `cli`, …). Access tokens carry the
+//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `cli`, …). Access tokens carry the
 //!   session id (`sid`) and every authenticated request checks the row is
 //!   live, so revocation is immediate.
 //! - Refresh tokens are opaque 32-byte secrets, stored as SHA-256 and rotated
@@ -41,6 +41,7 @@ pub enum ClientType {
     WebChat,
     WebMaps,
     WebPhotos,
+    WebOffice,
     Cli,
 }
 
@@ -52,6 +53,7 @@ impl ClientType {
             Self::WebChat => "web-chat",
             Self::WebMaps => "web-maps",
             Self::WebPhotos => "web-photos",
+            Self::WebOffice => "web-office",
             Self::Cli => "cli",
         }
     }
@@ -63,6 +65,7 @@ impl ClientType {
             "web-chat" => Some(Self::WebChat),
             "web-maps" => Some(Self::WebMaps),
             "web-photos" => Some(Self::WebPhotos),
+            "web-office" => Some(Self::WebOffice),
             "cli" => Some(Self::Cli),
             _ => None,
         }
@@ -83,7 +86,7 @@ impl ClientType {
     pub fn is_fork_child(self) -> bool {
         matches!(
             self,
-            Self::WebDrive | Self::WebChat | Self::WebMaps | Self::WebPhotos
+            Self::WebDrive | Self::WebChat | Self::WebMaps | Self::WebPhotos | Self::WebOffice
         )
     }
 }
