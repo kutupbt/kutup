@@ -67,6 +67,7 @@ fn deliver(env: &OutgoingEnvelope, sender: &str, id: &str, cursor: u64) -> Deliv
         suite: env.suite,
         content: env.content.clone(),
         server_timestamp: "2026-07-14T10:00:00Z".into(),
+        send_id: None,
     }
 }
 
@@ -306,6 +307,7 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
         suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
         content: "not-base64".into(),
         server_timestamp: "2026-07-14T10:00:00Z".into(),
+        send_id: None,
     }]);
 
     let mut engine = Engine::new(bob, server.clone());

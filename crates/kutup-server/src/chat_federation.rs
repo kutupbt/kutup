@@ -1779,8 +1779,8 @@ pub async fn deliver_messages(
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
                 (recipient_user_id, recipient_device_id, sender, sender_device_id,
-                 envelope_type, suite, content)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)
+                 envelope_type, suite, content, send_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -1792,6 +1792,7 @@ pub async fn deliver_messages(
         ))
         .bind(envelope.suite.as_u16() as i16)
         .bind(&envelope.content)
+        .bind(&transaction.message.send_id)
         .fetch_one(&mut *tx)
         .await?;
         stored.push((
@@ -1807,6 +1808,7 @@ pub async fn deliver_messages(
                 suite: envelope.suite,
                 content: envelope.content.clone(),
                 server_timestamp: server_ts.format(&Rfc3339).unwrap_or_default(),
+                send_id: Some(transaction.message.send_id.clone()),
             },
         ));
     }

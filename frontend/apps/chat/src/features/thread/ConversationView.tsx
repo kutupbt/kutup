@@ -459,9 +459,9 @@ export function ConversationView({
           }
           if (row.kind === 'notice' && row.view.undecryptable) {
             return (
-              <div key={row.key} className="mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-undecryptable-notice">
+              <div key={row.key} className="mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-undecryptable-notice" data-state={row.view.undecryptable}>
                 <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-                <span>{t('chat.undecryptable.notice', { name: nameOf(row.view) })}</span>
+                <span>{t(row.view.undecryptable === 'waiting' ? 'chat.undecryptable.waiting' : 'chat.undecryptable.notice', { name: nameOf(row.view) })}</span>
               </div>
             )
           }

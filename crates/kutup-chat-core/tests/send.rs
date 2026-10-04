@@ -77,6 +77,7 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
         suite: env.suite,
         content: env.content.clone(),
         server_timestamp: "2026-07-14T10:00:00Z".into(),
+        send_id: None,
     }
 }
 
@@ -368,6 +369,7 @@ impl ChatTransport for MockServer {
                     suite: envelope.suite,
                     content: envelope.content.clone(),
                     server_timestamp: "2026-07-16T10:00:00Z".into(),
+                    send_id: None,
                 });
             }
         }
@@ -528,6 +530,55 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     assert_eq!(pin.highest_sequence, 1);
     assert_eq!(pin.authority_key_id, manifest.authority_key_id);
     assert_eq!(pin.account, "bob@example.test");
+}
+
+#[test]
+fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 2, &mut rng);
+    let bundle = bundle_of(&bob, 2);
+    let server = Rc::new(MockServer::default());
+    // One fetch is scripted; a second gets no devices and the send fails.
+    server.script(vec![vec![bundle.clone()], vec![]]);
+    server.script_manifests(vec![Some(signed_manifest("bob@example.test", &bundle))]);
+    server.set_active(vec![(2, reg_id(&bob))]);
+    let alice_session = device("alice", 1, &mut rng);
+    let alice_reg = reg_id(&alice_session);
+    let alice_bundle = bundle_of(&alice_session, 1);
+    server.script_sync(vec![vec![alice_bundle.clone()]]);
+    server.script_sync_manifests(vec![Some(signed_manifest(
+        "alice@example.test",
+        &alice_bundle,
+    ))]);
+    server.set_sync_active(vec![(1, alice_reg)]);
+    let mut alice = Engine::new(alice_session, server.clone());
+    let alice_addr = ChatAddress::local("alice", 1);
+
+    block_on(alice.send("v1", "bob", &ChatContent::text("t", 1, "one"), &mut rng)).unwrap();
+    decrypt_for(&mut bob, &alice_addr, &server.last_delivered(), 2, &mut rng);
+
+    // Bob writes from the device list Alice already holds: nothing changes.
+    let mut same = ChatContent::text("t", 1, "same list");
+    same.set_device_list_version(1);
+    let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &same, &mut rng)).unwrap();
+    deposit(&server, &envelope, "bob", 2, 1);
+    assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
+    assert!(
+        block_on(alice.send("v2", "bob", &ChatContent::text("t", 2, "two"), &mut rng))
+            .unwrap()
+            .delivered
+    );
+
+    // Bob writes from a newer one: Alice stops trusting the list she holds.
+    let mut newer = ChatContent::text("t", 2, "new list");
+    newer.set_device_list_version(2);
+    let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &newer, &mut rng)).unwrap();
+    deposit(&server, &envelope, "bob", 2, 2);
+    assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
+    assert!(
+        block_on(alice.send("v3", "bob", &ChatContent::text("t", 3, "three"), &mut rng)).is_err(),
+        "the send fetched the list again, and the mock had none to give"
+    );
 }
 
 #[test]
@@ -819,6 +870,7 @@ fn deposit(
         suite: env.suite,
         content: env.content.clone(),
         server_timestamp: "2026-10-04T10:00:00Z".into(),
+        send_id: None,
     });
     id
 }
@@ -959,6 +1011,155 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
         report.messages[0].content.as_text().unwrap().text,
         "still fine"
     );
+}
+
+/// Carry the last thing `from` delivered into `to`'s mailbox, with the send
+/// id the server passes along, optionally damaged on the way.
+fn relay(
+    from: &MockServer,
+    to: &MockServer,
+    sender: &str,
+    sender_device_id: u32,
+    cursor: u64,
+    damage: bool,
+) -> String {
+    let (send_id, envelopes) = from.delivered.borrow().last().unwrap().clone();
+    let env = if damage {
+        corrupted(&envelopes[0])
+    } else {
+        envelopes[0].clone()
+    };
+    let id = deposit(to, &env, sender, sender_device_id, cursor);
+    to.sync_mailbox.borrow_mut().last_mut().unwrap().send_id = Some(send_id);
+    id
+}
+
+fn undecryptable_records(engine: &Engine) -> Vec<Option<String>> {
+    block_on(engine.session().history())
+        .unwrap()
+        .iter()
+        .filter_map(|message| {
+            serde_json::from_slice::<ChatContent>(&message.content)
+                .ok()?
+                .as_undecryptable()
+                .map(|body| body.send_id)
+        })
+        .collect()
+}
+
+#[test]
+fn an_unreadable_message_is_asked_for_again_and_fills_in() {
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    bob_server.script(vec![vec![bundle_of(&alice_session, 1)]]);
+    bob_server.set_active(vec![(1, reg_id(&alice_session))]);
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    block_on(alice.send("f1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
+    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.send("f2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
+
+    // Alice's message reaches Bob unreadable. A record waits in its place
+    // and Bob asks for exactly that message.
+    let lost = "11111111-1111-4111-8111-111111111111";
+    let content = ChatContent::text_with_id(lost, "2026-10-04T09:00:00.000Z", 2, "lost");
+    block_on(alice.send(lost, "bob", &content, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.repaired.len(), 1);
+    assert_eq!(undecryptable_records(&bob), vec![Some(lost.to_string())]);
+
+    // Alice answers from her sent history, without anyone doing anything.
+    let alice_sent = alice_server.delivered.borrow().len();
+    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    let report = block_on(alice.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    assert_eq!(alice_server.delivered.borrow().len(), alice_sent + 1);
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+    let alice_history = block_on(alice.session().sent_history()).unwrap().len();
+
+    // The message arrives as itself, where it belongs, and the record goes.
+    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.messages.len(), 1);
+    assert_eq!(report.messages[0].content.as_text().unwrap().text, "lost");
+    assert_eq!(report.messages[0].content.message_id.as_deref(), Some(lost));
+    assert_eq!(
+        report.messages[0].content.sent_at,
+        "2026-10-04T09:00:00.000Z"
+    );
+    assert!(undecryptable_records(&bob).is_empty());
+    assert_eq!(block_on(bob.session().history()).unwrap().len(), 2);
+
+    // Asked a second time within the hour, Alice does not send it again.
+    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    alice_server
+        .sync_mailbox
+        .borrow_mut()
+        .last_mut()
+        .unwrap()
+        .cursor = 3;
+    let before = alice_server.delivered.borrow().len();
+    let _ = block_on(alice.receive(&mut rng));
+    assert_eq!(alice_server.delivered.borrow().len(), before);
+    assert_eq!(
+        block_on(alice.session().sent_history()).unwrap().len(),
+        alice_history
+    );
+}
+
+#[test]
+fn a_record_stops_waiting_for_something_that_was_never_a_message() {
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    bob_server.script(vec![vec![bundle_of(&alice_session, 1)]]);
+    bob_server.set_active(vec![(1, reg_id(&alice_session))]);
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    block_on(bob.receive(&mut rng)).unwrap();
+    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    block_on(alice.receive(&mut rng)).unwrap();
+
+    // A typing indicator arrives unreadable. Bob cannot tell it from a
+    // message, so a record waits; Alice has nothing to send again and says
+    // so, and the record goes.
+    let typing_id = "22222222-2222-4222-8222-222222222222";
+    let typing = ChatContent::typing_with_id(typing_id, "2026-10-04T09:00:00Z", 2, true);
+    block_on(alice.send(typing_id, "bob", &typing, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        undecryptable_records(&bob),
+        vec![Some(typing_id.to_string())]
+    );
+
+    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    block_on(alice.receive(&mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    assert!(undecryptable_records(&bob).is_empty());
+    assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
 }
 
 #[test]

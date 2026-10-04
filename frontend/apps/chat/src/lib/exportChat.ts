@@ -32,7 +32,7 @@ export function chatTranscript(
       continue
     }
     if (view.undecryptable) {
-      lines.push(`${at} ${t('chat.undecryptable.notice', { name: nameOf(view.author) })}`)
+      lines.push(`${at} ${t(view.undecryptable === 'waiting' ? 'chat.undecryptable.waiting' : 'chat.undecryptable.notice', { name: nameOf(view.author) })}`)
       continue
     }
     if (view.groupCall) {

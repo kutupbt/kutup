@@ -313,8 +313,12 @@ export interface MessageView {
   groupUpdate: ChatGroupUpdate | null
   /** A call in the timeline. */
   callLog: ChatCallLog | null
-  /** A notice where a message could not be read. */
-  undecryptable: boolean
+  /**
+   * A notice where a message could not be read: `waiting` once its sender
+   * has been asked for it again (it is replaced when the message arrives),
+   * `lost` when it could not be named to ask for.
+   */
+  undecryptable: 'waiting' | 'lost' | null
   /** A group call someone started. */
   groupCall: ChatGroupCall | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
@@ -325,6 +329,12 @@ export interface MessageView {
   pollEnded: { question: string } | null
   /** A live location this message started. */
   liveLocation: LiveShareState | null
+}
+
+export function undecryptableState(entry: ChatHistoryEntry): 'waiting' | 'lost' | null {
+  if (!entry.content.undecryptable) return null
+  const body = entry.content.body as { sendId?: unknown } | null
+  return typeof body?.sendId === 'string' ? 'waiting' : 'lost'
 }
 
 export interface PollState {
@@ -462,7 +472,7 @@ export function threadView(
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       callLog: entry.content.callLog ?? null,
-      undecryptable: entry.content.undecryptable === true,
+      undecryptable: undecryptableState(entry),
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
@@ -497,7 +507,7 @@ export function threadView(
       timerChange: null,
       groupUpdate: null,
       callLog: null,
-      undecryptable: false,
+      undecryptable: null,
       groupCall: null,
       viewedOnce: { video: body.video },
       poll: null,

@@ -554,6 +554,8 @@
       "empty": "Henüz saklanan sohbet eki yok."
     },
     "undecryptable": {
+      "waiting": "{{name}} tarafından gönderilen bir mesaj bekleniyor. Bu tarayıcıda okunamadığı için yeniden istendi; geldiğinde burada görünecek.",
+      "waitingPreview": "Bir mesaj bekleniyor",
       "notice": "{{name}} tarafından gönderilen bir mesaj bu tarayıcıda okunamadı. Güvenli bağlantı kendiliğinden yenilendi; yeni mesajlar her zamanki gibi gelecek. Mesajı yeniden göndermesini iste.",
       "preview": "Bir mesaj okunamadı"
     },

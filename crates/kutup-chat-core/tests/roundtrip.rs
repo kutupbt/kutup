@@ -50,6 +50,7 @@ fn wrap(env: kutup_chat_proto::OutgoingEnvelope, sender: &str, cursor: u64) -> D
         suite: env.suite,
         content: env.content,
         server_timestamp: "2026-07-13T10:00:00Z".into(),
+        send_id: None,
     }
 }
 
