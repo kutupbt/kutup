@@ -18,6 +18,7 @@
     "dev:drive": "pnpm -C apps/drive dev",
     "dev:chat": "pnpm -C apps/chat dev",
     "dev:maps": "pnpm -C apps/maps dev",
+    "dev:editor": "pnpm -C apps/editor dev",
     "dev:office": "pnpm -C apps/office dev"
   },
   "devDependencies": {

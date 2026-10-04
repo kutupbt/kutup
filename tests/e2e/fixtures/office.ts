@@ -2,7 +2,7 @@ import { expect, type Browser, type BrowserContext, type Frame, type Page } from
 import { newAccount, openDrive, registerAccount } from './apps'
 
 /**
- * ONLYOFFICE runs client-side in the office app's sandboxed origin, framed by
+ * ONLYOFFICE runs client-side in the editor sandbox's own origin, framed by
  * Drive's editor page (docs/onlyoffice.md). Its bridge (inner.html) logs
  * `[kutup-bridge]` lines the specs read: outbound changes, applied remote
  * changes, cursor frames, and document readiness.

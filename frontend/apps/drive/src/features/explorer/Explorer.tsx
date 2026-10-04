@@ -12,7 +12,7 @@ import {
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { draggedItems, endItemDrag, startItemDrag } from './dragItems'
-import { KindIcon } from './KindIcon'
+import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import type { ViewMode } from './prefs'
 import { itemKey, type ExplorerItem, type SortField, type SortSpec } from './sort'
 import { useMarquee } from './useMarquee'

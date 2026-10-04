@@ -2,4 +2,4 @@
 
 Files in this directory are licensed **AGPL-3.0-or-later** (the OnlyOffice subtree's upstream license). They integrate Kutup with the verified client assets copied from the digest-pinned `kutupbt/kutup-office-assets` image during normal Docker builds. `./install-onlyoffice.sh` provides the same pinned runtime for non-Docker frontend development.
 
-The full explanation lives at [`frontend/apps/office/public/onlyoffice/LICENSE.md`](../../../../../office/public/onlyoffice/LICENSE.md). Kutup itself is **AGPL-3.0-only** — see the top-level [LICENSE](../../../../../../../LICENSE).
+The full explanation lives at [`frontend/apps/editor/public/onlyoffice/LICENSE.md`](../../../../../editor/public/onlyoffice/LICENSE.md). Kutup itself is **AGPL-3.0-only** — see the top-level [LICENSE](../../../../../../../LICENSE).

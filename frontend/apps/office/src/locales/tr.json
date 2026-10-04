@@ -1,0 +1,66 @@
+{
+  "app": {
+    "title": "Kutup Ofis"
+  },
+  "boot": {
+    "opening": "Belgeleriniz açılıyor…",
+    "failedTitle": "Ofis açılamadı",
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "nav": {
+    "all": "Tüm belgeler",
+    "notes": "Notlar",
+    "documents": "Belgeler",
+    "spreadsheets": "Tablolar",
+    "presentations": "Sunular",
+    "whiteboards": "Beyaz tahtalar"
+  },
+  "home": {
+    "startNew": "Yeni bir şey başlat",
+    "blank": {
+      "note": "Boş not",
+      "document": "Boş belge",
+      "spreadsheet": "Boş tablo",
+      "presentation": "Boş sunu",
+      "whiteboard": "Boş beyaz tahta"
+    },
+    "untitled": {
+      "note": "Adsız not",
+      "document": "Adsız belge",
+      "spreadsheet": "Adsız tablo",
+      "presentation": "Adsız sunu",
+      "whiteboard": "Adsız beyaz tahta"
+    },
+    "savedTo": "Depo'da Dosyalarım'a kaydedilir",
+    "creating": "Oluşturuluyor…",
+    "createFailed": "Oluşturulamadı. Yeniden deneyin.",
+    "recent": {
+      "all": "Son belgeler",
+      "note": "Son notlar",
+      "document": "Son belgeler",
+      "spreadsheet": "Son tablolar",
+      "presentation": "Son sunular",
+      "whiteboard": "Son beyaz tahtalar"
+    },
+    "search": "Ada göre ara",
+    "order": {
+      "recent": "Son değişiklik",
+      "name": "Ad"
+    },
+    "changed": "{{when}} tarihinde değişti",
+    "changedBy": "{{when}} tarihinde değişti · {{owner}}",
+    "unnamed": "Okunamayan bir belge",
+    "loading": "Belgeleriniz yükleniyor…",
+    "loadFailedTitle": "Belgeleriniz yüklenemedi",
+    "loadFailed": "Bağlantınızı kontrol edip sayfayı yeniden yükleyin.",
+    "emptyTitle": "Henüz bir şey yok",
+    "empty": "Yukarıdan bir şey başlatın ya da Depo'ya dosya yükleyin: açabildiğiniz her not, belge, tablo, sunu ve beyaz tahta burada görünür.",
+    "noMatchTitle": "Eşleşme yok",
+    "noMatch": "Adında bu geçen bir şey yok.",
+    "openDrive": "Depo'yu aç"
+  }
+}

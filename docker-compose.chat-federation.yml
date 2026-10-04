@@ -111,6 +111,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_EDITOR_URL: http://editor.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAPS_URL: http://maps.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PHOTOS_URL: http://photos.a.test:${KUTUP_FED_A_PORT:-39081}
       # Group calls hosted on A (no SFU runs: the live test checks tokens).
@@ -159,6 +160,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_EDITOR_URL: http://editor.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAPS_URL: http://maps.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PHOTOS_URL: http://photos.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
@@ -197,6 +199,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_CHAT_URL: http://chat.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_OFFICE_URL: http://office.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_EDITOR_URL: http://editor.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAPS_URL: http://maps.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PHOTOS_URL: http://photos.a.test:${KUTUP_FED_A_PORT:-39081}
 
@@ -210,6 +213,7 @@ services:
       KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_CHAT_URL: http://chat.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_OFFICE_URL: http://office.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_EDITOR_URL: http://editor.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAPS_URL: http://maps.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PHOTOS_URL: http://photos.b.test:${KUTUP_FED_B_PORT:-39082}
 

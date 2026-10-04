@@ -19,8 +19,8 @@ const CONVERTER_SOURCE = 'https://github.com/kutupbt/onlyoffice-x2t-wasm'
  */
 export function EditorNotice() {
   const { t } = useTranslation()
-  const licence = appUrl('office', '/onlyoffice/LICENSE.md')
-  const terms = appUrl('office', '/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md')
+  const licence = appUrl('editor', '/onlyoffice/LICENSE.md')
+  const terms = appUrl('editor', '/onlyoffice/ONLYOFFICE-ADDITIONAL-TERMS.md')
   const link = 'font-medium text-primary underline underline-offset-2 hover:no-underline'
   return (
     <Dialog>

@@ -1,4 +1,5 @@
-# The Kutup web apps: account, drive, chat and the OnlyOffice sandbox, each
+# The Kutup web apps (account, drive, chat, maps, photos, office) and the
+# OnlyOffice editor sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
 ARG KUTUP_OFFICE_ASSETS_IMAGE=ghcr.io/kutupbt/kutup-office-assets@sha256:724ae7164bdfa79018a70b59fa7e84b96e300b05995183584bb5055fa7f8282a
@@ -36,8 +37,8 @@ COPY frontend .
 RUN --mount=type=cache,id=kutup-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 COPY --from=browser-wasm /src/frontend/wasm ./wasm
-COPY --from=office-assets /opt/kutup/onlyoffice/ ./apps/office/public/onlyoffice/
-RUN o=apps/office/public/onlyoffice \
+COPY --from=office-assets /opt/kutup/onlyoffice/ ./apps/editor/public/onlyoffice/
+RUN o=apps/editor/public/onlyoffice \
     && test -s $o/dist/v9/web-apps/apps/api/documents/api.js \
     && test -s $o/dist/v9/web-apps/apps/common/main/resources/img/header/header-logo_s.svg \
     && test -s $o/dist/x2t/x2t.wasm \
@@ -48,7 +49,7 @@ RUN o=apps/office/public/onlyoffice \
     && grep -Fx '2025.6.0' $o/templates/.version
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat maps photos office; do cp -r apps/$app/dist /out/$app; done
+    && for app in account drive chat maps photos office editor; do cp -r apps/$app/dist /out/$app; done
 
 FROM nginx:1.29-alpine
 COPY --from=builder /out /usr/share/nginx/html

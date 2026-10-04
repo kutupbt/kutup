@@ -3,7 +3,7 @@
 # Development installer for the OnlyOffice client JS + x2t WASM converter.
 # Normal Docker builds consume the verified kutup-office-assets OCI image.
 # This fallback downloads the same pinned third-party assets and applicable
-# license texts into frontend/apps/office/public/onlyoffice/ (gitignored).
+# license texts into frontend/apps/editor/public/onlyoffice/ (gitignored).
 #
 # Bundle sources: Kutup's forks of CryptPad's OnlyOffice builds
 # (kutupbt/onlyoffice-editor, kutupbt/onlyoffice-x2t-wasm), whose releases
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-ASSET_ROOT=${KUTUP_ONLYOFFICE_ROOT:-"$SCRIPT_DIR/frontend/apps/office/public/onlyoffice"}
+ASSET_ROOT=${KUTUP_ONLYOFFICE_ROOT:-"$SCRIPT_DIR/frontend/apps/editor/public/onlyoffice"}
 DEST="$ASSET_ROOT/dist"
 LICENSE_DEST="$ASSET_ROOT/LICENSES"
 
@@ -129,7 +129,7 @@ agree_to_agpl() {
 This installer downloads the pinned ONLYOFFICE client assets (modified
 versions of ONLYOFFICE by Ascensio System SIA, changed by CryptPad and Kutup)
 into
-  frontend/apps/office/public/onlyoffice/
+  frontend/apps/editor/public/onlyoffice/
 which is gitignored. They are licensed under the GNU AGPL v3 with ONLYOFFICE's
 additional terms (keep notices, mark modifications with dates, show
 Appropriate Legal Notices in the interface, no trademark rights, CC BY-SA 4.0

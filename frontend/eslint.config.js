@@ -47,7 +47,7 @@ const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive
 const LOGIC_CODE = ['packages/{crypto,session,files,collab,chat-core}/src/**/*.ts']
 
 export default tseslint.config(
-  { ignores: ['**/dist', '**/node_modules', 'wasm', 'apps/office/public'] },
+  { ignores: ['**/dist', '**/node_modules', 'wasm', 'apps/editor/public'] },
   {
     files: UI_CODE,
     extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],

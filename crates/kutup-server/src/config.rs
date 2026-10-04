@@ -117,8 +117,11 @@ pub struct AppOrigins {
     pub account: String,
     pub drive: String,
     pub chat: String,
-    /// The keyless OnlyOffice sandbox; embedded by drive, holds no session.
+    /// The Office home: a person's documents, spreadsheets and presentations,
+    /// which are Drive files.
     pub office: String,
+    /// The keyless OnlyOffice sandbox; embedded by drive, holds no session.
+    pub editor: String,
     /// The Maps app (docs/plans/maps.md).
     pub maps: String,
     /// The Photos app (docs/plans/photos.md).
@@ -135,6 +138,7 @@ impl AppOrigins {
             ClientType::WebChat => Some(&self.chat),
             ClientType::WebMaps => Some(&self.maps),
             ClientType::WebPhotos => Some(&self.photos),
+            ClientType::WebOffice => Some(&self.office),
             ClientType::Cli => None,
         }
     }
@@ -152,7 +156,7 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
     Ok(origin.ascii_serialization())
 }
 
-/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS,PHOTOS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
 /// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
 /// (`http://<app>.localhost:<port>`) and production refuses to start.
 pub fn resolve_app_origins(
@@ -176,7 +180,8 @@ pub fn resolve_app_origins(
         account: pick("account", "KUTUP_ACCOUNT_URL", 5173)?,
         drive: pick("drive", "KUTUP_DRIVE_URL", 5174)?,
         chat: pick("chat", "KUTUP_CHAT_URL", 5175)?,
-        office: pick("office", "KUTUP_OFFICE_URL", 5176)?,
+        office: pick("office", "KUTUP_OFFICE_URL", 5179)?,
+        editor: pick("editor", "KUTUP_EDITOR_URL", 5176)?,
         maps: pick("maps", "KUTUP_MAPS_URL", 5177)?,
         photos: pick("photos", "KUTUP_PHOTOS_URL", 5178)?,
     };
@@ -185,6 +190,7 @@ pub fn resolve_app_origins(
         &origins.drive,
         &origins.chat,
         &origins.office,
+        &origins.editor,
         &origins.maps,
         &origins.photos,
     ];
@@ -376,6 +382,7 @@ mod tests {
         assert_eq!(o.drive, "https://drive.example.org");
         assert_eq!(o.chat, "https://chat.example.org");
         assert_eq!(o.office, "https://office.example.org");
+        assert_eq!(o.editor, "https://editor.example.org");
         assert_eq!(o.maps, "https://maps.example.org");
         assert_eq!(o.photos, "https://photos.example.org");
     }
@@ -400,7 +407,8 @@ mod tests {
         assert_eq!(o.account, "http://account.localhost:5173");
         assert_eq!(o.drive, "http://drive.localhost:5174");
         assert_eq!(o.chat, "http://chat.localhost:5175");
-        assert_eq!(o.office, "http://office.localhost:5176");
+        assert_eq!(o.office, "http://office.localhost:5179");
+        assert_eq!(o.editor, "http://editor.localhost:5176");
         assert_eq!(o.maps, "http://maps.localhost:5177");
         assert_eq!(o.photos, "http://photos.localhost:5178");
     }

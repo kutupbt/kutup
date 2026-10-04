@@ -8,12 +8,12 @@ target/
 # Keep its sources in context while excluding generated and heavy assets.
 frontend/wasm/
 frontend/**/dist/
-frontend/apps/office/public/onlyoffice/dist/
-frontend/apps/office/public/onlyoffice/templates/
-frontend/apps/office/public/onlyoffice/LICENSES/
-frontend/apps/office/public/onlyoffice/FILES.sha512
-frontend/apps/office/public/onlyoffice/SBOM.spdx.json
-frontend/apps/office/public/onlyoffice/SOURCE.json
+frontend/apps/editor/public/onlyoffice/dist/
+frontend/apps/editor/public/onlyoffice/templates/
+frontend/apps/editor/public/onlyoffice/LICENSES/
+frontend/apps/editor/public/onlyoffice/FILES.sha512
+frontend/apps/editor/public/onlyoffice/SBOM.spdx.json
+frontend/apps/editor/public/onlyoffice/SOURCE.json
 frontend/tsconfig.tsbuildinfo
 backend/
 cmd/

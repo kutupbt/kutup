@@ -60,7 +60,10 @@ capability advertisement, and where each web app lives (`apps`, from
     "account": "https://account.example.org",
     "drive": "https://drive.example.org",
     "chat": "https://chat.example.org",
-    "office": "https://office.example.org"
+    "maps": "https://maps.example.org",
+    "photos": "https://photos.example.org",
+    "office": "https://office.example.org",
+    "editor": "https://editor.example.org"
   }
 }
 ```
