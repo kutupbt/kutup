@@ -581,7 +581,11 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     Mail, Calendar and Contacts are planned as later pieces of Kutup;
     recurring meetings, invitations by email and reminders belong to that
     work and are deliberately not built into Chat.
-  - The list of meetings a person joined is kept in the browser only.
+  - The list of meetings an account joined belongs to the account: sealed
+    under its key and stored on its server, so every device shows it. (It
+    began as a per-browser list, which was poor to use.) It is its own
+    small store rather than hidden Note to Self records, because the
+    meeting page that records a stay has no Chat session to send from.
   - The waiting room is optional and off by default, because it needs its
     host present: the owner admits people from inside the meeting, in a
     browser where they are signed in to Chat.
@@ -603,9 +607,6 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   they typed, including people with accounts. A signed-in person could
   instead join with a name the others can verify against their contact, and
   a link from another server could open inside their own Chat.
-- **Meetings: history across devices.** The joined-meetings list is per
-  browser. For an account it could travel between its devices the way list
-  state does (hidden Note to Self records).
 - **Meetings with Calendar (after Mail, Calendar and Contacts).** Recurring
   meetings, invitations sent by email, reminders, and picking invitees from
   contacts.

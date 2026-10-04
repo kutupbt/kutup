@@ -1,4 +1,4 @@
-import type { CallLinkInfo, CallLinkKeys } from '@kutup/chat-core/types'
+import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-core/types'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -142,6 +142,11 @@ export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink,
 export async function deleteCallLink(roomId: string): Promise<void> {
   await api.delete(`/chat/call-links/${roomId}`)
   forgetHostToken(roomId)
+}
+
+/** The room of the link whose fragment this is. */
+export function callLinkRoomId(wasm: Pick<CallLinkCrypto, 'callLinkParse' | 'callLinkKeys'>, fragment: string): string {
+  return wasm.callLinkKeys(wasm.callLinkParse(fragment)).roomId
 }
 
 /** Why the host refused, for the page to explain. */

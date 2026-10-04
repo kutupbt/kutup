@@ -193,7 +193,8 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 41: meetings: an account schedules one (only sealed details reach
   the server), downloads its calendar file, and a browser with no account
   joins through the link by name; both see each other, a shared screen and
-  the meeting's temporary chat; the stay lands in the browser's history;
+  the meeting's temporary chat; the stay lands in the account's list of joined meetings (sealed, and
+  still there without the browser's copy);
   renaming and deleting take effect for holders of the link. Also "New
   meeting" in the sidebar, "Start a meeting" in a conversation, and the
   waiting room: the link alone is refused an SFU token, a guest waits until

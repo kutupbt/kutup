@@ -140,15 +140,29 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
   // The owner's leave button asks which: leave, or end it for everyone.
+  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/joined-meetings')
   await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
   await ownerCall.close()
 
-  // The owner's stay is in this browser's history, and can be rejoined.
+  // The owner's stay is in the account's list of joined meetings, and can
+  // be rejoined. The meeting page left it in this browser; Chat moved it
+  // into the account, sealed, so it is there without this browser's copy.
   const entry = chat.locator(`[data-testid="chat-meeting-history-entry"][data-title="${title}"]`)
   await expect(entry).toHaveCount(1, { timeout: 30_000 })
   await expect(entry.getByTestId('chat-meeting-rejoin')).toHaveAttribute('href', url)
+  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup-meeting-history')), { timeout: 30_000 }).toBe('[]')
+  const recordedBody = (await recorded).postData() ?? ''
+  expect(Object.keys(JSON.parse(recordedBody) as Record<string, unknown>).sort()).toEqual(['entry', 'id'])
+  expect(recordedBody).not.toContain('Team sync')
+  await chat.reload()
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await expect(entry).toHaveCount(1, { timeout: 60_000 })
+  // The guest has no account: their stays remain in their own browser.
+  const guestStays = () => guest.evaluate(() => JSON.parse(localStorage.getItem('kutup-meeting-history') ?? '[]') as { title: string; account?: string }[])
+  await expect.poll(async () => (await guestStays()).map((stay) => stay.title), { timeout: 30_000 }).toEqual([title, title])
+  expect((await guestStays()).every((stay) => stay.account === undefined)).toBe(true)
 
   // Renaming it changes what a holder of the link sees.
   await meeting(chat, title).getByTestId('chat-meeting-edit').click()

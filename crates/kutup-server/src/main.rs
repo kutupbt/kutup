@@ -860,6 +860,17 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/chat/joined-meetings",
+            get(chat_mls::call_link_history::list)
+                .post(chat_mls::call_link_history::add)
+                .delete(chat_mls::call_link_history::clear)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/chat/joined-meetings/:id",
+            delete(chat_mls::call_link_history::remove),
+        )
+        .route(
             "/api/chat/call-links/token",
             post(chat_mls::call_links::token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))

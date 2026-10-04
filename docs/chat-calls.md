@@ -256,12 +256,30 @@ the title and the link), on the Meetings page and on the join page; Kutup
 keeps no calendar and sends no invitations or reminders.
 
 **History:** the Meetings page lists the account's meetings (those whose
-planned end is still ahead first) and, separately, the meetings this
-browser joined, with when and for how long. That second list lives only in
-the browser's storage (`kutup-meeting-history`, at most 30 entries, each
-with the link's fragment so it can be joined again): the server has no
-record of who joined what, the account's other devices do not see it, and
-it can be cleared.
+planned end is still ahead first) and, separately, the meetings the account
+joined, with when and for how long. That second list belongs to the
+account, so it is the same on all of its devices:
+
+- Each stay is a record of the link's fragment (so it can be joined again),
+  the title, when it was joined and for how long, sealed in the browser:
+  `nonce (24) || XChaCha20-Poly1305(length || JSON || zeros)`, padded to
+  1024 bytes, under HKDF-SHA256 of the account master key (the meetings'
+  salt, info `joined key`), with the AAD `kutup/chat/call-link/v1/joined`.
+- The server stores the records (`/api/chat/joined-meetings`, the newest
+  100 per account) and hands them back. It cannot open them, so it still
+  has no readable record of who joined what; it does learn that the account
+  recorded a stay and when, which someone watching the server could set
+  beside the token requests of that moment.
+- The meeting page sits outside the sign-in, so it cannot write to the
+  account itself. When a stay ends it leaves it in the browser's storage
+  (`kutup-meeting-history`, at most 30), tagged with the account signed in
+  to Chat in that browser at the time, if any. Chat, whenever it is open
+  there, moves those stays into the account and removes them from the
+  browser. A stay joined while nobody was signed in goes to the account
+  that next opens Chat in that browser; one tagged with another account is
+  left for that account.
+- Someone without an account keeps their stays in their browser only.
+- Stays can be taken off the list one by one, or the list cleared.
 
 **The waiting room:** optional, per meeting ("Waiting room" when making or
 changing one). With it on, holding the link is not enough to join.
@@ -407,7 +425,8 @@ accounts.
 For meetings, the host additionally learns that a meeting exists, which
 account made it and when, when its sealed details change, whether it has a
 waiting room, how many people knock and when each is let in or turned away,
-which SFU identities are its hosts, which identity is removed and when the
+that an account recorded a joined meeting and when (not which), which SFU
+identities are its hosts, which identity is removed and when the
 meeting is ended, and the network address of each joiner when it asks for the details or a
 token. It never
 learns the link, the title or time, the names people chose, the chat, or

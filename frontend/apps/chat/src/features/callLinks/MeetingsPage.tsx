@@ -14,21 +14,21 @@ import { callLinkUrl, type OwnedCallLink } from './callLinks'
 import { rememberCallName } from './callName'
 import { downloadMeetingIcs } from './ics'
 import { MeetingDialog } from './MeetingDialog'
-import { clearJoinedMeetings, forgetJoinedMeeting, type JoinedMeeting } from './meetingHistory'
+import type { JoinedMeeting } from './meetingHistory'
 import { isUpcoming, meetingStartText } from './meetingTime'
 import { useJoinedMeetings, useMeetings, type MeetingDraft } from './useMeetings'
 
 /**
  * Meetings: calls anyone with the link can join, with or without a Kutup
  * account. The account's own (those with a time still ahead first), and the
- * ones this browser joined.
+ * ones the account joined, on any of its devices.
  */
 export function MeetingsPage() {
   const { t } = useTranslation()
   const { capabilities } = useChat()
   const now = useNow(60_000)
   const { list, create, change, remove } = useMeetings()
-  const history = useJoinedMeetings()
+  const { entries: history, forget, clear } = useJoinedMeetings()
   const [dialog, setDialog] = useState<{ kind: 'schedule' } | { kind: 'edit'; meeting: OwnedCallLink } | null>(null)
   const [deleting, setDeleting] = useState<OwnedCallLink | null>(null)
   const [clearing, setClearing] = useState(false)
@@ -138,7 +138,11 @@ export function MeetingsPage() {
             <>
               <ul className="divide-y divide-border rounded-lg border border-border" data-testid="chat-meetings-history">
                 {history.map((entry) => (
-                  <HistoryRow key={`${entry.roomId}:${entry.joinedAtMs}`} entry={entry} />
+                  <HistoryRow
+                    key={entry.id}
+                    entry={entry}
+                    onForget={() => forget.mutate(entry, { onError: () => toast.error(t('chat.meetings.historyForgetFailed')) })}
+                  />
                 ))}
               </ul>
               <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setClearing(true)} data-testid="chat-meetings-history-clear">
@@ -182,11 +186,10 @@ export function MeetingsPage() {
         title={t('chat.meetings.historyClearTitle')}
         description={t('chat.meetings.historyClearDescription')}
         submit={t('chat.meetings.historyClear')}
-        errorFallback=""
-        onConfirm={() => {
-          clearJoinedMeetings()
-          setClearing(false)
-        }}
+        pending={clear.isPending}
+        error={clear.error}
+        errorFallback={t('chat.meetings.historyClearFailed')}
+        onConfirm={() => clear.mutate(undefined, { onSuccess: () => setClearing(false) })}
       />
     </div>
   )
@@ -268,7 +271,7 @@ function MeetingRow({ meeting, onEdit, onDelete }: { meeting: OwnedCallLink; onE
   )
 }
 
-function HistoryRow({ entry }: { entry: JoinedMeeting }) {
+function HistoryRow({ entry, onForget }: { entry: JoinedMeeting; onForget: () => void }) {
   const { t, i18n } = useTranslation()
   return (
     <li className="flex flex-wrap items-center gap-3 px-3 py-2" data-testid="chat-meeting-history-entry" data-title={entry.title}>
@@ -283,7 +286,7 @@ function HistoryRow({ entry }: { entry: JoinedMeeting }) {
         </p>
       </div>
       <JoinLink url={callLinkUrl(entry.fragment)} label={t('chat.meetings.rejoin')} testId="chat-meeting-rejoin" />
-      <Button size="icon" variant="ghost" onClick={() => forgetJoinedMeeting(entry)} aria-label={t('chat.meetings.historyForget')} title={t('chat.meetings.historyForget')}>
+      <Button size="icon" variant="ghost" onClick={onForget} aria-label={t('chat.meetings.historyForget')} title={t('chat.meetings.historyForget')}>
         <X />
       </Button>
     </li>

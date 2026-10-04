@@ -3780,6 +3780,27 @@ pub fn call_link_host_token(
     })
 }
 
+/// Seal one stay in a meeting for the account's own list of joined meetings.
+#[wasm_bindgen(js_name = callLinkSealJoined)]
+pub fn call_link_seal_joined(
+    master_key: String,
+    entry: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    let entry: crate::call_link::JoinedMeetingV1 = from_transport(entry).map_err(chat_error)?;
+    crate::call_link::seal_joined_meeting(&master_key, &entry).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = callLinkOpenJoined)]
+pub fn call_link_open_joined(
+    master_key: String,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    let entry = crate::call_link::open_joined_meeting(&master_key, &sealed).map_err(chat_error)?;
+    to_output(&entry)
+}
+
 #[wasm_bindgen(js_name = callLinkKeys)]
 pub fn call_link_keys(secret: String) -> std::result::Result<JsValue, JsValue> {
     let secret = zeroize::Zeroizing::new(secret);

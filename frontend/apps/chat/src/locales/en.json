@@ -923,9 +923,9 @@
       "deleteTitle": "Delete \"{{title}}\"?",
       "deleteDescription": "Nobody will be able to join through its link any more. People already in the meeting stay until they leave.",
       "deleteFailed": "The meeting could not be deleted.",
-      "history": "Joined on this browser",
-      "historyDescription": "Meetings you joined from this browser, kept only here so you can find one again. Other devices and the server have no such list.",
-      "historyEmpty": "No meetings joined from this browser yet.",
+      "history": "Joined meetings",
+      "historyDescription": "Meetings you joined, on any of your devices, so you can find one again. The list is encrypted with your account key: the server stores it and cannot read it.",
+      "historyEmpty": "No meetings joined yet.",
       "historyWhen": "{{when}} · {{length}}",
       "historyForget": "Remove from this list",
       "historyClear": "Clear the list",
@@ -965,7 +965,9 @@
       "endTitle": "End the meeting for everyone?",
       "endDescription": "Everyone is disconnected, and whoever is waiting is turned away. The link keeps working, so the meeting can be held again.",
       "endSubmit": "End meeting",
-      "endFailed": "The meeting could not be ended."
+      "endFailed": "The meeting could not be ended.",
+      "historyForgetFailed": "The meeting could not be removed from the list.",
+      "historyClearFailed": "The list could not be cleared."
     },
     "shortcuts": {
       "title": "Keyboard shortcuts",

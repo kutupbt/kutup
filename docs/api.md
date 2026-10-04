@@ -1869,6 +1869,28 @@ everyone in it. Whoever is waiting is turned away and the co-hosts are
 forgotten; the link keeps working. `404` for anyone but the owner, `502`
 when the SFU's API cannot be reached.
 
+### GET /api/chat/joined-meetings
+
+→ `{ "entries": [{ "id", "entry" }] }`: the meetings this account joined,
+most recently recorded first, at most 100
+([`chat-calls.md`](chat-calls.md) "History"). Each `entry` is a stay sealed
+in the browser under a key from the account master key (base64, 1064
+bytes); the server cannot open it.
+
+### POST /api/chat/joined-meetings
+
+`{ "id", "entry" }` → `204`: record a stay. `id` is 32 lowercase hex
+characters chosen by the browser; recording the same id again changes
+nothing. Beyond 100 the oldest are dropped.
+
+### DELETE /api/chat/joined-meetings/:id
+
+→ `204`: take one stay off the list.
+
+### DELETE /api/chat/joined-meetings
+
+→ `204`: clear the list.
+
 ### PUT /api/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device
