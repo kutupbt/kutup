@@ -833,6 +833,10 @@ pub enum ChatWsServerMessage {
     /// The socket carries no archive metadata; clients fetch authenticated
     /// opaque relay state over REST.
     HistoryTransferAvailable { transfer_id: String },
+    /// This account's device list changed: a device was registered or
+    /// removed, or a new signed manifest was published. It says nothing
+    /// more; each device fetches and verifies the list itself.
+    DevicesChanged,
     /// The answer to a client [`ChatWsClientMessage::Ping`].
     Pong,
 }

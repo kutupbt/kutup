@@ -556,13 +556,20 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     no longer commits a ratchet step without its message; background sync
     failures are caught; a browser whose device was removed elsewhere says
     so and can be set up again instead of "reconnecting" for ever; the
-    browser is asked to keep Chat's storage.
-  - Next: the server tells an account's devices and contacts when a device
-    list changes; a message that cannot be decrypted repairs its session by
-    itself (reset at most once an hour per device, a retry request the
-    sender answers from its sent messages) and shows as a placeholder that
-    fills in; a send stops using up the recipient's one-time prekeys when a
-    session exists; signed and last-resort prekeys rotate, and used prekeys
+    browser is asked to keep Chat's storage; a send takes no keys from the
+    server while it has sessions with the devices it last verified; a
+    message that cannot be read repairs its session by itself (reset at most
+    once an hour per device, a hidden message hands the sender a fresh
+    session) and leaves a notice in the conversation; the server tells an
+    account's connected devices when its device list changes
+    (`docs/chat-protocol.md`, "Unreadable messages and session repair").
+  - Next: the unreadable message itself is still lost and the notice asks
+    for it to be sent again. Filling it in needs a retry request the sender
+    answers from its sent messages, which in turn needs envelopes to carry
+    the logical message id and the server to accept a re-send to one device;
+    a contact is not told when the other side's device list changes (the
+    server does not know who an account's contacts are; a sender learns at
+    its next send); signed and last-resort prekeys rotate, and used prekeys
     are kept as long as the mailbox can still hold a message for them.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after

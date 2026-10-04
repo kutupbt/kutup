@@ -97,8 +97,12 @@ pub mod kind {
     /// A group call started or ended (MLS only); the start shows in the
     /// timeline with a way to join. [IMPL]
     pub const GROUP_CALL: &str = "groupCall";
-    /// Session-control notice (e.g. explicit reset). [RSV]
+    /// An invisible message whose only job is to carry a fresh session to a
+    /// device whose messages this one could no longer read. [IMPL]
     pub const SESSION_CONTROL: &str = "sessionControl";
+    /// A message from the peer arrived but could not be read; written by this
+    /// device's engine in its place. Never travels. [IMPL]
+    pub const UNDECRYPTABLE: &str = "undecryptable";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -448,7 +452,57 @@ impl ChatContent {
 
     /// Content that is delivered live and never kept: typing and call signals.
     pub fn is_ephemeral(&self) -> bool {
-        self.as_typing().is_some() || self.as_call().is_some()
+        self.as_typing().is_some() || self.as_call().is_some() || self.is_session_control()
+    }
+
+    /// Builds the invisible message that carries a fresh session to a device
+    /// whose messages could no longer be read. Like typing, it is never
+    /// history and never a linked-device transcript.
+    pub fn session_control_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::SESSION_CONTROL.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::json!({ "action": "refresh" }),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn is_session_control(&self) -> bool {
+        self.kind == kind::SESSION_CONTROL
+    }
+
+    /// Builds the local record that stands where an unreadable message from
+    /// the peer would have been.
+    pub fn undecryptable_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::UNDECRYPTABLE.to_string(),
+            sent_at: sent_at.into(),
+            seq: 0,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::json!({}),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn is_undecryptable(&self) -> bool {
+        self.kind == kind::UNDECRYPTABLE && self.v == Self::VERSION
     }
 
     pub fn call_log_with_id(
@@ -748,7 +802,7 @@ impl ChatContent {
 
     /// Kinds only this device's engine writes; they never travel.
     pub fn is_local_only_kind(kind: &str) -> bool {
-        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG
+        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG || kind == kind::UNDECRYPTABLE
     }
 
     pub fn group_update_with_id(
@@ -865,6 +919,7 @@ impl ChatContent {
                     | kind::GROUP_CONTROL
                     | kind::GROUP_UPDATE
                     | kind::SESSION_CONTROL
+                    | kind::UNDECRYPTABLE
             )
     }
 }

@@ -148,6 +148,31 @@ describe('ChatService connection status', () => {
     expect(reconcile).toHaveBeenCalledTimes(1)
   })
 
+  it('drops the device lists it holds when the server says the account\'s devices changed', async () => {
+    const { service } = socketService()
+    const forgetKnownDevices = vi.fn()
+    const updates = vi.fn()
+    Object.assign(service, {
+      client: { forgetKnownDevices },
+      listeners: new Set([updates]),
+      withLock: (work: () => Promise<unknown>) => work(),
+    })
+    const socket = await connect(service)
+    socket.open()
+    await vi.advanceTimersByTimeAsync(0)
+    const reconcile = (service as unknown as { reconcile: ReturnType<typeof vi.fn> }).reconcile
+    reconcile.mockClear()
+
+    socket.onmessage?.({ data: JSON.stringify({ type: 'drainMailbox' }) })
+    expect(forgetKnownDevices).not.toHaveBeenCalled()
+    socket.onmessage?.({ data: JSON.stringify({ type: 'devicesChanged' }) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(forgetKnownDevices).toHaveBeenCalledTimes(1)
+    expect(updates).toHaveBeenCalledTimes(1)
+    // Like any other frame, it also reads the mailbox.
+    expect(reconcile).toHaveBeenCalledTimes(2)
+  })
+
   it('goes offline with the browser and reconnects at once when it is back', async () => {
     const { service } = socketService()
     const socket = await connect(service)

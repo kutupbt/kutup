@@ -42,6 +42,10 @@ use kutup_chat_proto::{
 const MAX_SEND_ATTEMPTS: u32 = 5;
 /// Drain page size (the contract caps it at 500).
 const DRAIN_LIMIT: u32 = 500;
+/// A session with one device is set aside for unreadable messages at most
+/// this often, as in Signal: a device that keeps sending under a session it
+/// cannot leave must not drive an endless reset loop.
+const SESSION_RESET_INTERVAL_MS: i64 = 60 * 60 * 1000;
 /// Keep used EC prekey private material for late concurrent prekey messages.
 const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 
@@ -83,6 +87,9 @@ pub struct ReceiveReport {
     pub errors: Vec<InboundFailure>,
     /// Authenticated replays that were safely moved directly to pending-ack.
     pub duplicates: Vec<String>,
+    /// Mailbox ids that could not be decrypted and were given up on, with
+    /// the sender's session refreshed where that was due.
+    pub repaired: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +143,12 @@ pub struct Engine {
     manifest_policy: ManifestPolicy,
     local_server: Option<String>,
     sealed_sender_enabled: bool,
+    /// The devices of each account as last fetched and verified this run
+    /// (`bundles_for_send`). Never used to establish a session.
+    known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
+    /// When the session with a peer device was last set aside for being
+    /// unreadable (`process_inbound`), by `(account, device)`.
+    session_resets: BTreeMap<(String, u32), i64>,
 }
 
 impl Engine {
@@ -167,6 +180,8 @@ impl Engine {
             manifest_policy,
             local_server: None,
             sealed_sender_enabled: false,
+            known_devices: BTreeMap::new(),
+            session_resets: BTreeMap::new(),
         }
     }
 
@@ -179,6 +194,13 @@ impl Engine {
         self.session.bind_local_server(server)?;
         self.local_server = Some(server.to_string());
         Ok(())
+    }
+
+    /// Forget every device list held from an earlier fetch, so the next send
+    /// to anyone fetches and verifies the list again. Called when the server
+    /// says this account's own devices changed.
+    pub fn forget_known_devices(&mut self) {
+        self.known_devices.clear();
     }
 
     /// Enable sealed delivery only after the application has received the
@@ -1416,7 +1438,7 @@ impl Engine {
         }
         let mut summary = SendSummary::default();
         if peer_user == self.session.user() {
-            let bundles = self.fetch_verified_bundles(peer_user).await?;
+            let bundles = self.bundles_for_send(peer_user).await?;
             self.session
                 .enqueue_note_to_self(send_id, &bundles, &content, &mut summary, rng)
                 .await?;
@@ -1439,15 +1461,14 @@ impl Engine {
                 }
             }
             if let Some(capability) = self.media_delivery_capability(peer_user).await? {
-                let recipient_bundles = self
-                    .fetch_verified_sealed_bundles(peer_user, &capability)
-                    .await?;
+                let recipient_bundles =
+                    self.sealed_bundles_for_send(peer_user, &capability).await?;
                 let certificate = self.issue_verified_sender_certificate().await?;
                 let user = self.session.user().to_string();
                 let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
-                    self.fetch_verified_bundles(&user).await?
+                    self.bundles_for_send(&user).await?
                 };
                 self.session
                     .enqueue_sealed_direct_send(
@@ -1465,12 +1486,12 @@ impl Engine {
                     )
                     .await?;
             } else {
-                let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
+                let recipient_bundles = self.bundles_for_send(peer_user).await?;
                 let user = self.session.user().to_string();
                 let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
-                    self.fetch_verified_bundles(&user).await?
+                    self.bundles_for_send(&user).await?
                 };
                 self.session
                     .enqueue_direct_send(
@@ -1573,7 +1594,10 @@ impl Engine {
                     .await?;
                 continue;
             }
-            let optional = is_receipt || is_typing || is_call;
+            let is_session_control = content
+                .as_ref()
+                .is_some_and(ChatContent::is_session_control);
+            let optional = is_receipt || is_typing || is_call || is_session_control;
             if !optional && waiting_peers.contains(&entry.peer) {
                 continue;
             }
@@ -1641,6 +1665,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         let mut ack_ids = Vec::new();
+        let mut refresh_peers: Vec<String> = Vec::new();
         for inbound in self.session.pending_inbound().await? {
             if matches!(
                 inbound.state,
@@ -1674,7 +1699,16 @@ impl Engine {
                         continue;
                     }
                 };
+            // The device a failed decryption can be repaired with: named on
+            // an identified envelope, or proven by a sealed one's certificate.
+            let mut origin = envelope.sender.as_deref().and_then(|sender| {
+                self.session
+                    .resolve_delivered_sender(sender, envelope.sender_device_id)
+                    .ok()
+                    .map(|(sender, _)| (sender, envelope.sender_device_id))
+            });
             let receive_result = if envelope.sealed_sender {
+                origin = None;
                 let inspection = self.session.inspect_sealed_envelope(&envelope).await;
                 match inspection {
                     Ok(inspection) => {
@@ -1683,6 +1717,8 @@ impl Engine {
                             .await;
                         match validation {
                             Ok(root) => {
+                                origin =
+                                    Some((inspection.sender.clone(), inspection.sender_device_id));
                                 let local = self.canonical_self()?;
                                 self.session
                                     .receive_sealed_envelope(&envelope, &inspection, &local, &root)
@@ -1730,6 +1766,46 @@ impl Engine {
                     report.undecodable.push(id);
                 }
                 Err(error) => {
+                    let unreadable = matches!(
+                        error.inbound_failure_kind(),
+                        InboundFailureKind::MissingKeyMaterial
+                            | InboundFailureKind::MalformedCiphertext
+                    );
+                    if let (true, Some((sender, device_id))) = (unreadable, origin) {
+                        // A broken session rarely breaks for one message. Set
+                        // it aside once, then let what was already on its way
+                        // under the old one drain without resetting again.
+                        let now = unix_millis();
+                        let device = (sender.clone(), device_id);
+                        let reset = self.session_resets.get(&device).is_none_or(|last| {
+                            now.saturating_sub(*last) >= SESSION_RESET_INTERVAL_MS
+                        });
+                        let repair = self
+                            .session
+                            .repair_undecryptable(
+                                inbound.clone(),
+                                &sender,
+                                device_id,
+                                reset,
+                                &error,
+                            )
+                            .await?;
+                        if repair.reset {
+                            self.session_resets.insert(device, now);
+                            self.known_devices.remove(&sender);
+                        }
+                        if repair.refresh_peer && !refresh_peers.contains(&sender) {
+                            refresh_peers.push(sender);
+                        }
+                        if let Some(notice) = repair.notice {
+                            self.events
+                                .push_back(ChatEvent::MessageReceived(Box::new(notice.clone())));
+                            report.messages.push(notice);
+                        }
+                        ack_ids.push(inbound.id.clone());
+                        report.repaired.push(inbound.id);
+                        continue;
+                    }
                     let state = self
                         .session
                         .record_inbound_failure(inbound.clone(), &error)
@@ -1759,6 +1835,25 @@ impl Engine {
                 .ack(self.session.device_id(), &ack_ids)
                 .await?;
             self.session.finish_acks(&ack_ids).await?;
+        }
+        // Hand each repaired peer a fresh session now, so their next message
+        // is readable without waiting for this side to write first. Failing
+        // to deliver it loses nothing: it stays queued, and any later
+        // message to them carries the fresh session just the same.
+        for peer in refresh_peers {
+            let mut id = [0u8; 16];
+            rng.fill_bytes(&mut id);
+            let send_id = uuid::Builder::from_random_bytes(id)
+                .into_uuid()
+                .hyphenated()
+                .to_string();
+            let seq = self.session.next_sent_seq().await?;
+            let content = ChatContent::session_control_with_id(
+                send_id.clone(),
+                crate::clock::rfc3339(unix_millis()),
+                seq,
+            );
+            let _ = self.send(&send_id, &peer, &content, rng).await;
         }
         Ok(())
     }
@@ -1947,10 +2042,78 @@ impl Engine {
         Err(ChatError::SendNotConverged(MAX_SEND_ATTEMPTS))
     }
 
+    /// The devices to encrypt a new message for.
+    ///
+    /// A key fetch takes a one-time prekey from every device of the account,
+    /// so fetching for each message would drain a busy correspondent's pool
+    /// (and cost a round trip per send) for keys that are only needed to
+    /// start a session. Once this run has fetched and verified an account's
+    /// devices and holds a session with each under the identity it served,
+    /// they are used as they are. If the account's devices changed meanwhile,
+    /// the server refuses the send and says how (missing, extra, or
+    /// re-registered devices); the amendment then fetches afresh.
+    async fn bundles_for_send(
+        &mut self,
+        peer_user: &str,
+    ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        if let Some(known) = self.known_devices_with_sessions(peer_user).await? {
+            return Ok(known);
+        }
+        self.fetch_verified_bundles(peer_user).await
+    }
+
+    /// [`Self::bundles_for_send`] for sealed delivery.
+    async fn sealed_bundles_for_send(
+        &mut self,
+        peer_user: &str,
+        capability: &[u8; 16],
+    ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        if let Some(known) = self.known_devices_with_sessions(peer_user).await? {
+            return Ok(known);
+        }
+        self.fetch_verified_sealed_bundles(peer_user, capability)
+            .await
+    }
+
+    async fn known_devices_with_sessions(
+        &self,
+        peer_user: &str,
+    ) -> Result<Option<Vec<kutup_chat_proto::DevicePreKeyBundle>>> {
+        let Some(known) = self.known_devices.get(peer_user) else {
+            return Ok(None);
+        };
+        if self.session.has_sessions_with_all(peer_user, known).await? {
+            Ok(Some(known.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Keep what a verified fetch said about an account's devices, without
+    /// the one-time prekey: that was this fetch's to use, once.
+    fn remember_devices(
+        &mut self,
+        peer_user: &str,
+        bundles: &[kutup_chat_proto::DevicePreKeyBundle],
+    ) {
+        self.known_devices.insert(
+            peer_user.to_owned(),
+            bundles
+                .iter()
+                .cloned()
+                .map(|mut bundle| {
+                    bundle.one_time_pre_key = None;
+                    bundle
+                })
+                .collect(),
+        );
+    }
+
     async fn fetch_verified_bundles(
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        self.known_devices.remove(peer_user);
         let transport = Rc::clone(&self.transport);
         let response = if peer_user == self.session.user() {
             transport
@@ -1959,8 +2122,11 @@ impl Engine {
         } else {
             transport.fetch_bundles(peer_user).await?
         };
-        self.accept_verified_bundle_response(peer_user, response)
-            .await
+        let bundles = self
+            .accept_verified_bundle_response(peer_user, response)
+            .await?;
+        self.remember_devices(peer_user, &bundles);
+        Ok(bundles)
     }
 
     async fn fetch_verified_sealed_bundles(
@@ -1968,11 +2134,15 @@ impl Engine {
         peer_user: &str,
         capability: &[u8; 16],
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        self.known_devices.remove(peer_user);
         let response = Rc::clone(&self.transport)
             .fetch_sealed_bundles(peer_user, capability)
             .await?;
-        self.accept_verified_bundle_response(peer_user, response)
-            .await
+        let bundles = self
+            .accept_verified_bundle_response(peer_user, response)
+            .await?;
+        self.remember_devices(peer_user, &bundles);
+        Ok(bundles)
     }
 
     async fn accept_verified_bundle_response(

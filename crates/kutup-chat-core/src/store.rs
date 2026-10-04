@@ -118,10 +118,53 @@ impl ChatStore {
     /// lets the engine encrypt with an existing session instead of re-establishing
     /// (which would reset the ratchet).
     pub(crate) async fn has_session(&self, address: &str) -> ChatResult<bool> {
-        if let Some(opt) = self.pending.borrow().sessions.get(address) {
-            return Ok(opt.is_some());
+        Ok(match self.session_record(address).await? {
+            Some(record) => record
+                .has_usable_sender_chain(crate::clock::now(), SessionUsabilityRequirements::empty())
+                .map_err(|error| ChatError::Protocol(error.to_string()))?,
+            None => false,
+        })
+    }
+
+    async fn session_record(&self, address: &str) -> ChatResult<Option<SessionRecord>> {
+        let staged = self.pending.borrow().sessions.get(address).cloned();
+        let bytes = match staged {
+            Some(staged) => staged,
+            None => self.db.load_session(address).await?,
+        };
+        bytes
+            .map(|bytes| {
+                SessionRecord::deserialize(&bytes)
+                    .map_err(|error| ChatError::Protocol(error.to_string()))
+            })
+            .transpose()
+    }
+
+    /// Stage setting aside the current session with `address`, so the next
+    /// send starts a fresh one. The old state is kept as a previous session:
+    /// messages already on their way under it still decrypt. Returns whether
+    /// there was a current session to set aside.
+    pub(crate) async fn archive_session(&self, address: &str) -> ChatResult<bool> {
+        let Some(mut record) = self.session_record(address).await? else {
+            return Ok(false);
+        };
+        let current = record
+            .has_usable_sender_chain(crate::clock::now(), SessionUsabilityRequirements::empty())
+            .map_err(|error| ChatError::Protocol(error.to_string()))?;
+        if !current {
+            return Ok(false);
         }
-        Ok(self.db.load_session(address).await?.is_some())
+        record
+            .archive_current_state()
+            .map_err(|error| ChatError::Protocol(error.to_string()))?;
+        let bytes = record
+            .serialize()
+            .map_err(|error| ChatError::Protocol(error.to_string()))?;
+        self.pending
+            .borrow_mut()
+            .sessions
+            .insert(address.to_string(), Some(bytes));
+        Ok(true)
     }
 
     /// Stage a session archive (drop) for a stale/extra device.

@@ -1046,6 +1046,17 @@ export class ChatService {
    * tab coming back). A failure is not the person's to handle: the next
    * nudge or retry runs it again.
    */
+  /**
+   * The server says this account's device list changed. Device lists held
+   * from earlier fetches are dropped, so the next send fetches and verifies
+   * them again instead of finding out from a refused send.
+   */
+  private devicesChanged(): void {
+    this.withLock(async () => this.client.forgetKnownDevices())
+      .then(() => this.emitUpdate())
+      .catch(reportBackgroundFailure)
+  }
+
   private reconcileInBackground(): void {
     this.reconcile().catch(reportBackgroundFailure)
   }
@@ -1743,6 +1754,7 @@ export class ChatService {
           this.pongDeadline = null
           return
         }
+        if (isDevicesChanged(event.data)) this.devicesChanged()
         this.reconcileInBackground()
       }
       socket.onerror = () => socket.close()
@@ -1793,6 +1805,15 @@ function requestPersistentStorage(): void {
 
 function reportBackgroundFailure(error: unknown): void {
   console.warn('chat: background sync failed; it runs again on the next update', error)
+}
+
+function isDevicesChanged(data: unknown): boolean {
+  if (typeof data !== 'string' || data.length > 64) return false
+  try {
+    return (JSON.parse(data) as { type?: unknown }).type === 'devicesChanged'
+  } catch {
+    return false
+  }
 }
 
 function isPong(data: unknown): boolean {

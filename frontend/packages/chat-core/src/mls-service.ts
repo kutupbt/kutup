@@ -1108,9 +1108,10 @@ export class MlsConversationService {
       }),
       this.deviceId,
     )
-    if (response.available < target) {
-      throw new Error('MLS KeyPackage publication did not reach the requested target')
-    }
+    // The count may already be below the target: another member can claim a
+    // package between the upload and this answer (a group being repaired
+    // claims several). That is the pool working, not a failed upload, and
+    // the next maintenance pass tops it up.
     return response.available
   }
 
