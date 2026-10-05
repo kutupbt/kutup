@@ -94,6 +94,7 @@ services:
       KUTUP_DRIVE_URL: ${KUTUP_DRIVE_URL:-}
       KUTUP_CHAT_URL: ${KUTUP_CHAT_URL:-}
       KUTUP_OFFICE_URL: ${KUTUP_OFFICE_URL:-}
+      KUTUP_EDITOR_URL: ${KUTUP_EDITOR_URL:-}
       KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
       KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
       # The map relay's shared tile cache; its size is set on the admin Maps page.
@@ -169,6 +170,7 @@ services:
       KUTUP_DRIVE_URL: ${KUTUP_DRIVE_URL:-}
       KUTUP_CHAT_URL: ${KUTUP_CHAT_URL:-}
       KUTUP_OFFICE_URL: ${KUTUP_OFFICE_URL:-}
+      KUTUP_EDITOR_URL: ${KUTUP_EDITOR_URL:-}
       KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
       KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
 

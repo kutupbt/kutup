@@ -12,12 +12,12 @@ docker-compose.override.yml
 # Optional OnlyOffice integration assets — populated by ./install-onlyoffice.sh.
 # AGPL-3.0-or-later (upstream), kept out of the kutup repo because they are
 # vendored binary builds, not source we maintain.
-frontend/apps/office/public/onlyoffice/dist/
-frontend/apps/office/public/onlyoffice/templates/
-frontend/apps/office/public/onlyoffice/LICENSES/
-frontend/apps/office/public/onlyoffice/SOURCE.json
-frontend/apps/office/public/onlyoffice/SBOM.spdx.json
-frontend/apps/office/public/onlyoffice/FILES.sha512
+frontend/apps/editor/public/onlyoffice/dist/
+frontend/apps/editor/public/onlyoffice/templates/
+frontend/apps/editor/public/onlyoffice/LICENSES/
+frontend/apps/editor/public/onlyoffice/SOURCE.json
+frontend/apps/editor/public/onlyoffice/SBOM.spdx.json
+frontend/apps/editor/public/onlyoffice/FILES.sha512
 test-results/
 tests/e2e/sanitized-results/
 

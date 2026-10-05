@@ -7,7 +7,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { folderHex } from '../drive/colors'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
-import { KindIcon } from '../explorer/KindIcon'
+import { KindIcon } from '@kutup/drive-ui/KindIcon'
 
 /**
  * Choose a destination folder: My files as a tree, then the folders shared

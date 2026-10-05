@@ -30,10 +30,11 @@
   },
   "apps": {
     "account": "Hesap",
-    "chat": "Sohbet",
-    "drive": "Drive",
+    "chat": "İleti",
+    "drive": "Depo",
     "maps": "Haritalar",
-    "photos": "Fotoğraflar"
+    "office": "Ofis",
+    "photos": "Galeri"
   },
   "theme": {
     "dark": "Koyu tema",

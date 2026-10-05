@@ -191,7 +191,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   for (const message of data.history) {
     // A group change notice counts as the latest activity (Signal shows it
     // as the preview), though it is not a message.
-    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.groupCall) {
+    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.groupCall || message.content.undecryptable) {
       latest.set(conversationKey(message.conversation), message)
     }
   }
@@ -313,6 +313,12 @@ export interface MessageView {
   groupUpdate: ChatGroupUpdate | null
   /** A call in the timeline. */
   callLog: ChatCallLog | null
+  /**
+   * A notice where a message could not be read: `waiting` once its sender
+   * has been asked for it again (it is replaced when the message arrives),
+   * `lost` when it could not be named to ask for.
+   */
+  undecryptable: 'waiting' | 'lost' | null
   /** A group call someone started. */
   groupCall: ChatGroupCall | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
@@ -323,6 +329,12 @@ export interface MessageView {
   pollEnded: { question: string } | null
   /** A live location this message started. */
   liveLocation: LiveShareState | null
+}
+
+export function undecryptableState(entry: ChatHistoryEntry): 'waiting' | 'lost' | null {
+  if (!entry.content.undecryptable) return null
+  const body = entry.content.body as { sendId?: unknown } | null
+  return typeof body?.sendId === 'string' ? 'waiting' : 'lost'
 }
 
 export interface PollState {
@@ -435,7 +447,7 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !(m.content.messageId && opened.has(m.content.messageId)) &&
       !repeatedStart(m),
   )
@@ -460,6 +472,7 @@ export function threadView(
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       callLog: entry.content.callLog ?? null,
+      undecryptable: undecryptableState(entry),
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
@@ -494,6 +507,7 @@ export function threadView(
       timerChange: null,
       groupUpdate: null,
       callLog: null,
+      undecryptable: null,
       groupCall: null,
       viewedOnce: { video: body.video },
       poll: null,

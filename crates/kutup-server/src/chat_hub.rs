@@ -106,6 +106,31 @@ impl ChatHub {
             .unwrap_or_default()
     }
 
+    /// Tell the account's connected devices that its device list changed, so
+    /// they stop using the list they hold. Best effort: a device that misses
+    /// it still learns the list at its next send, which the server checks.
+    pub fn notify_devices_changed(&self, user_id: Uuid) {
+        let Ok(text) =
+            serde_json::to_string(&kutup_chat_proto::ChatWsServerMessage::DevicesChanged)
+        else {
+            return;
+        };
+        let conns: Vec<Arc<ChatConn>> = self
+            .inner
+            .lock()
+            .expect("chat hub lock poisoned")
+            .iter()
+            .filter(|((user, _), _)| *user == user_id)
+            .flat_map(|(_, conns)| conns.iter().cloned())
+            .collect();
+        for conn in conns {
+            let text = text.clone();
+            tokio::spawn(async move {
+                conn.write(ChatWsOut::Text(text)).await;
+            });
+        }
+    }
+
     /// Force-closes every socket of a device (revocation / re-registration).
     pub fn close_device(&self, user_id: Uuid, device_id: i32) {
         let conns = {
@@ -116,5 +141,33 @@ impl ChatHub {
             conn.close.notify_waiters();
             let _ = conn.tx.try_send(ChatWsOut::Close);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_device_list_change_reaches_every_device_of_that_account_only() {
+        let hub = ChatHub::default();
+        let (account, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (_first, mut first_rx) = hub.join(account, 1);
+        let (_second, mut second_rx) = hub.join(account, 2);
+        let (_stranger, mut stranger_rx) = hub.join(other, 1);
+
+        hub.notify_devices_changed(account);
+
+        for rx in [&mut first_rx, &mut second_rx] {
+            let frame = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("the frame arrives")
+                .expect("the connection is open");
+            assert!(
+                matches!(frame, ChatWsOut::Text(text) if text.as_str() == r#"{"type":"devicesChanged"}"#)
+            );
+        }
+        tokio::task::yield_now().await;
+        assert!(stranger_rx.try_recv().is_err());
     }
 }

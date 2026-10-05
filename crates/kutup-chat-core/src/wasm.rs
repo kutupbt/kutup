@@ -2841,10 +2841,16 @@ impl WasmChatClient {
     /// of-truth reconciliation path.
     pub async fn reconcile(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
-        self.engine
-            .flush_outbox_deferring_optional_failures(&mut rng)
+        // A message the server will not take right now stays queued and is
+        // reported below; it must not keep the mailbox from being read, or
+        // one stuck send would cut this device off from everything incoming
+        // (and stop Chat from opening at all).
+        let send_failures = self
+            .engine
+            .flush_outbox_collecting_failures(&mut rng)
             .await
-            .map_err(chat_error)?;
+            .map_err(chat_error)?
+            .failed;
         // Contact controls are durable best-effort account sync. A temporary
         // failure must not prevent mailbox decrypt/ack; the marker/outbox retry.
         let _ = self
@@ -2864,7 +2870,16 @@ impl WasmChatClient {
             .flush_contact_syncs(&now_rfc3339(), &mut rng)
             .await;
         report.profiles_refreshed = self.engine.refresh_profiles().await.unwrap_or_default();
-        to_output(&ReceiveReportView::from(report))
+        let mut view = ReceiveReportView::from(report);
+        view.send_failures = send_failures
+            .into_iter()
+            .map(|failure| SendFailureView {
+                send_id: failure.send_id,
+                peer: failure.peer,
+                error: failure.error.to_string(),
+            })
+            .collect();
+        to_output(&view)
     }
 
     #[wasm_bindgen(js_name = maintainPrekeys)]
@@ -3099,6 +3114,12 @@ impl WasmChatClient {
         to_output(&ContactRecordView::from(contact))
     }
 
+    /// The next send to anyone fetches and verifies their device list again.
+    #[wasm_bindgen(js_name = forgetKnownDevices)]
+    pub fn forget_known_devices(&mut self) {
+        self.engine.forget_known_devices();
+    }
+
     #[wasm_bindgen(js_name = pendingSendCount)]
     pub async fn pending_send_count(&self) -> std::result::Result<usize, JsValue> {
         self.engine.pending_send_count().await.map_err(chat_error)
@@ -3188,6 +3209,18 @@ struct ReceiveReportView {
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
+    /// Unreadable envelopes given up on, the sender's session refreshed.
+    repaired: Vec<String>,
+    /// Queued messages that could not be delivered on this pass.
+    send_failures: Vec<SendFailureView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendFailureView {
+    send_id: String,
+    peer: String,
+    error: String,
 }
 
 impl From<ReceiveReport> for ReceiveReportView {
@@ -3210,6 +3243,8 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .map(InboundFailureView::from)
                 .collect(),
             duplicates: report.duplicates,
+            repaired: report.repaired,
+            send_failures: Vec::new(),
         }
     }
 }
@@ -3399,6 +3434,9 @@ struct ContentView {
     mentions: Vec<kutup_chat_proto::MentionV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     link_preview: Option<kutup_chat_proto::LinkPreviewV1>,
+    /// Stands where a message from the peer could not be read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    undecryptable: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3428,6 +3466,7 @@ impl From<ChatContent> for ContentView {
         let sticker_saved = content.as_sticker_saved();
         let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
+        let undecryptable = content.is_undecryptable();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3470,6 +3509,7 @@ impl From<ChatContent> for ContentView {
             poll_terminate,
             mentions: extras.mentions,
             link_preview: extras.link_preview,
+            undecryptable,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,

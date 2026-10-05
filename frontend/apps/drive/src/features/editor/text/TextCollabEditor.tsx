@@ -27,7 +27,7 @@ import OutlinePanel from './outline/OutlinePanel'
 import NoteContextMenu from './NoteContextMenu'
 import CommandPalette, { type PaletteItem } from './palette/CommandPalette'
 import { noteCommands } from './palette/noteCommands'
-import { KindIcon } from '../../explorer/KindIcon'
+import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { folderPath, openFile } from '../../drive/paths'
 import { useNavigate } from 'react-router-dom'
 import {

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Writes the nginx site for the four Kutup web apps, one server block per
-# hostname, from the same settings kutup-server reads:
-# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,MAPS,PHOTOS}_URL, or KUTUP_BASE_DOMAIN for
+# Writes the nginx site for the Kutup web apps and the editor sandbox, one
+# server block per hostname, from the same settings kutup-server reads:
+# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS}_URL, or KUTUP_BASE_DOMAIN for
 # https://<app>.<domain>. The reverse proxy in front terminates TLS and must
 # pass the Host header through.
 set -eu
@@ -28,6 +28,7 @@ account=$(origin_of account KUTUP_ACCOUNT_URL)
 drive=$(origin_of drive KUTUP_DRIVE_URL)
 chat=$(origin_of chat KUTUP_CHAT_URL)
 office=$(origin_of office KUTUP_OFFICE_URL)
+editor=$(origin_of editor KUTUP_EDITOR_URL)
 maps=$(origin_of maps KUTUP_MAPS_URL)
 photos=$(origin_of photos KUTUP_PHOTOS_URL)
 
@@ -41,16 +42,16 @@ server {
     return 404;
 }
 NGINX
-  office_origin=$(printf '%s' "$office" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
-  for app in account drive chat maps photos; do
+  editor_origin=$(printf '%s' "$editor" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
+  for app in account drive chat maps photos office; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
     # count as eval); in-tab viewers render decrypted PDFs and media from
     # blob: URLs; Chat and collaboration use WebSockets. Drive alone may
-    # frame the office sandbox; nothing may frame an app.
+    # frame the editor sandbox; nothing may frame an app.
     frames="'self' blob:"
-    if [ "$app" = drive ]; then frames="$frames $office_origin"; fi
+    if [ "$app" = drive ]; then frames="$frames $editor_origin"; fi
     app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
     cat <<NGINX
 server {
@@ -93,7 +94,7 @@ server {
 }
 NGINX
   done
-  host=$(host_of "$office")
+  host=$(host_of "$editor")
   # The same policy as the dev server (frontend/packages/config/vite.ts):
   # OnlyOffice needs eval and inline script, so its origin holds nothing
   # worth stealing and only Drive may embed it.
@@ -102,7 +103,7 @@ NGINX
 server {
     listen 80;
     server_name $host;
-    root /usr/share/nginx/html/office;
+    root /usr/share/nginx/html/editor;
     add_header Content-Security-Policy "$csp" always;
     add_header Referrer-Policy no-referrer always;
     add_header X-Content-Type-Options nosniff always;
@@ -113,4 +114,4 @@ server {
 }
 NGINX
 } > "$conf"
-echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office"
+echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office editor=$editor"

@@ -1,0 +1,122 @@
+import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
+import { useSharedFiles } from '@kutup/drive-core/fileShares'
+import { foldersKey, useFolders } from '@kutup/drive-core/folders'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { documentKindOf, newDocument, type DocumentKind } from '@kutup/drive-core/documents'
+import { streamUpload } from '@kutup/files/upload/streamUpload'
+import { appUrl } from '@kutup/session/apps'
+import { freshAccessToken } from '@kutup/session/client'
+
+// A document (a note, an office document, a whiteboard) is a Drive file.
+// The Office home shows every one this account can open in an editor: its
+// own wherever they are, in folders shared with it, and files shared with it
+// by themselves. Folders on other servers are left out: the editors cannot
+// open their files yet.
+
+export interface DocumentEntry {
+  folder: Folder
+  file: DriveFile
+  kind: DocumentKind
+  /** The owner's account, when the document is someone else's. */
+  owner: string | null
+  /** Where it opens: Drive's editor. */
+  href: string
+}
+
+/** Drive's editor page for a file (apps/drive: features/drive/paths.ts). */
+export function editorUrl(folder: Pick<Folder, 'id' | 'source'>, fileId: string): string {
+  return appUrl('drive', folder.source === 'file' ? `/shared/file/${fileId}` : `/file/${folder.id}/${fileId}`)
+}
+
+export function useDocuments() {
+  const folders = useFolders()
+  const sharedFiles = useSharedFiles()
+  const readable = (folders.data?.all ?? []).filter((f) => f.key && f.source !== 'remote')
+  const listings = useQueries({
+    queries: readable.map((folder) => ({
+      queryKey: folderFilesKey(folder),
+      queryFn: () => loadFolderFiles(folder),
+    })),
+  })
+  const documents: DocumentEntry[] = []
+  const seen = new Set<string>()
+  listings.forEach((listing, i) => {
+    const folder = readable[i]
+    if (!folder || !listing.data) return
+    for (const file of listing.data) {
+      const kind = documentKindOf(file.name)
+      if (!kind || seen.has(file.id)) continue
+      seen.add(file.id)
+      documents.push({
+        folder,
+        file,
+        kind,
+        owner: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
+        href: editorUrl(folder, file.id),
+      })
+    }
+  })
+  for (const shared of sharedFiles.data ?? []) {
+    // A file shared by itself that is also in a shared folder shows once.
+    // One on another server, or still waiting for its owner's new key,
+    // cannot be opened in the editor from here.
+    const kind = documentKindOf(shared.file.name)
+    if (!kind || seen.has(shared.file.id) || shared.container.remoteFileShareId) continue
+    seen.add(shared.file.id)
+    documents.push({
+      folder: shared.container,
+      file: shared.file,
+      kind,
+      owner: shared.ownerAccount,
+      href: editorUrl(shared.container, shared.file.id),
+    })
+  }
+  return {
+    root: folders.data?.root,
+    documents,
+    loading: folders.isPending || sharedFiles.isPending || listings.some((l) => l.isPending),
+    error: folders.error ?? sharedFiles.error ?? listings.find((l) => l.error)?.error ?? null,
+  }
+}
+
+export type DocumentOrder = 'recent' | 'name'
+
+/** Most recently changed first, or by name. */
+export function sortDocuments(documents: DocumentEntry[], order: DocumentOrder, locale: string): DocumentEntry[] {
+  const sorted = [...documents]
+  if (order === 'name') {
+    sorted.sort((a, b) => (a.file.name ?? '').localeCompare(b.file.name ?? '', locale, { numeric: true, sensitivity: 'base' }))
+  } else {
+    sorted.sort((a, b) => b.file.updatedAt.localeCompare(a.file.updatedAt))
+  }
+  return sorted
+}
+
+/** Those of `kind` (all when null) whose name contains `query`. */
+export function filterDocuments(documents: DocumentEntry[], kind: DocumentKind | null, query: string, locale: string): DocumentEntry[] {
+  const needle = query.trim().toLocaleLowerCase(locale)
+  return documents.filter(
+    (d) => (!kind || d.kind === kind) && (!needle || (d.file.name ?? '').toLocaleLowerCase(locale).includes(needle)),
+  )
+}
+
+/** Make an empty document in `folder`; returns where it opens. */
+export function useCreateDocument() {
+  const queryClient = useQueryClient()
+  return async (folder: Folder, kind: DocumentKind, title: string): Promise<string> => {
+    if (!folder.key || !folder.canUpload) throw new Error('folder is not open')
+    const existing = await loadFolderFiles(folder)
+    const file = newDocument(kind, title, existing.flatMap((f) => (f.name ? [f.name] : [])))
+    const uploaded = await streamUpload({
+      file,
+      collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
+      accessToken: freshAccessToken,
+    })
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['files'] }),
+      queryClient.invalidateQueries({ queryKey: foldersKey }),
+    ])
+    return editorUrl(folder, uploaded.fileId)
+  }
+}

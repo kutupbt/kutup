@@ -311,6 +311,6 @@ Where code, schemas, or protocol details were copied or closely adapted, the rel
 
 **AGPL-3.0-only** — Copyright (c) 2026 Alperen Albayrak. See [LICENSE](LICENSE).
 
-The OnlyOffice subtree under `frontend/apps/office/public/onlyoffice/` and the kutup ↔ OnlyOffice bridge in `frontend/apps/drive/src/features/editor/office/` are licensed AGPL-3.0-or-later (so they can link the OnlyOffice client). Full license boundary: [frontend/apps/office/public/onlyoffice/LICENSE.md](frontend/apps/office/public/onlyoffice/LICENSE.md).
+The OnlyOffice subtree under `frontend/apps/editor/public/onlyoffice/` and the kutup ↔ OnlyOffice bridge in `frontend/apps/drive/src/features/editor/office/` are licensed AGPL-3.0-or-later (so they can link the OnlyOffice client). Full license boundary: [frontend/apps/editor/public/onlyoffice/LICENSE.md](frontend/apps/editor/public/onlyoffice/LICENSE.md).
 
 The **kutup name, the three-diamond logo, and other brand assets** are not granted by the AGPL — see [TRADEMARK.md](TRADEMARK.md) for what's OK without asking (articles, integration references, screenshots) and what needs permission (selling merch, distributing forks under our name).

@@ -263,6 +263,71 @@ typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
 
+### Unreadable messages and session repair
+
+A Direct envelope from a known sender device (named on an identified
+envelope, or proven by a sealed envelope's certificate) that cannot be
+decrypted because the session is missing or the ciphertext does not
+authenticate is not retried for ever. In one transaction the receiver:
+
+- sets the current session with that device aside, at most once an hour per
+  device and only if there is one. The old state is kept as a previous
+  session, so messages already on their way under it still decrypt;
+- writes a local-only `undecryptable` record in the message's place, in an
+  open conversation only (accepted, or a request this side sent). A stranger
+  cannot make records or requests appear this way. The server passes each
+  envelope's `sendId` along; with it there is one record per unreadable
+  message, carrying that id. Without it (a row stored before the server did
+  so) there is one record per reset, which nothing replaces;
+- marks the envelope for acknowledgement.
+
+It then sends the peer a hidden `sessionControl` message
+(`{action: "refresh", sendIds}`), in an open conversation only. Encrypting it
+starts a fresh session from a newly fetched bundle, and the peer adopts that
+session by decrypting it; everything either side sends afterwards is
+readable. `sendIds` (at most 64 per message) names what could not be read.
+
+The peer answers from its sent history. For each named message that it sent
+to that account and that was history on both sides, it sends a hidden
+`resend` wrapping the original content whole, under a new transport id; for
+the rest (a typing indicator, a receipt it no longer has, an id it never
+sent) it sends one `sessionControl` `{action: "unavailable", sendIds}`. A
+message is sent again at most once an hour per peer. The receiver handles a
+`resend` as the message inside it: it is stored and shown with its original
+id and sender time, so it takes its place in the conversation, and the
+record that waited for it is removed. A device that had read the message the
+first time drops the copy. `unavailable` removes the waiting records and
+shows nothing.
+
+`sessionControl` and `resend` travel like `typing`: never history on the
+sending side, never a linked-device transcript, and they cannot open or
+reopen a message request. If one cannot be delivered it stays queued without
+blocking the conversation.
+
+The `sendId` on an envelope is not authenticated. A server that changes it
+can make a device ask for, and receive again, a message of the same sender
+it already has (which it drops) or one that does not exist; it cannot make a
+peer send anything that peer did not already send to this account.
+
+Within the hour, further unreadable envelopes from the same device do not
+reset the session again. The interval is kept in memory, so a reload allows
+one more. An envelope that fails for another reason (an untrusted identity,
+an unknown suite, a malformed envelope, a sealed envelope whose outer layer
+or certificate does not verify) is not repaired this way and stays in the
+attention journal as before.
+
+A send reuses the device list it last fetched and verified for an account
+for as long as it has a current session with every listed device under the
+identity key that list served; it then takes no keys from the server. The
+server still checks the exact device set on every send, so a list that went
+stale is corrected by the usual `409` amendment, which fetches again. Two
+things drop a held list earlier: the server's `devicesChanged` frame (this
+account's own devices changed), and a message whose `deviceListVersion`
+(the sender's signed manifest sequence, a top-level field inside the
+ciphertext of every ordinary Direct message) is above the sequence this
+device has pinned for that sender. The server never learns who an account's
+contacts are; a contact hears of a change with the next message it reads.
+
 ### Disappearing-message V1 contract
 
 A hidden E2EE `disappearingTimer` operation changes the duration for future
@@ -326,7 +391,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate`. `groupCall`
+local-only record of a finished call, like `groupUpdate` and `undecryptable`:
+none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).
 
@@ -535,7 +601,9 @@ must be atomic:
 Decrypt precedes durable commit; acknowledgement follows it. A crash may cause
 an exact replay, never acknowledgement of uncommitted plaintext or ratchet
 state. Malformed/untrusted envelopes remain in a bounded attention/dead-letter
-journal and are never silently acknowledged.
+journal and are never silently acknowledged. The one exception is an
+unreadable message from a known sender device, which is acknowledged together
+with the session repair and the visible record described in §6.
 
 Network unavailability retains the last valid pin and retries. Cryptographic
 contradictions block. Unknown suites and malformed canonical encodings return

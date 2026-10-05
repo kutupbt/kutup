@@ -2,15 +2,15 @@ import { expect, type BrowserContext, type Locator, type Page } from '@playwrigh
 
 /**
  * Kutup serves one web app per hostname: account, drive, chat, photos, maps
- * and the office sandbox. A server's apps are described by an origin
+ * and office, plus the editor sandbox. A server's apps are described by an origin
  * template in which `{app}` stands for the app's name, for example
  * `https://{app}.localhost:38443` for the single-server stack or
  * `http://{app}.a.test:39081` for the first federation server.
  */
-export type App = 'account' | 'drive' | 'chat' | 'photos' | 'maps' | 'office'
+export type App = 'account' | 'drive' | 'chat' | 'photos' | 'maps' | 'office' | 'editor'
 export type Server = 'primary' | 'secondary'
 
-export const APPS: readonly App[] = ['account', 'drive', 'chat', 'photos', 'maps', 'office']
+export const APPS: readonly App[] = ['account', 'drive', 'chat', 'photos', 'maps', 'office', 'editor']
 
 export const PRIMARY_ORIGIN_TEMPLATE = process.env.E2E_APP_ORIGIN ?? 'https://{app}.localhost:38443'
 export const SECONDARY_ORIGIN_TEMPLATE = process.env.E2E_SECONDARY_APP_ORIGIN

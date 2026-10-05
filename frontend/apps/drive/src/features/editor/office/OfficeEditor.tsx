@@ -77,13 +77,13 @@ export interface SessionBase {
 export type DocType = 'docx' | 'xlsx' | 'pptx' | 'pdf'
 
 /**
- * OnlyOffice runs on its own origin (office.<domain>), which holds no
+ * OnlyOffice runs on its own origin (editor.<domain>), which holds no
  * session, keys or API: the bridge there sees only the document this page
  * hands it. Every message to it names that origin, and only messages from
  * it (and from this iframe) are read.
  */
 function officeOrigin(): string {
-  return getAppDirectory().office
+  return getAppDirectory().editor
 }
 
 /** How long the bridge may take to say it is ready before we give up. */
@@ -602,7 +602,7 @@ function OfficeEditorBase(
         ref={iframeRef}
         title={filename}
         src={appUrl(
-          'office',
+          'editor',
           `/onlyoffice/inner.html?${new URLSearchParams({
             type: docType ?? '',
             fileId,

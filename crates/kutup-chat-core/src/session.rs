@@ -93,6 +93,19 @@ pub(crate) struct SealedEnvelopeInspection {
     pub certificate: SenderCertificate,
 }
 
+/// What [`Session::repair_undecryptable`] did.
+pub(crate) struct UndecryptableRepair {
+    /// The current session with the sender device was set aside.
+    pub reset: bool,
+    /// The sender should be handed a fresh session now rather than with the
+    /// next message the user happens to write.
+    pub refresh_peer: bool,
+    /// The message to ask the sender for again, when it could be named.
+    pub request: Option<String>,
+    /// The record written in the unreadable message's place.
+    pub notice: Option<ReceivedMessage>,
+}
+
 pub(crate) struct SendAmendment<'a> {
     pub send_id: &'a str,
     pub peer_user: &'a str,
@@ -141,6 +154,13 @@ pub(crate) enum ReceiveOutcome {
         id: String,
         /// Present only when this device actually adopted a new peer key.
         peer: Option<String>,
+    },
+    /// The peer could not read some messages and asks for them again. The
+    /// request itself is kept by nobody.
+    ResendRequested {
+        id: String,
+        peer: String,
+        send_ids: Vec<String>,
     },
     /// A blocked peer's envelope was authenticated, decrypted, ratcheted, and
     /// made safe to ack, but its plaintext was deliberately not retained.
@@ -1039,11 +1059,45 @@ impl Session {
         self.store.db().list_inbound().await
     }
 
+    /// Whether a session exists with every one of `bundles`' devices, under
+    /// the identity key each bundle serves. This account's own current
+    /// device is skipped: it is listed among its account's devices but is
+    /// never encrypted to.
+    pub(crate) async fn has_sessions_with_all(
+        &self,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+    ) -> Result<bool> {
+        for bundle in bundles {
+            if peer_user == self.user() && bundle.device_id == self.device_id() {
+                continue;
+            }
+            let key = ChatAddress::from_sender(peer_user, bundle.device_id)?
+                .to_protocol()?
+                .to_string();
+            if !self.store.has_session(&key).await? {
+                return Ok(false);
+            }
+            let served = decode_identity_key(&bundle.identity_key)?
+                .serialize()
+                .to_vec();
+            if self.store.peer_identity(&key).await?.as_deref() != Some(served.as_slice()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) async fn record_inbound_failure(
         &mut self,
         mut inbound: InboundEnvelope,
         error: &ChatError,
     ) -> Result<InboundState> {
+        // Whatever the failed attempt staged goes: a ratchet that advanced
+        // for a message whose handling then failed must not be committed with
+        // the failure, or the retry would find the message already consumed,
+        // take it for a duplicate, and acknowledge it away unread.
+        self.store.discard();
         let failure_kind = error.inbound_failure_kind();
         inbound.state = if failure_kind == InboundFailureKind::Duplicate {
             InboundState::PendingAck
@@ -1057,6 +1111,156 @@ impl Session {
         self.store.stage_inbound(inbound);
         self.store.commit().await?;
         Ok(state)
+    }
+
+    /// Give up on an envelope from a known sender device that cannot be
+    /// decrypted, and make the conversation work again: with `reset`, the
+    /// current session with that device is set aside so the next message to
+    /// it starts a fresh one, and a local record takes the unreadable
+    /// message's place in an open conversation. The envelope is acknowledged
+    /// either way, since no retry can read it. One atomic unit of work.
+    pub(crate) async fn repair_undecryptable(
+        &mut self,
+        mut inbound: InboundEnvelope,
+        sender: &str,
+        sender_device_id: u32,
+        send_id: Option<&str>,
+        reset: bool,
+        error: &ChatError,
+    ) -> Result<UndecryptableRepair> {
+        self.store.discard();
+        let result = async {
+            let from = ChatAddress::from_sender(sender, sender_device_id)?;
+            let reset = reset
+                && self
+                    .store
+                    .archive_session(&from.to_protocol()?.to_string())
+                    .await?;
+            let received_at = now_millis();
+            let open_conversation = sender != self.user()
+                && self.contact(sender).await?.is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
+            // The id the server passed along names the message, so the
+            // sender can be asked for exactly it and the record can give way
+            // when it arrives. It is not authenticated; a wrong one gets a
+            // message this device already has, or nothing.
+            let named = send_id
+                .filter(|id| open_conversation && !id.is_empty() && id.len() <= 64)
+                .map(str::to_string);
+            let mut request = named.clone();
+            if let Some(send_id) = named.as_deref() {
+                for message in self.store.db().list_messages().await? {
+                    if message.peer != sender {
+                        continue;
+                    }
+                    let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content)
+                    else {
+                        continue;
+                    };
+                    let waiting = content
+                        .as_undecryptable()
+                        .is_some_and(|body| body.send_id.as_deref() == Some(send_id));
+                    if waiting || content.message_id.as_deref() == Some(send_id) {
+                        // Already here, or already waited for.
+                        request = None;
+                    }
+                }
+            }
+            // Without a name there is one record per reset, not per
+            // envelope: an unreadable typing indicator is indistinguishable
+            // from an unreadable message, and a burst of either says nothing
+            // more than the first.
+            let record = match named {
+                Some(_) => request.is_some(),
+                None => reset && open_conversation,
+            };
+            let notice = if record {
+                let content = ChatContent::undecryptable_with_id(
+                    inbound.id.clone(),
+                    crate::clock::rfc3339(received_at),
+                    request.clone(),
+                );
+                self.store.stage_message(InboxMessage {
+                    id: inbound.id.clone(),
+                    peer: sender.to_string(),
+                    sender_device_id,
+                    cursor: inbound.cursor,
+                    content: serde_json::to_vec(&content)
+                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                    received_at,
+                });
+                Some(ReceivedMessage {
+                    from,
+                    content,
+                    cursor: inbound.cursor,
+                    id: inbound.id.clone(),
+                })
+            } else {
+                None
+            };
+            inbound.state = InboundState::PendingAck;
+            inbound.attempts = inbound.attempts.saturating_add(1);
+            inbound.failure_kind = Some(error.inbound_failure_kind());
+            inbound.last_error = Some(error.to_string());
+            self.store.stage_inbound(inbound);
+            self.store.commit().await?;
+            Ok(UndecryptableRepair {
+                reset,
+                refresh_peer: reset && open_conversation,
+                request,
+                notice,
+            })
+        }
+        .await;
+        if result.is_err() {
+            self.store.discard();
+        }
+        result
+    }
+
+    /// What this device sent `peer` as `send_id`, if it is a message that
+    /// may be sent again.
+    pub(crate) async fn resendable_content(
+        &self,
+        peer: &str,
+        send_id: &str,
+    ) -> Result<Option<ChatContent>> {
+        Ok(self
+            .sent_message(send_id)
+            .await?
+            .filter(|sent| sent.peer == peer)
+            .and_then(|sent| serde_json::from_slice::<ChatContent>(&sent.content).ok())
+            .filter(|content| {
+                content.is_resendable() && content.message_id.as_deref() == Some(send_id)
+            }))
+    }
+
+    /// Stage removing the records standing in for `send_ids` from `sender`.
+    async fn stage_filled_in(&mut self, sender: &str, send_ids: &[String]) -> Result<bool> {
+        let mut already_here = false;
+        for message in self.store.db().list_messages().await? {
+            if message.peer != sender {
+                continue;
+            }
+            let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content) else {
+                continue;
+            };
+            match content.as_undecryptable() {
+                Some(body) => {
+                    if body.send_id.is_some_and(|id| send_ids.contains(&id)) {
+                        self.store.delete_message(&message.id);
+                    }
+                }
+                None => {
+                    already_here |= content.message_id.is_some_and(|id| send_ids.contains(&id));
+                }
+            }
+        }
+        Ok(already_here)
     }
 
     pub(crate) async fn finish_acks(&mut self, ids: &[String]) -> Result<()> {
@@ -1386,7 +1590,7 @@ impl Session {
     /// `username@homeserver` addresses. Qualify only bare senders with this
     /// session's already-validated local domain before choosing the ratchet or
     /// comparing a linked-device sender with the local account.
-    fn resolve_delivered_sender(
+    pub(crate) fn resolve_delivered_sender(
         &self,
         sender: &str,
         device_id: u32,
@@ -1507,7 +1711,57 @@ impl Session {
         from: ChatAddress,
         plaintext: Vec<u8>,
     ) -> Result<ReceiveOutcome> {
-        let parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        let mut plaintext = plaintext;
+        let mut parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        // A message sent again is handled as the message inside it, and
+        // takes the place of the record that waited for it.
+        if parsed
+            .as_ref()
+            .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::RESEND)
+        {
+            let body = parsed
+                .as_ref()
+                .and_then(ChatContent::as_resend)
+                .filter(|_| sender != self.user());
+            let Some(body) = body else {
+                self.store.discard();
+                return Err(ChatError::Content("invalid re-sent message".into()));
+            };
+            let already_here = match self
+                .stage_filled_in(&sender, std::slice::from_ref(&body.send_id))
+                .await
+            {
+                Ok(already_here) => already_here,
+                Err(error) => {
+                    self.store.discard();
+                    return Err(error);
+                }
+            };
+            if already_here {
+                // Another device of this account asked; this one read it the
+                // first time.
+                self.store.stage_inbound(InboundEnvelope {
+                    id: envelope.id.clone(),
+                    cursor: envelope.cursor,
+                    envelope: serde_json::to_vec(envelope)
+                        .map_err(|e| ChatError::Wire(e.to_string()))?,
+                    state: InboundState::PendingAck,
+                    attempts: 0,
+                    failure_kind: None,
+                    last_error: None,
+                    received_at: now_millis(),
+                });
+                self.store.commit().await?;
+                return Ok(ReceiveOutcome::Suppressed {
+                    id: envelope.id.clone(),
+                });
+            }
+            plaintext =
+                serde_json::to_vec(&body.content).map_err(|e| ChatError::Content(e.to_string()))?;
+            parsed = Some(*body.content);
+        }
+        let plaintext = plaintext;
+        let parsed = parsed;
         let local_only = |content: &ChatContent| {
             ChatContent::is_local_only_kind(&content.kind)
                 || content.as_sent_transcript().is_some_and(|transcript| {
@@ -1543,6 +1797,7 @@ impl Session {
         let mut profile_control = false;
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
+        let mut resend_request: Option<Vec<String>> = None;
         if let Some(Err(error)) = transcript.as_ref().map(|body| {
             body.content
                 .extras()
@@ -1610,6 +1865,7 @@ impl Session {
                 None
             } else if transcript.content.kind == kutup_chat_proto::content::kind::TYPING
                 || transcript.content.kind == kutup_chat_proto::content::kind::CALL
+                || transcript.content.is_session_control()
             {
                 // Ephemeral controls are never linked-device history. Current
                 // clients do not sync them, but older/malicious local devices
@@ -1647,6 +1903,7 @@ impl Session {
             let is_disappearing_timer = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_disappearing_timer().is_some());
+            let is_session_control = parsed.as_ref().is_some_and(ChatContent::is_session_control);
             let is_account_control = parsed
                 .as_ref()
                 .is_some_and(|content| ChatContent::is_account_control_kind(&content.kind));
@@ -1719,6 +1976,33 @@ impl Session {
                             profile_key_updated = Some(sender.clone());
                         }
                     }
+                }
+            } else if is_session_control {
+                // It already did its work: decrypting it adopted the session
+                // it carried. Nothing is kept, and it opens no request.
+                suppressed = true;
+                let open_conversation = prior_contact.as_ref().is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
+                let control = parsed
+                    .as_ref()
+                    .and_then(ChatContent::as_session_control)
+                    .filter(|body| open_conversation && !body.send_ids.is_empty());
+                match control {
+                    Some(body)
+                        if body.action == kutup_chat_proto::SessionControlAction::Refresh =>
+                    {
+                        resend_request = Some(body.send_ids);
+                    }
+                    Some(body) => {
+                        // Nothing was lost that a reader would see: the
+                        // records waiting for these simply go.
+                        self.stage_filled_in(&sender, &body.send_ids).await?;
+                    }
+                    None => {}
                 }
             } else if is_typing || is_call {
                 // Typing and calls cannot create/reopen a message request and
@@ -1796,6 +2080,13 @@ impl Session {
             return Ok(ReceiveOutcome::ProfileKeyUpdate {
                 id: envelope.id.clone(),
                 peer: profile_key_updated,
+            });
+        }
+        if let Some(send_ids) = resend_request {
+            return Ok(ReceiveOutcome::ResendRequested {
+                id: envelope.id.clone(),
+                peer: from.user.clone(),
+                send_ids,
             });
         }
         if suppressed {
@@ -4450,6 +4741,7 @@ mod sealed_tests {
             suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content: outgoing[0].content.clone(),
             server_timestamp: "2026-07-22T00:00:01Z".into(),
+            send_id: None,
         };
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
         assert_eq!(inspection.sender, "alice@chat.example");

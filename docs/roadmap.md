@@ -547,6 +547,45 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   direct chats only, no group calls), and direct chats get the self-healing
   first: pushed device-list changes, healing on send, undecryptable messages
   as placeholders that fill in, automatic session repair.
+- **Office home: what is left.** `office.<domain>` lists the notes, office
+  documents and whiteboards an account can open and starts new ones in My
+  files; they are Drive files and open in Drive's editors. Still open:
+  "recent" means last changed, since nothing records when a file was last
+  opened; there is no template gallery, only blank documents; a new
+  document always goes to My files; files in folders on other servers are
+  left out until the editors can open them; a document shows its preview
+  only after the editor has saved one.
+- **Direct chats: self-healing.** Worked through in the order of the
+  research report "Self healing encrypted group chat" and an audit of the
+  direct-chat code against it.
+  - Done: a queued message the server will not take no longer keeps the
+    mailbox from being read or Chat from opening (it is reported, retried on
+    every pass, and holds back only its own conversation); a failed decrypt
+    no longer commits a ratchet step without its message; background sync
+    failures are caught; a browser whose device was removed elsewhere says
+    so and can be set up again instead of "reconnecting" for ever; the
+    browser is asked to keep Chat's storage; a send takes no keys from the
+    server while it has sessions with the devices it last verified; a
+    message that cannot be read repairs its session by itself (reset at most
+    once an hour per device, a hidden message hands the sender a fresh
+    session) and leaves a notice in the conversation; the server tells an
+    account's connected devices when its device list changes
+    (`docs/chat-protocol.md`, "Unreadable messages and session repair").
+    The message itself is asked for again by id and takes its place when
+    it arrives; a contact drops the device list it holds for you when a
+    message of yours says your signed list has moved on.
+  - Next: signed and last-resort prekeys rotate, and used prekeys are kept
+    as long as the mailbox can still hold a message for them. Open edges of
+    the re-send: a message close to the size limit cannot be wrapped and
+    stays waiting; the once-an-hour limits are kept in memory only; a
+    waiting notice whose sender never answers (an old client, an account
+    gone) stays as it is.
+  - Later: writes with strict durability (the IndexedDB wrapper in use
+    cannot ask for it; without it a power loss can roll a ratchet back after
+    a send); a write generation checked in every transaction and a lock
+    timeout, so a second or frozen tab cannot corrupt or stall the engine;
+    detection of a restored older snapshot; fault-injection tests (killed
+    mid-write, stale snapshot, two tabs).
 - **Group device repair: what is left.** A group now recovers when a
   member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
   Still open: it takes up to two minutes (the device check's period), plus
@@ -634,7 +673,7 @@ shared files in Drive search.
 On roughly one warm reload in four, ONLYOFFICE's own editor frame loads its
 scripts but never reports `onAppReady`, so `api.js` never sends it its
 configuration and the loading skeleton stays. The bridge
-(`frontend/apps/office/public/onlyoffice/inner.html`) recovers by mounting the
+(`frontend/apps/editor/public/onlyoffice/inner.html`) recovers by mounting the
 editor again after 7 seconds, at most twice, so the document opens, but
 late. The cause is inside the vendored editor build
 (`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office

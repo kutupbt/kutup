@@ -31,6 +31,10 @@ export function chatTranscript(
       lines.push(`${at} ${callLogText(view.callLog, t)}`)
       continue
     }
+    if (view.undecryptable) {
+      lines.push(`${at} ${t(view.undecryptable === 'waiting' ? 'chat.undecryptable.waiting' : 'chat.undecryptable.notice', { name: nameOf(view.author) })}`)
+      continue
+    }
     if (view.groupCall) {
       lines.push(`${at} ${view.outgoing ? t('chat.calls.groupStarted_you') : t('chat.calls.groupStarted', { name: nameOf(view.author) })}`)
       continue

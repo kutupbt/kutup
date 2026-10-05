@@ -95,6 +95,30 @@ describe('ChatService connection status', () => {
     expect(statuses).toEqual(['connected', 'connecting', 'connected'])
   })
 
+  it('says the device was removed, and stops retrying, when the server does not know it', async () => {
+    const { default: api } = await import('@kutup/session/client')
+    const { AxiosError, AxiosHeaders } = await import('axios')
+    const response = { status: 404, data: { error: 'no such chat device' }, headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' }
+    vi.mocked(api.post).mockRejectedValueOnce(new AxiosError('failed', '404', undefined, undefined, response as never))
+    const { service, statuses } = socketService()
+    await (service as unknown as { connectSocket(): Promise<void> }).connectSocket()
+    expect(service.connectionStatus()).toBe('deviceRemoved')
+    // No reconnect is scheduled: waiting does not bring a removed device back.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(FakeSocket.instances).toHaveLength(0)
+    expect(statuses).toEqual(['deviceRemoved'])
+  })
+
+  it('keeps retrying when the server is merely out of reach', async () => {
+    const { default: api } = await import('@kutup/session/client')
+    vi.mocked(api.post).mockRejectedValueOnce(new Error('Network Error'))
+    const { service } = socketService()
+    await (service as unknown as { connectSocket(): Promise<void> }).connectSocket()
+    expect(service.connectionStatus()).toBe('connecting')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(FakeSocket.instances).toHaveLength(1)
+  })
+
   it('treats a socket that stops answering pings as dropped', async () => {
     const { service } = socketService()
     const socket = await connect(service)
@@ -122,6 +146,31 @@ describe('ChatService connection status', () => {
     expect(reconcile).not.toHaveBeenCalled()
     socket.onmessage?.({ data: JSON.stringify({ type: 'drainMailbox' }) })
     expect(reconcile).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the device lists it holds when the server says the account\'s devices changed', async () => {
+    const { service } = socketService()
+    const forgetKnownDevices = vi.fn()
+    const updates = vi.fn()
+    Object.assign(service, {
+      client: { forgetKnownDevices },
+      listeners: new Set([updates]),
+      withLock: (work: () => Promise<unknown>) => work(),
+    })
+    const socket = await connect(service)
+    socket.open()
+    await vi.advanceTimersByTimeAsync(0)
+    const reconcile = (service as unknown as { reconcile: ReturnType<typeof vi.fn> }).reconcile
+    reconcile.mockClear()
+
+    socket.onmessage?.({ data: JSON.stringify({ type: 'drainMailbox' }) })
+    expect(forgetKnownDevices).not.toHaveBeenCalled()
+    socket.onmessage?.({ data: JSON.stringify({ type: 'devicesChanged' }) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(forgetKnownDevices).toHaveBeenCalledTimes(1)
+    expect(updates).toHaveBeenCalledTimes(1)
+    // Like any other frame, it also reads the mailbox.
+    expect(reconcile).toHaveBeenCalledTimes(2)
   })
 
   it('goes offline with the browser and reconnects at once when it is back', async () => {

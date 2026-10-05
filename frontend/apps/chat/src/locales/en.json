@@ -553,11 +553,20 @@
       "clearDescription": "The messages stay, but files not saved elsewhere may no longer open.",
       "empty": "No chat attachments stored yet."
     },
+    "undecryptable": {
+      "waiting": "Waiting for a message from {{name}}. It could not be read on this browser, so it was asked for again and will appear here when it arrives.",
+      "waitingPreview": "Waiting for a message",
+      "notice": "A message from {{name}} could not be read on this browser. The secure connection was refreshed automatically; new messages will arrive as usual. Ask them to send it again.",
+      "preview": "A message could not be read"
+    },
     "connection": {
       "offline": "You're offline",
       "connecting": "Reconnecting…",
       "queued": "New messages will appear once you're connected. Messages you send will go out then.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "deviceRemoved": "This browser is no longer one of your Chat devices",
+      "deviceRemovedBody": "It was removed from your account, from another device or after going unused. Messages are not arriving here. Setting it up again registers it afresh and restores your history from the encrypted backup; messages still waiting to be sent from this browser are lost.",
+      "setUpAgain": "Set up again"
     },
     "groupUpdates": {
       "nameChanged": "{{actor}} changed the group name to “{{name}}”.",

@@ -1,4 +1,4 @@
 import { defineConfig } from 'vite'
-import { kutupOffice } from '@kutup/config/vite'
+import { kutupApp } from '@kutup/config/vite'
 
-export default defineConfig(kutupOffice())
+export default defineConfig(kutupApp({ app: 'office', wasm: ['crypto', 'chat'] }))
