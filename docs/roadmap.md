@@ -627,24 +627,51 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     Mail, Calendar and Contacts are planned as later pieces of Kutup;
     recurring meetings, invitations by email and reminders belong to that
     work and are deliberately not built into Chat.
-  - The list of meetings a person joined is kept in the browser only.
+  - The list of meetings an account joined belongs to the account: sealed
+    under its key and stored on its server, so every device shows it. (It
+    began as a per-browser list, which was poor to use.) It is its own
+    small store rather than hidden Note to Self records, because the
+    meeting page that records a stay has no Chat session to send from.
   - The waiting room is optional and off by default, because it needs its
     host present: the owner admits people from inside the meeting, in a
     browser where they are signed in to Chat.
-- **Meetings: moderation (next).** A waiting room decides who comes in. Not
-  built yet: removing someone and ending the meeting for everyone (the
-  server would have to act on the SFU as the room's administrator, and the
-  keys would have to change, since a removed person still holds the link
-  and a valid SFU token); an expiry for a meeting; co-hosts who can admit;
-  admitting from the Meetings page or a notification without being in the
-  meeting; and letting everyone waiting in at once.
-- **Meetings: joining as yourself.** Everyone in a meeting shows the name
-  they typed, including people with accounts. A signed-in person could
-  instead join with a name the others can verify against their contact, and
-  a link from another server could open inside their own Chat.
-- **Meetings: history across devices.** The joined-meetings list is per
-  browser. For an account it could travel between its devices the way list
-  state does (hidden Note to Self records).
+  - Hosts remove and mute people, stop a screen share, lock the meeting
+    and let everyone waiting in; the owner names co-hosts and ends the
+    meeting for everyone (`docs/chat-calls.md`, "Hosts").
+  - Removing someone turns the waiting room on rather than changing the
+    meeting's keys: they still hold the link, so the door is what keeps
+    them out. Excluding someone for good is a new link for the meeting.
+  - A removed person's SFU token cannot be withdrawn, so the server
+    remembers removed seats and removes one again when it is back in the
+    room. A modified client is in the room for the few seconds that takes
+    (the SFU tells the others of a newcomer within about three). Closing
+    that entirely would mean moving everyone to a new SFU room on every
+    removal, interrupting the meeting each time: not done.
+  - Ending a meeting starts a new sitting with its own SFU room, so the
+    tokens of the ended one open nothing anyone is in.
+  - Each browser's identity in a meeting is bound to a secret it holds (a
+    seat), so nobody can take another participant's identity, and a
+    co-host is still one after reloading.
+  - A meeting left without a host gets one: after 20 seconds the
+    longest-present participant becomes a co-host (not the owner).
+  - The owner is the host only in a browser where they are signed in to
+    Chat; elsewhere they are a guest. Accepted.
+  - A signed-in person can show their account in a meeting, vouched for by
+    the server; a name alone stays what was typed. Guests have only names.
+  - Moderation is for meetings only. Group calls wait for the group work;
+    one-to-one calls need none.
+  - Admitting people without being in the meeting (from the Meetings page
+    or a notification) is deliberately not built: a host lets people in
+    from inside the meeting.
+  - The meeting routes are rate-limited per network address, so some 25
+    people waiting behind one address reach the limit. Accepted for now.
+- **Meetings: what is left.** The SFU's webhook for "participant joined",
+  to remove a returning removed participant as their media connects rather
+  than a few seconds later; an expiry for a meeting; unmuting on request
+  ("ask to unmute"); a meeting-wide "only hosts share their screen"; a
+  link from another server opening inside the person's own Chat; the
+  joined-meetings list pushed to other devices as it changes (it is asked
+  for again on focus and every half minute).
 - **Meetings with Calendar (after Mail, Calendar and Contacts).** Recurring
   meetings, invitations sent by email, reminders, and picking invitees from
   contacts.

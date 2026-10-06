@@ -139,14 +139,29 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-chat')).toBeVisible()
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
+  // The owner's leave button asks which: leave, or end it for everyone.
+  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/joined-meetings')
+  await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
   await ownerCall.close()
 
-  // The owner's stay is in this browser's history, and can be rejoined.
+  // The owner's stay is in the account's list of joined meetings, and can
+  // be rejoined. The meeting page left it in this browser; Chat moved it
+  // into the account, sealed, so it is there without this browser's copy.
   const entry = chat.locator(`[data-testid="chat-meeting-history-entry"][data-title="${title}"]`)
   await expect(entry).toHaveCount(1, { timeout: 30_000 })
   await expect(entry.getByTestId('chat-meeting-rejoin')).toHaveAttribute('href', url)
+  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup-meeting-history')), { timeout: 30_000 }).toBe('[]')
+  const recordedBody = (await recorded).postData() ?? ''
+  expect(Object.keys(JSON.parse(recordedBody) as Record<string, unknown>).sort()).toEqual(['entry', 'id'])
+  expect(recordedBody).not.toContain('Team sync')
+  await chat.reload()
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await expect(entry).toHaveCount(1, { timeout: 60_000 })
+  // The guest has no account: their stays are kept nowhere, so they cannot
+  // end up in the list of whoever signs in to this browser next.
+  expect(await guest.evaluate(() => localStorage.getItem('kutup-meeting-history'))).toBeNull()
 
   // Renaming it changes what a holder of the link sees.
   await meeting(chat, title).getByTestId('chat-meeting-edit').click()
@@ -253,7 +268,7 @@ test('a meeting with a waiting room lets in only whom its owner admits', async (
   await expect(guest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 60_000 })
   expect(tokenRequest).not.toBeNull()
   const direct = await guest.request.post(apiUrl('/chat/call-links/token'), {
-    data: { ...tokenRequest!, participantId: 'ab'.repeat(16), label: Buffer.alloc(168).toString('base64') },
+    data: { ...tokenRequest!, participantId: 'ab'.repeat(16), seat: Buffer.alloc(32, 3).toString('base64'), label: Buffer.alloc(168).toString('base64') },
   })
   expect(direct.status()).toBe(403)
   const asHost = await guest.request.post(apiUrl('/chat/call-links/knocks'), {
@@ -309,6 +324,283 @@ test('a meeting with a waiting room lets in only whom its owner admits', async (
 
   await strangerContext.close()
   await guestContext.close()
+  await ownerContext.close()
+})
+
+function person(page: Page, name: string) {
+  return page.locator(`[data-testid="chat-call-person"][data-name="${name}"]`)
+}
+
+/** An account's meeting with this title, without a waiting room, and its link. */
+async function makeMeeting(chat: Page, title: string): Promise<string> {
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await chat.getByTestId('chat-meeting-schedule').click()
+  await chat.getByTestId('chat-meeting-title').fill(title)
+  await chat.getByTestId('chat-meeting-timed').uncheck()
+  await chat.getByTestId('chat-meeting-save').click()
+  await expect(meeting(chat, title)).toBeVisible({ timeout: 30_000 })
+  return (await meeting(chat, title).getByTestId('chat-meeting-url').textContent())!.trim()
+}
+
+test('hosts remove and mute people and stop a screen share; the owner names co-hosts and ends the meeting', async ({ browser }) => {
+  test.slow()
+  const owner = newAccount('hostowner', PASSWORD)
+  const ownerContext = await browser.newContext()
+  await registerAccount(ownerContext, owner)
+  const chat = await openChat(ownerContext)
+  test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
+
+  // A meeting anyone with the link walks into.
+  const title = `Town hall ${Date.now()}`
+  const url = await makeMeeting(chat, title)
+  const popup = ownerContext.waitForEvent('page')
+  await meeting(chat, title).getByTestId('chat-meeting-join').click()
+  const ownerCall = await popup
+  // The owner is signed in here, and shows the others their account.
+  await expect(ownerCall.getByTestId('chat-link-call-show-account')).toBeChecked({ timeout: 60_000 })
+  await join(ownerCall, 'Owner Ada', false)
+
+  // Two people join with the link. What one of them shows the server to ask
+  // who the hosts are is kept, to try as a co-host what a co-host may not do.
+  const helperContext = await browser.newContext()
+  const helper = await helperContext.newPage()
+  let asHelper: { roomId: string; accessToken: string; sfuToken: string } | null = null
+  let ownerId: string | null = null
+  helper.on('response', async (response) => {
+    if (new URL(response.url()).pathname !== '/api/chat/call-links/roles' || !response.ok()) return
+    asHelper = response.request().postDataJSON() as typeof asHelper
+    const { roles } = (await response.json()) as { roles: { participantId: string; role: string }[] }
+    ownerId = roles.find((entry) => entry.role === 'owner')?.participantId ?? ownerId
+  })
+  await helper.goto(url)
+  await expect(helper.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  // Nobody is signed in there: there is no account to show.
+  await expect(helper.getByTestId('chat-link-call-show-account')).toHaveCount(0)
+  await join(helper, 'Helper Hale', false)
+  const pestContext = await browser.newContext()
+  const pest = await pestContext.newPage()
+  // The SFU token this one is given is kept, to try it again once removed.
+  let pestAccess: { url: string; token: string } | null = null
+  pest.on('response', async (response) => {
+    if (new URL(response.url()).pathname === '/api/chat/call-links/token' && response.ok()) pestAccess = (await response.json()) as typeof pestAccess
+  })
+  await pest.goto(url)
+  await expect(pest.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await join(pest, 'Pest', false)
+  await expect(tile(ownerCall, 'Pest')).toBeVisible({ timeout: 60_000 })
+
+  // Everyone sees who the host is, and the account the server vouches for
+  // under the name they typed. A guest has none. Someone who is not a host
+  // can act on nobody.
+  await helper.getByTestId('chat-call-people-button').click()
+  await expect(person(helper, 'Owner Ada').getByTestId('chat-call-person-badge')).toHaveText('Host', { timeout: 30_000 })
+  await expect(person(helper, 'Owner Ada').getByTestId('chat-call-person-account')).toContainText(`${owner.username}@`)
+  await expect(person(helper, 'Pest')).toBeVisible({ timeout: 30_000 })
+  await expect(person(helper, 'Pest').getByTestId('chat-call-person-account')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-meeting-person-menu')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-link-call-leave-menu')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-meeting-mute-all')).toHaveCount(0)
+  expect(asHelper).not.toBeNull()
+  expect(ownerId).not.toBeNull()
+  const refused = await helper.request.post(apiUrl('/chat/call-links/participants/remove'), {
+    data: { ...asHelper!, participantId: ownerId! },
+  })
+  expect(refused.status()).toBe(404)
+  // Nobody takes someone else's identity: a token for the owner's is minted
+  // only to the browser that holds its seat.
+  const { roomId, accessToken } = asHelper!
+  const stolen = await helper.request.post(apiUrl('/chat/call-links/token'), {
+    data: { roomId, accessToken, participantId: ownerId!, seat: Buffer.alloc(32, 9).toString('base64'), label: Buffer.alloc(168).toString('base64') },
+  })
+  expect(stolen.status()).toBe(409)
+
+  // The owner mutes someone: their microphone goes off, and they can turn
+  // it back on themselves.
+  await ownerCall.getByTestId('chat-call-people-button').click()
+  await expect(pest.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'false')
+  await person(ownerCall, 'Pest').getByTestId('chat-meeting-person-menu').click()
+  await ownerCall.getByTestId('chat-meeting-mute').click()
+  await expect(pest.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 })
+  await pest.getByTestId('chat-link-call-mute').click()
+  await expect(pest.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'false', { timeout: 30_000 })
+  // Muting everyone leaves the hosts' microphones on.
+  await ownerCall.getByTestId('chat-meeting-mute-all').click()
+  await expect(pest.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 })
+  await expect(helper.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 })
+  await expect(ownerCall.getByTestId('chat-link-call-mute')).toHaveAttribute('aria-pressed', 'false')
+
+  // The owner stops someone's screen share: it ends, and they cannot start
+  // another until a host allows it again.
+  await pest.getByTestId('chat-link-call-screen-share').click()
+  await expect(ownerCall.getByTestId('chat-group-call-screen-tile')).toBeVisible({ timeout: 60_000 })
+  await person(ownerCall, 'Pest').getByTestId('chat-meeting-person-menu').click()
+  await expect(ownerCall.getByTestId('chat-meeting-screen')).toHaveText('Stop their screen sharing')
+  await ownerCall.getByTestId('chat-meeting-screen').click()
+  await expect(ownerCall.getByTestId('chat-group-call-screen-tile')).toHaveCount(0, { timeout: 45_000 })
+  await expect(pest.getByTestId('chat-link-call-screen-share')).toBeDisabled({ timeout: 30_000 })
+  await person(ownerCall, 'Pest').getByTestId('chat-meeting-person-menu').click()
+  await expect(ownerCall.getByTestId('chat-meeting-screen')).toHaveText('Allow screen sharing', { timeout: 30_000 })
+  await ownerCall.getByTestId('chat-meeting-screen').click()
+  await expect(pest.getByTestId('chat-link-call-screen-share')).toBeEnabled({ timeout: 30_000 })
+
+  // The owner makes one of them a co-host.
+  await person(ownerCall, 'Helper Hale').getByTestId('chat-meeting-person-menu').click()
+  await ownerCall.getByTestId('chat-meeting-co-host').click()
+  await expect(person(ownerCall, 'Helper Hale').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+  await expect(person(helper, 'You').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+
+  // A co-host is still one after reloading the page: the browser comes back
+  // to its seat.
+  await helper.reload()
+  await join(helper, 'Helper Hale', false)
+  await helper.getByTestId('chat-call-people-button').click()
+  await expect(person(helper, 'You').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+
+  // A co-host acts on those who are not hosts, never on the owner, and does
+  // not end the meeting.
+  await expect(person(helper, 'Pest').getByTestId('chat-meeting-person-menu')).toBeVisible({ timeout: 30_000 })
+  await expect(person(helper, 'Owner Ada').getByTestId('chat-meeting-person-menu')).toHaveCount(0)
+  await expect(helper.getByTestId('chat-link-call-leave-menu')).toHaveCount(0)
+  const notTheOwner = await helper.request.post(apiUrl('/chat/call-links/participants/remove'), {
+    data: { ...asHelper!, participantId: ownerId! },
+  })
+  expect(notTheOwner.status()).toBe(403)
+  const notTheirs = await helper.request.post(apiUrl('/chat/call-links/end'), { data: asHelper! })
+  expect(notTheirs.status()).toBe(404)
+
+  // The co-host removes someone: they are told, and the meeting now has a
+  // waiting room, so the link alone no longer lets them back in.
+  await person(helper, 'Pest').getByTestId('chat-meeting-person-menu').click()
+  await helper.getByTestId('chat-meeting-remove').click()
+  await helper.getByRole('alertdialog').getByRole('button', { name: 'Remove from meeting' }).click()
+  await expect(pest.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'removed', { timeout: 45_000 })
+  await expect(tile(ownerCall, 'Pest')).toHaveCount(0, { timeout: 45_000 })
+  await expect(pest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 30_000 })
+
+  // The SFU token they were given still works at the SFU, which cannot take
+  // it back. Connecting with it again gets them removed again by the server,
+  // without a host doing anything.
+  expect(pestAccess).not.toBeNull()
+  const back = await pest.evaluate(
+    ({ url: sfu, token }) =>
+      new Promise<string>((resolve) => {
+        const socket = new WebSocket(`${sfu}/rtc?access_token=${encodeURIComponent(token)}&auto_subscribe=1&protocol=9`)
+        let opened = false
+        socket.onopen = () => (opened = true)
+        socket.onclose = () => resolve(opened ? 'removed again' : 'refused')
+        setTimeout(() => resolve('still connected'), 40_000)
+      }),
+    pestAccess!,
+  )
+  expect(back).toBe('removed again')
+  await expect(tile(ownerCall, 'Pest')).toHaveCount(0)
+
+  // They ask again; the co-host sees them waiting and lets them in.
+  await pest.getByTestId('chat-link-call-join').click()
+  await expect(pest.getByTestId('chat-link-call-waiting')).toBeVisible({ timeout: 30_000 })
+  const knock = helper.locator('[data-testid="chat-meeting-knock"][data-name="Pest"]')
+  await expect(knock).toBeVisible({ timeout: 30_000 })
+  await knock.getByTestId('chat-meeting-admit').click()
+  await expect(pest.getByTestId('chat-link-call-screen')).toHaveAttribute('data-phase', 'active', { timeout: 60_000 })
+  await expect(tile(ownerCall, 'Pest')).toBeVisible({ timeout: 60_000 })
+
+  // The owner takes the co-host's role back: they can act on nobody again.
+  await person(ownerCall, 'Helper Hale').getByTestId('chat-meeting-person-menu').click()
+  await ownerCall.getByTestId('chat-meeting-co-host').click()
+  await expect(person(ownerCall, 'Helper Hale').getByTestId('chat-call-person-badge')).toHaveCount(0, { timeout: 30_000 })
+  await expect(helper.getByTestId('chat-meeting-person-menu')).toHaveCount(0, { timeout: 30_000 })
+
+  // The owner ends the meeting: everyone is out and told why, and the SFU
+  // tokens of the sitting that ended say nothing about the next one.
+  await ownerCall.getByTestId('chat-link-call-leave-menu').click()
+  await ownerCall.getByTestId('chat-meeting-end').click()
+  await ownerCall.getByRole('alertdialog').getByRole('button', { name: 'End meeting' }).click()
+  await expect(helper.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'endedByHost', { timeout: 45_000 })
+  await expect(pest.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'endedByHost', { timeout: 45_000 })
+  await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
+  await expect(ownerCall.getByTestId('chat-link-call-failure')).toHaveCount(0)
+  const afterwards = await helper.request.post(apiUrl('/chat/call-links/roles'), { data: asHelper! })
+  expect(afterwards.ok()).toBe(true)
+  expect(await afterwards.json()).toMatchObject({ roles: [] })
+
+  await pestContext.close()
+  await helperContext.close()
+  await ownerContext.close()
+})
+
+test('a meeting is locked, gets a co-host when its hosts leave, and can be given a new link', async ({ browser }) => {
+  test.slow()
+  const owner = newAccount('lockowner', PASSWORD)
+  const ownerContext = await browser.newContext()
+  await registerAccount(ownerContext, owner)
+  const chat = await openChat(ownerContext)
+  test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
+
+  const title = `Workshop ${Date.now()}`
+  const url = await makeMeeting(chat, title)
+  const popup = ownerContext.waitForEvent('page')
+  await meeting(chat, title).getByTestId('chat-meeting-join').click()
+  const ownerCall = await popup
+  await join(ownerCall, 'Owner Ada', false)
+  const firstContext = await browser.newContext()
+  const first = await firstContext.newPage()
+  await first.goto(url)
+  await join(first, 'First Fatma', false)
+  await expect(tile(ownerCall, 'First Fatma')).toBeVisible({ timeout: 60_000 })
+
+  // Locked: someone new with the link is told so and does not get in;
+  // someone already in the meeting sees that it is locked.
+  await ownerCall.getByTestId('chat-call-people-button').click()
+  await ownerCall.getByTestId('chat-meeting-lock').click()
+  await expect(ownerCall.getByTestId('chat-meeting-lock')).toHaveAttribute('data-locked', 'true', { timeout: 30_000 })
+  await first.getByTestId('chat-call-people-button').click()
+  await expect(first.getByTestId('chat-meeting-locked')).toBeVisible({ timeout: 30_000 })
+  const lateContext = await browser.newContext()
+  const late = await lateContext.newPage()
+  await late.goto(url)
+  await expect(late.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'locked', { timeout: 60_000 })
+  await late.getByTestId('chat-link-call-name').fill('Late Leyla')
+  await late.getByTestId('chat-link-call-join').click()
+  await expect(late.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'locked', { timeout: 30_000 })
+  await expect(tile(ownerCall, 'Late Leyla')).toHaveCount(0)
+
+  // Unlocked, they come in.
+  await ownerCall.getByTestId('chat-meeting-lock').click()
+  await expect(ownerCall.getByTestId('chat-meeting-lock')).toHaveAttribute('data-locked', 'false', { timeout: 30_000 })
+  await late.reload()
+  await join(late, 'Late Leyla', false)
+  await expect(tile(ownerCall, 'Late Leyla')).toBeVisible({ timeout: 60_000 })
+
+  // The owner leaves without ending the meeting. It is not left without
+  // anyone to let people in: after a short while the participant who has
+  // been there longest is a co-host, and is told so.
+  await ownerCall.getByTestId('chat-link-call-leave-menu').click()
+  await ownerCall.getByTestId('chat-link-call-leave').click()
+  await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
+  await expect(person(first, 'You').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 90_000 })
+  await expect(person(first, 'Late Leyla').getByTestId('chat-meeting-person-menu')).toBeVisible({ timeout: 30_000 })
+  await late.getByTestId('chat-call-people-button').click()
+  await expect(person(late, 'First Fatma').getByTestId('chat-call-person-badge')).toHaveText('Co-host', { timeout: 30_000 })
+  await expect(person(late, 'You').getByTestId('chat-call-person-badge')).toHaveCount(0)
+  await ownerCall.close()
+
+  // A new link: the old one stops working and whoever was in the meeting is
+  // out; the meeting keeps its title under the new link.
+  await meeting(chat, title).getByTestId('chat-meeting-new-link').click()
+  await chat.getByRole('alertdialog').getByRole('button', { name: 'New link' }).click()
+  await expect(meeting(chat, title).getByTestId('chat-meeting-url')).not.toHaveText(url, { timeout: 30_000 })
+  const newUrl = (await meeting(chat, title).getByTestId('chat-meeting-url').textContent())!.trim()
+  await expect(chat.getByTestId('chat-meetings-yours').getByTestId('chat-meeting')).toHaveCount(1)
+  await expect(first.getByTestId('chat-link-call-failure')).toBeVisible({ timeout: 45_000 })
+  await first.reload()
+  await expect(first.getByTestId('chat-link-call-failure')).toHaveAttribute('data-reason', 'gone', { timeout: 60_000 })
+  await late.goto(newUrl)
+  await late.reload()
+  await expect(late.getByTestId('chat-link-call-title')).toHaveText(title, { timeout: 60_000 })
+  await join(late, 'Late Leyla', false)
+
+  await lateContext.close()
+  await firstContext.close()
   await ownerContext.close()
 })
 

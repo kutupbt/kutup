@@ -796,6 +796,22 @@ export interface CallLinkCrypto {
   /** Seal a message written during the meeting, for the others in it. */
   callLinkSealMessage(secret: string, message: CallLinkMessage): string
   callLinkOpenMessage(secret: string, sealed: string): CallLinkMessage
+  /**
+   * Seal one stay in a meeting for the account's own list of joined
+   * meetings, under a key from the account master key (base64).
+   */
+  callLinkSealJoined(masterKey: string, entry: JoinedMeetingRecord): string
+  /** Throws when the record was not sealed by this account. */
+  callLinkOpenJoined(masterKey: string, sealed: string): JoinedMeetingRecord
+}
+
+/** One stay in a meeting, as the account that joined keeps it. */
+export interface JoinedMeetingRecord {
+  /** The part of the link after `#`. */
+  fragment: string
+  title: string
+  joinedAtMs: number
+  seconds: number
 }
 
 /** The link functions of the chat WASM module. */

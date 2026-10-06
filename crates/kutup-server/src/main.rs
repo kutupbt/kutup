@@ -861,6 +861,17 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/chat/joined-meetings",
+            get(chat_mls::call_link_history::list)
+                .post(chat_mls::call_link_history::add)
+                .delete(chat_mls::call_link_history::clear)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/chat/joined-meetings/:id",
+            delete(chat_mls::call_link_history::remove),
+        )
+        .route(
             "/api/chat/call-links/token",
             post(chat_mls::call_links::token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
@@ -894,6 +905,48 @@ fn build_router(state: AppState) -> Router {
             "/api/chat/call-links/knocks/decide",
             post(chat_mls::call_link_waiting::decide)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/roles",
+            post(chat_mls::call_link_moderation::roles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/co-hosts",
+            post(chat_mls::call_link_moderation::set_co_host)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/participants/remove",
+            post(chat_mls::call_link_moderation::remove_participant)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/participants/mute",
+            post(chat_mls::call_link_moderation::mute)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/participants/screen",
+            post(chat_mls::call_link_moderation::set_screen_share)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/lock",
+            post(chat_mls::call_link_moderation::lock)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/end",
+            post(chat_mls::call_link_moderation::end)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(

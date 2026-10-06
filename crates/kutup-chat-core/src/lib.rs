@@ -37,10 +37,11 @@ mod wire;
 
 pub use address::ChatAddress;
 pub use call_link::{
-    call_link_fragment, call_link_token_hash, new_call_link_nonce, owner_call_link_host_token,
-    owner_call_link_secret, parse_call_link_fragment, CallLinkInfoV1, CallLinkKeys,
-    CallLinkMessageV1, CALL_INFO_SEALED_BYTES, CALL_NAME_SEALED_BYTES, MAX_CALL_MESSAGE_BYTES,
-    MAX_CALL_NAME_BYTES, MAX_CALL_TITLE_BYTES,
+    call_link_fragment, call_link_token_hash, new_call_link_nonce, open_joined_meeting,
+    owner_call_link_host_token, owner_call_link_secret, parse_call_link_fragment,
+    seal_joined_meeting, CallLinkInfoV1, CallLinkKeys, CallLinkMessageV1, JoinedMeetingV1,
+    CALL_INFO_SEALED_BYTES, CALL_NAME_SEALED_BYTES, JOINED_MEETING_SEALED_BYTES,
+    MAX_CALL_MESSAGE_BYTES, MAX_CALL_NAME_BYTES, MAX_CALL_TITLE_BYTES,
 };
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use db::indexed_db::IndexedDbChatDb;
