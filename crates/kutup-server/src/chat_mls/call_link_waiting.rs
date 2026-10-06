@@ -39,6 +39,10 @@ const PRESENT_SECONDS: i64 = 20;
 /// Knocks are forgotten this long after the knocker last asked.
 const FORGET_SECONDS: i64 = 10 * 60;
 
+/// How often knocks past `FORGET_SECONDS` are removed everywhere, not only
+/// when someone next knocks at the same meeting.
+const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 const WAITING: i16 = 0;
 const ADMITTED: i16 = 1;
 const TURNED_AWAY: i16 = 2;
@@ -425,4 +429,25 @@ pub(crate) async fn decide(
         return Err(AppError::not_found("nobody is waiting under that knock"));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Forget knocks whose knocker stopped asking `FORGET_SECONDS` ago, across
+/// every meeting: a sealed name is not kept longer than the wait needs.
+pub(crate) fn spawn_sweeper(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            if let Err(error) = sqlx::query(
+                "DELETE FROM chat_call_link_knocks
+                 WHERE last_seen_at < NOW() - make_interval(secs => $1)",
+            )
+            .bind(FORGET_SECONDS as f64)
+            .execute(&pool)
+            .await
+            {
+                tracing::warn!(%error, "meeting knock sweep failed");
+            }
+        }
+    });
 }

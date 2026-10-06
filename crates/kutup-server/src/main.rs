@@ -330,6 +330,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     live_locations::spawn_sweeper(pool.clone());
+    chat_mls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
