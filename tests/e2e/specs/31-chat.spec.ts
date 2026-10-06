@@ -3,6 +3,7 @@ import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import {
   acceptRequest,
   closeDetails,
+  composer,
   message,
   openChat,
   openChats,
@@ -92,18 +93,36 @@ test.describe('Signal-backed chat', () => {
     await pageA2.reload()
     await expect(message(pageA2, fromA)).toBeVisible({ timeout: 60_000 })
 
-    // Blocked messages are acknowledged and discarded on the device.
+    // Blocked messages are acknowledged and discarded on the device. A send
+    // can arrive as more than one envelope (a typing indicator, then the
+    // message), so before unblocking, wait until everything that arrived has
+    // been acknowledged and nothing more is coming: a message still being
+    // handled when the block ends is, correctly, shown.
+    const arrivals: number[] = []
+    const acks: number[] = []
+    pageB.on('websocket', (socket) =>
+      socket.on('framereceived', (frame) => {
+        if (typeof frame.payload === 'string' && frame.payload.includes('"envelope"')) arrivals.push(Date.now())
+      }),
+    )
+    pageB.on('response', (response) => {
+      if (response.request().method() === 'POST' && response.url().includes('/api/chat/messages/ack') && response.ok()) acks.push(Date.now())
+    })
+    await pageB.reload()
+    await expect(composer(pageB)).toBeVisible({ timeout: 60_000 })
     await openDetails(pageB)
     await pageB.getByRole('button', { name: /^Block / }).click()
     await expect(pageB.getByRole('button', { name: 'Unblock', exact: true }).first()).toBeVisible({ timeout: 30_000 })
     await closeDetails(pageB)
     const whileBlocked = `while-blocked-${tag}`
-    const blockedAck = pageB.waitForResponse(
-      (response) => response.request().method() === 'POST' && response.url().includes('/api/chat/messages/ack') && response.ok(),
-      { timeout: 30_000 },
-    )
+    const sentAt = Date.now()
     await send(pageA, whileBlocked)
-    await blockedAck
+    await expect
+      .poll(() => {
+        const last = arrivals.filter((t) => t >= sentAt).at(-1)
+        return last !== undefined && acks.some((t) => t >= last) && Date.now() - last > 1_500
+      }, { timeout: 45_000 })
+      .toBe(true)
     await expect(message(pageB, whileBlocked)).toHaveCount(0)
     await pageB.getByRole('button', { name: 'Unblock', exact: true }).first().click()
     await expect(pageB.getByRole('button', { name: 'Unblock', exact: true })).toHaveCount(0, { timeout: 30_000 })

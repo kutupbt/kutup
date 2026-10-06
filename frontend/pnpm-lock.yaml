@@ -335,6 +335,9 @@ importers:
       katex:
         specifier: ^0.16.45
         version: 0.16.47
+      lowlight:
+        specifier: ^3.3.0
+        version: 3.3.0
       lucide-react:
         specifier: ^1.8.0
         version: 1.47.0(react@18.3.1)

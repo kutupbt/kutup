@@ -70,7 +70,16 @@ export async function openDirectChat(page: Page, address: string): Promise<void>
   await dialog.getByRole('textbox').fill(address)
   await dialog.getByRole('textbox').press('Enter')
   await page.waitForURL((url) => decodeURIComponent(url.href).includes(address), { timeout: 45_000 })
-  if (page.url() !== from) await expect(composer(page)).toBeVisible({ timeout: 60_000 })
+  if (page.url() !== from) {
+    // The address changes before the view does: until the header names the
+    // new conversation, the composer on screen is still the previous one's.
+    await expect(page.locator('header').getByText(new RegExp(`^${escapeRegExp(address)}`)).first()).toBeVisible({ timeout: 60_000 })
+    await expect(composer(page)).toBeVisible({ timeout: 60_000 })
+  }
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export function composer(page: Page) {
@@ -101,7 +110,9 @@ export function message(page: Page, text: string) {
 export async function openConversationWith(page: Page, peer: string): Promise<void> {
   await openChats(page)
   const from = page.url()
-  const row = page.getByRole('region', { name: 'Conversations' }).getByRole('link', { name: new RegExp(`^${peer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first()
+  const row = page.getByRole('region', { name: 'Conversations' }).getByRole('link', { name: new RegExp(`^${escapeRegExp(peer)}`) }).first()
+  // A new conversation appears once its first message has been read.
+  await expect(row).toBeVisible({ timeout: 60_000 })
   const target = new URL(await row.getAttribute('href') ?? '', from).href
   await row.click()
   if (target !== from) await conversationChanged(page, from)

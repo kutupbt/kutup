@@ -562,6 +562,8 @@
     "connection": {
       "offline": "Çevrimdışısınız",
       "connecting": "Yeniden bağlanılıyor…",
+      "polling": "Bu ağda canlı bağlantı engelleniyor",
+      "pollingBody": "Yeni mesajlar birkaç saniyede bir denetleniyor; gönderme her zamanki gibi çalışıyor. Aramalar zamanında çalmayabilir.",
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene",
       "deviceRemoved": "Bu tarayıcı artık İleti cihazlarınızdan biri değil",

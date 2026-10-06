@@ -547,6 +547,13 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   direct chats only, no group calls), and direct chats get the self-healing
   first: pushed device-list changes, healing on send, undecryptable messages
   as placeholders that fill in, automatic session repair.
+- **Networks that block WebSockets: what is left.** Calls get out over TLS
+  on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
+  seconds when its socket cannot open, and a document opens read-only with
+  the reason. Not done: live editing over plain HTTPS (a streaming fallback
+  for the collaboration hub, for all three editors), and meetings, whose
+  signalling (LiveKit) has no transport but WebSockets. Worth building only
+  if people are seen behind such gateways.
 - **Office home: what is left.** `office.<domain>` lists the notes, office
   documents and whiteboards an account can open and starts new ones in My
   files; they are Drive files and open in Drive's editors. Still open:
