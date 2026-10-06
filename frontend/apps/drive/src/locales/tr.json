@@ -550,6 +550,8 @@
   },
   "file": {
     "opening": "Açılıyor…",
+    "liveBlocked": "Bu ağ canlı düzenlemeyi engelliyor.",
+    "liveBlockedBody": "Dosyayı son kaydedildiği haliyle, salt okunur görüyorsunuz. Bir kopya üzerinde çalışmak için indirin ya da düzenlemek için başka bir ağdan açın.",
     "failedTitle": "Bu dosya açılamıyor",
     "backToDrive": "Depo'ya dön",
     "backTo": "{{folder}} klasörüne dön",

@@ -85,11 +85,22 @@ type TypingListener = (event: ChatTypingEvent) => void
 const LINKED_DEVICE_CHECK_MS = 2 * 60_000
 
 /**
+ * `polling`: the live socket cannot be opened (a gateway that blocks
+ * WebSockets, say) but the server answers ordinary requests, so the mailbox
+ * is read every few seconds instead.
+ *
  * `deviceRemoved`: the server no longer knows this browser's Chat device (it
  * was revoked from another device, or expired unused). Nothing reconnects
  * it; it has to be set up again.
  */
-export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline' | 'deviceRemoved'
+export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved'
+
+/** How often the mailbox is read while the live socket cannot be opened. */
+const POLL_VISIBLE_MS = 5_000
+/** In a hidden tab, where nobody is waiting for the next message. */
+const POLL_HIDDEN_MS = 30_000
+/** Failed socket attempts before polling starts: a restart or a hand-over needs none. */
+const POLL_AFTER_ATTEMPTS = 2
 
 /** The protocol's limit on messages per delete-for-me control. */
 const DELETE_FOR_ME_BATCH = 64
@@ -146,6 +157,7 @@ export class ChatService {
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private pongDeadline: ReturnType<typeof setTimeout> | null = null
   private connection: ChatConnectionStatus = 'connecting'
+  private pollTimer: ReturnType<typeof setTimeout> | null = null
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
   private readonly callListeners = new Set<(event: ChatCallEvent) => void>()
   private cachedCallServers: ChatCallServers | null = null
@@ -1470,6 +1482,7 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    this.stopPolling()
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     this.stopHeartbeat()
@@ -1675,6 +1688,7 @@ export class ChatService {
   }
 
   private wentOffline(): void {
+    this.stopPolling()
     this.setConnection('offline')
     // The socket may linger half-open; drop it so the reconnect starts clean.
     this.socket?.close()
@@ -1729,7 +1743,7 @@ export class ChatService {
   private async connectSocket(): Promise<void> {
     if (this.disposed || this.socket?.readyState === WebSocket.OPEN) return
     if (this.socket?.readyState === WebSocket.CONNECTING) return
-    this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
+    this.socketDown()
     try {
       const response = await api.post<{ ticket: string }>('/chat/ws-ticket', null, {
         params: { deviceId: this.deviceId },
@@ -1743,6 +1757,7 @@ export class ChatService {
       this.socket = socket
       socket.onopen = () => {
         this.retryAttempt = 0
+        this.stopPolling()
         this.setConnection('connected')
         this.startHeartbeat(socket)
         void this.maintainPrekeys()
@@ -1762,27 +1777,67 @@ export class ChatService {
         if (this.socket !== socket) return
         this.socket = null
         this.stopHeartbeat()
-        this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
+        this.socketDown()
         this.scheduleSocketRetry()
       }
     } catch (error) {
       // The server answered that this device does not exist: retrying will
       // not bring it back, and "reconnecting" forever would hide that.
       if (isAxiosError(error) && error.response?.status === 404) {
+        this.stopPolling()
         this.setConnection('deviceRemoved')
         return
       }
-      this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
+      this.socketDown()
       this.scheduleSocketRetry()
     }
+  }
+
+  /** No socket right now. While polling works, that is what the status stays. */
+  private socketDown(): void {
+    if (navigator.onLine === false) this.setConnection('offline')
+    else if (this.connection !== 'polling') this.setConnection('connecting')
+  }
+
+  /**
+   * Read the mailbox on a timer for as long as the socket stays down. The
+   * socket is still retried beside it and takes over the moment it opens.
+   */
+  private startPolling(): void {
+    if (this.disposed || this.pollTimer) return
+    const tick = (): void => {
+      this.pollTimer = null
+      if (this.disposed || this.socket?.readyState === WebSocket.OPEN || this.connection === 'deviceRemoved') return
+      if (navigator.onLine === false) return
+      this.reconcile()
+        .then(() => {
+          if (this.socket?.readyState !== WebSocket.OPEN && this.connection === 'connecting') this.setConnection('polling')
+        })
+        .catch((error: unknown) => {
+          // The server did not answer either: this is not a blocked socket.
+          if (this.connection === 'polling') this.setConnection('connecting')
+          reportBackgroundFailure(error)
+        })
+        .finally(() => {
+          if (this.disposed || this.socket?.readyState === WebSocket.OPEN) return
+          this.pollTimer = setTimeout(tick, document.visibilityState === 'visible' ? POLL_VISIBLE_MS : POLL_HIDDEN_MS)
+        })
+    }
+    this.pollTimer = setTimeout(tick, 0)
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) clearTimeout(this.pollTimer)
+    this.pollTimer = null
   }
 
   private scheduleSocketRetry(): void {
     if (this.disposed || this.socketRetry) return
     const delay = Math.min(30_000, 500 * 2 ** this.retryAttempt++)
+    if (this.retryAttempt >= POLL_AFTER_ATTEMPTS) this.startPolling()
     this.socketRetry = setTimeout(() => {
       this.socketRetry = null
-      this.reconcileInBackground()
+      if (!this.pollTimer) this.reconcileInBackground()
       void this.connectSocket()
     }, delay)
   }

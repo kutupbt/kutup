@@ -292,13 +292,15 @@ export default function MarkdownPreview({
       }}
       onScroll={handleScroll}
       className={
-        'overflow-auto px-6 py-4 ' +
+        'overflow-auto py-4 ' +
         'prose prose-sm max-w-none ' +
         // Make code-block + inline-code visible against both themes.
         'prose-code:before:hidden prose-code:after:hidden ' +
         (className ?? '')
       }
     >
+      {/* The same measure as Edit mode's text (NOTE_LAYOUT in TextCollabEditor), centred. */}
+      <div className="mx-auto max-w-[40rem] px-6">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkCodeMeta, remarkHighlight, [remarkCallouts, { label: calloutLabel }]]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema], rehypeKatex, rehypeHighlight, rehypeCodeLines]}
@@ -374,6 +376,7 @@ export default function MarkdownPreview({
       >
         {source}
       </ReactMarkdown>
+      </div>
     </div>
   )
 }

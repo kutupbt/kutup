@@ -1,6 +1,8 @@
 // WebSocket client for the collab relay. Reconnect with backoff, queue while
 // disconnected, replay-from-seq on reconnect.
 
+import { reportCollabSocket } from './connectivity'
+
 export interface PeerInfo {
   deviceId: number
   userId: string
@@ -142,8 +144,11 @@ export class CollabTransport {
     }
     this.ws = ws
     ws.binaryType = 'arraybuffer'
+    let opened = false
 
     ws.addEventListener('open', () => {
+      opened = true
+      reportCollabSocket(true)
       // Resume from last-seen seq on the server.
       const last = this.opts.lastSeenSeq?.() ?? 0
       this.resumedFrom = last
@@ -189,6 +194,8 @@ export class CollabTransport {
     })
 
     ws.addEventListener('close', () => {
+      // Closed before it ever opened: the network (or the server) refused it.
+      if (!opened && !this.closed) reportCollabSocket(false)
       if (!this.closed) this.scheduleReconnect()
     })
     ws.addEventListener('error', (e) => this.opts.onError(e))

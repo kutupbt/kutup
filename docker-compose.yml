@@ -222,7 +222,10 @@ services:
   # SFU for group calls (optional: `docker compose --profile sfu up`). Frames
   # arrive end-to-end encrypted. The bundled nginx serves it at
   # wss://sfu.<domain> (set that as CHAT_SFU_URL; the name needs DNS and a
-  # place on the certificate); open UDP 50000-60000 and TCP 7881.
+  # place on the certificate); open UDP 50000-60000 and TCP 7881. With
+  # CHAT_SFU_TURN_DOMAIN (sfu-turn.<domain>, also on the certificate) it
+  # relays media over TLS on port 443 for networks that allow nothing else:
+  # nginx ends the TLS and hands the connection to port 5349 here.
   livekit:
     image: livekit/livekit-server:v1.13
     profiles: ["sfu"]
@@ -231,11 +234,13 @@ services:
     environment:
       SFU_KEY: ${CHAT_SFU_API_KEY:-}
       SFU_SECRET: ${CHAT_SFU_API_SECRET:-}
+      SFU_TURN_DOMAIN: ${CHAT_SFU_TURN_DOMAIN:-}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
         [ -n "$$SFU_KEY" ] && [ -n "$$SFU_SECRET" ] || { echo 'set CHAT_SFU_API_KEY and CHAT_SFU_API_SECRET' >&2; exit 1; };
-        LIVEKIT_KEYS="$$SFU_KEY: $$SFU_SECRET" exec /livekit-server --port 7880 --rtc.tcp_port 7881 --rtc.port_range_start 50000 --rtc.port_range_end 60000 --rtc.use_external_ip
+        turn=""; [ -z "$$SFU_TURN_DOMAIN" ] || turn="--turn.enabled --turn.domain $$SFU_TURN_DOMAIN --turn.tls_port 5349 --turn.external_tls";
+        LIVEKIT_KEYS="$$SFU_KEY: $$SFU_SECRET" exec /livekit-server --port 7880 --rtc.tcp_port 7881 --rtc.port_range_start 50000 --rtc.port_range_end 60000 --rtc.use_external_ip $$turn
 
 volumes:
   postgres_data:
