@@ -1403,6 +1403,7 @@ export interface ChatTransportPort {
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
+    | { kind: 'refused' }
   >
   sendSyncMessage(
     request: unknown,

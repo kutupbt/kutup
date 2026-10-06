@@ -321,6 +321,7 @@ enum BrowserSendOutcome {
     Mismatch {
         mismatch: DeviceListMismatch,
     },
+    Refused,
 }
 
 #[async_trait(?Send)]
@@ -539,6 +540,11 @@ impl ChatTransport for BrowserTransport {
                 SendOutcome::Delivered { deduplicated }
             }
             BrowserSendOutcome::Mismatch { mismatch } => SendOutcome::Mismatch(mismatch),
+            BrowserSendOutcome::Refused => {
+                return Err(ChatError::Transport(
+                    "identified delivery cannot be refused as sealed".into(),
+                ))
+            }
         })
     }
 
@@ -558,6 +564,7 @@ impl ChatTransport for BrowserTransport {
                 SendOutcome::Delivered { deduplicated }
             }
             BrowserSendOutcome::Mismatch { mismatch } => SendOutcome::Mismatch(mismatch),
+            BrowserSendOutcome::Refused => SendOutcome::Refused,
         })
     }
 
@@ -573,6 +580,11 @@ impl ChatTransport for BrowserTransport {
                 SendOutcome::Delivered { deduplicated }
             }
             BrowserSendOutcome::Mismatch { mismatch } => SendOutcome::Mismatch(mismatch),
+            BrowserSendOutcome::Refused => {
+                return Err(ChatError::Transport(
+                    "identified delivery cannot be refused as sealed".into(),
+                ))
+            }
         })
     }
 

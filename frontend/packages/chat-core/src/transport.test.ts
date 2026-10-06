@@ -207,6 +207,20 @@ describe('ApiChatTransport', () => {
     )
   })
 
+  it('reports only the server\'s own sealed refusal as refused', async () => {
+    await resolveApiBase()
+    const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)
+    const post = vi
+      .spyOn(axios, 'post')
+      .mockRejectedValueOnce(refusal({ error: 'sealed delivery unavailable' }))
+      .mockRejectedValueOnce(refusal('<html>Not Found</html>'))
+    const transport = new ApiChatTransport()
+
+    await expect(transport.sendSealedMessage('bob', { sendId: 's-1' })).resolves.toEqual({ kind: 'refused' })
+    await expect(transport.sendSealedMessage('bob', { sendId: 's-2' })).rejects.toThrow('failed')
+    expect(post).toHaveBeenCalledTimes(2)
+  })
+
   it('uses authenticated routes for MLS invitation decisions', async () => {
     const get = vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
     const post = vi.spyOn(api, 'post').mockResolvedValue({

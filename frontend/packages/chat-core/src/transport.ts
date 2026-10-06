@@ -378,6 +378,7 @@ export class ApiChatTransport implements ChatTransportPort {
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
+    | { kind: 'refused' }
   > {
     try {
       const response = await axios.post(
@@ -389,6 +390,11 @@ export class ApiChatTransport implements ChatTransportPort {
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
+      }
+      // The server's uniform refusal: the recipient no longer takes this
+      // capability. Only its exact answer counts, not a proxy's 404.
+      if (axios.isAxiosError(error) && error.response?.status === 404 && isSealedRefusal(error.response.data)) {
+        return { kind: 'refused' }
       }
       throw error
     }
@@ -425,4 +431,8 @@ export class ApiChatTransport implements ChatTransportPort {
   async ackMessages(deviceId: number, ids: string[]): Promise<void> {
     await api.post('/chat/messages/ack', { ids }, { params: { deviceId } })
   }
+}
+
+function isSealedRefusal(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'sealed delivery unavailable'
 }
