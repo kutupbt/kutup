@@ -330,6 +330,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     live_locations::spawn_sweeper(pool.clone());
+    chat_mls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
@@ -872,8 +873,37 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
+            "/api/chat/call-links/knock",
+            post(chat_mls::call_link_waiting::knock)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link)),
+        )
+        .route(
+            "/api/chat/call-links/knock/status",
+            post(chat_mls::call_link_waiting::knock_status)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/knocks",
+            post(chat_mls::call_link_waiting::knocks)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
+            "/api/chat/call-links/knocks/decide",
+            post(chat_mls::call_link_waiting::decide)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
             "/api/chat/call-links/:room_id",
             delete(chat_mls::call_links::delete),
+        )
+        .route(
+            "/api/chat/call-links/:room_id/waiting-room",
+            put(chat_mls::call_link_waiting::set_waiting_room)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/call-links/:room_id/info",

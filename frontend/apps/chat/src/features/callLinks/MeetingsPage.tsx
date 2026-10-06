@@ -1,4 +1,4 @@
-import { CalendarPlus, CalendarClock, Copy, History, Link2, Loader2, Pencil, Trash2, Video, X } from 'lucide-react'
+import { CalendarPlus, CalendarClock, Copy, DoorOpen, History, Link2, Loader2, Pencil, Trash2, Video, X } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -10,13 +10,13 @@ import { apiErrorCode } from '@kutup/ui/lib/apiError'
 import { useChat } from '../../app/chatStore'
 import { formatDuration } from '../../lib/callText'
 import { useNow } from '../../lib/useNow'
-import { callLinkUrl, type MeetingInfo, type OwnedCallLink } from './callLinks'
+import { callLinkUrl, type OwnedCallLink } from './callLinks'
 import { rememberCallName } from './callName'
 import { downloadMeetingIcs } from './ics'
 import { MeetingDialog } from './MeetingDialog'
 import { clearJoinedMeetings, forgetJoinedMeeting, type JoinedMeeting } from './meetingHistory'
 import { isUpcoming, meetingStartText } from './meetingTime'
-import { useJoinedMeetings, useMeetings } from './useMeetings'
+import { useJoinedMeetings, useMeetings, type MeetingDraft } from './useMeetings'
 
 /**
  * Meetings: calls anyone with the link can join, with or without a Kutup
@@ -56,20 +56,20 @@ export function MeetingsPage() {
 
   async function startNow() {
     try {
-      const meeting = await create.mutateAsync({ title: t('chat.meetings.defaultTitle') })
+      const meeting = await create.mutateAsync({ info: { title: t('chat.meetings.defaultTitle') }, waitingRoom: false })
       await copyLink(meeting.url, t('chat.meetings.startedCopied'), t('chat.meetings.started'))
     } catch (error) {
       createFailed(error)
     }
   }
 
-  async function submit(info: MeetingInfo) {
+  async function submit(draft: MeetingDraft) {
     if (dialog?.kind === 'edit') {
-      await change.mutateAsync({ meeting: dialog.meeting, info })
+      await change.mutateAsync({ meeting: dialog.meeting, draft })
       return
     }
     try {
-      await create.mutateAsync(info)
+      await create.mutateAsync(draft)
     } catch (error) {
       createFailed(error)
       throw error
@@ -155,7 +155,7 @@ export function MeetingsPage() {
         onOpenChange={(next) => {
           if (!next) setDialog(null)
         }}
-        initial={dialog?.kind === 'edit' ? dialog.meeting.info : undefined}
+        initial={dialog?.kind === 'edit' ? { info: dialog.meeting.info, waitingRoom: dialog.meeting.waitingRoom } : undefined}
         scheduled={dialog?.kind === 'schedule'}
         heading={dialog?.kind === 'edit' ? t('chat.meetings.editTitle') : t('chat.meetings.scheduleTitle')}
         submitLabel={dialog?.kind === 'edit' ? t('common.save') : t('chat.meetings.schedule')}
@@ -220,7 +220,15 @@ function MeetingRow({ meeting, onEdit, onDelete }: { meeting: OwnedCallLink; onE
   return (
     <li className="space-y-3 rounded-lg border border-border p-3" data-testid="chat-meeting" data-title={info.title}>
       <div className="min-w-0">
-        <p className="truncate font-medium">{info.title}</p>
+        <p className="flex items-center gap-2">
+          <span className="truncate font-medium">{info.title}</span>
+          {meeting.waitingRoom ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground" data-testid="chat-meeting-has-waiting-room">
+              <DoorOpen className="size-3" aria-hidden />
+              {t('chat.meetings.waitingRoomBadge')}
+            </span>
+          ) : null}
+        </p>
         <p className="text-sm text-muted-foreground" data-testid="chat-meeting-when">
           {info.startsAtMs !== undefined
             ? info.durationMinutes

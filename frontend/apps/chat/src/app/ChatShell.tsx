@@ -47,7 +47,7 @@ export function ChatShell() {
   const navigate = useNavigate()
   async function newMeeting() {
     try {
-      const meeting = await meetings.create.mutateAsync({ title: t('chat.meetings.defaultTitle') })
+      const meeting = await meetings.create.mutateAsync({ info: { title: t('chat.meetings.defaultTitle') }, waitingRoom: false })
       try {
         await navigator.clipboard.writeText(meeting.url)
         toast.success(t('chat.meetings.startedCopied'))

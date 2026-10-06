@@ -776,6 +776,11 @@ export interface CallLinkCrypto {
   callLinkNonce(): string
   /** The secret of the link its owner made with `nonce`, from the account master key (base64). */
   callLinkOwnerSecret(masterKey: string, nonce: string): string
+  /**
+   * The owner's host token for the meeting made with `nonce` and the hash
+   * the server stores of it. Nobody the link is shared with can derive it.
+   */
+  callLinkHostToken(masterKey: string, nonce: string): { hostToken: string; hostTokenHash: string }
   callLinkKeys(secret: string): CallLinkKeys
   /** The part of the link's URL after `#`. */
   callLinkFragment(secret: string): string

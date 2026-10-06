@@ -184,7 +184,7 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 35: every app's sign-in and signed-in views at phone and desktop
   widths, both themes: one `main`, no page overflow, no serious/critical axe
   findings.
-- spec 40: calls with a synthetic camera, microphone and screen: a
+- spec 42: calls with a synthetic camera, microphone and screen: a
   one-to-one video call and a group call, each with the People panel, the
   conversation's chat beside the video, and screen sharing. The group call
   needs an SFU reachable from this machine (`docker compose --profile sfu`,
@@ -195,8 +195,10 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   joins through the link by name; both see each other, a shared screen and
   the meeting's temporary chat; the stay lands in the browser's history;
   renaming and deleting take effect for holders of the link. Also "New
-  meeting" in the sidebar and "Start a meeting" in a conversation. Needs
-  the same SFU as spec 40.
+  meeting" in the sidebar, "Start a meeting" in a conversation, and the
+  waiting room: the link alone is refused an SFU token, a guest waits until
+  the owner lets them in, one turned away is told so, and one who gives up
+  leaves the owner's list. Needs the same SFU as spec 42.
 - spec 36: a group chat on a server with no federation settings.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.

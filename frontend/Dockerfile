@@ -19,11 +19,17 @@ COPY crates crates
 COPY scripts/build-chat-wasm.sh scripts/build-chat-wasm.sh
 COPY scripts/build-crypto-wasm.sh scripts/build-crypto-wasm.sh
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+# The workspace sources are touched before compiling, as Dockerfile.server
+# does: Cargo decides what to rebuild by file time, the target directories
+# below are a cache shared by every build on the machine, and copied sources
+# can look older than artifacts another checkout left there. Without this the
+# image can silently ship that other checkout's WASM. Dependencies stay cached.
 RUN --mount=type=cache,id=kutup-browser-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kutup-browser-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=kutup-browser-root-target,target=/src/target,sharing=locked \
     --mount=type=cache,id=kutup-browser-chat-target,target=/src/crates/kutup-chat-core/target,sharing=locked \
     rustup target add wasm32-unknown-unknown \
+    && find crates -type f -exec touch {} + \
     && bash scripts/build-crypto-wasm.sh \
     && bash scripts/build-chat-wasm.sh
 

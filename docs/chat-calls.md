@@ -217,7 +217,9 @@ derives each link again; the host never holds a secret. An account keeps at
 most 50.
 
 **The host stores**, per meeting: the room id, the nonce, the SHA-256 of
-the access token, the sealed info, the owner and the time it was made. It
+the access token and of the owner's host token, the sealed info, whether it
+has a waiting room, the owner and the time it was made; and, for a meeting
+with a waiting room, the people waiting (below). It
 offers:
 
 - to the owner: create, list, replace the info and delete
@@ -229,8 +231,10 @@ offers:
     sealed name as the participant's metadata.
 
   A wrong token and an unknown room are answered alike. These routes are
-  limited to 60 a minute per address (`RATE_LIMIT_CALL_LINK_PER_MIN`), and
-  the SFU is never open to rooms nobody registered.
+  limited to 60 a minute per address (`RATE_LIMIT_CALL_LINK_PER_MIN`), the
+  waiting room's repeated questions to 600
+  (`RATE_LIMIT_CALL_LINK_POLL_PER_MIN`), and the SFU is never open to rooms
+  nobody registered.
 
 **In the meeting:** media goes through the host's SFU, each frame encrypted
 under the frame key, so the SFU forwards what it cannot read. The SFU sees
@@ -259,10 +263,48 @@ with the link's fragment so it can be joined again): the server has no
 record of who joined what, the account's other devices do not see it, and
 it can be cleared.
 
+**The waiting room:** optional, per meeting ("Waiting room" when making or
+changing one). With it on, holding the link is not enough to join.
+
+- The host is the meeting's owner. Their proof is the **host token**:
+  HKDF-SHA256 over the account master key with the meetings' salt and the
+  info `host token 0x00 nonce`. Unlike everything derived from the link's
+  secret, nobody the link is shared with can compute it. The server stores
+  its SHA-256.
+- This server enforces it, because it mints the SFU tokens:
+  `POST /api/chat/call-links/token` answers `403` for a meeting with a
+  waiting room unless the host token is presented. Whether a meeting has a
+  waiting room is therefore kept in the clear on the server, and told to
+  whoever asks for the meeting's details.
+- A joiner **knocks** (`…/knock`: access token, a random identity, their
+  sealed name) and receives a ticket only they hold. Their page shows
+  "Waiting for the host to let you in" and asks how the knock went every
+  2.5 s (`…/knock/status`); asking also tells the server they are still
+  there.
+- The host, in the meeting, sees who is waiting by the names they chose
+  (`…/knocks`, asked every 3 s, the sealed names opened in the browser) and
+  lets each one in or turns them away (`…/knocks/decide`). An admitted
+  knocker's next question returns the SFU token, for the identity and name
+  they knocked with; one turned away is told so.
+- A knocker who stops asking for 20 s is no longer listed, and knocks are
+  forgotten ten minutes after their knocker last asked. At most 50 people
+  wait at one meeting. Leaving and coming back means knocking again.
+- Turning the waiting room off lets in everyone still waiting.
+- The meeting page sits outside the sign-in, so it has no session to derive
+  the host token from. The signed-in app, which lists the account's
+  meetings, leaves each meeting's host token in the browser's storage for
+  that page (`kutup-meeting-hosts`). The owner is therefore the host in a
+  browser where they are signed in to Chat; in any other browser they are a
+  guest like everyone else, and wait. Someone has to be the host in the
+  meeting for anyone to be let in.
+- What it does not do: it admits, it does not remove. Someone let in stays
+  until they leave, and their SFU token lasts up to six hours.
+
 **What a meeting is, and is not:**
-- The link is the whole capability. Whoever has it can read the title and
-  time, join, see, hear and read the chat, and hand the link on. There is
-  no waiting room and no approval.
+- Without a waiting room the link is the whole capability: whoever has it
+  can join. With one, they can still read the title and time and ask to
+  join, and the host decides. Either way, someone in the meeting sees,
+  hears and reads its chat, and can hand the link on.
 - Names are what people typed. Nothing ties a name to an account, including
   for people who have one; the join page says so.
 - Deleting a meeting stops new joins. People already in it stay until they
@@ -333,8 +375,10 @@ servers see only the federated token request (room id and tag) from their
 accounts.
 
 For meetings, the host additionally learns that a meeting exists, which
-account made it and when, when its sealed details change, and the network
-address of each joiner when it asks for the details or a token. It never
+account made it and when, when its sealed details change, whether it has a
+waiting room, how many people knock and when each is let in or turned away,
+and the network address of each joiner when it asks for the details or a
+token. It never
 learns the link, the title or time, the names people chose, the chat, or
 the media. Someone who gets the link learns all of them.
 
