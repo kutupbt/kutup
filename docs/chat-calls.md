@@ -368,7 +368,12 @@ SFU itself, as the room's administrator, through LiveKit's room service
   the knock they came in by as removed, and disconnects them at the SFU.
   Their page says a host removed them. They still hold the link, which is
   why the waiting room goes on: to come back they have to ask, and a host
-  decides. It stays on until the owner turns it off.
+  decides. It stays on until the owner turns it off. A link made before
+  host tokens cannot have a waiting room (nobody could let anyone in), so
+  removing someone there locks the meeting instead. The database changes
+  are made together, before the SFU is asked: if it cannot be reached the
+  host sees an error, the person stays out of the seat they had, and asking
+  again disconnects them.
 - **Muting someone** (`…/participants/mute`): the server mutes their
   microphone track at the SFU; their page says so, and they can turn it
   back on. A host mutes, and never unmutes. "Mute everyone" mutes
@@ -389,9 +394,11 @@ SFU itself, as the room's administrator, through LiveKit's room service
   everyone"): a new **sitting** begins. The SFU room is named after the
   room id and the sitting number, and every SFU token names its room, so
   the tokens of the sitting that ended open nothing that anyone is in. The
-  server deletes the old SFU room (which disconnects everybody; their pages
-  say the host ended it), forgets every seat and role, and turns away
-  whoever was waiting. The link keeps working: the meeting can be held
+  server first deletes the SFU room of the sitting that is ending (which
+  disconnects everybody; their pages say the host ended it) and only then
+  moves to the next sitting, forgets every seat and role, and turns away
+  whoever was waiting. If the SFU cannot be reached nothing changes and
+  the owner can ask again, which closes the same room. The link keeps working: the meeting can be held
   again, and everyone comes in like anyone new. When the owner merely
   leaves, the meeting goes on.
 - **What removal is not.** It is not a change of keys: a removed person

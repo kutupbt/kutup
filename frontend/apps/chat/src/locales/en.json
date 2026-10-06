@@ -971,7 +971,7 @@
       "remove": "Remove from meeting",
       "removeTitle": "Remove {{name}}?",
       "removeDescription": "{{name}} is disconnected from the meeting.",
-      "removeWarning": "They still have the link, so the waiting room is turned on: from now on a host lets each person in.",
+      "removeWarning": "They still have the link, so the meeting no longer lets anyone in on its own: the waiting room is turned on (or, for a link without one, the meeting is locked).",
       "removeFailed": "They could not be removed.",
       "leave": "Leave meeting",
       "endForAll": "End meeting for everyone",

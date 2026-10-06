@@ -125,11 +125,11 @@ pub(super) async fn claim_seat(
                 "a host removed this participant from the meeting",
             ));
         }
-        sqlx::query(
+        let renewed = sqlx::query(
             "UPDATE chat_call_link_seats
              SET last_minted_at = NOW(), account = $3,
                  role = CASE WHEN $4 THEN $5 ELSE role END
-             WHERE room_id = $1 AND participant_id = $2",
+             WHERE room_id = $1 AND participant_id = $2 AND removed_at IS NULL",
         )
         .bind(room_id)
         .bind(participant_id)
@@ -137,7 +137,15 @@ pub(super) async fn claim_seat(
         .bind(entry == Entry::Owner)
         .bind(OWNER)
         .execute(&state.pool)
-        .await?;
+        .await?
+        .rows_affected();
+        // Removed between the check above and now.
+        if renewed == 0 {
+            return Err(AppError::new(
+                StatusCode::GONE,
+                "a host removed this participant from the meeting",
+            ));
+        }
         return Ok(Seat { no_screen });
     }
     match entry {
@@ -602,6 +610,15 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
     let outcome: AppResult<bool> = async {
         let room = sfu_room(room_id, meeting.sitting);
         let Some(answer) = participants(state, &room).await? else {
+            // Nobody is in the room: the wait for a host starts again with
+            // whoever comes next.
+            sqlx::query(
+                "UPDATE chat_call_links SET hostless_since = NULL
+                 WHERE room_id = $1 AND hostless_since IS NOT NULL",
+            )
+            .bind(room_id)
+            .execute(&state.pool)
+            .await?;
             return Ok(false);
         };
         let present = identities(&answer);
@@ -911,13 +928,18 @@ pub(crate) async fn remove_participant(
         &request.participant_id,
     )
     .await?;
-    // The door first: once it is shut, disconnecting them is final.
+    let mut tx = state.pool.begin().await?;
+    // The door first: once it is shut, disconnecting them is final. A link
+    // made before host tokens has no waiting room to turn on (nobody could
+    // let anyone in), so it is locked instead.
     sqlx::query(
-        "UPDATE chat_call_links SET waiting_room = TRUE
-         WHERE room_id = $1 AND host_token_hash IS NOT NULL",
+        "UPDATE chat_call_links
+         SET waiting_room = waiting_room OR host_token_hash IS NOT NULL,
+             locked = locked OR host_token_hash IS NULL
+         WHERE room_id = $1",
     )
     .bind(room_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     // Their seat mints no more tokens, and the SFU token they hold is
     // answered by removing them again if they come back (`tend`).
@@ -927,7 +949,7 @@ pub(crate) async fn remove_participant(
     )
     .bind(room_id)
     .bind(&request.participant_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     // Nor does the knock they came in by.
     sqlx::query(
@@ -935,8 +957,9 @@ pub(crate) async fn remove_participant(
     )
     .bind(room_id)
     .bind(&request.participant_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     disconnect(
         &state,
         &sfu_room(room_id, meeting.sitting),
@@ -1192,14 +1215,23 @@ pub(crate) async fn end(
     owner(&state, &credentials).await?;
     let room_id = &credentials.room_id;
     let mut tx = state.pool.begin().await?;
-    // The sitting that ends, read as it is replaced.
-    let ended: i64 = sqlx::query_scalar(
+    // The sitting that ends, held while its room is closed: the room is
+    // closed first, so a call server that fails leaves everything as it was
+    // and asking again closes the right room (closing an empty one first
+    // would report success while everyone stays connected).
+    let ended: i64 =
+        sqlx::query_scalar("SELECT sitting FROM chat_call_links WHERE room_id = $1 FOR UPDATE")
+            .bind(room_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    delete_sfu_room(&state, &sfu_room(room_id, ended)).await?;
+    sqlx::query(
         "UPDATE chat_call_links
          SET sitting = sitting + 1, locked = FALSE, hostless_since = NULL
-         WHERE room_id = $1 RETURNING sitting - 1",
+         WHERE room_id = $1",
     )
     .bind(room_id)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
     // Nobody keeps a seat or a role, and no knock of this sitting, waiting
     // or let in, gets a token now.
@@ -1212,7 +1244,6 @@ pub(crate) async fn end(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    delete_sfu_room(&state, &sfu_room(room_id, ended)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

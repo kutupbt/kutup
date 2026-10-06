@@ -971,7 +971,7 @@
       "remove": "Toplantıdan çıkar",
       "removeTitle": "{{name}} çıkarılsın mı?",
       "removeDescription": "{{name}} toplantıdan çıkarılır.",
-      "removeWarning": "Bağlantı hâlâ onda olduğu için bekleme odası açılır: bundan sonra herkesi bir toplantı sahibi içeri alır.",
+      "removeWarning": "Bağlantı hâlâ onda olduğu için toplantı artık kimseyi kendiliğinden almaz: bekleme odası açılır (bekleme odası olamayan bir bağlantıda toplantı kilitlenir).",
       "removeFailed": "Kişi çıkarılamadı.",
       "leave": "Toplantıdan ayrıl",
       "endForAll": "Toplantıyı herkes için bitir",
