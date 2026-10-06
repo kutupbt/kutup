@@ -8,6 +8,8 @@
   },
   "chat": {
     "attachments": {
+      "unavailableUntilAccepted": "Files, voice messages and stickers can be sent once {{name}} has accepted your message request.",
+      "unavailableOnServer": "This server does not offer sealed delivery, so files, voice messages and stickers can be sent only to Note to Self and to groups.",
       "downloadInto": "Download {{filename}} into Kutup",
       "cancelDownload": "Cancel download of {{filename}}",
       "open": "Open {{filename}}",

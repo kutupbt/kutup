@@ -249,6 +249,17 @@ export function ConversationView({
     [model.group, profiles, self.address, t],
   )
   const writable = !model.readOnly
+  // In a direct chat, files, voice messages and stickers travel by sealed
+  // delivery, which needs the other person's profile key: it arrives once
+  // they accept the message request, and only on a server that offers it.
+  const mediaUnavailable =
+    conversation.kind === 'direct' && !model.note && !embedded && writable && chat.capabilities?.media
+      ? !chat.capabilities.sealedSender
+        ? t('chat.attachments.unavailableOnServer')
+        : !model.canSendMedia
+          ? t('chat.attachments.unavailableUntilAccepted', { name: model.title })
+          : undefined
+      : undefined
 
   const jump = useCallback((messageId: string) => {
     const element = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
@@ -689,6 +700,7 @@ export function ConversationView({
               ? actions.sendFile
               : undefined
           }
+          mediaUnavailable={mediaUnavailable}
           mediaLimit={chat.capabilities?.media?.maximumPlaintextBytes ?? 0}
           maxTextBytes={model.group ? model.group.currentCryptographicPolicy.maximumApplicationPlaintextBytes : DIRECT_TEXT_MAX_BYTES}
           tooLongText={model.group ? undefined : t('chat.composer.tooLongDirect')}

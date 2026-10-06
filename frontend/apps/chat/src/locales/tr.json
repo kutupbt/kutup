@@ -8,6 +8,8 @@
   },
   "chat": {
     "attachments": {
+      "unavailableUntilAccepted": "Dosya, sesli mesaj ve çıkartma, {{name}} mesaj isteğinizi kabul ettiğinde gönderilebilir.",
+      "unavailableOnServer": "Bu sunucu mühürlü gönderim sunmuyor; dosya, sesli mesaj ve çıkartma yalnızca Kendime Not'a ve gruplara gönderilebilir.",
       "downloadInto": "{{filename}} dosyasını Kutup'a indir",
       "cancelDownload": "{{filename}} indirmesini iptal et",
       "open": "{{filename}} dosyasını aç",
