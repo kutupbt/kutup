@@ -617,14 +617,15 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   its mailbox until they expire.
   The server rule and the engine's cross-account path are covered by browser
   tests (38) and TypeScript unit tests, not yet by Rust unit tests.
-- **Direct-chat media without sealed sender says nothing.** Attachments,
-  stickers, view-once media and voice notes to another person travel by
-  sealed delivery, which a server offers only once its operator has
-  provisioned it (`docs/self-hosting.md`, "Contacts-only sealed sender").
-  On a server without it the composer simply has no attach, sticker or
-  microphone button in a direct chat (Note to Self and groups have them),
-  with no explanation. Either provision it automatically, as the server
-  identity and ordering key already are, or tell the person why.
+- **Direct-chat media: what is left.** Attachments, stickers, view-once
+  media and voice notes to another person travel by sealed delivery, which
+  needs their profile key (it arrives when they accept the message request)
+  and a server that offers sealed sender. Where either is missing the attach
+  button stays and says why. Still open: a server only offers sealed sender
+  once its operator provisions an offline root (`docs/self-hosting.md`,
+  "Contacts-only sealed sender"); a server could provision it itself, as it
+  does its identity and ordering keys, at the cost of keeping the root on the
+  server.
 - **Meetings: decisions (2026-10-03).** Recorded here so the next round
   starts from them (`docs/chat-calls.md`, "Meetings", has the design):
   - Conversation calls and meetings stay separate. A one-to-one or group

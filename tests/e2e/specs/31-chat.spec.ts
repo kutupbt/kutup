@@ -83,6 +83,11 @@ test.describe('Signal-backed chat', () => {
     const fromA = `from-a-${tag}`
     await openDirectChat(pageA, bob.username)
     await send(pageA, fromA)
+    // Until Bob accepts (or on a server without sealed delivery) files cannot
+    // go to him: the attach button stays and says why.
+    await pageA.getByTestId('chat-attachment-unavailable').click()
+    await expect(pageA.getByTestId('chat-media-unavailable')).toBeVisible()
+    await expect(pageA.getByTestId('chat-attachment-button')).toHaveCount(0)
     await openConversationWith(pageB, alice.username)
     await expect(message(pageB, fromA)).toBeVisible({ timeout: 30_000 })
     await pageB.getByRole('button', { name: 'Reject', exact: true }).click()

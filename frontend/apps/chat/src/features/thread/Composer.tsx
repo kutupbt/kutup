@@ -66,6 +66,11 @@ export interface ComposerProps {
    * and the text is sent without it.
    */
   maxEncodedBytes?: number
+  /**
+   * Why files, voice messages and stickers cannot be sent here yet. With it,
+   * the attach button stays and says so, rather than being missing.
+   */
+  mediaUnavailable?: string
   onTyping?: () => void
 }
 
@@ -182,6 +187,7 @@ export function Composer(props: ComposerProps) {
     element.style.height = `${Math.min(element.scrollHeight, 144)}px`
   }, [text])
 
+  const [mediaNote, setMediaNote] = useState(false)
   const trimmed = text.trim()
   const tooLong =
     props.maxTextBytes !== undefined && new TextEncoder().encode(trimmed).byteLength > props.maxTextBytes
@@ -420,6 +426,19 @@ export function Composer(props: ComposerProps) {
               <ViewOnceIcon />
             </Button>
           </>
+        ) : props.mediaUnavailable && !editing ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 shrink-0 rounded-full text-muted-foreground"
+            onClick={() => setMediaNote((shown) => !shown)}
+            aria-label={t('chat.attachments.attach')}
+            aria-expanded={mediaNote}
+            data-testid="chat-attachment-unavailable"
+          >
+            <Paperclip />
+          </Button>
         ) : null}
         {props.onSendSticker && !editing ? <StickerPicker onSend={props.onSendSticker} disabled={busy} /> : null}
         {props.onCreatePoll && !editing ? (
@@ -488,6 +507,11 @@ export function Composer(props: ComposerProps) {
         )}
       </div>
       {tooLong ? <p className="mt-1 px-2 text-xs text-destructive">{props.tooLongText ?? t('chat.composer.tooLong')}</p> : null}
+      {mediaNote && props.mediaUnavailable && !sendFile ? (
+        <p role="status" className="mt-1 px-2 text-xs text-muted-foreground" data-testid="chat-media-unavailable">
+          {props.mediaUnavailable}
+        </p>
+      ) : null}
     </div>
   )
 }
