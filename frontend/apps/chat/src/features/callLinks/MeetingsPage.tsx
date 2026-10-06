@@ -1,4 +1,4 @@
-import { CalendarPlus, CalendarClock, Copy, DoorOpen, History, Link2, Loader2, Pencil, Trash2, Video, X } from 'lucide-react'
+import { CalendarPlus, CalendarClock, Copy, DoorOpen, History, Link2, Loader2, Pencil, RefreshCw, Trash2, Video, X } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -14,23 +14,24 @@ import { callLinkUrl, type OwnedCallLink } from './callLinks'
 import { rememberCallName } from './callName'
 import { downloadMeetingIcs } from './ics'
 import { MeetingDialog } from './MeetingDialog'
-import { clearJoinedMeetings, forgetJoinedMeeting, type JoinedMeeting } from './meetingHistory'
+import type { JoinedMeeting } from './meetingHistory'
 import { isUpcoming, meetingStartText } from './meetingTime'
 import { useJoinedMeetings, useMeetings, type MeetingDraft } from './useMeetings'
 
 /**
  * Meetings: calls anyone with the link can join, with or without a Kutup
  * account. The account's own (those with a time still ahead first), and the
- * ones this browser joined.
+ * ones the account joined, on any of its devices.
  */
 export function MeetingsPage() {
   const { t } = useTranslation()
   const { capabilities } = useChat()
   const now = useNow(60_000)
-  const { list, create, change, remove } = useMeetings()
-  const history = useJoinedMeetings()
+  const { list, create, change, replace, remove } = useMeetings()
+  const { entries: history, forget, clear } = useJoinedMeetings()
   const [dialog, setDialog] = useState<{ kind: 'schedule' } | { kind: 'edit'; meeting: OwnedCallLink } | null>(null)
   const [deleting, setDeleting] = useState<OwnedCallLink | null>(null)
+  const [replacing, setReplacing] = useState<OwnedCallLink | null>(null)
   const [clearing, setClearing] = useState(false)
 
   if (!capabilities?.callLinks) {
@@ -107,7 +108,7 @@ export function MeetingsPage() {
           <Section title={t('chat.meetings.upcoming')}>
             <ul className="space-y-3" data-testid="chat-meetings-upcoming">
               {upcoming.map((meeting) => (
-                <MeetingRow key={meeting.roomId} meeting={meeting} onEdit={() => setDialog({ kind: 'edit', meeting })} onDelete={() => setDeleting(meeting)} />
+                <MeetingRow key={meeting.roomId} meeting={meeting} onEdit={() => setDialog({ kind: 'edit', meeting })} onReplace={() => setReplacing(meeting)} onDelete={() => setDeleting(meeting)} />
               ))}
             </ul>
           </Section>
@@ -122,7 +123,7 @@ export function MeetingsPage() {
             ) : (
               <ul className="space-y-3" data-testid="chat-meetings-yours">
                 {others.map((meeting) => (
-                  <MeetingRow key={meeting.roomId} meeting={meeting} onEdit={() => setDialog({ kind: 'edit', meeting })} onDelete={() => setDeleting(meeting)} />
+                  <MeetingRow key={meeting.roomId} meeting={meeting} onEdit={() => setDialog({ kind: 'edit', meeting })} onReplace={() => setReplacing(meeting)} onDelete={() => setDeleting(meeting)} />
                 ))}
               </ul>
             )}
@@ -138,7 +139,11 @@ export function MeetingsPage() {
             <>
               <ul className="divide-y divide-border rounded-lg border border-border" data-testid="chat-meetings-history">
                 {history.map((entry) => (
-                  <HistoryRow key={`${entry.roomId}:${entry.joinedAtMs}`} entry={entry} />
+                  <HistoryRow
+                    key={entry.id}
+                    entry={entry}
+                    onForget={() => forget.mutate(entry, { onError: () => toast.error(t('chat.meetings.historyForgetFailed')) })}
+                  />
                 ))}
               </ul>
               <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setClearing(true)} data-testid="chat-meetings-history-clear">
@@ -177,16 +182,38 @@ export function MeetingsPage() {
         }}
       />
       <ConfirmDestructive
+        open={replacing !== null}
+        onOpenChange={(next) => {
+          if (!next) setReplacing(null)
+        }}
+        title={t('chat.meetings.newLinkTitle', { title: replacing?.info.title ?? '' })}
+        description={t('chat.meetings.newLinkDescription')}
+        warning={t('chat.meetings.newLinkWarning')}
+        warningVariant="warn"
+        submit={t('chat.meetings.newLink')}
+        pending={replace.isPending}
+        error={replace.error}
+        errorFallback={t('chat.meetings.newLinkFailed')}
+        onConfirm={() => {
+          if (!replacing) return
+          replace.mutate(replacing, {
+            onSuccess: (next) => {
+              setReplacing(null)
+              void copyLink(next.url, t('chat.meetings.newLinkCopied'), t('chat.meetings.newLinkMade'))
+            },
+          })
+        }}
+      />
+      <ConfirmDestructive
         open={clearing}
         onOpenChange={setClearing}
         title={t('chat.meetings.historyClearTitle')}
         description={t('chat.meetings.historyClearDescription')}
         submit={t('chat.meetings.historyClear')}
-        errorFallback=""
-        onConfirm={() => {
-          clearJoinedMeetings()
-          setClearing(false)
-        }}
+        pending={clear.isPending}
+        error={clear.error}
+        errorFallback={t('chat.meetings.historyClearFailed')}
+        onConfirm={() => clear.mutate(undefined, { onSuccess: () => setClearing(false) })}
       />
     </div>
   )
@@ -214,7 +241,17 @@ function JoinLink({ url, label, testId }: { url: string; label: string; testId: 
   )
 }
 
-function MeetingRow({ meeting, onEdit, onDelete }: { meeting: OwnedCallLink; onEdit: () => void; onDelete: () => void }) {
+function MeetingRow({
+  meeting,
+  onEdit,
+  onReplace,
+  onDelete,
+}: {
+  meeting: OwnedCallLink
+  onEdit: () => void
+  onReplace: () => void
+  onDelete: () => void
+}) {
   const { t, i18n } = useTranslation()
   const { info } = meeting
   return (
@@ -259,6 +296,10 @@ function MeetingRow({ meeting, onEdit, onDelete }: { meeting: OwnedCallLink; onE
           <Pencil />
           {t('chat.meetings.edit')}
         </Button>
+        <Button size="sm" variant="ghost" onClick={onReplace} data-testid="chat-meeting-new-link">
+          <RefreshCw />
+          {t('chat.meetings.newLink')}
+        </Button>
         <Button size="sm" variant="ghost" className="ml-auto text-destructive" onClick={onDelete} data-testid="chat-meeting-delete">
           <Trash2 />
           {t('chat.meetings.delete')}
@@ -268,7 +309,7 @@ function MeetingRow({ meeting, onEdit, onDelete }: { meeting: OwnedCallLink; onE
   )
 }
 
-function HistoryRow({ entry }: { entry: JoinedMeeting }) {
+function HistoryRow({ entry, onForget }: { entry: JoinedMeeting; onForget: () => void }) {
   const { t, i18n } = useTranslation()
   return (
     <li className="flex flex-wrap items-center gap-3 px-3 py-2" data-testid="chat-meeting-history-entry" data-title={entry.title}>
@@ -283,7 +324,7 @@ function HistoryRow({ entry }: { entry: JoinedMeeting }) {
         </p>
       </div>
       <JoinLink url={callLinkUrl(entry.fragment)} label={t('chat.meetings.rejoin')} testId="chat-meeting-rejoin" />
-      <Button size="icon" variant="ghost" onClick={() => forgetJoinedMeeting(entry)} aria-label={t('chat.meetings.historyForget')} title={t('chat.meetings.historyForget')}>
+      <Button size="icon" variant="ghost" onClick={onForget} aria-label={t('chat.meetings.historyForget')} title={t('chat.meetings.historyForget')}>
         <X />
       </Button>
     </li>

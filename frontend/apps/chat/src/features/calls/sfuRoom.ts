@@ -1,6 +1,7 @@
 import {
   BaseKeyProvider,
   createKeyMaterialFromBuffer,
+  DisconnectReason,
   Room,
   RoomEvent,
   Track,
@@ -34,6 +35,14 @@ export interface SfuParticipant {
   identity: string
   /** The opaque label the participant's token carried, if any. */
   label: string
+  /**
+   * The name the participant's token carried, if any. Only the server that
+   * minted the token sets it, so it can be relied on (a meeting's
+   * vouched-for account address).
+   */
+  account: string
+  /** Whether this participant is allowed to share their screen. */
+  canShare: boolean
   local: boolean
   audio: MediaStreamTrack | null
   video: MediaStreamTrack | null
@@ -46,17 +55,31 @@ export interface SfuParticipant {
 export interface SfuRoomHandlers {
   /** Someone joined, left, or changed what they send. */
   changed(): void
-  /** The room is gone (the connection dropped for good, or it was closed). */
-  disconnected(): void
+  /**
+   * The room is gone: this participant was removed by a host, the room was
+   * closed for everyone, or the connection dropped for good (or was left).
+   */
+  disconnected(why: 'removed' | 'closed' | 'other'): void
   /** A frame did not decrypt: the keys may be behind. */
   decryptionFailed(): void
   /** Bytes a participant sent to everyone in the room, outside the media. */
-  data?(identity: string, payload: Uint8Array): void
+  data?(identity: string, payload: Uint8Array, topic: string): void
 }
 
-/** The topic of the room's data messages. */
-const DATA_TOPIC = 'kutup'
+/** The topic of a call's chat messages. */
+export const CHAT_TOPIC = 'kutup'
+/** The topic of the hint that the meeting's hosts changed (no content). */
+export const ROLES_TOPIC = 'kutup-roles'
 
+
+/** The screen-share source in a participant's permissions (the SFU's own numbering). */
+const SCREEN_SHARE_SOURCE = 3
+
+/** Whether a participant's permissions let them publish `source`; no list means every source. */
+function maySource(participant: Participant, source: number): boolean {
+  const sources: readonly number[] = participant.permissions?.canPublishSources ?? []
+  return sources.length === 0 || sources.includes(source)
+}
 
 export class SfuRoom {
   readonly keys = new FrameKeys()
@@ -76,6 +99,8 @@ export class SfuRoom {
       RoomEvent.ParticipantConnected,
       RoomEvent.ParticipantDisconnected,
       RoomEvent.ParticipantMetadataChanged,
+      RoomEvent.ParticipantNameChanged,
+      RoomEvent.ParticipantPermissionsChanged,
       RoomEvent.TrackPublished,
       RoomEvent.TrackUnpublished,
       RoomEvent.TrackSubscribed,
@@ -89,9 +114,13 @@ export class SfuRoom {
       room.on(event, () => handlers.changed())
     }
     room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
-      if (participant && topic === DATA_TOPIC) handlers.data?.(participant.identity, payload)
+      if (participant && topic) handlers.data?.(participant.identity, payload, topic)
     })
-    room.on(RoomEvent.Disconnected, () => handlers.disconnected())
+    room.on(RoomEvent.Disconnected, (reason) =>
+      handlers.disconnected(
+        reason === DisconnectReason.PARTICIPANT_REMOVED ? 'removed' : reason === DisconnectReason.ROOM_DELETED ? 'closed' : 'other',
+      ),
+    )
     room.on(RoomEvent.EncryptionError, (error) => {
       console.warn('chat: a call frame did not decrypt', error)
       handlers.decryptionFailed()
@@ -123,6 +152,11 @@ export class SfuRoom {
     return this.room.remoteParticipants.size
   }
 
+  /** Whether this browser's microphone is published (on or muted). */
+  get microphonePublished(): boolean {
+    return this.room.localParticipant.getTrackPublication(Track.Source.Microphone) !== undefined
+  }
+
   get screenOn(): boolean {
     return this.room.localParticipant.isScreenShareEnabled
   }
@@ -144,10 +178,10 @@ export class SfuRoom {
    * Send bytes to everyone in the room, reliably. The SFU relays them as
    * they are: the caller seals what must stay private.
    */
-  send(payload: Uint8Array): Promise<void> {
+  send(payload: Uint8Array, topic: string = CHAT_TOPIC): Promise<void> {
     const bytes = new Uint8Array(new ArrayBuffer(payload.byteLength))
     bytes.set(payload)
-    return this.room.localParticipant.publishData(bytes, { reliable: true, topic: DATA_TOPIC })
+    return this.room.localParticipant.publishData(bytes, { reliable: true, topic })
   }
 
   participants(): SfuParticipant[] {
@@ -159,6 +193,8 @@ export class SfuRoom {
       return {
         identity: participant.identity,
         label: participant.metadata ?? '',
+        account: participant.name ?? '',
+        canShare: maySource(participant, SCREEN_SHARE_SOURCE),
         local,
         audio: local ? null : (audio?.track?.mediaStreamTrack ?? null),
         video: video && !video.isMuted ? (video.track?.mediaStreamTrack ?? null) : null,

@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -49,8 +49,13 @@ export function MeetingDialog({
   const [error, setError] = useState<string | null>(null)
 
   // Each opening starts from the meeting as it is (or from a fresh default).
+  // Only the opening does: the page behind re-renders while the dialog is
+  // open (its lists refresh), and that must not undo what was typed.
+  const wasOpen = useRef(false)
   useEffect(() => {
-    if (!open) return
+    const opening = open && !wasOpen.current
+    wasOpen.current = open
+    if (!opening) return
     const start = initial?.info.startsAtMs ?? (scheduled ? defaultStart(Date.now()) : undefined)
     const local = localDateTime(start ?? defaultStart(Date.now()))
     setTitle(initial?.info.title ?? '')

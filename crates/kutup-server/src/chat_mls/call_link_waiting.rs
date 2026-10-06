@@ -15,7 +15,7 @@
 //! the link); this server cannot.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -25,8 +25,10 @@ use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::call_link_moderation::{claim_seat, host, sfu_room, tend, Entry, HostCredentials};
 use super::call_links::{
-    admitted, base64_exact, hex32, owner, require_sfu, room_token, SEALED_NAME_BYTES,
+    admitted, base64_exact, hex32, owner, require_sfu, room_token, seat_hash, vouched_account,
+    SEALED_NAME_BYTES,
 };
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
@@ -65,6 +67,9 @@ pub struct KnockRequest {
     pub participant_id: String,
     /// The joiner's chosen name, sealed (standard base64, 168 bytes).
     pub label: String,
+    /// The secret of this identity's seat (standard base64, 32 bytes), as
+    /// for a token.
+    pub seat: String,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -98,21 +103,16 @@ pub struct KnockStatusResponse {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostRequest {
-    pub room_id: String,
-    pub access_token: String,
-    /// The owner's host token (standard base64, 32 bytes).
-    pub host_token: String,
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitingKnock {
     pub knock_id: Uuid,
     /// The knocker's sealed name.
     pub label: String,
+    /// The account address this server vouches for, when the knocker is
+    /// signed in here and chose to show it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String)]
     pub created_at: OffsetDateTime,
@@ -129,7 +129,12 @@ pub struct WaitingKnocks {
 pub struct DecideKnockRequest {
     pub room_id: String,
     pub access_token: String,
-    pub host_token: String,
+    /// The owner's host token, or
+    #[serde(default)]
+    pub host_token: Option<String>,
+    /// a co-host's own SFU token.
+    #[serde(default)]
+    pub sfu_token: Option<String>,
     pub knock_id: Uuid,
     pub admit: bool,
 }
@@ -197,20 +202,30 @@ pub(crate) async fn set_waiting_room(
         (status = 201, description = "Waiting to be admitted", body = KnockResponse),
         (status = 404, description = "No such link, or the wrong access token"),
         (status = 409, description = "The meeting has no waiting room: ask for a token"),
+        (status = 423, description = "A host locked the meeting"),
         (status = 429, description = "Too many requests, or the waiting room is full"),
     )
 )]
 pub(crate) async fn knock(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<KnockRequest>,
 ) -> AppResult<(StatusCode, Json<KnockResponse>)> {
     require_sfu(&state)?;
     hex32("participantId", &request.participant_id)?;
     let label = base64_exact("label", &request.label, SEALED_NAME_BYTES)?;
+    let seat_hash = seat_hash(&request.seat)?;
     let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
     if !meeting.waiting_room {
         return Err(AppError::conflict("this meeting has no waiting room"));
     }
+    if meeting.locked {
+        return Err(AppError::new(
+            StatusCode::LOCKED,
+            "a host locked this meeting",
+        ));
+    }
+    let account = vouched_account(&state, &headers).await;
     let mut ticket = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut ticket);
     let ticket_hash: [u8; 32] = Sha256::digest(ticket).into();
@@ -244,13 +259,16 @@ pub(crate) async fn knock(
         return Err(AppError::too_many_requests("the waiting room is full"));
     }
     let knock_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO chat_call_link_knocks (room_id, participant_id, label, ticket_hash)
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO chat_call_link_knocks
+            (room_id, participant_id, label, ticket_hash, seat_hash, account)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(&request.room_id)
     .bind(&request.participant_id)
     .bind(&label)
     .bind(ticket_hash.as_slice())
+    .bind(seat_hash.as_slice())
+    .bind(&account)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -283,11 +301,13 @@ pub(crate) async fn knock_status(
 ) -> AppResult<Json<KnockStatusResponse>> {
     require_sfu(&state)?;
     let presented: [u8; 32] = Sha256::digest(base64_exact("ticket", &request.ticket, 32)?).into();
-    admitted(&state, &request.room_id, &request.access_token).await?;
-    let row: Option<(Vec<u8>, i16, String, Vec<u8>)> = sqlx::query_as(
+    let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
+    // ticket_hash, status, participant_id, label, seat_hash, account
+    type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(
         "UPDATE chat_call_link_knocks SET last_seen_at = NOW()
          WHERE id = $1 AND room_id = $2
-         RETURNING ticket_hash, status, participant_id, label",
+         RETURNING ticket_hash, status, participant_id, label, seat_hash, account",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -298,16 +318,34 @@ pub(crate) async fn knock_status(
         .and_then(|(hash, ..)| hash.as_slice().try_into().ok())
         .unwrap_or([0u8; 32]);
     let matches = kutup_chat_proto::constant_time_capability_hash_eq(&presented, &stored);
-    let Some((_, status, participant_id, label)) = row.filter(|_| matches) else {
+    let Some((_, status, participant_id, label, seat_hash, account)) = row.filter(|_| matches)
+    else {
         return Err(AppError::not_found("this knock is gone"));
     };
     Ok(Json(match status {
         ADMITTED => {
-            let token = room_token(
+            // Let in: the knock becomes their seat.
+            let seat_hash: [u8; 32] = seat_hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::internal("a knock without a seat"))?;
+            let seat = claim_seat(
                 &state,
+                &meeting,
                 &request.room_id,
                 &participant_id,
+                &seat_hash,
+                Entry::Admitted,
+                account.as_deref(),
+            )
+            .await?;
+            let token = room_token(
+                &state,
+                &sfu_room(&request.room_id, meeting.sitting),
+                &participant_id,
                 &STANDARD.encode(label),
+                &seat,
+                account.as_deref(),
             )?;
             KnockStatusResponse {
                 status: "admitted",
@@ -328,29 +366,13 @@ pub(crate) async fn knock_status(
     }))
 }
 
-/// The meeting, for its owner: a wrong host token is answered like an
-/// unknown room.
-async fn hosted(
-    state: &AppState,
-    room_id: &str,
-    access_token: &str,
-    host_token: &str,
-) -> AppResult<()> {
-    let meeting = admitted(state, room_id, access_token).await?;
-    if meeting.is_host(Some(host_token))? {
-        Ok(())
-    } else {
-        Err(AppError::not_found("this call link does not work"))
-    }
-}
-
-/// Who is waiting to be let in, oldest first, for the owner.
+/// Who is waiting to be let in, oldest first, for the meeting's hosts.
 #[utoipa::path(
     post,
     path = "/api/chat/call-links/knocks",
     tag = "chat",
     operation_id = "listChatCallLinkKnocks",
-    request_body = HostRequest,
+    request_body = HostCredentials,
     responses(
         (status = 200, description = "The people waiting", body = WaitingKnocks),
         (status = 404, description = "No such link, or the wrong access or host token"),
@@ -359,17 +381,14 @@ async fn hosted(
 )]
 pub(crate) async fn knocks(
     State(state): State<AppState>,
-    Json(request): Json<HostRequest>,
+    Json(request): Json<HostCredentials>,
 ) -> AppResult<Json<WaitingKnocks>> {
-    hosted(
-        &state,
-        &request.room_id,
-        &request.access_token,
-        &request.host_token,
-    )
-    .await?;
-    let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
-        "SELECT id, label, created_at FROM chat_call_link_knocks
+    let (meeting, _) = host(&state, &request).await?;
+    // A host looks here every few seconds: a good moment to look after the
+    // meeting (call_link_moderation::tend).
+    tend(&state, &request.room_id, &meeting).await;
+    let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, Option<String>)> = sqlx::query_as(
+        "SELECT id, label, created_at, account FROM chat_call_link_knocks
          WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)
          ORDER BY created_at, id",
     )
@@ -381,16 +400,17 @@ pub(crate) async fn knocks(
     Ok(Json(WaitingKnocks {
         knocks: rows
             .into_iter()
-            .map(|(knock_id, label, created_at)| WaitingKnock {
+            .map(|(knock_id, label, created_at, account)| WaitingKnock {
                 knock_id,
                 label: STANDARD.encode(label),
+                account,
                 created_at,
             })
             .collect(),
     }))
 }
 
-/// Admit or turn away one person waiting, as the owner.
+/// Admit or turn away one person waiting, as a host.
 #[utoipa::path(
     post,
     path = "/api/chat/call-links/knocks/decide",
@@ -407,11 +427,14 @@ pub(crate) async fn decide(
     State(state): State<AppState>,
     Json(request): Json<DecideKnockRequest>,
 ) -> AppResult<StatusCode> {
-    hosted(
+    host(
         &state,
-        &request.room_id,
-        &request.access_token,
-        &request.host_token,
+        &HostCredentials {
+            room_id: request.room_id.clone(),
+            access_token: request.access_token.clone(),
+            host_token: request.host_token.clone(),
+            sfu_token: request.sfu_token.clone(),
+        },
     )
     .await?;
     let decided = sqlx::query(

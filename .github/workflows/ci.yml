@@ -167,6 +167,9 @@ jobs:
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
       APP_ENV: test
+      # The batch registers more test accounts than the default ten an hour
+      # from one address allows (spec 40's last test was refused since #60).
+      RATE_LIMIT_REGISTER_PER_HOUR: "100"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443

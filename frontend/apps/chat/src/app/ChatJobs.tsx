@@ -3,6 +3,7 @@ import { disappearingMessageExpiresAt, isVisibleChatMessage } from '@kutup/chat-
 import { conversationKey, directAddress } from '@kutup/chat-core/identity'
 import type { ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
 import { useNow } from '../lib/useNow'
+import { useJoinedMeetingsSync } from '../features/callLinks/useMeetings'
 import { parseConversationKey } from '../features/list/paths'
 import { nextListState } from '../state/accountState'
 import { useViewedConversation } from '../state/openConversation'
@@ -27,6 +28,8 @@ const RECEIPT_BATCH = 64
  *   message read, sent once per new message; "marked unread" is cleared.
  * - Expiry: when a disappearing message's time is up, the history is
  *   reloaded, which purges it.
+ * - Joined meetings: a stay the meeting page left in this browser moves
+ *   into the account's list, which all its devices see.
  */
 export function ChatJobs() {
   const chat = useChat()
@@ -38,6 +41,7 @@ export function ChatJobs() {
   const account = useAccountState()
   const purging = useRef(false)
   const { service, self, snapshot } = chat
+  useJoinedMeetingsSync()
 
   const ownReceipts = useMemo(() => {
     const states = new Map<string, 'delivered' | 'read'>()

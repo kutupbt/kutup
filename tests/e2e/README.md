@@ -193,12 +193,23 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 41: meetings: an account schedules one (only sealed details reach
   the server), downloads its calendar file, and a browser with no account
   joins through the link by name; both see each other, a shared screen and
-  the meeting's temporary chat; the stay lands in the browser's history;
+  the meeting's temporary chat; the stay lands in the account's list of joined meetings (sealed, and
+  still there without the browser's copy; a guest's stay is kept nowhere);
   renaming and deleting take effect for holders of the link. Also "New
   meeting" in the sidebar, "Start a meeting" in a conversation, and the
   waiting room: the link alone is refused an SFU token, a guest waits until
   the owner lets them in, one turned away is told so, and one who gives up
-  leaves the owner's list. Needs the same SFU as spec 42.
+  leaves the owner's list. And hosts: everyone sees who the host is and
+  the account the server vouches for; nobody gets a token under someone
+  else's identity; the owner mutes one person and everyone, stops and
+  allows a screen share, makes a guest a co-host (who still is one after a
+  reload) and takes it back; a co-host removes a guest (who is told, must
+  then ask to come back in, and is removed again by the server when
+  connecting with the SFU token they still hold) but cannot remove the
+  owner or end the meeting; the owner ends the meeting for everyone. Also:
+  a locked meeting refuses a newcomer, a meeting whose owner leaves gets a
+  co-host, and a new link replaces the old one. Needs the same SFU as spec
+  42, with its API reachable from the server (`CHAT_SFU_API_URL`).
 - spec 36: a group chat on a server with no federation settings.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.

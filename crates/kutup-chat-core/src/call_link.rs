@@ -441,9 +441,153 @@ pub fn parse_call_link_fragment(fragment: &str) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(STANDARD.encode(&bytes[1..])))
 }
 
+// --- An account's joined meetings -------------------------------------------
+
+/// A sealed joined-meeting record is padded to this.
+const JOINED_PADDED_BYTES: usize = 1024;
+/// A sealed joined-meeting record: nonce + padded record + tag.
+pub const JOINED_MEETING_SEALED_BYTES: usize = NONCE_BYTES + JOINED_PADDED_BYTES + TAG_BYTES;
+const JOINED_AAD: &[u8] = b"kutup/chat/call-link/v1/joined";
+
+/// One stay in a meeting, as the account that joined keeps it for its own
+/// devices: sealed under a key from the account master key, so the server
+/// that stores it reads none of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JoinedMeetingV1 {
+    /// The part of the link after `#`: what joining again needs.
+    pub fragment: String,
+    pub title: String,
+    pub joined_at_ms: i64,
+    /// How long the stay lasted.
+    pub seconds: u32,
+}
+
+impl JoinedMeetingV1 {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        parse_call_link_fragment(&self.fragment)
+            .map_err(|_| "a joined meeting carries its link".to_owned())?;
+        let title = self.title.as_str();
+        if title.is_empty()
+            || title.len() > MAX_CALL_TITLE_BYTES
+            || title.chars().any(char::is_control)
+        {
+            return Err("a meeting title is 1 to 200 bytes without control characters".into());
+        }
+        if self.joined_at_ms <= 0 {
+            return Err("a joined meeting's time is positive".into());
+        }
+        Ok(())
+    }
+}
+
+fn joined_cipher(master_key: &str) -> Result<XChaCha20Poly1305> {
+    let invalid_key = || ChatError::Invalid("account master key is not 32 bytes of base64".into());
+    let master = Zeroizing::new(STANDARD.decode(master_key).map_err(|_| invalid_key())?);
+    if master.len() != 32 {
+        return Err(invalid_key());
+    }
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), master.as_slice());
+    let mut key = Zeroizing::new([0u8; 32]);
+    expand(&hkdf, b"joined key", key.as_mut_slice())?;
+    XChaCha20Poly1305::new_from_slice(key.as_slice())
+        .map_err(|_| ChatError::Protocol("invalid joined-meetings key".into()))
+}
+
+/// Seal one stay for the account's own list:
+/// `nonce (24) || XChaCha20-Poly1305(length (u32 BE) || JSON || zeros)`.
+pub fn seal_joined_meeting(master_key: &str, entry: &JoinedMeetingV1) -> Result<String> {
+    entry.validate().map_err(ChatError::Invalid)?;
+    let json = Zeroizing::new(
+        serde_json::to_vec(entry).map_err(|error| ChatError::Invalid(error.to_string()))?,
+    );
+    if 4 + json.len() > JOINED_PADDED_BYTES {
+        return Err(ChatError::Invalid("joined meeting is too large".into()));
+    }
+    let mut padded = Zeroizing::new(Vec::with_capacity(JOINED_PADDED_BYTES));
+    padded.extend_from_slice(&(json.len() as u32).to_be_bytes());
+    padded.extend_from_slice(&json);
+    padded.resize(JOINED_PADDED_BYTES, 0);
+    let mut nonce = [0u8; NONCE_BYTES];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = joined_cipher(master_key)?
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: &padded,
+                aad: JOINED_AAD,
+            },
+        )
+        .map_err(|_| ChatError::Protocol("joined meeting sealing failed".into()))?;
+    let mut sealed = nonce.to_vec();
+    sealed.extend_from_slice(&ciphertext);
+    Ok(STANDARD.encode(sealed))
+}
+
+/// A record that does not open was not sealed by this account.
+pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeetingV1> {
+    let malformed = || ChatError::Content("sealed joined meeting is malformed".into());
+    let sealed = STANDARD.decode(sealed).map_err(|_| malformed())?;
+    if sealed.len() != JOINED_MEETING_SEALED_BYTES {
+        return Err(malformed());
+    }
+    let (nonce, ciphertext) = sealed.split_at(NONCE_BYTES);
+    let padded = Zeroizing::new(
+        joined_cipher(master_key)?
+            .decrypt(
+                XNonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: JOINED_AAD,
+                },
+            )
+            .map_err(|_| ChatError::Content("sealed joined meeting does not open".into()))?,
+    );
+    let length = u32::from_be_bytes(padded[..4].try_into().expect("four bytes")) as usize;
+    let body = padded.get(4..4 + length).ok_or_else(malformed)?;
+    if padded[4 + length..].iter().any(|byte| *byte != 0) {
+        return Err(malformed());
+    }
+    let entry: JoinedMeetingV1 = serde_json::from_slice(body).map_err(|_| malformed())?;
+    entry.validate().map_err(ChatError::Content)?;
+    Ok(entry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_joined_meeting_opens_only_for_the_account_that_sealed_it() {
+        let master = STANDARD.encode([0x11u8; 32]);
+        let entry = JoinedMeetingV1 {
+            fragment: call_link_fragment(&STANDARD.encode([0x42u8; 32])).unwrap(),
+            // The longest title, at its worst for JSON.
+            title: "\"".repeat(MAX_CALL_TITLE_BYTES),
+            joined_at_ms: 1_700_000_000_000,
+            seconds: 754,
+        };
+        let sealed = seal_joined_meeting(&master, &entry).unwrap();
+        assert_eq!(
+            STANDARD.decode(&sealed).unwrap().len(),
+            JOINED_MEETING_SEALED_BYTES
+        );
+        assert_ne!(sealed, seal_joined_meeting(&master, &entry).unwrap());
+        assert_eq!(open_joined_meeting(&master, &sealed).unwrap(), entry);
+        assert!(open_joined_meeting(&STANDARD.encode([0x12u8; 32]), &sealed).is_err());
+        let mut bytes = STANDARD.decode(&sealed).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        assert!(open_joined_meeting(&master, &STANDARD.encode(bytes)).is_err());
+
+        let without_link = JoinedMeetingV1 {
+            fragment: "nope".into(),
+            ..entry.clone()
+        };
+        assert!(seal_joined_meeting(&master, &without_link).is_err());
+        // Not a value the link's own keys open: a different key and purpose.
+        let keys = CallLinkKeys::derive(&STANDARD.encode([0x42u8; 32])).unwrap();
+        assert!(keys.open_info(&sealed).is_err());
+    }
 
     fn secret(byte: u8) -> String {
         STANDARD.encode([byte; 32])
