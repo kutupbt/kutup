@@ -134,6 +134,8 @@ pub enum ChatEvent {
     },
 }
 
+/// The server's default mailbox retention (`CHAT_MAILBOX_RETENTION_DAYS`).
+const DEFAULT_MAILBOX_RETENTION_DAYS: u32 = 30;
 /// How long a fetched and verified device list is used without fetching it
 /// again (each fetch takes one of the account's one-time prekeys).
 const KNOWN_DEVICES_TTL_MS: i64 = 60 * 60 * 1000;
@@ -175,6 +177,10 @@ pub struct Engine {
     waiting_checked_at: i64,
     /// Added to the clock where waiting records are aged (tests only).
     clock_offset_ms: i64,
+    /// How long the server keeps undelivered messages (0: for ever), which
+    /// sets how long a replaced prekey must be kept. The server says
+    /// (`mailboxRetentionDays`); until it has, its default.
+    mailbox_retention_days: u32,
 }
 
 impl Engine {
@@ -213,6 +219,7 @@ impl Engine {
             asked_again: BTreeMap::new(),
             waiting_checked_at: 0,
             clock_offset_ms: 0,
+            mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
         }
     }
 
@@ -243,6 +250,18 @@ impl Engine {
     /// Forget every device list held from an earlier fetch, so the next send
     /// to anyone fetches and verifies the list again. Called when the server
     /// says this account's own devices changed.
+    /// The server's mailbox retention (`mailboxRetentionDays`, 0: for ever).
+    pub fn set_mailbox_retention_days(&mut self, days: u32) {
+        self.mailbox_retention_days = days;
+    }
+
+    /// Age the prekey rotation state by `ms` (as if that much time had
+    /// passed since keys were published, retired or used). Tests only.
+    #[doc(hidden)]
+    pub async fn age_prekeys_for_testing(&mut self, ms: i64) -> Result<()> {
+        self.session.age_prekey_rotation_for_testing(ms).await
+    }
+
     /// Move the clock that ages waiting records forward. Tests only.
     #[doc(hidden)]
     pub fn advance_clock_for_testing(&mut self, ms: i64) {
@@ -1340,16 +1359,23 @@ impl Engine {
         } else {
             0
         };
-        if needed_ec > 0 || needed_kyber > 0 {
+        // The signed and last-resort pair is replaced on a schedule, in the
+        // same durable request as any one-time keys.
+        let rotate = self.session.prekey_rotation_due().await?;
+        if needed_ec > 0 || needed_kyber > 0 || rotate {
             let request = self
                 .session
-                .prepare_prekey_replenishment(needed_ec, needed_kyber, rng)
+                .prepare_prekey_replenishment(needed_ec, needed_kyber, rotate, rng)
                 .await?;
             transport.replenish_prekeys(device_id, &request).await?;
             self.session.complete_prekey_upload().await?;
             uploaded_ec += request.one_time_pre_keys.len();
             uploaded_kyber += request.one_time_kyber_pre_keys.len();
         }
+        // Keys no longer needed go once nothing waits to be published.
+        self.session
+            .purge_retired_pre_keys(self.mailbox_retention_days, USED_PREKEY_GRACE_MS)
+            .await?;
         let after = if uploaded_ec > 0 || uploaded_kyber > 0 {
             self.events.push_back(ChatEvent::PreKeysReplenished {
                 ec: uploaded_ec,

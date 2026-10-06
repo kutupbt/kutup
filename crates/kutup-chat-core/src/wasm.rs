@@ -2882,6 +2882,14 @@ impl WasmChatClient {
         to_output(&view)
     }
 
+    /// How long the server keeps undelivered messages (its
+    /// `mailboxRetentionDays`, 0: for ever): a replaced prekey is kept that
+    /// long plus a margin.
+    #[wasm_bindgen(js_name = setMailboxRetentionDays)]
+    pub fn set_mailbox_retention_days(&mut self, days: u32) {
+        self.engine.set_mailbox_retention_days(days);
+    }
+
     #[wasm_bindgen(js_name = maintainPrekeys)]
     pub async fn maintain_prekeys(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();

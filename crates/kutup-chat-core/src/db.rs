@@ -637,6 +637,15 @@ pub struct Pending {
     /// Serialized `ReplenishKeysRequest` whose private keys are already durable
     /// but whose server response has not yet been confirmed.
     pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
+    /// Serialized prekey rotation state (which signed and last-resort keys
+    /// are current, which are retired and since when, which one-time Kyber
+    /// keys were used): replaced whole.
+    pub(crate) prekey_rotation: Option<Vec<u8>>,
+    /// Retired signed prekeys whose last message could have arrived: deleted.
+    pub(crate) delete_signed_pre_keys: HashSet<u32>,
+    /// Kyber prekeys no longer needed (used one-time keys past their grace,
+    /// retired last-resort keys): deleted with their replay-guard rows.
+    pub(crate) delete_kyber_pre_keys: HashSet<u32>,
     /// Serialized `RegisterChatDeviceRequest` durably paired with freshly
     /// generated private keys until the server-assigned device id is committed.
     pub(crate) registration_upload: Option<Option<Vec<u8>>>,
@@ -681,6 +690,9 @@ impl Pending {
             && self.delete_mls_message_ids.is_empty()
             && self.delete_imported_history_ids.is_empty()
             && self.prekey_upload.is_none()
+            && self.prekey_rotation.is_none()
+            && self.delete_signed_pre_keys.is_empty()
+            && self.delete_kyber_pre_keys.is_empty()
             && self.registration_upload.is_none()
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
@@ -828,6 +840,9 @@ pub trait ChatDb {
 
     /// Durable prekey publication request, if a prior upload is unconfirmed.
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>>;
+
+    /// The serialized prekey rotation state, if one was ever written.
+    async fn load_prekey_rotation(&self) -> Result<Option<Vec<u8>>>;
 
     /// Exact device-registration request whose private material is installed,
     /// but whose server-assigned id is not yet confirmed locally.

@@ -83,6 +83,12 @@ type TypingListener = (event: ChatTypingEvent) => void
  */
 /** How often a tab checks for newly linked devices to add to its groups. */
 const LINKED_DEVICE_CHECK_MS = 2 * 60_000
+/**
+ * How often an open tab checks its prekeys: tops up the one-time keys and
+ * rotates the signed pair when due, also for a tab whose socket never drops
+ * and one that only polls.
+ */
+const PREKEY_CHECK_MS = 60 * 60_000
 
 /**
  * `polling`: the live socket cannot be opened (a gateway that blocks
@@ -171,6 +177,7 @@ export class ChatService {
   private readonly invites: InviteLinkService | null
   private inviteTimer: ReturnType<typeof setInterval> | null = null
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
+  private prekeyTimer: ReturnType<typeof setInterval> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -189,6 +196,9 @@ export class ChatService {
     this.lockName = lockName
     this.mlsWorkflowLockName = `${lockName}:mls-workflow`
     this.capabilities = capabilities
+    // Replaced prekeys are kept as long as the server may still hold a
+    // message made with them.
+    client.setMailboxRetentionDays?.(capabilities.mailboxRetentionDays)
     this.mls = capabilities.mlsGroups === true
       ? new MlsConversationService(
           client,
@@ -294,6 +304,7 @@ export class ChatService {
       await service.reconcile()
       requestPersistentStorage()
       void service.maintainPrekeys()
+      service.startPrekeyChecks()
       void service.connectSocket()
       service.startInviteLinks()
       service.startLinkedDeviceChecks()
@@ -1384,6 +1395,13 @@ export class ChatService {
     }, LINKED_DEVICE_CHECK_MS)
   }
 
+  private startPrekeyChecks(): void {
+    if (this.prekeyTimer) return
+    this.prekeyTimer = setInterval(() => {
+      if (!this.disposed) void this.maintainPrekeys()
+    }, PREKEY_CHECK_MS)
+  }
+
   private startInviteLinks(): void {
     if (!this.invites || this.inviteTimer) return
     void this.reconcileInviteLinks()
@@ -1450,7 +1468,7 @@ export class ChatService {
     try {
       await this.withLock(() => this.client.maintainPrekeys())
     } catch {
-      // Mail delivery remains usable; the next open/online transition retries.
+      // Mail delivery remains usable; the next check or reconnect retries.
     }
   }
 
@@ -1487,6 +1505,7 @@ export class ChatService {
     this.stopPolling()
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
+    if (this.prekeyTimer) clearInterval(this.prekeyTimer)
     this.stopHeartbeat()
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)

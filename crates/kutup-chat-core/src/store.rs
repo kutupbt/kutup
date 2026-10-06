@@ -14,6 +14,7 @@
 //! Every trait method awaits the `ChatDb` port. Native SQLite resolves
 //! immediately; IndexedDB may yield without changing the unit-of-work semantics.
 
+use crate::prekey_rotation::PrekeyRotation;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -407,6 +408,28 @@ impl ChatStore {
         self.pending.borrow_mut().kyber_pre_keys.insert(id, record);
     }
 
+    pub(crate) fn stage_generated_signed_pre_key(&self, id: u32, record: Vec<u8>) {
+        self.pending.borrow_mut().signed_pre_keys.insert(id, record);
+    }
+
+    /// The prekey rotation state as this transaction sees it.
+    pub(crate) async fn prekey_rotation(&self) -> crate::error::Result<PrekeyRotation> {
+        current_rotation(self.db.as_ref(), &self.pending).await
+    }
+
+    pub(crate) fn stage_prekey_rotation(&self, state: &PrekeyRotation) -> crate::error::Result<()> {
+        stage_rotation(&self.pending, state)
+    }
+
+    /// Stage deleting keys no longer needed (`PrekeyRotation::sweep`).
+    pub(crate) fn stage_expired_pre_keys(&self, signed: &[u32], kyber: &[u32]) {
+        let mut pending = self.pending.borrow_mut();
+        pending
+            .delete_signed_pre_keys
+            .extend(signed.iter().copied());
+        pending.delete_kyber_pre_keys.extend(kyber.iter().copied());
+    }
+
     pub(crate) fn stage_prekey_upload(&self, request: Vec<u8>) {
         self.pending.borrow_mut().prekey_upload = Some(Some(request));
     }
@@ -697,8 +720,40 @@ impl KyberPreKeyStore for KyberAdapter {
             ));
         }
         self.pending.borrow_mut().kyber_seen.push((k, e, bk));
+        // A one-time key is consumed: noted, so it is deleted after the
+        // late-message grace. The last-resort key is reused, guarded above.
+        let mut rotation = current_rotation(self.db.as_ref(), &self.pending)
+            .await
+            .map_err(cb("mark_kyber_pre_key_used"))?;
+        if rotation.mark_one_time_kyber_used(k, crate::clock::unix_millis()) {
+            stage_rotation(&self.pending, &rotation).map_err(cb("mark_kyber_pre_key_used"))?;
+        }
         Ok(())
     }
+}
+
+async fn current_rotation(
+    db: &dyn ChatDb,
+    pending: &RefCell<Pending>,
+) -> crate::error::Result<PrekeyRotation> {
+    let staged = pending.borrow().prekey_rotation.clone();
+    let bytes = match staged {
+        Some(bytes) => Some(bytes),
+        None => db.load_prekey_rotation().await?,
+    };
+    match bytes {
+        Some(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+            crate::error::ChatError::Db(format!("prekey rotation state: {error}"))
+        }),
+        None => Ok(PrekeyRotation::initial(crate::clock::unix_millis())),
+    }
+}
+
+fn stage_rotation(pending: &RefCell<Pending>, state: &PrekeyRotation) -> crate::error::Result<()> {
+    let bytes = serde_json::to_vec(state)
+        .map_err(|error| crate::error::ChatError::Db(format!("prekey rotation state: {error}")))?;
+    pending.borrow_mut().prekey_rotation = Some(bytes);
+    Ok(())
 }
 
 // ----- sender keys (groups; reserved) -----

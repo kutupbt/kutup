@@ -598,9 +598,11 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     The message itself is asked for again by id and takes its place when
     it arrives; a contact drops the device list it holds for you when a
     message of yours says your signed list has moved on.
-  - Next: signed and last-resort prekeys rotate, and used prekeys are kept
-    as long as the mailbox can still hold a message for them. Open edges of
-    the re-send: the once-an-hour limits are kept in memory only.
+  - Done: the signed and last-resort prekeys rotate every two days, a
+    replaced pair is kept as long as the mailbox can still hold a message
+    for it, and used one-time ML-KEM prekeys are deleted after the same
+    14-day grace as EC ones (`docs/chat-protocol.md`, "Prekeys").
+  - Next: the re-send's once-an-hour limits are kept in memory only.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after
     a send); a write generation checked in every transaction and a lock
@@ -623,9 +625,18 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   and a server that offers sealed sender. Where either is missing the attach
   button stays and says why. Still open: a server only offers sealed sender
   once its operator provisions an offline root (`docs/self-hosting.md`,
-  "Contacts-only sealed sender"); a server could provision it itself, as it
-  does its identity and ordering keys, at the cost of keeping the root on the
-  server.
+  "Contacts-only sealed sender").
+  Planned, after the direct-chat hardening (kutup.dev does not need it, its
+  root is provisioned): a server that has no root provisions sealed sender
+  itself with a root that is generated, used and thrown away. On first
+  start it generates a root, signs a long-lived online certificate with it,
+  publishes the policy, then deletes the root's private key. Before that
+  certificate expires it repeats the cycle with a new root under the
+  policy's existing rules (the new root is published first, and the switch
+  waits 24 hours). Self-hosters need no setup, no root key is stored
+  anywhere for a leaked backup to mint certificates with, and recovery from
+  a breach is the same as today. The offline-root mode stays for operators
+  who want it.
 - **Meetings: decisions (2026-10-03).** Recorded here so the next round
   starts from them (`docs/chat-calls.md`, "Meetings", has the design):
   - Conversation calls and meetings stay separate. A one-to-one or group

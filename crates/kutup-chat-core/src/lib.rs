@@ -26,6 +26,7 @@ mod manifest;
 mod mls_engine;
 mod mls_policy;
 mod padding;
+mod prekey_rotation;
 mod profile;
 mod sealed_sender;
 mod session;

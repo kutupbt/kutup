@@ -84,6 +84,7 @@ const SINGLETON: &str = "value";
 const LAST_CURSOR: &str = "last_cursor";
 const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
+const PREKEY_ROTATION: &str = "prekey_rotation";
 const PENDING_REGISTRATION: &str = "pending_registration";
 
 /// One account/device-scoped browser chat database.
@@ -398,6 +399,10 @@ impl ChatDb for IndexedDbChatDb {
         self.get(META, string_key(PENDING_PREKEY_UPLOAD)).await
     }
 
+    async fn load_prekey_rotation(&self) -> Result<Option<Vec<u8>>> {
+        self.get(META, string_key(PREKEY_ROTATION)).await
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_REGISTRATION)).await
     }
@@ -525,6 +530,14 @@ impl ChatDb for IndexedDbChatDb {
         }
         stage_puts(&mut operations, &signed_pre_keys, writes.signed_pre_keys);
         stage_puts(&mut operations, &kyber_pre_keys, writes.kyber_pre_keys);
+        // Retired keys go; their replay-guard rows (a few bytes each) stay,
+        // since they are keyed by the whole triple and cannot be ranged here.
+        for id in writes.delete_signed_pre_keys {
+            operations.push(delete_op(&signed_pre_keys, number_key(id)));
+        }
+        for id in writes.delete_kyber_pre_keys {
+            operations.push(delete_op(&kyber_pre_keys, number_key(id)));
+        }
         for (key, value) in writes.kyber_seen {
             operations.push(put_op(&kyber_seen, value, string_key(&key)));
         }
@@ -602,6 +615,9 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(put_op(&local_profile, value, string_key(SINGLETON)));
         }
         stage_puts(&mut operations, &peer_profiles, writes.peer_profiles);
+        if let Some(value) = writes.prekey_rotation {
+            operations.push(put_op(&meta, value, string_key(PREKEY_ROTATION)));
+        }
         if let Some(value) = writes.prekey_upload {
             match value {
                 Some(value) => {
@@ -721,6 +737,9 @@ struct PreparedWrites {
     local_profile: Option<JsValue>,
     peer_profiles: Vec<(String, JsValue)>,
     prekey_upload: Option<Option<JsValue>>,
+    prekey_rotation: Option<JsValue>,
+    delete_signed_pre_keys: Vec<u32>,
+    delete_kyber_pre_keys: Vec<u32>,
     registration_upload: Option<Option<JsValue>>,
     last_cursor: Option<JsValue>,
     last_sent_seq: Option<JsValue>,
@@ -771,6 +790,9 @@ impl PreparedWrites {
                 .as_ref()
                 .map(|value| value.as_ref().map(to_js).transpose())
                 .transpose()?,
+            prekey_rotation: pending.prekey_rotation.as_ref().map(to_js).transpose()?,
+            delete_signed_pre_keys: pending.delete_signed_pre_keys.iter().copied().collect(),
+            delete_kyber_pre_keys: pending.delete_kyber_pre_keys.iter().copied().collect(),
             registration_upload: pending
                 .registration_upload
                 .as_ref()

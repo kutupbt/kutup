@@ -48,6 +48,9 @@ struct KeyServer {
     ec: RefCell<HashSet<u32>>,
     kyber: RefCell<HashSet<u32>>,
     fail_next_upload: Cell<bool>,
+    /// The signed and last-resort keys the server holds (0: as registered).
+    signed: Cell<u32>,
+    last_resort: Cell<u32>,
     attempted_requests: RefCell<Vec<Vec<u8>>>,
 }
 
@@ -78,6 +81,12 @@ impl ChatTransport for KeyServer {
             .push(serde_json::to_vec(request).unwrap());
         if self.fail_next_upload.replace(false) {
             return Err(ChatError::Transport("simulated upload loss".into()));
+        }
+        if let Some(signed) = &request.signed_pre_key {
+            self.signed.set(signed.key_id);
+        }
+        if let Some(last_resort) = &request.last_resort_kyber_pre_key {
+            self.last_resort.set(last_resort.key_id);
         }
         self.ec
             .borrow_mut()
@@ -140,4 +149,107 @@ fn failed_upload_retries_the_exact_durable_keys_after_reopen() {
     assert!(block_on(reopened_db.load_pending_prekey_upload())
         .unwrap()
         .is_none());
+}
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+#[test]
+fn the_signed_and_last_resort_pair_rotates_and_the_old_one_goes_after_retention() {
+    let db_file = TempDb::new();
+    let db = db_file.open();
+    let mut rng = test_rng();
+    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    block_on(session.complete_registration(1)).unwrap();
+    let server = Rc::new(KeyServer::default());
+    let mut engine = Engine::new(session, server.clone());
+
+    // Fresh: one-time keys only, no rotation yet.
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert_eq!(server.signed.get(), 0);
+
+    // Two days on, a new pair is published; the old one is still there.
+    block_on(engine.age_prekeys_for_testing(2 * DAY_MS + 1)).unwrap();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    let (signed, last_resort) = (server.signed.get(), server.last_resort.get());
+    assert!(
+        signed >= 1_000 && last_resort >= 1_000,
+        "new ids: {signed} {last_resort}"
+    );
+    assert!(block_on(db.load_signed_pre_key(signed)).unwrap().is_some());
+    assert!(block_on(db.load_kyber_pre_key(last_resort))
+        .unwrap()
+        .is_some());
+    assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_some());
+    assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_some());
+    assert!(block_on(db.load_prekey_rotation()).unwrap().is_some());
+
+    // Within the server's retention (30 days by default) the old pair stays.
+    block_on(engine.age_prekeys_for_testing(30 * DAY_MS)).unwrap();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_some());
+
+    // Past retention plus the margin it is deleted, keys and all.
+    block_on(engine.age_prekeys_for_testing(8 * DAY_MS)).unwrap();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
+    assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
+    // The pair that replaced it (itself replaced by now) is still kept.
+    assert!(block_on(db.load_signed_pre_key(signed)).unwrap().is_some());
+}
+
+#[test]
+fn a_server_that_keeps_mail_for_ever_keeps_replaced_keys_too() {
+    let db_file = TempDb::new();
+    let db = db_file.open();
+    let mut rng = test_rng();
+    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    block_on(session.complete_registration(1)).unwrap();
+    let server = Rc::new(KeyServer::default());
+    let mut engine = Engine::new(session, server.clone());
+    engine.set_mailbox_retention_days(0);
+    block_on(engine.age_prekeys_for_testing(3 * DAY_MS)).unwrap();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    block_on(engine.age_prekeys_for_testing(400 * DAY_MS)).unwrap();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_some());
+}
+
+#[test]
+fn an_interrupted_rotation_publishes_the_same_pair_after_reopen() {
+    let db_file = TempDb::new();
+    let db = db_file.open();
+    let mut rng = test_rng();
+    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    block_on(session.complete_registration(1)).unwrap();
+    let server = Rc::new(KeyServer::default());
+    let mut engine = Engine::new(session, server.clone());
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    block_on(engine.age_prekeys_for_testing(3 * DAY_MS)).unwrap();
+    server.fail_next_upload.set(true);
+    assert!(block_on(engine.maintain_prekeys(2, 5, &mut rng)).is_err());
+    let lost: ReplenishKeysRequest =
+        serde_json::from_slice(server.attempted_requests.borrow().last().unwrap()).unwrap();
+    let staged = lost
+        .signed_pre_key
+        .expect("the rotation was in the lost upload")
+        .key_id;
+    drop(engine);
+    drop(db);
+
+    let reopened_db = db_file.open();
+    let reopened = block_on(Session::open(reopened_db.clone(), "alice", 1)).unwrap();
+    let mut engine = Engine::new(reopened, server.clone());
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert_eq!(
+        server.signed.get(),
+        staged,
+        "the very pair kept durable was published"
+    );
+    assert!(block_on(reopened_db.load_signed_pre_key(staged))
+        .unwrap()
+        .is_some());
+    // Published once: not due again at once.
+    let uploads = server.attempted_requests.borrow().len();
+    block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
+    assert_eq!(server.attempted_requests.borrow().len(), uploads);
 }
