@@ -422,7 +422,7 @@ function WhiteboardEditorBase(
           deviceId: BigInt(did),
           sequence: outboundSeqRef.current,
         }, fileKey, kp.privateKey)
-        transport.send(packed)
+        transport.send(packed, { edit: false })
       } catch (e) {
         console.warn('whiteboard: cursor send failed', e)
       }

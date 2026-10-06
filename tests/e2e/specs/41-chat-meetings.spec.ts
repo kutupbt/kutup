@@ -230,6 +230,43 @@ test('a meeting starts from the sidebar and from a conversation', async ({ brows
   await contextB.close()
 })
 
+test('after its owner signs out, their meeting in that browser waits like anyone', async ({ browser }) => {
+  test.slow()
+  const owner = newAccount('doorleaver', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, owner)
+  const chat = await openChat(context)
+  test.skip(!(await hostsMeetings(chat)), 'this stack has no SFU (docker compose --profile sfu)')
+
+  await chat.getByRole('link', { name: 'Meetings', exact: true }).click()
+  await chat.getByTestId('chat-meeting-schedule').click()
+  const title = `Left ${Date.now()}`
+  await chat.getByTestId('chat-meeting-title').fill(title)
+  await chat.getByTestId('chat-meeting-timed').uncheck()
+  await chat.getByTestId('chat-meeting-waiting-room').check()
+  await chat.getByTestId('chat-meeting-save').click()
+  await expect(meeting(chat, title).getByTestId('chat-meeting-has-waiting-room')).toBeVisible({ timeout: 30_000 })
+  const url = (await meeting(chat, title).getByTestId('chat-meeting-url').textContent())!.trim()
+
+  // Signed in, this browser hosts it: no waiting.
+  const signedIn = await context.newPage()
+  await signedIn.goto(url)
+  await expect(signedIn.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await expect(signedIn.getByTestId('chat-link-call-has-waiting-room')).toHaveCount(0)
+  await signedIn.close()
+
+  // Signed out: the same browser is a guest, who has to ask.
+  await chat.getByRole('button', { name: 'Account menu' }).click()
+  await chat.getByRole('menuitem', { name: 'Sign out' }).click()
+  await chat.waitForURL((address) => address.pathname.startsWith('/login'), { timeout: 60_000 })
+  const signedOut = await context.newPage()
+  await signedOut.goto(url)
+  await expect(signedOut.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
+  await expect(signedOut.getByTestId('chat-link-call-has-waiting-room')).toBeVisible()
+  expect(await signedOut.evaluate(() => localStorage.getItem('kutup-meeting-hosts'))).toBeNull()
+  await context.close()
+})
+
 test('a meeting with a waiting room lets in only whom its owner admits', async ({ browser }) => {
   test.slow()
   const owner = newAccount('doorowner', PASSWORD)

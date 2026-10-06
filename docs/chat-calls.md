@@ -307,8 +307,13 @@ changing one). With it on, holding the link is not enough to join.
   lets each one in or turns them away (`…/knocks/decide`). An admitted
   knocker's next question returns the SFU token, for the identity and name
   they knocked with; one turned away is told so.
-- A knocker who stops asking for 20 s is no longer listed, and knocks are
-  forgotten ten minutes after their knocker last asked. At most 50 people
+- A knocker who cancels or closes the page says so (`…/knock/leave`, sent
+  as the page closes) and leaves the list at once. One who merely stops
+  asking is no longer listed after 90 s: long enough for a tab in the
+  background, whose timers the browser slows to about one a minute. A
+  status question that fails (a dropped connection, a busy server) is asked
+  again for up to 90 s before the wait is given up. Knocks are forgotten
+  ten minutes after their knocker last asked. At most 50 people
   wait at one meeting. Someone let in can leave and come back from the same
   browser tab without knocking again (their seat, below), until the meeting
   is ended.
@@ -424,7 +429,11 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Meetings page makes one for the same meeting (same title, time and
   waiting room, a new secret and so new keys), deletes the old one and
   disconnects whoever is in it. Only the people the new link is sent to
-  come back.
+  come back. It is one request (`replaces` on `POST /api/chat/call-links`):
+  the server closes the old meeting at the SFU, deletes the old link and
+  stores the new one in one transaction, so the two links never both work.
+  If the SFU cannot close the old meeting nothing changes and the owner
+  sees an error.
 
 **Names and accounts:** the name a participant shows is what they typed;
 nothing verifies it, and a guest has nothing else. Someone signed in to

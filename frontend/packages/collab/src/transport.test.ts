@@ -20,6 +20,33 @@ describe('CollabTransport', () => {
     t.send(new Uint8Array([1, 2, 3]))
     expect(t.pendingCount()).toBe(1)
   })
+
+  it('counts only queued edits as unsent work, not presence', async () => {
+    const { unsentCollabFrames } = await import('./connectivity')
+    const t = new CollabTransport({
+      url: 'ws://localhost',
+      wsFactory: () => ({
+        binaryType: '',
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        send: () => {},
+        close: () => {},
+        readyState: 0,
+      } as unknown as WebSocket),
+      onFrame: () => {},
+      onHello: () => {},
+      onError: () => {},
+    })
+    const before = unsentCollabFrames()
+    t.send(new Uint8Array([1]), { edit: false })
+    expect(t.pendingEditCount()).toBe(0)
+    expect(unsentCollabFrames()).toBe(before)
+    t.send(new Uint8Array([2]))
+    expect(t.pendingEditCount()).toBe(1)
+    expect(unsentCollabFrames()).toBe(before + 1)
+    t.close()
+    expect(unsentCollabFrames()).toBe(before)
+  })
 })
 
 /** Just enough WebSocket for connect/close cycles. */

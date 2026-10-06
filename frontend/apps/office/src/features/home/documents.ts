@@ -63,6 +63,9 @@ export function useDocuments() {
     // cannot be opened in the editor from here.
     const kind = documentKindOf(shared.file.name)
     if (!kind || seen.has(shared.file.id) || shared.container.remoteFileShareId) continue
+    // Waiting for the owner's new key (or gone), it would only open on a
+    // page that says so.
+    if (shared.state === 'waiting' || shared.state === 'gone') continue
     seen.add(shared.file.id)
     documents.push({
       folder: shared.container,
@@ -76,7 +79,10 @@ export function useDocuments() {
     root: folders.data?.root,
     documents,
     loading: folders.isPending || sharedFiles.isPending || listings.some((l) => l.isPending),
-    error: folders.error ?? sharedFiles.error ?? listings.find((l) => l.error)?.error ?? null,
+    // Without the folders nothing can be listed; one folder that could not
+    // be read only leaves its documents out.
+    error: folders.error ?? null,
+    incomplete: Boolean(sharedFiles.error) || listings.some((l) => l.error),
   }
 }
 

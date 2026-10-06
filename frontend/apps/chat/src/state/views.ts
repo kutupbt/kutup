@@ -333,7 +333,9 @@ export interface MessageView {
 
 export function undecryptableState(entry: ChatHistoryEntry): 'waiting' | 'lost' | null {
   if (!entry.content.undecryptable) return null
-  const body = entry.content.body as { sendId?: unknown } | null
+  const body = entry.content.body as { sendId?: unknown; lost?: unknown } | null
+  // Asked for in vain (the sender said so, or never answered in a week).
+  if (body?.lost === true) return 'lost'
   return typeof body?.sendId === 'string' ? 'waiting' : 'lost'
 }
 

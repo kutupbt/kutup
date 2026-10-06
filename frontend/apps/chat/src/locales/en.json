@@ -398,7 +398,8 @@
     "composer": {
       "label": "Message",
       "placeholder": "Message",
-      "tooLong": "This is longer than the group allows. Shorten it to send."
+      "tooLong": "This is longer than the group allows. Shorten it to send.",
+      "tooLongDirect": "This is too long for one message. Shorten it, or send it as a file."
     },
     "message": {
       "more": "More actions",

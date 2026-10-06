@@ -552,6 +552,7 @@
     "opening": "Opening…",
     "liveBlocked": "This network blocks live editing.",
     "liveBlockedBody": "You are seeing the file as it was last saved, read-only. Download it to work on a copy, or open it from another network to edit.",
+    "liveBlockedUnsent": "Your latest changes have not reached the server. They are kept in this tab and sent if the connection comes back; do not close it. Or download the file as it was last saved.",
     "failedTitle": "This file can't be opened",
     "backToDrive": "Back to Drive",
     "backTo": "Back to {{folder}}",

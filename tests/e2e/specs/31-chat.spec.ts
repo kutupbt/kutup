@@ -63,6 +63,12 @@ test.describe('Signal-backed chat', () => {
     // creates sent transcripts for the account's other devices.
     await pageA.reload()
     await openNoteToSelf(pageA)
+    // A direct message has to fit again when it is re-sent or copied to the
+    // account's other devices: the composer stops long text and says why.
+    await composer(pageA).fill('x'.repeat(30_001))
+    await expect(pageA.getByText('This is too long for one message. Shorten it, or send it as a file.')).toBeVisible()
+    await expect(pageA.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+    await composer(pageA).fill('')
     const selfNote = `note-to-self-${tag}`
     await send(pageA, selfNote)
     await expect(message(pageA, selfNote)).toBeVisible({ timeout: 30_000 })

@@ -8,6 +8,19 @@
 use crate::error::{ChatError, Result};
 
 pub(crate) const PADDING_BLOCK_BYTES: usize = 160;
+
+/// The server's limit on one envelope's content (`maxContentBytes`).
+const MAX_ENVELOPE_CONTENT_BYTES: usize = 65_536;
+/// What encryption adds to a padded direct plaintext, at most: measured at
+/// 2,110 bytes for a sealed first message (a post-quantum PreKey message,
+/// which is also what a re-send after a session repair is), rounded up.
+const DIRECT_ENVELOPE_OVERHEAD_BYTES: usize = 2_560;
+/// The largest direct plaintext sure to fit one envelope, sealed or not,
+/// first message or not.
+pub(crate) const MAX_DIRECT_PLAINTEXT_BYTES: usize =
+    (MAX_ENVELOPE_CONTENT_BYTES - DIRECT_ENVELOPE_OVERHEAD_BYTES) / PADDING_BLOCK_BYTES
+        * PADDING_BLOCK_BYTES
+        - 1;
 const TERMINATOR: u8 = 0x80;
 
 /// The padded plaintext to encrypt.

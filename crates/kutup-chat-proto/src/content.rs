@@ -563,6 +563,16 @@ impl ChatContent {
         sent_at: impl Into<String>,
         send_id: Option<String>,
     ) -> Self {
+        Self::undecryptable_record(message_id, sent_at, send_id, false)
+    }
+
+    /// As [`Self::undecryptable_with_id`], saying whether it is still waited for.
+    pub fn undecryptable_record(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        send_id: Option<String>,
+        lost: bool,
+    ) -> Self {
         ChatContent {
             v: Self::VERSION,
             kind: kind::UNDECRYPTABLE.to_string(),
@@ -572,7 +582,7 @@ impl ChatContent {
             reply_to: None,
             profile_key: None,
             profile_suite: None,
-            body: serde_json::to_value(UndecryptableBody { send_id }).unwrap_or_default(),
+            body: serde_json::to_value(UndecryptableBody { send_id, lost }).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
     }
@@ -1129,6 +1139,10 @@ pub enum SessionControlAction {
     /// The answer to a `refresh` for messages the writer no longer has, or
     /// never had as history (a typing indicator, a receipt).
     Unavailable,
+    /// The answer to a `refresh` for messages the writer did send but cannot
+    /// send again (too large to wrap, say): the reader stops waiting and
+    /// says the message is lost.
+    Lost,
 }
 
 impl SessionControlBody {
@@ -1162,6 +1176,10 @@ pub struct ResendBody {
 pub struct UndecryptableBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_id: Option<String>,
+    /// Asked for again in vain (the sender has it no more, or never
+    /// answered): no longer waited for. Still filled in if it arrives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

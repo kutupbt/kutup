@@ -157,7 +157,7 @@
     "title": "Ayarlar",
     "loadFailed": "Ayarlar yüklenemedi.",
     "saveTo": "Yeni haritaları kaydet",
-    "saveToHint": "Burada oluşturduğunuz haritalar Deponuzdaki bu klasöre gider. Her haritayı sonra taşıyabilirsiniz.",
+    "saveToHint": "Burada oluşturduğunuz haritalar Depo'nuzdaki bu klasöre gider. Her haritayı sonra taşıyabilirsiniz.",
     "saveFolderGone": "Seçtiğiniz klasör artık yok ya da çöp kutusunda, bu yüzden yeni haritalar Dosyalarım’a gidiyor.",
     "saved": "Kaydedildi",
     "saveFailed": "Kaydedilemedi.",

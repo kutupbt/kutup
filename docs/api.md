@@ -1759,7 +1759,11 @@ lowercase hex characters; `accessTokenHash` is the SHA-256 of the link's
 access token (standard base64); `info` is the sealed title and time (552
 bytes of standard base64). The link's secret never reaches the server.
 `404` when the server has no SFU, `409` when the meeting exists or the
-account already has 50.
+account already has 50. Optional `"replaces"` (another of the account's
+room ids, "New link"): in the same transaction the old meeting is closed at
+the SFU and its link deleted, so the two never both work; the new link
+does not count against the 50. `404` when the account has no such link,
+`502` when the SFU cannot close the old meeting (nothing changes).
 
 ### GET /api/chat/call-links
 
@@ -1827,6 +1831,15 @@ its optional `hostToken` is the owner's, or the seat was already let in.
 `{ "knockId", "ticket" }`: ask to be let in. `409` when the meeting has no
 waiting room, `423` when it is locked, `429` when 50 people are already
 waiting or over 60 a minute per address.
+
+### POST /api/chat/call-links/knock/leave
+
+**No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →
+`204`: the knocker stops waiting and the knock leaves the host's list at
+once. Sent with
+`keepalive` as the page closes. A knock already let in or turned away keeps
+its outcome; a wrong ticket changes nothing (still `204`). `404` for an
+unknown link or a wrong access token.
 
 ### POST /api/chat/call-links/knock/status
 

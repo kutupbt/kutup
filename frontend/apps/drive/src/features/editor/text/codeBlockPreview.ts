@@ -66,15 +66,15 @@ class CodeBlockWidget extends WidgetType {
     readonly code: string,
     readonly language: string | null,
     readonly meta: string,
-    /** Where the cursor goes when the block is clicked: its first line of code. */
-    readonly editAt: number,
     readonly labels: CodeBlockLabels,
   ) {
     super()
   }
 
+  // Not the position: typing above a block moves it, and redrawing every
+  // block below on each keystroke would highlight them all again.
   eq(other: CodeBlockWidget) {
-    return other.code === this.code && other.language === this.language && other.meta === this.meta && other.editAt === this.editAt
+    return other.code === this.code && other.language === this.language && other.meta === this.meta
   }
 
   toDOM(view: EditorView) {
@@ -118,7 +118,11 @@ class CodeBlockWidget extends WidgetType {
     outer.addEventListener('mousedown', (e) => {
       if ((e.target as HTMLElement).closest('.code-block-copy')) return
       e.preventDefault()
-      view.dispatch({ selection: { anchor: this.editAt }, scrollIntoView: true })
+      // The block starts at its opening fence; the cursor goes to its first
+      // line of code.
+      const fence = view.state.doc.lineAt(view.posAtDOM(outer))
+      const editAt = Math.min(fence.to + 1, view.state.doc.length)
+      view.dispatch({ selection: { anchor: editAt }, scrollIntoView: true })
       view.focus()
     })
     return outer
@@ -133,7 +137,10 @@ function build(state: EditorState, labels: CodeBlockLabels): DecorationSet {
   const decos: Range<Decoration>[] = []
   syntaxTree(state).iterate({
     enter: (node) => {
-      if (node.name !== 'FencedCode') return
+      if (node.name === 'Document') return
+      // Only top-level fences are drawn; nothing inside a paragraph, list
+      // or quote needs visiting.
+      if (node.name !== 'FencedCode') return false
       const touched = state.selection.ranges.some((r) => r.from <= node.to && r.to >= node.from)
       if (touched) return false
       const open = state.doc.lineAt(node.from)
@@ -151,9 +158,8 @@ function build(state: EditorState, labels: CodeBlockLabels): DecorationSet {
       const meta = space < 0 ? '' : infoText.slice(space + 1)
       const text = node.node.getChild('CodeText')
       const code = text ? state.sliceDoc(text.from, text.to) : ''
-      const editAt = Math.min(open.to + 1, state.doc.length)
       decos.push(
-        Decoration.replace({ widget: new CodeBlockWidget(code, language, meta, editAt, labels), block: true }).range(open.from, close.to),
+        Decoration.replace({ widget: new CodeBlockWidget(code, language, meta, labels), block: true }).range(open.from, close.to),
       )
       return false
     },
@@ -197,6 +203,14 @@ export function codeBlockPreview(labels: CodeBlockLabels): Extension {
     if (!state.selection.main.empty || state.selection.ranges.length > 1) return false
     const block = adjacentBlock(state.field(field), state, up)
     if (!block) return false
+    // A wrapped line has several rows: only from the row next to the block
+    // (the line's first row going up, its last going down) does the arrow
+    // leave the line. Without layout (no coordinates) a line is one row.
+    const head = state.selection.main.head
+    const line = state.doc.lineAt(head)
+    const here = view.coordsAtPos(head)
+    const edge = view.coordsAtPos(up ? line.from : line.to)
+    if (here && edge && Math.abs(here.top - edge.top) > 2) return false
     const at = up ? state.doc.lineAt(block.to).from : block.from
     view.dispatch({ selection: EditorSelection.cursor(at), scrollIntoView: true, userEvent: 'select' })
     return true

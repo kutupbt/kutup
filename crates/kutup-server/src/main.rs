@@ -896,6 +896,12 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
+            "/api/chat/call-links/knock/leave",
+            post(chat_mls::call_link_waiting::leave_knock)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
+        )
+        .route(
             "/api/chat/call-links/knocks",
             post(chat_mls::call_link_waiting::knocks)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))

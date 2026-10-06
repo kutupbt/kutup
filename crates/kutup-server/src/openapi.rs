@@ -227,6 +227,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_mls::call_link_waiting::set_waiting_room,
         crate::chat_mls::call_link_waiting::knock,
         crate::chat_mls::call_link_waiting::knock_status,
+        crate::chat_mls::call_link_waiting::leave_knock,
         crate::chat_mls::call_link_waiting::knocks,
         crate::chat_mls::call_link_waiting::decide,
         crate::chat_mls::call_link_moderation::roles,

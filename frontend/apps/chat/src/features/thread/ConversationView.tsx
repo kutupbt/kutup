@@ -61,6 +61,22 @@ import { useConversationActions } from './useConversationActions'
 import { useConversationModel } from './useConversationModel'
 
 /**
+ * The longest text a direct message takes. A direct message must also fit
+ * the envelope when it is sent again or copied to this account's other
+ * devices (kutup-chat-core refuses anything that would not, about 62 KB of
+ * encoded content); text can double when encoded (quotes, line breaks),
+ * so the composer stops well inside that.
+ */
+const DIRECT_TEXT_MAX_BYTES = 30_000
+/**
+ * What a direct message's fields may take once encoded, leaving room for
+ * the rest of the message and its re-send and transcript wrappers inside
+ * kutup-chat-core's limit (62,879 bytes). A link preview (its picture alone
+ * up to about 33 KB) that would go over is left out.
+ */
+const DIRECT_ENCODED_MAX_BYTES = 60_000
+
+/**
  * One conversation: its header, the timeline and the composer (or, where
  * nothing can be written, what to do instead: accept a request, unblock…).
  * The details panel slides over it, as in Signal Desktop.
@@ -674,7 +690,9 @@ export function ConversationView({
               : undefined
           }
           mediaLimit={chat.capabilities?.media?.maximumPlaintextBytes ?? 0}
-          maxTextBytes={model.group?.currentCryptographicPolicy.maximumApplicationPlaintextBytes}
+          maxTextBytes={model.group ? model.group.currentCryptographicPolicy.maximumApplicationPlaintextBytes : DIRECT_TEXT_MAX_BYTES}
+          tooLongText={model.group ? undefined : t('chat.composer.tooLongDirect')}
+          maxEncodedBytes={model.group ? undefined : DIRECT_ENCODED_MAX_BYTES}
           onTyping={
             model.canSendTyping && typingIndicators
               ? () => void service.sendTyping(conversation, true).catch((error: unknown) => console.warn('chat: typing not sent', error))

@@ -291,13 +291,24 @@ The peer answers from its sent history. For each named message that it sent
 to that account and that was history on both sides, it sends a hidden
 `resend` wrapping the original content whole, under a new transport id; for
 the rest (a typing indicator, a receipt it no longer has, an id it never
-sent) it sends one `sessionControl` `{action: "unavailable", sendIds}`. A
+sent) it sends one `sessionControl` `{action: "unavailable", sendIds}`;
+for a message it did send but cannot send again (too large to wrap, one
+stored before the size check below) it sends `{action: "lost", sendIds}`. A
 message is sent again at most once an hour per peer. The receiver handles a
 `resend` as the message inside it: it is stored and shown with its original
 id and sender time, so it takes its place in the conversation, and the
 record that waited for it is removed. A device that had read the message the
 first time drops the copy. `unavailable` removes the waiting records and
-shows nothing.
+shows nothing (a typing indicator can be the unreadable thing, and a device
+that does have the message still sends it, which then arrives as a
+message). `lost` keeps the record but no longer waits: it says the message
+could not be recovered and asks the reader to have it sent again.
+
+The request can be lost (a send that fails, a key fetch that fails, a tab
+closed before it went out), so the waiting records themselves drive it:
+every ten minutes, and at once after a reload, each record waiting longer
+than two minutes is asked for again, at most every half hour. A record still
+waiting after a week is given up on and shown as lost.
 
 `sessionControl` and `resend` travel like `typing`: never history on the
 sending side, never a linked-device transcript, and they cannot open or
@@ -322,11 +333,28 @@ identity key that list served; it then takes no keys from the server. The
 server still checks the exact device set on every send, so a list that went
 stale is corrected by the usual `409` amendment, which fetches again. Two
 things drop a held list earlier: the server's `devicesChanged` frame (this
-account's own devices changed), and a message whose `deviceListVersion`
+account's own devices changed), the list being an hour old (it is then
+fetched and verified again, so a server that withholds the `409` cannot keep
+a revoked device in longer than that; each fetch takes one of the account's
+one-time prekeys), and a message whose `deviceListVersion`
 (the sender's signed manifest sequence, a top-level field inside the
 ciphertext of every ordinary Direct message) is above the sequence this
 device has pinned for that sender. The server never learns who an account's
 contacts are; a contact hears of a change with the next message it reads.
+
+### Size of a direct message
+
+The server takes at most 64 KiB of content per envelope. A direct message
+must fit not only as itself but also as what may carry it again: a
+`resend` (sent after a session repair, so as a sealed first message, the
+largest kind) and the sent transcript to the account's other devices.
+Encryption adds at most about 2.1 KB, so before anything is queued the
+sender checks that the message, its `resend` wrapping (with the longest ids
+it can carry) and its transcript each stay within 64 KiB less 2,560 bytes,
+rounded down to the padding step, and refuses the message otherwise ("too
+large to send"). The web composer limits direct-message text to 30,000
+bytes, well inside that, and says so. A message stored before this check
+that is too large to wrap is not sent again; its notice waits as before.
 
 ### Disappearing-message V1 contract
 

@@ -53,6 +53,7 @@ function socketService() {
     heartbeat: null,
     pongDeadline: null,
     pollTimer: null,
+    polling: false,
     connection: 'connecting',
     connectionListeners: new Set(),
     disposed: false,
@@ -108,6 +109,17 @@ describe('ChatService connection status', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(FakeSocket.instances).toHaveLength(0)
     expect(statuses).toEqual(['deviceRemoved'])
+  })
+
+  it('does not take a 404 from something else for a removed device', async () => {
+    const { default: api } = await import('@kutup/session/client')
+    const { AxiosError, AxiosHeaders } = await import('axios')
+    // A proxy's page, or a server without Chat: not the server's word.
+    const response = { status: 404, data: '<html>Not Found</html>', headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' }
+    vi.mocked(api.post).mockRejectedValueOnce(new AxiosError('failed', '404', undefined, undefined, response as never))
+    const { service } = socketService()
+    await (service as unknown as { connectSocket(): Promise<void> }).connectSocket()
+    expect(service.connectionStatus()).toBe('connecting')
   })
 
   it('keeps retrying when the server is merely out of reach', async () => {
@@ -200,6 +212,24 @@ describe('ChatService connection status', () => {
     reconcile.mockClear()
     await vi.advanceTimersByTimeAsync(20_000)
     expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('never runs two polling loops, even when a retry fails during a read', async () => {
+    const { service } = socketService()
+    const reconcile = (service as unknown as { reconcile: ReturnType<typeof vi.fn> }).reconcile
+    // Each read takes a while, so retries land while one is in flight.
+    reconcile.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({}), 3_000)))
+    ;(await connect(service)).close()
+    await vi.advanceTimersByTimeAsync(500)
+    FakeSocket.instances.at(-1)!.close()
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(2_000)
+      FakeSocket.instances.at(-1)?.close()
+    }
+    reconcile.mockClear()
+    // One loop: a read of 3 s, then a 5 s pause, so at most 5 reads in 40 s.
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(reconcile.mock.calls.length).toBeLessThanOrEqual(5)
   })
 
   it('says reconnecting, not polling, when the server does not answer at all', async () => {

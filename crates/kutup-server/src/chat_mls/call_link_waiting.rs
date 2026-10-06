@@ -36,8 +36,10 @@ use crate::AppState;
 
 /// People who can wait at one meeting at a time.
 const MAX_WAITING: i64 = 50;
-/// A knocker who has not asked for this long has gone.
-const PRESENT_SECONDS: i64 = 20;
+/// A knocker who has not asked for this long has gone. Generous, because a
+/// browser slows the timers of a tab in the background to about one a
+/// minute; a knocker who leaves says so (`knock/leave`) and goes at once.
+const PRESENT_SECONDS: i64 = 90;
 /// Knocks are forgotten this long after the knocker last asked.
 const FORGET_SECONDS: i64 = 10 * 60;
 
@@ -279,6 +281,53 @@ pub(crate) async fn knock(
             ticket: STANDARD.encode(ticket),
         }),
     ))
+}
+
+/// Stop waiting, for the knocker (who holds its ticket): the knock goes from
+/// the host's list at once. Sent as the page closes, so it may arrive after
+/// the knock was decided; then it changes nothing.
+#[utoipa::path(
+    post,
+    path = "/api/chat/call-links/knock/leave",
+    tag = "chat",
+    operation_id = "leaveChatCallLinkKnock",
+    request_body = KnockStatusRequest,
+    responses(
+        (status = 204, description = "No longer waiting (or already decided)"),
+        (status = 404, description = "No such link, or the wrong access token"),
+        (status = 429, description = "Too many requests"),
+    )
+)]
+pub(crate) async fn leave_knock(
+    State(state): State<AppState>,
+    Json(request): Json<KnockStatusRequest>,
+) -> AppResult<StatusCode> {
+    let presented: [u8; 32] = Sha256::digest(base64_exact("ticket", &request.ticket, 32)?).into();
+    admitted(&state, &request.room_id, &request.access_token).await?;
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2",
+    )
+    .bind(request.knock_id)
+    .bind(&request.room_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let stored: [u8; 32] = stored
+        .as_deref()
+        .and_then(|hash| hash.try_into().ok())
+        .unwrap_or([0u8; 32]);
+    if kutup_chat_proto::constant_time_capability_hash_eq(&presented, &stored) {
+        // Only a knock still waiting: one already let in or turned away
+        // keeps its outcome (a removal, say, must stand).
+        sqlx::query(
+            "DELETE FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2 AND status = $3",
+        )
+        .bind(request.knock_id)
+        .bind(&request.room_id)
+        .bind(WAITING)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// How a knock went, for the knocker (who holds its ticket). An admitted one

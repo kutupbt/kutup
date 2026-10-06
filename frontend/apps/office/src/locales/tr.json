@@ -57,6 +57,8 @@
     "loading": "Belgeleriniz yükleniyor…",
     "loadFailedTitle": "Belgeleriniz yüklenemedi",
     "loadFailed": "Bağlantınızı kontrol edip sayfayı yeniden yükleyin.",
+    "incompleteTitle": "Bazı belgeler eksik",
+    "incomplete": "Bazı klasörler şu an okunamadı. Yeniden denemek için sayfayı yenileyin.",
     "emptyTitle": "Henüz bir şey yok",
     "empty": "Yukarıdan bir şey başlatın ya da Depo'ya dosya yükleyin: açabildiğiniz her not, belge, tablo, sunu ve beyaz tahta burada görünür.",
     "noMatchTitle": "Eşleşme yok",

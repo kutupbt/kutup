@@ -57,6 +57,8 @@
     "loading": "Loading your documents…",
     "loadFailedTitle": "Your documents could not be loaded",
     "loadFailed": "Check your connection and reload the page.",
+    "incompleteTitle": "Some documents are missing",
+    "incomplete": "Some folders could not be read just now. Reload the page to try again.",
     "emptyTitle": "Nothing here yet",
     "empty": "Start something above, or upload files in Drive: every note, document, spreadsheet, presentation and whiteboard you can open shows up here.",
     "noMatchTitle": "No match",
