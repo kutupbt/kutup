@@ -58,6 +58,8 @@ export interface ComposerProps {
   mediaLimit: number
   /** Group messages have a size limit (UTF-8 bytes). */
   maxTextBytes?: number
+  /** What to say when the text is over `maxTextBytes` (the group's rule by default). */
+  tooLongText?: string
   onTyping?: () => void
 }
 
@@ -475,7 +477,7 @@ export function Composer(props: ComposerProps) {
           </Button>
         )}
       </div>
-      {tooLong ? <p className="mt-1 px-2 text-xs text-destructive">{t('chat.composer.tooLong')}</p> : null}
+      {tooLong ? <p className="mt-1 px-2 text-xs text-destructive">{props.tooLongText ?? t('chat.composer.tooLong')}</p> : null}
     </div>
   )
 }

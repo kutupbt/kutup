@@ -1759,7 +1759,11 @@ lowercase hex characters; `accessTokenHash` is the SHA-256 of the link's
 access token (standard base64); `info` is the sealed title and time (552
 bytes of standard base64). The link's secret never reaches the server.
 `404` when the server has no SFU, `409` when the meeting exists or the
-account already has 50.
+account already has 50. Optional `"replaces"` (another of the account's
+room ids, "New link"): in the same transaction the old meeting is closed at
+the SFU and its link deleted, so the two never both work; the new link
+does not count against the 50. `404` when the account has no such link,
+`502` when the SFU cannot close the old meeting (nothing changes).
 
 ### GET /api/chat/call-links
 

@@ -95,7 +95,13 @@ async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCa
 }
 
 /** Make a meeting and register it with this server. */
-export async function createCallLink(masterKey: Uint8Array, info: MeetingInfo, waitingRoom = false): Promise<OwnedCallLink> {
+export async function createCallLink(
+  masterKey: Uint8Array,
+  info: MeetingInfo,
+  waitingRoom = false,
+  /** The room id of one of this account's links that the new one replaces, at once. */
+  replaces?: string,
+): Promise<OwnedCallLink> {
   const wasm = await loadChatWasm()
   const nonce = wasm.callLinkNonce()
   const secret = await ownerSecret(masterKey, nonce)
@@ -107,6 +113,7 @@ export async function createCallLink(masterKey: Uint8Array, info: MeetingInfo, w
     info: wasm.callLinkSealInfo(secret, info),
     hostTokenHash: wasm.callLinkHostToken(toBase64(masterKey), nonce).hostTokenHash,
     waitingRoom,
+    ...(replaces ? { replaces } : {}),
   })
   const link = await owned(masterKey, data)
   if (!link) throw new Error('the server returned another meeting')
@@ -144,8 +151,10 @@ export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink,
  * disconnected, so only the people the new link is sent to come back.
  */
 export async function replaceCallLink(masterKey: Uint8Array, link: OwnedCallLink): Promise<OwnedCallLink> {
-  const next = await createCallLink(masterKey, link.info, link.waitingRoom)
-  await deleteCallLink(link.roomId)
+  // One request: the server deletes the old link in the transaction that
+  // stores the new one, so the two never both work.
+  const next = await createCallLink(masterKey, link.info, link.waitingRoom, link.roomId)
+  forgetHostToken(link.roomId)
   return next
 }
 

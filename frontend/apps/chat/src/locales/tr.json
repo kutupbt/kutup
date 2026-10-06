@@ -398,7 +398,8 @@
     "composer": {
       "label": "Mesaj",
       "placeholder": "Mesaj",
-      "tooLong": "Bu, grubun izin verdiğinden uzun. Göndermek için kısalt."
+      "tooLong": "Bu, grubun izin verdiğinden uzun. Göndermek için kısalt.",
+      "tooLongDirect": "Bu, tek bir mesaj için fazla uzun. Kısaltın ya da dosya olarak gönderin."
     },
     "message": {
       "more": "Diğer işlemler",

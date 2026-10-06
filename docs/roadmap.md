@@ -583,8 +583,7 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     message of yours says your signed list has moved on.
   - Next: signed and last-resort prekeys rotate, and used prekeys are kept
     as long as the mailbox can still hold a message for them. Open edges of
-    the re-send: a message close to the size limit cannot be wrapped and
-    stays waiting; the once-an-hour limits are kept in memory only; a
+    the re-send: the once-an-hour limits are kept in memory only; a
     waiting notice whose sender never answers (an old client, an account
     gone) stays as it is.
   - Later: writes with strict durability (the IndexedDB wrapper in use

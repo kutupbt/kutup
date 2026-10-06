@@ -424,7 +424,11 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Meetings page makes one for the same meeting (same title, time and
   waiting room, a new secret and so new keys), deletes the old one and
   disconnects whoever is in it. Only the people the new link is sent to
-  come back.
+  come back. It is one request (`replaces` on `POST /api/chat/call-links`):
+  the server closes the old meeting at the SFU, deletes the old link and
+  stores the new one in one transaction, so the two links never both work.
+  If the SFU cannot close the old meeting nothing changes and the owner
+  sees an error.
 
 **Names and accounts:** the name a participant shows is what they typed;
 nothing verifies it, and a guest has nothing else. Someone signed in to

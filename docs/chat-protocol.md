@@ -328,6 +328,20 @@ ciphertext of every ordinary Direct message) is above the sequence this
 device has pinned for that sender. The server never learns who an account's
 contacts are; a contact hears of a change with the next message it reads.
 
+### Size of a direct message
+
+The server takes at most 64 KiB of content per envelope. A direct message
+must fit not only as itself but also as what may carry it again: a
+`resend` (sent after a session repair, so as a sealed first message, the
+largest kind) and the sent transcript to the account's other devices.
+Encryption adds at most about 2.1 KB, so before anything is queued the
+sender checks that the message, its `resend` wrapping (with the longest ids
+it can carry) and its transcript each stay within 64 KiB less 2,560 bytes,
+rounded down to the padding step, and refuses the message otherwise ("too
+large to send"). The web composer limits direct-message text to 30,000
+bytes, well inside that, and says so. A message stored before this check
+that is too large to wrap is not sent again; its notice waits as before.
+
 ### Disappearing-message V1 contract
 
 A hidden E2EE `disappearingTimer` operation changes the duration for future

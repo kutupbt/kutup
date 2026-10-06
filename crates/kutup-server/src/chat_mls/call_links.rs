@@ -66,6 +66,12 @@ pub struct CreateCallLinkRequest {
     /// Joiners wait until the owner admits them.
     #[serde(default)]
     pub waiting_room: bool,
+    /// The room id of one of this account's links that this one replaces
+    /// ("New link"): in the same transaction the old link is deleted and
+    /// its meeting closed, so the two never both work. If the SFU cannot
+    /// close the old meeting, nothing changes.
+    #[serde(default)]
+    pub replaces: Option<String>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -218,6 +224,12 @@ pub(crate) async fn create(
     if request.waiting_room && host_token_hash.is_none() {
         return Err(AppError::bad_request("a waiting room needs hostTokenHash"));
     }
+    if let Some(replaces) = &request.replaces {
+        hex32("replaces", replaces)?;
+        if *replaces == request.room_id {
+            return Err(AppError::bad_request("a link cannot replace itself"));
+        }
+    }
     let owner = owner(&auth)?;
     let mut tx = state.pool.begin().await?;
     // One account's creations in turn, so the count below holds.
@@ -232,10 +244,37 @@ pub(crate) async fn create(
             .bind(owner)
             .fetch_one(&mut *tx)
             .await?;
-    if count >= MAX_LINKS_PER_ACCOUNT {
+    // The link being replaced, held until the new one is in its place.
+    let replaced: Option<i64> = match &request.replaces {
+        Some(old) => Some(
+            sqlx::query_scalar(
+                "SELECT sitting FROM chat_call_links
+                 WHERE room_id = $1 AND owner_user_id = $2 FOR UPDATE",
+            )
+            .bind(old)
+            .bind(owner)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::not_found("the link to replace was not found"))?,
+        ),
+        None => None,
+    };
+    if count - i64::from(replaced.is_some()) >= MAX_LINKS_PER_ACCOUNT {
         return Err(AppError::conflict(
             "this account has as many call links as it can keep; delete one first",
         ));
+    }
+    if let (Some(old), Some(sitting)) = (&request.replaces, replaced) {
+        // The old meeting is closed first: if the SFU cannot be reached the
+        // transaction is dropped and the old link keeps working, alone.
+        if hosts_group_calls(&state) {
+            delete_sfu_room(&state, &sfu_room(old, sitting)).await?;
+        }
+        sqlx::query("DELETE FROM chat_call_links WHERE room_id = $1 AND owner_user_id = $2")
+            .bind(old)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
     }
     let created: Option<OffsetDateTime> = sqlx::query_scalar(
         "INSERT INTO chat_call_links
