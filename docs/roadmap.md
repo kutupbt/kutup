@@ -554,6 +554,17 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   for the collaboration hub, for all three editors), and meetings, whose
   signalling (LiveKit) has no transport but WebSockets. Worth building only
   if people are seen behind such gateways.
+- **Client-side search and listing index** ([research](research/15-client-side-search-index.md)).
+  - Next (Phase 1): an encrypted metadata catalog for the Office home, one
+    record per document under a random key wrapped by the account key,
+    kept current from a server change feed (an account change log with a
+    cursor, or per-folder revisions as a first step) and decrypted into
+    worker memory once per session; one tab syncs (Web Lock). Name search
+    uses a Turkish-aware fold (İ, I, ı, i → i). Needs the server change feed
+    first: today a folder can only be listed whole.
+  - Later (Phase 2): full-text search for Chat and notes with SQLite FTS5 in
+    the Rust core (SQLCipher natively, `sqlite-wasm-rs` on OPFS on the web)
+    and the same fold tokenizer; open questions in the research note.
 - **Office home: what is left.** `office.<domain>` lists the notes, office
   documents and whiteboards an account can open and starts new ones in My
   files; they are Drive files and open in Drive's editors. Still open:

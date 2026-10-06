@@ -29,6 +29,7 @@ history implementation. It is retained as design and debugging history;
 |---|---|
 | [`06-webdav-support.md`](./06-webdav-support.md) | Future feature: mount kutup as a native filesystem (Finder / Explorer / KIO). Why server-side WebDAV breaks E2EE; why a client-side proxy in the kutup CLI is the only viable path; references to Cryptomator / Filen / rclone precedents. No spec, no committed scope — captured so the idea isn't lost. |
 | [`10-admin-password-reset.md`](./10-admin-password-reset.md) | Shipped admin recovery/wipe decision under the E2EE boundary. |
+| [`15-client-side-search-index.md`](./15-client-side-search-index.md) | How E2EE products (Proton Drive and Mail, Signal, Tuta, Element, Ente, CryptPad, MEGA, Bitwarden, Wire) index and search on the client, browser storage engines (IndexedDB, SQLite WASM on OPFS) and Turkish case folding. Recommends an encrypted metadata catalog for the Office home now and one Rust SQLite FTS5 index for Chat and notes later. Not implemented. |
 | [`account-protection-wasm-baseline-2026-07-29.md`](./account-protection-wasm-baseline-2026-07-29.md) | Time-stamped Rust/WASM selection measurements for account-protection operations. |
 | [`perf-baseline-2026-05-06.md`](./perf-baseline-2026-05-06.md) | Historical Go/frontend performance snapshot; its Go rerun command no longer applies after the Rust cutover. |
 
