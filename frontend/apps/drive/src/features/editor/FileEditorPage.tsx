@@ -31,7 +31,7 @@ import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle, SessionBase } from './office/OfficeEditor'
 import { EditorNotice } from './office/EditorNotice'
 import { listVersions, patchVersion } from '@kutup/collab/api'
-import { collabSocketFailures, subscribeCollabConnectivity } from '@kutup/collab/connectivity'
+import { collabSocketFailures, resetCollabConnectivity, subscribeCollabConnectivity, unsentCollabFrames } from '@kutup/collab/connectivity'
 import { loadVersionBytes, saveSnapshot, type LogPosition, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
@@ -88,26 +88,31 @@ const LIVE_BLOCKED_AFTER = 3
  * whose changes cannot leave the page must not look as if it were saving, so
  * the file is shown as it was last saved, read-only, until a socket opens.
  */
-function useLiveEditingBlocked(): boolean {
+type LiveEditing = 'live' | 'blocked' | 'blockedWithEdits'
+
+function useLiveEditingBlocked(): LiveEditing {
   const failures = useSyncExternalStore(subscribeCollabConnectivity, collabSocketFailures)
-  const [blocked, setBlocked] = useState(false)
+  const [state, setState] = useState<LiveEditing>('live')
   useEffect(() => {
     if (failures === 0) {
-      setBlocked(false)
+      setState('live')
       return
     }
-    if (failures < LIVE_BLOCKED_AFTER || blocked) return
+    if (failures < LIVE_BLOCKED_AFTER || state !== 'live') return
     let alive = true
     // The server not answering either is an outage, not a blocked socket.
     api
       .get('/auth/settings')
-      .then(() => alive && setBlocked(true))
+      // Edits still waiting to be sent stay where they are: rebuilding the
+      // editor read-only would throw them away. They go out if the socket
+      // opens after all.
+      .then(() => alive && setState(unsentCollabFrames() > 0 ? 'blockedWithEdits' : 'blocked'))
       .catch(() => undefined)
     return () => {
       alive = false
     }
-  }, [failures, blocked])
-  return blocked
+  }, [failures, state])
+  return state
 }
 
 export function FileEditorPage({ shared = false }: { shared?: boolean }) {
@@ -116,7 +121,11 @@ export function FileEditorPage({ shared = false }: { shared?: boolean }) {
 }
 
 function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
-  const liveBlocked = useLiveEditingBlocked()
+  // Declared before the hook below, so it runs first for a new file.
+  useEffect(() => resetCollabConnectivity(), [fid])
+  const live = useLiveEditingBlocked()
+  // Read-only only when nothing typed here is still waiting to be sent.
+  const liveBlocked = live === 'blocked'
   const { t } = useTranslation()
   const session = useRequiredSession()
   const folders = useFolders()
@@ -283,7 +292,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // As the file opened: an editor stays one for the session (the server
       // drops a narrowed share's edits and closes its socket).
       readOnly={!(picked?.folder ?? liveFolder).canUpload || liveBlocked}
-      liveBlocked={liveBlocked}
+      liveBlocked={live !== 'live'}
+      unsentEdits={live === 'blockedWithEdits'}
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
       shareRole={shareRole(liveFolder, liveFile, sharedFile)}
       mayRename={
@@ -365,6 +375,7 @@ function Workspace({
   keys,
   readOnly,
   liveBlocked,
+  unsentEdits,
   notice,
   shareRole: mayShare,
   mayRename,
@@ -380,6 +391,8 @@ function Workspace({
   readOnly: boolean
   /** This network blocks live editing: say so above the document. */
   liveBlocked: boolean
+  /** …and edits made here are still waiting to be sent. */
+  unsentEdits: boolean
   /** Why an editor opened read-only when that is not its share. */
   notice: string | null
   /** How this account may share the file from here, if at all. */
@@ -540,7 +553,7 @@ function Workspace({
           <WifiOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="min-w-0 flex-1">
             <span className="font-medium">{t('file.liveBlocked')}</span>{' '}
-            <span className="text-muted-foreground">{t('file.liveBlockedBody')}</span>
+            <span className="text-muted-foreground">{t(unsentEdits ? 'file.liveBlockedUnsent' : 'file.liveBlockedBody')}</span>
           </p>
           <Button size="sm" variant="outline" onClick={() => void download()}>
             <Download />

@@ -134,6 +134,18 @@ pub enum ChatEvent {
     },
 }
 
+/// How long a fetched and verified device list is used without fetching it
+/// again (each fetch takes one of the account's one-time prekeys).
+const KNOWN_DEVICES_TTL_MS: i64 = 60 * 60 * 1000;
+/// How often the records waiting for a message are looked at.
+const WAITING_CHECK_INTERVAL_MS: i64 = 10 * 60 * 1000;
+/// A record this young was just asked for when it was made.
+const WAITING_FIRST_ASK_MS: i64 = 2 * 60 * 1000;
+/// How often one waited-for message is asked for again.
+const WAITING_ASK_EVERY_MS: i64 = 30 * 60 * 1000;
+/// After this long without an answer the message is given up on.
+const WAITING_GIVE_UP_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
 /// A registered chat client: one device plus its transport.
 pub struct Engine {
     session: Session,
@@ -146,12 +158,23 @@ pub struct Engine {
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
     known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
+    /// When each entry of `known_devices` was fetched: a list older than
+    /// `KNOWN_DEVICES_TTL_MS` is fetched and verified again.
+    known_devices_at: BTreeMap<String, i64>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
     /// When a message was last sent again at a peer's request, by
     /// `(account, send id)`.
     resent: BTreeMap<(String, String), i64>,
+    /// When this device last asked again for a message it waits for, by
+    /// `(account, send id)` (`ask_again_for_waiting`).
+    asked_again: BTreeMap<(String, String), i64>,
+    /// When the waiting records were last looked at; zero until the first
+    /// look of this run, so a reload asks again at once.
+    waiting_checked_at: i64,
+    /// Added to the clock where waiting records are aged (tests only).
+    clock_offset_ms: i64,
 }
 
 impl Engine {
@@ -184,8 +207,12 @@ impl Engine {
             local_server: None,
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
+            known_devices_at: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
+            asked_again: BTreeMap::new(),
+            waiting_checked_at: 0,
+            clock_offset_ms: 0,
         }
     }
 
@@ -216,6 +243,12 @@ impl Engine {
     /// Forget every device list held from an earlier fetch, so the next send
     /// to anyone fetches and verifies the list again. Called when the server
     /// says this account's own devices changed.
+    /// Move the clock that ages waiting records forward. Tests only.
+    #[doc(hidden)]
+    pub fn advance_clock_for_testing(&mut self, ms: i64) {
+        self.clock_offset_ms += ms;
+    }
+
     pub fn forget_known_devices(&mut self) {
         self.known_devices.clear();
     }
@@ -1683,7 +1716,62 @@ impl Engine {
         }
         let cutoff = unix_millis().saturating_sub(USED_PREKEY_GRACE_MS);
         self.session.purge_used_pre_keys(cutoff).await?;
+        // Never fatal: asking again is best effort and tried again later.
+        let _ = self.ask_again_for_waiting(rng).await;
         Ok(report)
+    }
+
+    /// Ask again for messages still waited for. The first request goes out
+    /// when a message cannot be read, but it can be lost (a failed send, a
+    /// key fetch that failed, the tab closed before it went), and nothing
+    /// would ever ask again. So every few minutes, and at once after a
+    /// reload, each waiting record older than a moment is asked for again
+    /// at most every half hour; one waited for a week is given up on and
+    /// says the message is lost.
+    async fn ask_again_for_waiting<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<()> {
+        let now = unix_millis() + self.clock_offset_ms;
+        if self.waiting_checked_at != 0 && now - self.waiting_checked_at < WAITING_CHECK_INTERVAL_MS
+        {
+            return Ok(());
+        }
+        self.waiting_checked_at = now;
+        let mut ask: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut give_up: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (peer, send_id, received_at) in self.session.waiting_records().await? {
+            let age = now - received_at;
+            if age >= WAITING_GIVE_UP_MS {
+                give_up.entry(peer).or_default().push(send_id);
+                continue;
+            }
+            if age < WAITING_FIRST_ASK_MS {
+                continue;
+            }
+            let key = (peer.clone(), send_id.clone());
+            if self
+                .asked_again
+                .get(&key)
+                .is_some_and(|at| now - at < WAITING_ASK_EVERY_MS)
+            {
+                continue;
+            }
+            self.asked_again.insert(key, now);
+            ask.entry(peer).or_default().push(send_id);
+        }
+        for (peer, send_ids) in give_up {
+            self.session.give_up_waiting(&peer, &send_ids).await?;
+        }
+        for (peer, send_ids) in ask {
+            for batch in send_ids.chunks(kutup_chat_proto::MAX_SESSION_CONTROL_SEND_IDS) {
+                self.send_session_control(
+                    &peer,
+                    kutup_chat_proto::SessionControlAction::Refresh,
+                    batch.to_vec(),
+                    rng,
+                )
+                .await;
+            }
+        }
+        Ok(())
     }
 
     async fn process_inbound<R: Rng + CryptoRng>(
@@ -1953,12 +2041,13 @@ impl Engine {
         self.resent
             .retain(|_, at| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS);
         let mut unavailable = Vec::new();
+        let mut lost = Vec::new();
         for original in send_ids {
             let key = (peer.to_string(), original.clone());
             if self.resent.contains_key(&key) {
                 continue;
             }
-            self.resent.insert(key, now);
+            self.resent.insert(key.clone(), now);
             let Some(content) = self.session.resendable_content(peer, &original).await? else {
                 unavailable.push(original);
                 continue;
@@ -1974,13 +2063,35 @@ impl Engine {
                 unavailable.push(original);
                 continue;
             };
-            let _ = self.send(&send_id, peer, &wrapped, rng).await;
+            match self.send(&send_id, peer, &wrapped, rng).await {
+                Ok(_) => {}
+                // Too large to wrap (stored before the size check existed):
+                // it can never be sent again, so say so rather than leave
+                // the reader waiting.
+                Err(ChatError::Invalid(message)) if message.contains("too large") => {
+                    lost.push(original);
+                }
+                // Anything else (a key fetch that failed, say): this device
+                // may answer again when the request is repeated.
+                Err(_) => {
+                    self.resent.remove(&key);
+                }
+            }
         }
         if !unavailable.is_empty() {
             self.send_session_control(
                 peer,
                 kutup_chat_proto::SessionControlAction::Unavailable,
                 unavailable,
+                rng,
+            )
+            .await;
+        }
+        if !lost.is_empty() {
+            self.send_session_control(
+                peer,
+                kutup_chat_proto::SessionControlAction::Lost,
+                lost,
                 rng,
             )
             .await;
@@ -2212,6 +2323,14 @@ impl Engine {
         let Some(known) = self.known_devices.get(peer_user) else {
             return Ok(None);
         };
+        // A held list is not trusted for ever: the server's own check of the
+        // device set (409) is what corrects a stale one, and a server that
+        // withholds it could keep a revoked device in. Fetched and verified
+        // again every so often, it cannot for longer than that.
+        let fetched = self.known_devices_at.get(peer_user).copied().unwrap_or(0);
+        if unix_millis() - fetched >= KNOWN_DEVICES_TTL_MS {
+            return Ok(None);
+        }
         if self.session.has_sessions_with_all(peer_user, known).await? {
             Ok(Some(known.clone()))
         } else {
@@ -2226,6 +2345,8 @@ impl Engine {
         peer_user: &str,
         bundles: &[kutup_chat_proto::DevicePreKeyBundle],
     ) {
+        self.known_devices_at
+            .insert(peer_user.to_owned(), unix_millis());
         self.known_devices.insert(
             peer_user.to_owned(),
             bundles

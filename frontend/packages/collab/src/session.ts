@@ -223,7 +223,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         fileKey,
         kp.privateKey,
       )
-      transport?.send(frame)
+      // Loading the file's content into a new document is not an edit.
+      transport?.send(frame, { edit: origin !== 'seed' })
     })()
     sending.add(sent)
     void sent.catch(() => undefined).finally(() => sending.delete(sent))
@@ -247,7 +248,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         fileKey,
         kp.privateKey,
       )
-      transport?.send(frame)
+      transport?.send(frame, { edit: false })
     })()
   }
   awareness.on('change', onAwarenessChange)

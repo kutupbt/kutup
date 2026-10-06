@@ -1239,6 +1239,77 @@ impl Session {
             }))
     }
 
+    /// The records still waiting for a message: `(peer, send id, received at)`.
+    pub(crate) async fn waiting_records(&self) -> Result<Vec<(String, String, i64)>> {
+        let mut waiting = Vec::new();
+        for message in self.store.db().list_messages().await? {
+            let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content) else {
+                continue;
+            };
+            if let Some(body) = content.as_undecryptable() {
+                if let (Some(send_id), false) = (body.send_id, body.lost) {
+                    waiting.push((message.peer, send_id, message.received_at));
+                }
+            }
+        }
+        Ok(waiting)
+    }
+
+    /// Stop waiting for these messages from `sender` (asked for in vain).
+    pub(crate) async fn give_up_waiting(
+        &mut self,
+        sender: &str,
+        send_ids: &[String],
+    ) -> Result<()> {
+        let result = self.stage_lost(sender, send_ids).await;
+        match result {
+            Ok(()) => self.store.commit().await,
+            Err(error) => {
+                self.store.discard();
+                Err(error)
+            }
+        }
+    }
+
+    /// Stage turning the records waiting for `send_ids` from `sender` into
+    /// lost ones. Stored under a derived id (a record is never rewritten in
+    /// place), with the send id kept, so the message still fills in if
+    /// another device of the sender sends it after all.
+    async fn stage_lost(&mut self, sender: &str, send_ids: &[String]) -> Result<()> {
+        for message in self.store.db().list_messages().await? {
+            if message.peer != sender {
+                continue;
+            }
+            let Ok(content) = serde_json::from_slice::<ChatContent>(&message.content) else {
+                continue;
+            };
+            let Some(body) = content.as_undecryptable() else {
+                continue;
+            };
+            let Some(send_id) = body.send_id.filter(|id| send_ids.contains(id)) else {
+                continue;
+            };
+            if body.lost {
+                continue;
+            }
+            let id = format!("{}:lost", message.id);
+            let lost = ChatContent::undecryptable_record(
+                id.clone(),
+                content.sent_at.clone(),
+                Some(send_id),
+                true,
+            );
+            self.store.delete_message(&message.id);
+            self.store.stage_message(InboxMessage {
+                id,
+                content: serde_json::to_vec(&lost)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                ..message
+            });
+        }
+        Ok(())
+    }
+
     /// Stage removing the records standing in for `send_ids` from `sender`.
     async fn stage_filled_in(&mut self, sender: &str, send_ids: &[String]) -> Result<bool> {
         let mut already_here = false;
@@ -1997,9 +2068,17 @@ impl Session {
                     {
                         resend_request = Some(body.send_ids);
                     }
+                    Some(body) if body.action == kutup_chat_proto::SessionControlAction::Lost => {
+                        // Sent, but not to be had again: no longer waited
+                        // for, and saying so. Another device of the sender
+                        // that still has one fills it in all the same.
+                        self.stage_lost(&sender, &body.send_ids).await?;
+                    }
                     Some(body) => {
-                        // Nothing was lost that a reader would see: the
-                        // records waiting for these simply go.
+                        // Nothing that device kept as history (a typing
+                        // indicator can be the unreadable thing): the records
+                        // simply go. A device that does have it still sends
+                        // it, and it arrives as a message.
                         self.stage_filled_in(&sender, &body.send_ids).await?;
                     }
                     None => {}
@@ -3068,12 +3147,14 @@ impl Session {
                 "a sent transcript cannot contain another sent transcript".into(),
             ));
         }
+        let user = self.user().to_string();
+        // Note to Self travels only as a transcript, which must fit too.
+        ensure_room_for_wrappers(send_id, &user, content)?;
         let created_at = now_millis();
         let transcript =
             ChatContent::sent_transcript(send_id, self.user(), created_at, content.clone());
         let transcript_plaintext =
             serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
-        let user = self.user().to_string();
         match self
             .build_send(&user, bundles, &transcript_plaintext, summary, rng)
             .await

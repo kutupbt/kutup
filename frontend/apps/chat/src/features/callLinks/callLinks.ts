@@ -2,6 +2,7 @@ import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-cor
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
 import { forgetHostToken, rememberHostToken } from './hostTokens'
 
 // Meetings (docs/chat-calls.md, "Meetings"): a call anyone holding the link
@@ -82,7 +83,8 @@ async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCa
     return null
   }
   const { hostToken } = wasm.callLinkHostToken(toBase64(masterKey), stored.nonce)
-  rememberHostToken(stored.roomId, hostToken)
+  const account = getSession()?.userId
+  if (account) rememberHostToken(account, stored.roomId, hostToken)
   return {
     roomId: stored.roomId,
     createdAt: stored.createdAt,
@@ -95,6 +97,11 @@ async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCa
 }
 
 /** Make a meeting and register it with this server. */
+function forgetOwnHostToken(roomId: string): void {
+  const account = getSession()?.userId
+  if (account) forgetHostToken(account, roomId)
+}
+
 export async function createCallLink(
   masterKey: Uint8Array,
   info: MeetingInfo,
@@ -154,14 +161,14 @@ export async function replaceCallLink(masterKey: Uint8Array, link: OwnedCallLink
   // One request: the server deletes the old link in the transaction that
   // stores the new one, so the two never both work.
   const next = await createCallLink(masterKey, link.info, link.waitingRoom, link.roomId)
-  forgetHostToken(link.roomId)
+  forgetOwnHostToken(link.roomId)
   return next
 }
 
 /** Delete a meeting: nobody can join through its link any more, and it ends for whoever is in it. */
 export async function deleteCallLink(roomId: string): Promise<void> {
   await api.delete(`/chat/call-links/${roomId}`)
-  forgetHostToken(roomId)
+  forgetOwnHostToken(roomId)
 }
 
 /** The room of the link whose fragment this is. */
@@ -323,6 +330,26 @@ export interface Knock {
 /** Ask to be let into a meeting with a waiting room. */
 export function knockMeeting(link: OpenCallLink, seat: MeetingSeat, label: string, vouchFor?: string | null): Promise<Knock> {
   return asHolder('knock', { roomId: link.roomId, accessToken: link.accessToken, ...seat, label }, 'knock', vouchFor)
+}
+
+/**
+ * Stop waiting: the knock goes from the host's list at once. Sent with
+ * `keepalive`, so it still goes out while the page is closing. Best effort:
+ * a knock whose leave is lost drops off the list once its knocker stops
+ * asking.
+ */
+export function leaveKnock(link: OpenCallLink, knock: Knock): void {
+  try {
+    void fetch('/api/chat/call-links/knock/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'omit',
+      keepalive: true,
+      body: JSON.stringify({ roomId: link.roomId, accessToken: link.accessToken, ...knock }),
+    }).catch(() => undefined)
+  } catch {
+    // No fetch here (a test, an old browser): nothing to do.
+  }
 }
 
 export type KnockStatus = { status: 'waiting' } | { status: 'turnedAway' } | ({ status: 'admitted' } & SfuAccess)

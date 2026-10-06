@@ -60,6 +60,12 @@ export interface ComposerProps {
   maxTextBytes?: number
   /** What to say when the text is over `maxTextBytes` (the group's rule by default). */
   tooLongText?: string
+  /**
+   * The most the message may take once encoded (text, mentions and link
+   * preview together). A link preview that would take it over is left out,
+   * and the text is sent without it.
+   */
+  maxEncodedBytes?: number
   onTyping?: () => void
 }
 
@@ -190,7 +196,11 @@ export function Composer(props: ComposerProps) {
         setText('')
       } else {
         const mentions = resolveMentions(trimmed, picks)
-        const linkPreview = preview?.status === 'ready' && trimmed.includes(preview.url) ? preview.preview : undefined
+        const offered = preview?.status === 'ready' && trimmed.includes(preview.url) ? preview.preview : undefined
+        const linkPreview =
+          offered && props.maxEncodedBytes !== undefined && encodedBytes(trimmed, mentions, offered) > props.maxEncodedBytes
+            ? undefined
+            : offered
         const extras: ChatMessageExtras = {
           ...(mentions.length > 0 ? { mentions } : {}),
           ...(linkPreview ? { linkPreview } : {}),
@@ -480,4 +490,10 @@ export function Composer(props: ComposerProps) {
       {tooLong ? <p className="mt-1 px-2 text-xs text-destructive">{props.tooLongText ?? t('chat.composer.tooLong')}</p> : null}
     </div>
   )
+}
+
+/** Roughly what the message's own fields take once encoded (UTF-8 JSON). */
+function encodedBytes(...parts: unknown[]): number {
+  const encoder = new TextEncoder()
+  return parts.reduce<number>((total, part) => total + encoder.encode(JSON.stringify(part)).byteLength, 0)
 }

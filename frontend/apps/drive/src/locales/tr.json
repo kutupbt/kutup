@@ -7,7 +7,7 @@
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
   },
   "boot": {
-    "opening": "Deponuz açılıyor…",
+    "opening": "Depo'nuz açılıyor…",
     "failedTitle": "Depo açılamadı",
     "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin."
   },
@@ -273,7 +273,7 @@
     },
     "leave": "Ayrıl",
     "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",
-    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Deponuzdan kalkar. Sizi yeniden davet edebilir.",
+    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Depo'nuzdan kalkar. Sizi yeniden davet edebilir.",
     "leaveFailed": "Klasörden ayrılınamadı.",
     "waitingName": "Sahibi bekleniyor",
     "waiting": "sahibinin erişimi güncellemesi bekleniyor",
@@ -487,7 +487,7 @@
       "foldAll": "Her şeyi katla ya da aç",
       "palette": "Komut paleti",
       "switcher": "Bir dosya ya da klasör aç",
-      "kutupLink": "Depondaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
+      "kutupLink": "Depo'ndaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
       "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
       "title": "Düzenleyici klavye kısayolları",
       "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
@@ -552,6 +552,7 @@
     "opening": "Açılıyor…",
     "liveBlocked": "Bu ağ canlı düzenlemeyi engelliyor.",
     "liveBlockedBody": "Dosyayı son kaydedildiği haliyle, salt okunur görüyorsunuz. Bir kopya üzerinde çalışmak için indirin ya da düzenlemek için başka bir ağdan açın.",
+    "liveBlockedUnsent": "Son değişiklikleriniz sunucuya ulaşmadı. Bu sekmede tutuluyor ve bağlantı geri gelirse gönderiliyor; sekmeyi kapatmayın. Ya da dosyanın son kaydedilmiş halini indirin.",
     "failedTitle": "Bu dosya açılamıyor",
     "backToDrive": "Depo'ya dön",
     "backTo": "{{folder}} klasörüne dön",

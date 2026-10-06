@@ -26,6 +26,7 @@ import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { unreadCounts } from '../state/views'
 import { ChatNotifier } from './ChatNotifier'
 import { Shortcuts } from './Shortcuts'
+import { forgetAccountHostTokens } from '../features/callLinks/hostTokens'
 import { closeChat, useChat } from './chatStore'
 
 /**
@@ -136,6 +137,8 @@ export function ChatShell() {
           onSignOut={() => {
             // A signed-out browser is not woken for this account any more.
             if (chat.self) clearDrafts(chat.self.address)
+            // Nor does it host this account's meetings any more.
+            forgetAccountHostTokens(session.userId)
             void disableWebPush(chat.service)
               .catch(() => undefined)
               .then(() => {

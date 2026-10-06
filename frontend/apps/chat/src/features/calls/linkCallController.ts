@@ -7,6 +7,7 @@ import {
   forgetMeetingSeat,
   knockMeeting,
   knockStatus,
+  leaveKnock,
   lockMeeting,
   meetingRoles,
   meetingSeat,
@@ -69,6 +70,8 @@ const MAX_MESSAGES = 500
 
 /** How often someone waiting asks whether they were let in. */
 const KNOCK_POLL_MS = 2_500
+/** Asking how a knock went may fail this long in a row (a dropped connection, a busy server) before the wait is given up. */
+const KNOCK_GIVE_UP_MS = 90_000
 /** How often a host looks at who is waiting. */
 const WAITING_POLL_MS = 3_000
 /**
@@ -285,13 +288,34 @@ export class LinkCallController {
       if (error instanceof NoWaitingRoom) return callLinkToken(this.link, seat, label, this.hostToken, account)
       throw error
     }
-    while (current()) {
-      const answer = await knockStatus(this.link, knock)
-      if (answer.status === 'admitted') return { url: answer.url, token: answer.token }
-      if (answer.status === 'turnedAway') throw new CallLinkRefused('turnedAway')
-      await new Promise((resolve) => setTimeout(resolve, KNOCK_POLL_MS))
+    // A knocker who closes the page stops waiting at once, not when the
+    // host's list notices they stopped asking.
+    const leave = () => leaveKnock(this.link, knock)
+    window.addEventListener('pagehide', leave)
+    try {
+      let failingSince: number | null = null
+      while (current()) {
+        let answer: Awaited<ReturnType<typeof knockStatus>> | null = null
+        try {
+          answer = await knockStatus(this.link, knock)
+          failingSince = null
+        } catch (error) {
+          // Unreachable or busy (a shared address over the rate limit) is
+          // asked again; a knock that is gone (swept, the meeting deleted)
+          // is final.
+          if (error instanceof CallLinkRefused && error.reason !== 'unavailable' && error.reason !== 'busy') throw error
+          failingSince ??= Date.now()
+          if (Date.now() - failingSince > KNOCK_GIVE_UP_MS) throw error
+        }
+        if (answer?.status === 'admitted') return { url: answer.url, token: answer.token }
+        if (answer?.status === 'turnedAway') throw new CallLinkRefused('turnedAway')
+        await new Promise((resolve) => setTimeout(resolve, KNOCK_POLL_MS))
+      }
+      leave()
+      return null
+    } finally {
+      window.removeEventListener('pagehide', leave)
     }
-    return null
   }
 
   /** As a host: let in someone who is waiting. */

@@ -148,7 +148,7 @@
       "profile": "Profil",
       "noUsername": "Belirlenmedi",
       "driveStorage": "Depo alanı",
-      "chatStorage": "İleti alanı",
+      "chatStorage": "İleti depolama alanı",
       "usage": "{{total}} alanın {{used}} kadarı",
       "colour": "Varlık rengi",
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",

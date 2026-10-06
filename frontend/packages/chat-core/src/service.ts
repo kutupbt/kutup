@@ -158,6 +158,8 @@ export class ChatService {
   private pongDeadline: ReturnType<typeof setTimeout> | null = null
   private connection: ChatConnectionStatus = 'connecting'
   private pollTimer: ReturnType<typeof setTimeout> | null = null
+  /** A polling loop runs (its timer may be between ticks, or a read in flight). */
+  private polling = false
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
   private readonly callListeners = new Set<(event: ChatCallEvent) => void>()
   private cachedCallServers: ChatCallServers | null = null
@@ -1783,7 +1785,10 @@ export class ChatService {
     } catch (error) {
       // The server answered that this device does not exist: retrying will
       // not bring it back, and "reconnecting" forever would hide that.
-      if (isAxiosError(error) && error.response?.status === 404) {
+      // Only the server's own answer counts: a 404 from a proxy, or from a
+      // server where Chat is off, says nothing about this device, and the
+      // repair offered for a removed one drops what waits to be sent.
+      if (isAxiosError(error) && error.response?.status === 404 && isNoSuchDevice(error.response.data)) {
         this.stopPolling()
         this.setConnection('deviceRemoved')
         return
@@ -1804,11 +1809,22 @@ export class ChatService {
    * socket is still retried beside it and takes over the moment it opens.
    */
   private startPolling(): void {
-    if (this.disposed || this.pollTimer) return
+    // One loop at a time: `pollTimer` is empty while a read is in flight,
+    // so it cannot say whether one runs.
+    if (this.disposed || this.polling) return
+    this.polling = true
     const tick = (): void => {
       this.pollTimer = null
-      if (this.disposed || this.socket?.readyState === WebSocket.OPEN || this.connection === 'deviceRemoved') return
-      if (navigator.onLine === false) return
+      if (
+        this.disposed ||
+        !this.polling ||
+        this.socket?.readyState === WebSocket.OPEN ||
+        this.connection === 'deviceRemoved' ||
+        navigator.onLine === false
+      ) {
+        this.polling = false
+        return
+      }
       this.reconcile()
         .then(() => {
           if (this.socket?.readyState !== WebSocket.OPEN && this.connection === 'connecting') this.setConnection('polling')
@@ -1819,7 +1835,10 @@ export class ChatService {
           reportBackgroundFailure(error)
         })
         .finally(() => {
-          if (this.disposed || this.socket?.readyState === WebSocket.OPEN) return
+          if (this.disposed || !this.polling || this.socket?.readyState === WebSocket.OPEN) {
+            this.polling = false
+            return
+          }
           this.pollTimer = setTimeout(tick, document.visibilityState === 'visible' ? POLL_VISIBLE_MS : POLL_HIDDEN_MS)
         })
     }
@@ -1829,6 +1848,7 @@ export class ChatService {
   private stopPolling(): void {
     if (this.pollTimer) clearTimeout(this.pollTimer)
     this.pollTimer = null
+    this.polling = false
   }
 
   private scheduleSocketRetry(): void {
@@ -1837,7 +1857,7 @@ export class ChatService {
     if (this.retryAttempt >= POLL_AFTER_ATTEMPTS) this.startPolling()
     this.socketRetry = setTimeout(() => {
       this.socketRetry = null
-      if (!this.pollTimer) this.reconcileInBackground()
+      if (!this.polling) this.reconcileInBackground()
       void this.connectSocket()
     }, delay)
   }
@@ -1983,4 +2003,9 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
     return null
   }
   return event as ChatCallEvent
+}
+
+/** The server's answer when it does not know this browser's Chat device. */
+function isNoSuchDevice(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
 }

@@ -131,12 +131,14 @@ describe('an unreadable message', () => {
       entry(bob, 'incoming', 1, { messageId: 'm1', text: 'before' }),
       entry(bob, 'incoming', 2, { kind: 'undecryptable', messageId: 'lost', undecryptable: true, body: {} }),
       entry(bob, 'incoming', 3, { kind: 'undecryptable', messageId: 'asked', undecryptable: true, body: { sendId: 's1' } }),
+      entry(bob, 'incoming', 4, { kind: 'undecryptable', messageId: 'given-up', undecryptable: true, body: { sendId: 's2', lost: true } }),
     ]
     const view = threadView(history, 'direct:bob@a.test', SELF, 100)
     expect(view.map((m) => [m.id, m.undecryptable, m.author])).toEqual([
       ['m1', null, 'bob@a.test'],
       ['lost', 'lost', 'bob@a.test'],
       ['asked', 'waiting', 'bob@a.test'],
+      ['given-up', 'lost', 'bob@a.test'],
     ])
     expect(conversationList(data(history), SELF, 100)[0]?.last?.content.undecryptable).toBe(true)
     expect(unreadCounts(history, {}, 100).get('direct:bob@a.test')).toBe(1)

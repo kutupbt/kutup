@@ -1,7 +1,7 @@
 // WebSocket client for the collab relay. Reconnect with backoff, queue while
 // disconnected, replay-from-seq on reconnect.
 
-import { reportCollabSocket } from './connectivity'
+import { reportCollabSocket, trackCollabTransport } from './connectivity'
 
 export interface PeerInfo {
   deviceId: number
@@ -82,7 +82,7 @@ export type PositionMsg =
 
 export class CollabTransport {
   private ws: WebSocket | null = null
-  private pending: Uint8Array[] = []
+  private pending: { bytes: Uint8Array; edit: boolean }[] = []
   private reconnectTimer: number | null = null
   private closed = false
   /** Messages are handled one after another, in arrival order. */
@@ -90,25 +90,36 @@ export class CollabTransport {
   /** The position this connection resumed from. */
   private resumedFrom = 0
 
+  private readonly untrack: () => void
+
   constructor(private readonly opts: CollabTransportOpts) {
+    this.untrack = trackCollabTransport(this)
     this.connect()
   }
 
   /** Number of frames queued while disconnected. Test helper. */
   pendingCount(): number { return this.pending.length }
 
-  /** Send a binary frame. If disconnected, queues until next connect. */
-  send(b: Uint8Array): void {
+  /** Queued frames that change the document (not presence or cursors). */
+  pendingEditCount(): number { return this.pending.filter((frame) => frame.edit).length }
+
+  /**
+   * Send a binary frame. If disconnected, queues until next connect.
+   * `edit`: the frame changes the document (a cursor or presence update
+   * does not), so losing it would lose work.
+   */
+  send(b: Uint8Array, { edit = true }: { edit?: boolean } = {}): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(b)
     } else {
-      this.pending.push(b)
+      this.pending.push({ bytes: b, edit })
     }
   }
 
   /** Permanently close the transport. No further connects. */
   close(): void {
     this.closed = true
+    this.untrack()
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -155,7 +166,7 @@ export class CollabTransport {
       for (const m of this.opts.openMessages?.() ?? []) ws.send(JSON.stringify(m))
       ws.send(JSON.stringify({ type: 'resume', lastSeenSeq: last }))
       // Drain queued outbound.
-      for (const p of this.pending) ws.send(p)
+      for (const p of this.pending) ws.send(p.bytes)
       this.pending = []
     })
 

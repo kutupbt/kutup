@@ -1047,6 +1047,146 @@ fn undecryptable_records(engine: &Engine) -> Vec<Option<String>> {
         .collect()
 }
 
+fn waiting_records(engine: &Engine) -> Vec<(Option<String>, bool)> {
+    block_on(engine.session().history())
+        .unwrap()
+        .iter()
+        .filter_map(|message| {
+            serde_json::from_slice::<ChatContent>(&message.content)
+                .ok()?
+                .as_undecryptable()
+                .map(|body| (body.send_id, body.lost))
+        })
+        .collect()
+}
+
+#[test]
+fn a_message_still_waited_for_is_asked_for_again_and_given_up_on_after_a_week() {
+    const MINUTE: i64 = 60 * 1000;
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    // Every ask after the reset fetches Alice's keys again.
+    bob_server.script(vec![vec![bundle_of(&alice_session, 1)]; 6]);
+    bob_server.set_active(vec![(1, reg_id(&alice_session))]);
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    block_on(bob.receive(&mut rng)).unwrap();
+    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    block_on(alice.receive(&mut rng)).unwrap();
+
+    // A message arrives unreadable; Alice never answers (the ask is not
+    // relayed to her).
+    let lost_id = "33333333-3333-4333-8333-333333333333";
+    let message = ChatContent::text_with_id(lost_id, "2026-10-06T09:00:00Z", 2, "lost in transit");
+    block_on(alice.send(lost_id, "bob", &message, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        waiting_records(&bob),
+        vec![(Some(lost_id.to_string()), false)]
+    );
+    let sent = || bob_server.delivered.borrow().len();
+    let after_first_ask = sent();
+
+    // Not again at once.
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(sent(), after_first_ask);
+
+    // Some minutes on, it is asked for again.
+    bob.advance_clock_for_testing(11 * MINUTE);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(sent(), after_first_ask + 1, "asked again");
+
+    // Not more than every half hour.
+    bob.advance_clock_for_testing(11 * MINUTE);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(sent(), after_first_ask + 1);
+    bob.advance_clock_for_testing(25 * MINUTE);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        sent(),
+        after_first_ask + 2,
+        "asked again after half an hour"
+    );
+
+    // A week without an answer: no longer waited for, and lost.
+    bob.advance_clock_for_testing(8 * 24 * 60 * MINUTE);
+    block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        waiting_records(&bob),
+        vec![(Some(lost_id.to_string()), true)]
+    );
+    assert_eq!(
+        sent(),
+        after_first_ask + 2,
+        "a lost message is not asked for"
+    );
+}
+
+#[test]
+fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
+    let mut rng = test_rng();
+    let alice_session = device("alice", 1, &mut rng);
+    let bob_session = device("bob", 2, &mut rng);
+    let alice_server = Rc::new(MockServer::default());
+    alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
+    alice_server.set_active(vec![(2, reg_id(&bob_session))]);
+    let bob_server = Rc::new(MockServer::default());
+    bob_server.script(vec![vec![bundle_of(&alice_session, 1)]; 3]);
+    bob_server.set_active(vec![(1, reg_id(&alice_session))]);
+    let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
+    let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
+
+    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    block_on(bob.receive(&mut rng)).unwrap();
+    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    block_on(alice.receive(&mut rng)).unwrap();
+
+    let lost_id = "44444444-4444-4444-8444-444444444444";
+    let message =
+        ChatContent::text_with_id(lost_id, "2026-10-06T09:00:00Z", 2, "too big to wrap, say");
+    block_on(alice.send(lost_id, "bob", &message, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(bob.receive(&mut rng)).unwrap();
+    // Bob's request reaches Alice, which also takes the fresh session.
+    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    block_on(alice.receive(&mut rng)).unwrap();
+
+    // Alice answers that this one cannot be had again.
+    let control_id = "55555555-5555-4555-8555-555555555555";
+    let lost = ChatContent::session_control_with_id(
+        control_id,
+        "2026-10-06T09:01:00Z",
+        3,
+        &kutup_chat_proto::SessionControlBody {
+            action: kutup_chat_proto::SessionControlAction::Lost,
+            send_ids: vec![lost_id.to_string()],
+        },
+    );
+    block_on(alice.send(control_id, "bob", &lost, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty() && report.errors.is_empty());
+    // The notice stays, no longer waiting: it says the message is lost.
+    assert_eq!(
+        waiting_records(&bob),
+        vec![(Some(lost_id.to_string()), true)]
+    );
+}
+
 #[test]
 fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     let mut rng = test_rng();

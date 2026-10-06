@@ -1832,6 +1832,15 @@ its optional `hostToken` is the owner's, or the seat was already let in.
 waiting room, `423` when it is locked, `429` when 50 people are already
 waiting or over 60 a minute per address.
 
+### POST /api/chat/call-links/knock/leave
+
+**No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →
+`204`: the knocker stops waiting and the knock leaves the host's list at
+once. Sent with
+`keepalive` as the page closes. A knock already let in or turned away keeps
+its outcome; a wrong ticket changes nothing (still `204`). `404` for an
+unknown link or a wrong access token.
+
 ### POST /api/chat/call-links/knock/status
 
 **No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →

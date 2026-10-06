@@ -311,7 +311,7 @@ function OfficeEditorBase(
           fileKey,
           kp.privateKey,
         )
-        transport.send(packed)
+        transport.send(packed, { edit: false })
       } catch (e) {
         console.warn('office: send cursor failed', e)
       }

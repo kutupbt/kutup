@@ -562,6 +562,12 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   document always goes to My files; files in folders on other servers are
   left out until the editors can open them; a document shows its preview
   only after the editor has saved one.
+  The home reads and decrypts every file in every readable folder to find
+  the documents among them (as Maps does for its lists), with no limit on
+  parallel requests: slow for an account with a very large photo library.
+  A server-side query by kind (file kinds are not visible to the server, so
+  this needs a sealed index) is the real fix.
+
 - **Direct chats: self-healing.** Worked through in the order of the
   research report "Self healing encrypted group chat" and an audit of the
   direct-chat code against it.
@@ -583,9 +589,7 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     message of yours says your signed list has moved on.
   - Next: signed and last-resort prekeys rotate, and used prekeys are kept
     as long as the mailbox can still hold a message for them. Open edges of
-    the re-send: the once-an-hour limits are kept in memory only; a
-    waiting notice whose sender never answers (an old client, an account
-    gone) stays as it is.
+    the re-send: the once-an-hour limits are kept in memory only.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after
     a send); a write generation checked in every transaction and a lock

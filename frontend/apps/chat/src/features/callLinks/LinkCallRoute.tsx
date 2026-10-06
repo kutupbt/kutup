@@ -38,7 +38,7 @@ import { CallStage, type StageParticipant } from '../calls/CallStage'
 import { LinkCallController, type LinkCallState } from '../calls/linkCallController'
 import { CallLinkRefused, fetchMeetingInfo, openCallLink, type CallLinkRefusal, type MeetingInfo, type MeetingRole, type OpenCallLink } from './callLinks'
 import { MAX_CALL_NAME_LENGTH, rememberCallName, rememberedCallName } from './callName'
-import { hostTokenFor } from './hostTokens'
+import { hostTokenFor, verifiedHostAccount } from './hostTokens'
 import { downloadMeetingIcs } from './ics'
 import { MeetingChat } from './MeetingChat'
 import { recordJoinedMeeting } from './meetingHistory'
@@ -54,6 +54,17 @@ import { meetingStartText } from './meetingTime'
 export function LinkCallRoute() {
   const { t } = useTranslation()
   const [link, setLink] = useState<OpenCallLink | 'invalid' | null>(null)
+  // Whose host tokens this page may use, once the server has confirmed the
+  // sign-in here is live (undefined while it is asked).
+  const [hostAccount, setHostAccount] = useState<string | null | undefined>(undefined)
+
+  useEffect(() => {
+    let current = true
+    void verifiedHostAccount().then((account) => current && setHostAccount(account))
+    return () => {
+      current = false
+    }
+  }, [])
 
   useEffect(() => {
     let current = true
@@ -71,7 +82,7 @@ export function LinkCallRoute() {
     }
   }, [])
 
-  if (link === null) return <LoadingPanel label={t('common.loading')} />
+  if (link === null || hostAccount === undefined) return <LoadingPanel label={t('common.loading')} />
   if (link === 'invalid') {
     return (
       <main className="flex min-h-svh flex-col items-center justify-center gap-4 px-6 text-center">
@@ -81,7 +92,8 @@ export function LinkCallRoute() {
       </main>
     )
   }
-  return <LinkCall key={link.roomId} link={link} />
+  const hostToken = hostAccount ? hostTokenFor(hostAccount, link.roomId) : null
+  return <LinkCall key={link.roomId} link={link} hostToken={hostToken} />
 }
 
 /**
@@ -93,10 +105,11 @@ function signedInAccount(): string | null {
   return readPersisted()?.userId ?? null
 }
 
-function LinkCall({ link }: { link: OpenCallLink }) {
+function LinkCall({ link, hostToken }: { link: OpenCallLink; hostToken: string | null }) {
   const { t } = useTranslation()
   // The owner's proof of being the host, when they are signed in here.
-  const controller = useMemo(() => new LinkCallController(link, hostTokenFor(link.roomId)), [link])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fixed for the page's life (the parent keys it by room)
+  const controller = useMemo(() => new LinkCallController(link, hostToken), [link])
   useEffect(() => () => controller.dispose(), [controller])
   const call = useSyncExternalStore(controller.subscribe, controller.current)
   // What the meeting is called, when it is and whether joiners wait to be

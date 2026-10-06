@@ -64,7 +64,7 @@ function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {
 /** Start a new document, and every one you can open, most recently changed first. */
 export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
   const { t, i18n } = useTranslation()
-  const { root, documents, loading, error } = useDocuments()
+  const { root, documents, loading, error, incomplete } = useDocuments()
   const createDocument = useCreateDocument()
   const [creating, setCreating] = useState<DocumentKind | null>(null)
   const [order, setOrder] = useState<DocumentOrder>('recent')
@@ -150,6 +150,11 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
           </Button>
         </div>
 
+        {incomplete && !error ? (
+          <Alert variant="warn" title={t('home.incompleteTitle')} className="mb-4">
+            {t('home.incomplete')}
+          </Alert>
+        ) : null}
         {error ? (
           <Alert variant="error" title={t('home.loadFailedTitle')}>
             {t('home.loadFailed')}
