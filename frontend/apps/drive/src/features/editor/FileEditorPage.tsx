@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, UserPlus, X } from 'lucide-react'
-import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
+import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, UserPlus, WifiOff, X } from 'lucide-react'
+import { Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -31,6 +31,7 @@ import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle, SessionBase } from './office/OfficeEditor'
 import { EditorNotice } from './office/EditorNotice'
 import { listVersions, patchVersion } from '@kutup/collab/api'
+import { collabSocketFailures, subscribeCollabConnectivity } from '@kutup/collab/connectivity'
 import { loadVersionBytes, saveSnapshot, type LogPosition, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
@@ -78,12 +79,44 @@ interface Keys {
  * (docs/plans/drive-file-sharing.md). It opens with its own key; there is no
  * folder behind it.
  */
+/** Refused connection attempts in a row before asking whether the network is why. */
+const LIVE_BLOCKED_AFTER = 3
+
+/**
+ * Whether this network blocks the live editing socket: several attempts in
+ * a row never opened, yet the server answers an ordinary request. An editor
+ * whose changes cannot leave the page must not look as if it were saving, so
+ * the file is shown as it was last saved, read-only, until a socket opens.
+ */
+function useLiveEditingBlocked(): boolean {
+  const failures = useSyncExternalStore(subscribeCollabConnectivity, collabSocketFailures)
+  const [blocked, setBlocked] = useState(false)
+  useEffect(() => {
+    if (failures === 0) {
+      setBlocked(false)
+      return
+    }
+    if (failures < LIVE_BLOCKED_AFTER || blocked) return
+    let alive = true
+    // The server not answering either is an outage, not a blocked socket.
+    api
+      .get('/auth/settings')
+      .then(() => alive && setBlocked(true))
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [failures, blocked])
+  return blocked
+}
+
 export function FileEditorPage({ shared = false }: { shared?: boolean }) {
   const { cid = '', fid = '' } = useParams()
   return <OpenFile key={`${shared ? 'shared' : cid}/${fid}`} cid={shared ? null : cid} fid={fid} />
 }
 
 function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
+  const liveBlocked = useLiveEditingBlocked()
   const { t } = useTranslation()
   const session = useRequiredSession()
   const folders = useFolders()
@@ -239,7 +272,9 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
 
   return (
     <Workspace
-      key={generation}
+      // The editors take read-only when they are built: rebuild them when
+      // this network turns out to block live editing (and when it stops).
+      key={`${generation}:${liveBlocked ? 'blocked' : 'live'}`}
       folder={liveFolder}
       file={liveFile}
       name={name}
@@ -247,7 +282,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       keys={keys}
       // As the file opened: an editor stays one for the session (the server
       // drops a narrowed share's edits and closes its socket).
-      readOnly={!(picked?.folder ?? liveFolder).canUpload}
+      readOnly={!(picked?.folder ?? liveFolder).canUpload || liveBlocked}
+      liveBlocked={liveBlocked}
       notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
       shareRole={shareRole(liveFolder, liveFile, sharedFile)}
       mayRename={
@@ -328,6 +364,7 @@ function Workspace({
   opened,
   keys,
   readOnly,
+  liveBlocked,
   notice,
   shareRole: mayShare,
   mayRename,
@@ -341,6 +378,8 @@ function Workspace({
   keys: Keys
   /** A view-only share: editors open read-only, nothing is saved. */
   readOnly: boolean
+  /** This network blocks live editing: say so above the document. */
+  liveBlocked: boolean
   /** Why an editor opened read-only when that is not its share. */
   notice: string | null
   /** How this account may share the file from here, if at all. */
@@ -496,6 +535,19 @@ function Workspace({
           </div>
         </div>
       </header>
+      {liveBlocked && (wholeFile || opened.kind === 'text') ? (
+        <div role="status" data-testid="editor-live-blocked" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/60 px-3 py-2 text-sm">
+          <WifiOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <p className="min-w-0 flex-1">
+            <span className="font-medium">{t('file.liveBlocked')}</span>{' '}
+            <span className="text-muted-foreground">{t('file.liveBlockedBody')}</span>
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void download()}>
+            <Download />
+            {t('drive.actions.download')}
+          </Button>
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         <Suspense fallback={<LoadingPanel label={t('file.opening')} />}>{editor}</Suspense>
       </div>

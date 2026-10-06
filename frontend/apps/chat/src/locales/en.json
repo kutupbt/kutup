@@ -562,6 +562,8 @@
     "connection": {
       "offline": "You're offline",
       "connecting": "Reconnecting…",
+      "polling": "Live connection blocked on this network",
+      "pollingBody": "New messages are checked for every few seconds and sending works as usual. Calls may not ring in time.",
       "queued": "New messages will appear once you're connected. Messages you send will go out then.",
       "retry": "Retry",
       "deviceRemoved": "This browser is no longer one of your Chat devices",

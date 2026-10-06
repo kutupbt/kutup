@@ -52,6 +52,7 @@ function socketService() {
     retryAttempt: 0,
     heartbeat: null,
     pongDeadline: null,
+    pollTimer: null,
     connection: 'connecting',
     connectionListeners: new Set(),
     disposed: false,
@@ -171,6 +172,47 @@ describe('ChatService connection status', () => {
     expect(updates).toHaveBeenCalledTimes(1)
     // Like any other frame, it also reads the mailbox.
     expect(reconcile).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the mailbox on a timer while the socket cannot be opened, and stops when it can', async () => {
+    const { service, statuses } = socketService()
+    const reconcile = (service as unknown as { reconcile: ReturnType<typeof vi.fn> }).reconcile
+    // A gateway that refuses the upgrade: every socket closes before it opens.
+    ;(await connect(service)).close()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(service.connectionStatus()).toBe('connecting')
+    FakeSocket.instances.at(-1)!.close()
+    await vi.advanceTimersByTimeAsync(0)
+    // The server answered an ordinary request: that is what Chat now runs on.
+    expect(service.connectionStatus()).toBe('polling')
+
+    reconcile.mockClear()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(reconcile.mock.calls.length).toBeGreaterThanOrEqual(3)
+    // Further refused sockets do not flip the notice back and forth.
+    expect(statuses).toEqual(['polling'])
+
+    // The network lets the socket through after all: it takes over.
+    const socket = FakeSocket.instances.at(-1)!
+    socket.open()
+    expect(service.connectionStatus()).toBe('connected')
+    await vi.advanceTimersByTimeAsync(0)
+    reconcile.mockClear()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('says reconnecting, not polling, when the server does not answer at all', async () => {
+    const { service } = socketService()
+    const reconcile = (service as unknown as { reconcile: ReturnType<typeof vi.fn> }).reconcile
+    reconcile.mockRejectedValue(new Error('Network Error'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    ;(await connect(service)).close()
+    await vi.advanceTimersByTimeAsync(500)
+    FakeSocket.instances.at(-1)!.close()
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(service.connectionStatus()).toBe('connecting')
+    warn.mockRestore()
   })
 
   it('goes offline with the browser and reconnects at once when it is back', async () => {

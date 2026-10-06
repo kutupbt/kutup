@@ -19,6 +19,7 @@ import { useResolvedTheme } from '../useResolvedTheme'
 
 import { langForExtension } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
+import { codeBlockPreview } from './codeBlockPreview'
 import { liveMarkdown } from './liveMarkdown'
 import { noteFolding } from './folding'
 import { pasteMarkdown } from './pasteMarkdown'
@@ -128,7 +129,8 @@ const SEARCH_PANEL = EditorView.theme({
 const NOTE_LAYOUT = EditorView.theme({
   // A note sits on the page (in dark mode too), not on a code editor's panel.
   '&': { backgroundColor: 'var(--color-background)' },
-  '.cm-content': { maxWidth: '80ch', margin: '0 auto', padding: '16px 24px' },
+  // 40rem: the same measure as Read mode's text (MarkdownPreview).
+  '.cm-content': { maxWidth: '40rem', margin: '0 auto', padding: '16px 24px' },
 })
 
 /** The editor's look and code colours for Drive's theme. */
@@ -541,7 +543,7 @@ export default function TextCollabEditor({
         // ---- Tier 1 baseline polish ----
         ...(prose ? [EditorView.lineWrapping, NOTE_LAYOUT] : [lineNumbers()]),
         // Markdown notes read like the note while you edit them, and fold.
-        ...(markdownNote ? [liveMarkdown(), noteFolding(t('editor.unfold'))] : []),
+        ...(markdownNote ? [liveMarkdown(), codeBlockPreview({ copy: t('editor.code.copy'), copied: t('editor.code.copied') }), noteFolding(t('editor.unfold'))] : []),
         ...(markdownNote ? [livePreviewCompartment.of(sourceMode ? [] : livePreviewExtension.current ?? [])] : []),
         ...(prose && !readOnly ? [placeholder(t('editor.notePlaceholder'))] : []),
         highlightActiveLine(),

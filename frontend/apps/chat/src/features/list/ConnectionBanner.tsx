@@ -1,4 +1,4 @@
-import { CloudOff, MonitorX, RefreshCw } from 'lucide-react'
+import { CloudOff, MonitorX, RefreshCw, Timer } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { requestLocalChatDeviceReset } from '@kutup/chat-core/local-store'
@@ -55,6 +55,19 @@ export function ConnectionBanner() {
     )
   }
   if (!shown || connection === 'connected') return null
+  // The live socket is blocked but the server answers: messages still come,
+  // a few seconds late, so this is information rather than a fault.
+  if (connection === 'polling') {
+    return (
+      <div role="status" className="m-2 flex items-start gap-3 rounded-lg border border-border bg-muted/60 p-3 text-sm" data-testid="chat-connection-polling">
+        <Timer className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">{t('chat.connection.polling')}</p>
+          <p className="text-muted-foreground">{t('chat.connection.pollingBody')}</p>
+        </div>
+      </div>
+    )
+  }
   const offline = connection === 'offline'
   return (
     <div role="status" className="m-2 flex items-start gap-3 rounded-lg border border-border bg-muted/60 p-3 text-sm">

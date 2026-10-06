@@ -550,6 +550,8 @@
   },
   "file": {
     "opening": "Opening…",
+    "liveBlocked": "This network blocks live editing.",
+    "liveBlockedBody": "You are seeing the file as it was last saved, read-only. Download it to work on a copy, or open it from another network to edit.",
     "failedTitle": "This file can't be opened",
     "backToDrive": "Back to Drive",
     "backTo": "Back to {{folder}}",

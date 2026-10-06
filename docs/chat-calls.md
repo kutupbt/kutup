@@ -300,6 +300,18 @@ screen, People, Chat, leave).
 - **Relay needs no account list:** the relay only checks the HMAC.
 - **Coturn:** `docker compose --profile turn up` starts coturn with the same
   secret, refusing relays to private and loopback addresses.
+- **Networks that allow only HTTPS:** a `turns:turn.<domain>:443?transport=tcp`
+  entry in `CHAT_TURN_URLS` offers the relay as TURN over TLS on port 443,
+  which such a network cannot tell from a web page. The bundled nginx shares
+  the port by the name asked for (SNI, read without decrypting): `turn.` goes
+  to coturn's TCP listener, with nginx ending the TLS; every other name goes
+  to the web apps. Group calls have the same way out: with
+  `CHAT_SFU_TURN_DOMAIN=sfu-turn.<domain>` LiveKit runs its own relay and
+  offers it to callers as `turns:` on port 443, reached through nginx the same
+  way. Both names need DNS and a place on the certificate. What this does
+  not cover is a network that blocks WebSockets themselves: LiveKit's
+  signalling has no other transport, and 1:1 calls ring through Chat's
+  mailbox, which is then only read every few seconds.
 
 Without a relay, calls connect only where a direct path exists (same network,
 or NATs that allow it).
