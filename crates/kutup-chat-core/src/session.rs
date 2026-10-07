@@ -2520,23 +2520,51 @@ impl Session {
             .transpose()
     }
 
+    /// One-time keys to add, and with `rotate` a new signed and last-resort
+    /// pair (`crate::prekey_rotation`): generated, made durable with the exact
+    /// request, and only then published, so a retry never publishes keys this
+    /// device lost. A request already waiting is returned as it is.
     pub(crate) async fn prepare_prekey_replenishment<R: Rng + CryptoRng>(
         &mut self,
         ec_count: usize,
         kyber_count: usize,
+        rotate: bool,
         rng: &mut R,
     ) -> Result<ReplenishKeysRequest> {
         if let Some(request) = self.pending_prekey_upload().await? {
             return Ok(request);
         }
         let ec_ids = self.unused_prekey_ids(ec_count, false, rng).await?;
-        let kyber_ids = self.unused_prekey_ids(kyber_count, true, rng).await?;
-        let material = keys::generate_replenishment(
-            &self.store.local_identity_key_pair(),
-            &ec_ids,
-            &kyber_ids,
-            rng,
-        )?;
+        let kyber_ids = self
+            .unused_prekey_ids(kyber_count + usize::from(rotate), true, rng)
+            .await?;
+        let identity = self.store.local_identity_key_pair();
+        let (one_time_kyber_ids, last_resort_id) = if rotate {
+            let (last, rest) = kyber_ids
+                .split_last()
+                .expect("one id was asked for the rotation");
+            (rest.to_vec(), Some(*last))
+        } else {
+            (kyber_ids, None)
+        };
+        let mut material =
+            keys::generate_replenishment(&identity, &ec_ids, &one_time_kyber_ids, rng)?;
+        if let Some(last_resort_id) = last_resort_id {
+            let signed_id = self.unused_signed_prekey_id(rng).await?;
+            let rotation = keys::generate_rotation(&identity, signed_id, last_resort_id, rng)?;
+            material.request.signed_pre_key = Some(rotation.signed_pre_key);
+            material.request.last_resort_kyber_pre_key = Some(rotation.last_resort_kyber_pre_key);
+            self.store
+                .stage_generated_signed_pre_key(signed_id, rotation.signed_record);
+            self.store
+                .stage_generated_kyber_pre_key(last_resort_id, rotation.last_resort_record);
+            let mut state = self.store.prekey_rotation().await?;
+            state.pending = Some(crate::prekey_rotation::PendingKeys {
+                signed: signed_id,
+                last_resort: last_resort_id,
+            });
+            self.store.stage_prekey_rotation(&state)?;
+        }
         let serialized = serde_json::to_vec(&material.request)
             .map_err(|error| ChatError::Content(error.to_string()))?;
         for (id, record) in material.pre_keys {
@@ -2546,13 +2574,100 @@ impl Session {
             self.store.stage_generated_kyber_pre_key(id, record);
         }
         self.store.stage_prekey_upload(serialized);
-        self.store.commit().await?;
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
         Ok(material.request)
     }
 
+    /// The server took the waiting request: a staged pair becomes current
+    /// and the pair it replaces is retired, in the same transaction.
     pub(crate) async fn complete_prekey_upload(&mut self) -> Result<()> {
+        let mut state = self.store.prekey_rotation().await?;
+        if state.confirm(crate::clock::unix_millis()) {
+            self.store.stage_prekey_rotation(&state)?;
+        }
         self.store.clear_prekey_upload();
         self.store.commit().await
+    }
+
+    /// Whether the signed and last-resort pair is due to be replaced.
+    pub(crate) async fn prekey_rotation_due(&self) -> Result<bool> {
+        Ok(self
+            .store
+            .prekey_rotation()
+            .await?
+            .due(crate::clock::unix_millis()))
+    }
+
+    /// Delete prekeys no longer needed: retired pairs older than the
+    /// server's mailbox retention plus a margin, and one-time Kyber keys
+    /// used longer ago than `grace_ms`. Returns how many went.
+    #[doc(hidden)]
+    pub async fn purge_retired_pre_keys(
+        &mut self,
+        mailbox_retention_days: u32,
+        grace_ms: i64,
+    ) -> Result<usize> {
+        let mut state = self.store.prekey_rotation().await?;
+        let expired = state.sweep(
+            crate::clock::unix_millis(),
+            crate::prekey_rotation::retired_keep_ms(mailbox_retention_days),
+            grace_ms,
+        );
+        if expired.signed.is_empty() && expired.kyber.is_empty() {
+            return Ok(0);
+        }
+        self.store
+            .stage_expired_pre_keys(&expired.signed, &expired.kyber);
+        self.store.stage_prekey_rotation(&state)?;
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok(expired.signed.len() + expired.kyber.len())
+    }
+
+    /// Replace the signed and last-resort pair now, as if the server had
+    /// confirmed it; returns the published keys. Tests only.
+    #[doc(hidden)]
+    pub async fn rotate_prekeys_for_testing<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ReplenishKeysRequest> {
+        let request = self.prepare_prekey_replenishment(0, 0, true, rng).await?;
+        self.complete_prekey_upload().await?;
+        Ok(request)
+    }
+
+    #[doc(hidden)]
+    pub async fn age_prekey_rotation_for_testing(&mut self, ms: i64) -> Result<()> {
+        let mut state = self.store.prekey_rotation().await?;
+        state.signed.published_at_ms -= ms;
+        state.last_resort.published_at_ms -= ms;
+        for key in &mut state.retired {
+            key.retired_at_ms -= ms;
+        }
+        for used_at in state.used_one_time_kyber.values_mut() {
+            *used_at -= ms;
+        }
+        self.store.stage_prekey_rotation(&state)?;
+        self.store.commit().await
+    }
+
+    #[doc(hidden)]
+    pub async fn has_kyber_pre_key_for_testing(&self, id: u32) -> Result<bool> {
+        Ok(self.db().load_kyber_pre_key(id).await?.is_some())
+    }
+
+    async fn unused_signed_prekey_id<R: Rng + CryptoRng>(&self, rng: &mut R) -> Result<u32> {
+        loop {
+            let id = rng.random_range(1_000..=u32::MAX);
+            if self.store.db().load_signed_pre_key(id).await?.is_none() {
+                return Ok(id);
+            }
+        }
     }
 
     async fn unused_prekey_ids<R: Rng + CryptoRng>(

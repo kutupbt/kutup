@@ -185,6 +185,39 @@ ML-KEM prekey, and bounded one-time EC/PQ prekeys. Session establishment and
 steady-state ciphertext are generated only by libsignal. A bundle is unusable
 until its exact device identity matches the accepted account manifest.
 
+### Prekeys
+
+Registration publishes the signed EC prekey and the last-resort ML-KEM prekey
+as id 1, with a pool of one-time EC and ML-KEM prekeys. The client tops
+each pool back up to its target whenever the server reports it below the low
+watermark (`PUT /api/chat/keys`); replenished ids are random.
+
+The signed and last-resort pair is used by every first message that finds no
+one-time key left, so it is replaced on a schedule, as Signal does
+(`kutup-chat-core/src/prekey_rotation.rs`):
+
+- **Every two days** (checked at start, on each reconnect and hourly while
+  open) the client generates a new pair, signs both with the
+  identity key, and uploads it in the same `PUT /api/chat/keys` request as
+  any top-up. The pair and the upload are staged in one transaction before
+  the request, so a client that crashes or goes offline mid-upload sends the
+  same pair again; it becomes current only when the server accepts it.
+- **A replaced pair is kept** for as long as a first message made with it can
+  still sit in the mailbox: the server's `mailboxRetentionDays` (from
+  `GET /api/chat/capabilities`) plus seven days for clocks, late delivery
+  and devices that were offline. A server that keeps mail for ever (`0`)
+  means replaced pairs are kept for ever too.
+- **A used one-time ML-KEM prekey is deleted** 14 days after a message first
+  used it, the same grace as a used one-time EC prekey, so a late copy of
+  that message still reads. Only the last-resort key is ever reused, and its
+  reuse is guarded against replay by the base keys already seen.
+
+libsignal's records carry no usable time, so a small rotation record kept
+beside the keys, and written in the same transactions, says which key is
+current, which is staged, which are retired and since when. A device made
+before rotation existed starts that record on its first check and rotates
+two days later.
+
 Plaintext is padded before encryption with Signal's scheme: the content, one
 `0x80` byte, then zeros up to a multiple of 160 bytes
 (`kutup-chat-core/src/padding.rs`). A receiver refuses anything that is not a

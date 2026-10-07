@@ -210,6 +210,10 @@ CREATE TABLE IF NOT EXISTS pending_prekey_upload (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS prekey_rotation (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    state BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
@@ -786,6 +790,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_prekey_rotation(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT state FROM prekey_rotation WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
@@ -1281,6 +1296,20 @@ impl ChatDb for SqliteChatDb {
                  ON CONFLICT(peer) DO UPDATE SET profile = excluded.profile",
                 rusqlite::params![peer, encoded],
             ))?;
+        }
+        if let Some(state) = &pending.prekey_rotation {
+            db(tx.execute(
+                "INSERT INTO prekey_rotation (id, state) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET state = excluded.state",
+                [state],
+            ))?;
+        }
+        for id in &pending.delete_signed_pre_keys {
+            db(tx.execute("DELETE FROM signed_pre_keys WHERE id = ?1", [id]))?;
+        }
+        for id in &pending.delete_kyber_pre_keys {
+            db(tx.execute("DELETE FROM kyber_pre_keys WHERE id = ?1", [id]))?;
+            db(tx.execute("DELETE FROM kyber_base_keys_seen WHERE kyber_id = ?1", [id]))?;
         }
         if let Some(upload) = &pending.prekey_upload {
             match upload {

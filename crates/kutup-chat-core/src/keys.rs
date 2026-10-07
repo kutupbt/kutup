@@ -164,6 +164,58 @@ fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
+/// A fresh signed EC prekey and last-resort Kyber prekey, both signed by the
+/// identity key, to replace the current pair (`crate::prekey_rotation`).
+pub(crate) struct RotationMaterial {
+    pub signed_pre_key: EcPreKey,
+    pub last_resort_kyber_pre_key: KemPreKey,
+    pub signed_record: Vec<u8>,
+    pub last_resort_record: Vec<u8>,
+}
+
+pub(crate) fn generate_rotation<R: Rng + CryptoRng>(
+    identity_pair: &IdentityKeyPair,
+    signed_id: u32,
+    last_resort_id: u32,
+    rng: &mut R,
+) -> Result<RotationMaterial> {
+    let timestamp = Timestamp::from_epoch_millis(crate::clock::unix_millis() as u64);
+    let private = identity_pair.private_key();
+    let signed = KeyPair::generate(rng);
+    let signed_public = signed.public_key.serialize();
+    let signed_signature = crypto(private.calculate_signature(&signed_public, rng))?.to_vec();
+    let last_resort = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
+    let last_resort_public = last_resort.public_key.serialize();
+    let last_resort_signature =
+        crypto(private.calculate_signature(&last_resort_public, rng))?.to_vec();
+    Ok(RotationMaterial {
+        signed_pre_key: EcPreKey {
+            key_id: signed_id,
+            public_key: b64(&signed_public),
+            signature: Some(b64(&signed_signature)),
+        },
+        last_resort_kyber_pre_key: KemPreKey {
+            key_id: last_resort_id,
+            public_key: b64(&last_resort_public),
+            signature: b64(&last_resort_signature),
+        },
+        signed_record: SignedPreKeyRecord::new(
+            signed_id.into(),
+            timestamp,
+            &signed,
+            &signed_signature,
+        )
+        .serialize()?,
+        last_resort_record: KyberPreKeyRecord::new(
+            last_resort_id.into(),
+            timestamp,
+            &last_resort,
+            &last_resort_signature,
+        )
+        .serialize()?,
+    })
+}
+
 /// Generate one-time EC + Kyber keys for a low-watermark refill. The caller
 /// commits `pre_keys`, `kyber_pre_keys`, and the serialized request atomically
 /// before attempting publication.

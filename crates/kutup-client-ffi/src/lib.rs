@@ -101,6 +101,13 @@ impl NativeChatClient {
         self.dispatch(Command::MaintainPrekeys).await
     }
 
+    /// The server's `mailboxRetentionDays` (from chat capabilities; 0 keeps
+    /// mail for ever): how long replaced prekeys are kept before deletion.
+    pub async fn set_mailbox_retention_days(&self, days: u32) -> Result<()> {
+        self.dispatch(|reply| Command::SetMailboxRetentionDays { days, reply })
+            .await
+    }
+
     pub async fn history(&self) -> Result<Vec<ChatHistoryEntry>> {
         self.dispatch(Command::History).await
     }
@@ -138,7 +145,7 @@ impl NativeChatClient {
             scanned_payload,
             reply,
         })
-            .await
+        .await
     }
 }
 
@@ -266,6 +273,10 @@ enum Command {
     },
     Reconcile(oneshot::Sender<Result<ChatReceiveReport>>),
     MaintainPrekeys(oneshot::Sender<Result<ChatPreKeyMaintenance>>),
+    SetMailboxRetentionDays {
+        days: u32,
+        reply: oneshot::Sender<Result<()>>,
+    },
     History(oneshot::Sender<Result<Vec<ChatHistoryEntry>>>),
     PendingSendCount(oneshot::Sender<Result<u64>>),
     InboundAttention(oneshot::Sender<Result<Vec<ChatInboundAttention>>>),
@@ -372,6 +383,10 @@ fn worker_main(
                         .into())
                 });
                 let _ = reply.send(result);
+            }
+            Command::SetMailboxRetentionDays { days, reply } => {
+                engine.set_mailbox_retention_days(days);
+                let _ = reply.send(Ok(()));
             }
             Command::History(reply) => {
                 let _ = reply.send(futures_executor::block_on(history(&engine)));

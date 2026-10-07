@@ -98,13 +98,19 @@ atomic promotion. There is no blind native `verifyAuthority` operation.
 The exported object currently covers the phase-2b native engine contract:
 
 - `sendText`, `reconcile`, `history`, `pendingSendCount`
-- `maintainPrekeys`, `syncManifest`
+- `maintainPrekeys`, `setMailboxRetentionDays`, `syncManifest`
 - `inboundAttention`, `quarantineInbound`, `resolveDeadLetter`
 - `safetyNumber`, `verifySafetyNumber`
 - `shutdown` for logout/account-lock cleanup
 
 Swift receives `async throws`; Kotlin receives `suspend` functions and typed
 `KutupChatException` failures. `ChatHttpClient.execute` is also async/suspend.
+Call `maintainPrekeys` at start, on reconnect and periodically (the web client
+does so hourly): it tops up one-time prekeys and rotates the signed and
+last-resort pair every two days (`docs/chat-protocol.md`, "Prekeys"). Pass the
+server's `mailboxRetentionDays` from chat capabilities to
+`setMailboxRetentionDays` first; until then replaced prekeys are kept 30 days
+plus a margin.
 `ChatReceiveReport.synced` contains logical send ids imported as outgoing
 history from another linked device; callers normally refresh `history()` after
 every reconcile, just as they do for newly received messages.

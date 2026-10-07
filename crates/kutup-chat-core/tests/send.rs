@@ -487,6 +487,70 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
 }
 
 #[test]
+fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 2, &mut rng);
+    let registration = bob.registration().unwrap().clone();
+    // A sender that fetched Bob's keys before the rotation and found no
+    // one-time key left: only the signed and last-resort keys.
+    let mut stale = serve_bundle(&registration, 2);
+    stale.one_time_pre_key = None;
+    stale.kyber_pre_key = registration.last_resort_kyber_pre_key.clone();
+
+    let rotated = block_on(bob.rotate_prekeys_for_testing(&mut rng)).unwrap();
+    let mut fresh = stale.clone();
+    fresh.signed_pre_key = rotated.signed_pre_key.clone().unwrap();
+    fresh.kyber_pre_key = rotated.last_resort_kyber_pre_key.clone().unwrap();
+    assert_ne!(fresh.signed_pre_key.key_id, stale.signed_pre_key.key_id);
+
+    let bob_addr = ChatAddress::local("bob", 2);
+    for (name, bundle) in [("old", &stale), ("new", &fresh)] {
+        let mut sender = device(name, 1, &mut rng);
+        block_on(sender.establish(&bob_addr, bundle, &mut rng)).unwrap();
+        let content = ChatContent::text("2026-10-06T10:00:00Z", 1, name);
+        let envelope =
+            block_on(sender.encrypt(&bob_addr, bundle.registration_id, &content, &mut rng))
+                .unwrap();
+        let read = block_on(bob.decrypt(
+            &ChatAddress::local(name, 1),
+            &wrap(&envelope, name),
+            &mut rng,
+        ))
+        .unwrap();
+        assert_eq!(
+            read.as_text().map(|body| body.text),
+            Some(name.to_string()),
+            "a first message to the {name} keys reads"
+        );
+    }
+
+    // A first message that takes a one-time Kyber key consumes it: kept for
+    // the late-message grace, then deleted (only the last-resort key stays).
+    let one_time = serve_bundle(&registration, 2);
+    let one_time_kyber = one_time.kyber_pre_key.key_id;
+    assert_ne!(
+        one_time_kyber,
+        registration.last_resort_kyber_pre_key.key_id
+    );
+    let mut carol = device("carol", 1, &mut rng);
+    block_on(carol.establish(&bob_addr, &one_time, &mut rng)).unwrap();
+    let content = ChatContent::text("2026-10-06T10:00:00Z", 1, "one-time");
+    let envelope =
+        block_on(carol.encrypt(&bob_addr, one_time.registration_id, &content, &mut rng)).unwrap();
+    block_on(bob.decrypt(
+        &ChatAddress::local("carol", 1),
+        &wrap(&envelope, "carol"),
+        &mut rng,
+    ))
+    .unwrap();
+    let grace = 14 * 24 * 60 * 60 * 1000;
+    assert_eq!(block_on(bob.purge_retired_pre_keys(30, grace)).unwrap(), 0);
+    block_on(bob.age_prekey_rotation_for_testing(grace)).unwrap();
+    assert!(block_on(bob.purge_retired_pre_keys(30, grace)).unwrap() >= 1);
+    assert!(!block_on(bob.has_kyber_pre_key_for_testing(one_time_kyber)).unwrap());
+}
+
+#[test]
 fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     let mut rng = test_rng();
     let bob = device("bob", 1, &mut rng);

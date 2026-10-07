@@ -46,10 +46,7 @@ impl ChatTransport for NativeTransport {
     async fn fetch_bundles(&self, username: &str) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
-            format!(
-                "/chat/users/{}/keys",
-                urlencoding::encode(username)
-            ),
+            format!("/chat/users/{}/keys", urlencoding::encode(username)),
             None,
         )
         .await
@@ -90,7 +87,11 @@ impl ChatTransport for NativeTransport {
         &self,
         manifest: &AccountManifestV1,
     ) -> CoreResult<AccountManifestPublicationV1> {
-        self.json(ChatHttpMethod::Post, "/chat/manifest".into(), Some(manifest))
+        self.json(
+            ChatHttpMethod::Post,
+            "/chat/manifest".into(),
+            Some(manifest),
+        )
         .await
     }
 

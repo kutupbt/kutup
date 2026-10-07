@@ -53,6 +53,7 @@ function socketService() {
     heartbeat: null,
     pongDeadline: null,
     pollTimer: null,
+    prekeyTimer: null,
     polling: false,
     connection: 'connecting',
     connectionListeners: new Set(),
@@ -243,6 +244,19 @@ describe('ChatService connection status', () => {
     await vi.advanceTimersByTimeAsync(6_000)
     expect(service.connectionStatus()).toBe('connecting')
     warn.mockRestore()
+  })
+
+  it('checks its prekeys every hour while open, not only when the socket opens', async () => {
+    const { service } = socketService()
+    const maintain = (service as unknown as { maintainPrekeys: ReturnType<typeof vi.fn> }).maintainPrekeys
+    ;(service as unknown as { startPrekeyChecks(): void }).startPrekeyChecks()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(maintain).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(maintain).toHaveBeenCalledTimes(2)
+    Object.assign(service, { disposed: true })
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    expect(maintain).toHaveBeenCalledTimes(2)
   })
 
   it('goes offline with the browser and reconnects at once when it is back', async () => {
