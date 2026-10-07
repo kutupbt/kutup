@@ -852,6 +852,18 @@ pub trait ChatDb {
     /// The serialized session-repair limits, if any were written.
     async fn load_repair_limits(&self) -> Result<Option<Vec<u8>>>;
 
+    /// Fence this connection's commits behind the store's writer generation.
+    /// Several browser tabs open the same store and take turns under a lock;
+    /// a tab that takes the lock over from one that stopped answering passes
+    /// `take_over`, which moves the generation on, so the old holder's
+    /// commits are refused if it ever resumes. Otherwise this adopts the
+    /// current generation. Returns the generation now held. A store with one
+    /// owner (native SQLite) has nothing to fence.
+    async fn claim_writer(&self, take_over: bool) -> Result<u64> {
+        let _ = take_over;
+        Ok(0)
+    }
+
     /// Exact device-registration request whose private material is installed,
     /// but whose server-assigned id is not yet confirmed locally.
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>>;

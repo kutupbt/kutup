@@ -44,6 +44,7 @@ import type {
   WasmChatClientHandle,
 } from './types'
 import { loadChatWasm } from './wasm'
+import { EngineLock } from './engineLock'
 import { isSupportedChat } from './capabilities'
 import {
   canonicalAccountAddress,
@@ -150,6 +151,7 @@ export class ChatService {
 
   private readonly client: WasmChatClientHandle
   private readonly lockName: string
+  private readonly engineLock: EngineLock
   private readonly mlsWorkflowLockName: string
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
@@ -183,6 +185,7 @@ export class ChatService {
 
   private constructor(
     client: WasmChatClientHandle,
+    engineLock: EngineLock,
     lockName: string,
     channelName: string,
     capabilities: ChatCapabilities,
@@ -194,6 +197,7 @@ export class ChatService {
     this.client = client
     this.deviceId = client.deviceId
     this.lockName = lockName
+    this.engineLock = engineLock
     this.mlsWorkflowLockName = `${lockName}:mls-workflow`
     this.capabilities = capabilities
     // Replaced prekeys are kept as long as the server may still hold a
@@ -247,16 +251,33 @@ export class ChatService {
     const channelName = `kutup-chat-updates:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
-    const client = await navigator.locks.request(lockName, { mode: 'exclusive' }, () =>
-      wasm.WasmChatClient.open(
-        databaseName,
-        options.username,
-        capabilities.serverName!,
-        capabilities.sealedSender,
-        options.masterKey,
-        transport,
-      ),
+    // One lock for opening and for every later operation, so opening does
+    // not wait for ever behind a tab that froze while holding it.
+    let opened: WasmChatClientHandle | null = null
+    const engineLock = new EngineLock(
+      lockName,
+      async (takeOver) => { await opened?.claimWriter?.(takeOver) },
     )
+    let client: WasmChatClientHandle
+    try {
+      client = await engineLock.run(async (tookOver) => {
+        const handle = await wasm.WasmChatClient.open(
+          databaseName,
+          options.username,
+          capabilities.serverName!,
+          capabilities.sealedSender,
+          options.masterKey,
+          transport,
+        )
+        // Taken over before there was a client to claim with: claim now.
+        if (tookOver) await handle.claimWriter?.(true)
+        opened = handle
+        return handle
+      })
+    } catch (error) {
+      engineLock.close()
+      throw error
+    }
 
     let attachmentLedger: ChatAttachmentLedger | null = null
     try {
@@ -265,10 +286,12 @@ export class ChatService {
         : null
     } catch (error) {
       client.free()
+      engineLock.close()
       throw error
     }
     const service = new ChatService(
       client,
+      engineLock,
       lockName,
       channelName,
       capabilities,
@@ -1506,6 +1529,7 @@ export class ChatService {
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
+    this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)
@@ -1523,11 +1547,7 @@ export class ChatService {
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-    return await navigator.locks.request(
-      this.lockName,
-      { mode: 'exclusive' },
-      async () => await operation(),
-    )
+    return await this.engineLock.run(operation)
   }
 
   private async withAttachmentLedgerLock<T>(operation: () => Promise<T>): Promise<T> {

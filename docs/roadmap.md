@@ -606,12 +606,14 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     in the device's store, so a reload or a second tab does not start them
     over; a restore no longer fails when another device writes or compacts
     the history backup meanwhile.
-  - Later: writes with strict durability (the IndexedDB wrapper in use
-    cannot ask for it; without it a power loss can roll a ratchet back after
-    a send); a write generation checked in every transaction and a lock
-    timeout, so a second or frozen tab cannot corrupt or stall the engine;
-    detection of a restored older snapshot; fault-injection tests (killed
-    mid-write, stale snapshot, two tabs).
+  - Done: writes commit with strict durability; a tab that freezes holding
+    the engine lock is taken over after 30 s of silence, and a writer
+    generation checked in every write transaction refuses its late writes
+    (`docs/chat-protocol.md`, "Browser storage"; browser spec 46).
+  - Later: detection of a restored older snapshot of the browser store (the
+    server deletes acknowledged mailbox rows, so it holds nothing to compare
+    a rolled-back device with; needs its own design); more fault-injection
+    tests (killed mid-write, stale snapshot).
 - **Group device repair: what is left.** A group now recovers when a
   member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
   Still open: it takes up to two minutes (the device check's period), plus

@@ -12,7 +12,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures_util::future::join_all;
 use js_sys::Array;
-use rexie::{ObjectStore, Rexie, Store, TransactionMode};
+use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
@@ -86,6 +86,7 @@ const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
 const PREKEY_ROTATION: &str = "prekey_rotation";
 const REPAIR_LIMITS: &str = "repair_limits";
+const WRITER_GENERATION: &str = "writer_generation";
 const PENDING_REGISTRATION: &str = "pending_registration";
 
 /// One account/device-scoped browser chat database.
@@ -95,6 +96,12 @@ const PENDING_REGISTRATION: &str = "pending_registration";
 /// keys, sessions, and trust pins, so an empty name is rejected.
 pub struct IndexedDbChatDb {
     db: Rexie,
+    /// A second connection to the same database, for the write path: it
+    /// opens transactions with strict durability (`commit`).
+    writer: web_sys::IdbDatabase,
+    /// The writer generation this tab holds (`ChatDb::claim_writer`); every
+    /// write checks it inside its own transaction. `None` until claimed.
+    fence: std::cell::Cell<Option<u64>>,
 }
 
 impl IndexedDbChatDb {
@@ -111,7 +118,63 @@ impl IndexedDbChatDb {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
         let db = idb(builder.build().await)?;
-        Ok(Self { db })
+        // Opened after rexie created or upgraded the schema, without a
+        // version: it joins the database as it now is.
+        let writer = idb::Factory::new()
+            .map_err(write_error)?
+            .open(name, None)
+            .map_err(write_error)?
+            .await
+            .map_err(write_error)?;
+        Ok(Self {
+            db,
+            writer: writer.into(),
+            fence: std::cell::Cell::new(None),
+        })
+    }
+
+    /// A read-write transaction over every store that commits only once the
+    /// browser reports the data on disk. Without it Chrome's default lets a
+    /// power loss undo a commit the code already acted on (a ratchet step
+    /// after its message was sent). A browser without the option ignores it.
+    /// A strict write transaction over `stores` (and the meta store) whose
+    /// first request checks this tab still holds the writer generation. A
+    /// tab that lost the lock to another and resumed gets nothing written.
+    async fn fenced_write_transaction(&self, stores: &[&str]) -> Result<idb::Transaction> {
+        let mut scope: Vec<&str> = stores.to_vec();
+        if !scope.contains(&META) {
+            scope.push(META);
+        }
+        let transaction = self.strict_write_transaction(&scope)?;
+        if let Some(held) = self.fence.get() {
+            let meta = transaction.object_store(META).map_err(write_error)?;
+            let stored = meta
+                .get(string_key(WRITER_GENERATION))
+                .map_err(write_error)?
+                .await
+                .map_err(write_error)?;
+            let current = stored.map(from_js::<u64>).transpose()?.unwrap_or(0);
+            if current != held {
+                if let Ok(aborting) = transaction.abort() {
+                    let _ = aborting.await;
+                }
+                self.fence.set(None);
+                return Err(ChatError::Db(WRITER_SUPERSEDED.into()));
+            }
+        }
+        Ok(transaction)
+    }
+
+    fn strict_write_transaction(&self, stores: &[&str]) -> Result<idb::Transaction> {
+        let options = js_sys::Object::new();
+        js_sys::Reflect::set(&options, &"durability".into(), &"strict".into())
+            .map_err(|error| ChatError::Db(format!("IndexedDB write options: {error:?}")))?;
+        let names: js_sys::Array = stores.iter().map(|name| JsValue::from_str(name)).collect();
+        let database: &DurableDatabase = wasm_bindgen::JsCast::unchecked_ref(&self.writer);
+        let transaction = database
+            .transaction_with_options(&names, "readwrite", &options)
+            .map_err(|error| ChatError::Db(format!("IndexedDB write transaction: {error:?}")))?;
+        Ok(transaction.into())
     }
 
     async fn get<T: DeserializeOwned>(&self, store_name: &str, key: JsValue) -> Result<Option<T>> {
@@ -172,11 +235,13 @@ impl ChatDb for IndexedDbChatDb {
             return Ok(0);
         }
 
-        let transaction = idb(self
-            .db
-            .transaction(&[PRE_KEYS, USED_PRE_KEYS], TransactionMode::ReadWrite))?;
-        let pre_keys = idb(transaction.store(PRE_KEYS))?;
-        let used = idb(transaction.store(USED_PRE_KEYS))?;
+        let transaction = self
+            .fenced_write_transaction(&[PRE_KEYS, USED_PRE_KEYS])
+            .await?;
+        let pre_keys = transaction.object_store(PRE_KEYS).map_err(write_error)?;
+        let used = transaction
+            .object_store(USED_PRE_KEYS)
+            .map_err(write_error)?;
         let mut operations = Vec::with_capacity(candidates.len() * 2);
         for id in &candidates {
             operations.push(delete_op(&pre_keys, number_key(*id)));
@@ -408,6 +473,37 @@ impl ChatDb for IndexedDbChatDb {
         self.get(META, string_key(REPAIR_LIMITS)).await
     }
 
+    async fn claim_writer(&self, take_over: bool) -> Result<u64> {
+        if !take_over {
+            let current = self
+                .get::<u64>(META, string_key(WRITER_GENERATION))
+                .await?
+                .unwrap_or(0);
+            self.fence.set(Some(current));
+            return Ok(current);
+        }
+        // Read and move on the generation in one strict transaction, so two
+        // tabs taking over at once still end on different generations.
+        let transaction = self.strict_write_transaction(&[META])?;
+        let meta = transaction.object_store(META).map_err(write_error)?;
+        let key = string_key(WRITER_GENERATION);
+        let stored = meta
+            .get(key.clone())
+            .map_err(write_error)?
+            .await
+            .map_err(write_error)?;
+        let next = stored
+            .map(from_js::<u64>)
+            .transpose()?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| ChatError::Db("writer generation exhausted".into()))?;
+        let operations = vec![put_op(&meta, to_js(&next)?, key)];
+        finish_write(transaction, operations).await?;
+        self.fence.set(Some(next));
+        Ok(next)
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_REGISTRATION)).await
     }
@@ -487,32 +583,33 @@ impl ChatDb for IndexedDbChatDb {
         // instead of lossy Numbers.
         let mut writes = PreparedWrites::from_pending(pending)?;
 
-        let transaction = idb(self.db.transaction(&ALL_STORES, TransactionMode::ReadWrite))?;
-        let local_identity = idb(transaction.store(LOCAL_IDENTITY))?;
-        let sessions = idb(transaction.store(SESSIONS))?;
-        let identities = idb(transaction.store(IDENTITIES))?;
-        let pre_keys = idb(transaction.store(PRE_KEYS))?;
-        let used_pre_keys = idb(transaction.store(USED_PRE_KEYS))?;
-        let signed_pre_keys = idb(transaction.store(SIGNED_PRE_KEYS))?;
-        let kyber_pre_keys = idb(transaction.store(KYBER_PRE_KEYS))?;
-        let kyber_seen = idb(transaction.store(KYBER_SEEN))?;
-        let sender_keys = idb(transaction.store(SENDER_KEYS))?;
-        let outbox = idb(transaction.store(OUTBOX))?;
-        let mls_state = idb(transaction.store(MLS_STATE))?;
-        let mls_outbox = idb(transaction.store(MLS_OUTBOX))?;
-        let mls_messages = idb(transaction.store(MLS_MESSAGES))?;
-        let messages = idb(transaction.store(MESSAGES))?;
-        let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
-        let imported_history = idb(transaction.store(IMPORTED_HISTORY))?;
-        let history_transfer_journals = idb(transaction.store(HISTORY_TRANSFER_JOURNALS))?;
-        let history_transfer_frames = idb(transaction.store(HISTORY_TRANSFER_FRAMES))?;
-        let inbound = idb(transaction.store(INBOUND))?;
-        let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
-        let manifest_history = idb(transaction.store(MANIFEST_HISTORY))?;
-        let contacts = idb(transaction.store(CONTACTS))?;
-        let local_profile = idb(transaction.store(LOCAL_PROFILE))?;
-        let peer_profiles = idb(transaction.store(PEER_PROFILES))?;
-        let meta = idb(transaction.store(META))?;
+        let transaction = self.fenced_write_transaction(&ALL_STORES).await?;
+        let store = |name: &str| transaction.object_store(name).map_err(write_error);
+        let local_identity = store(LOCAL_IDENTITY)?;
+        let sessions = store(SESSIONS)?;
+        let identities = store(IDENTITIES)?;
+        let pre_keys = store(PRE_KEYS)?;
+        let used_pre_keys = store(USED_PRE_KEYS)?;
+        let signed_pre_keys = store(SIGNED_PRE_KEYS)?;
+        let kyber_pre_keys = store(KYBER_PRE_KEYS)?;
+        let kyber_seen = store(KYBER_SEEN)?;
+        let sender_keys = store(SENDER_KEYS)?;
+        let outbox = store(OUTBOX)?;
+        let mls_state = store(MLS_STATE)?;
+        let mls_outbox = store(MLS_OUTBOX)?;
+        let mls_messages = store(MLS_MESSAGES)?;
+        let messages = store(MESSAGES)?;
+        let sent_messages = store(SENT_MESSAGES)?;
+        let imported_history = store(IMPORTED_HISTORY)?;
+        let history_transfer_journals = store(HISTORY_TRANSFER_JOURNALS)?;
+        let history_transfer_frames = store(HISTORY_TRANSFER_FRAMES)?;
+        let inbound = store(INBOUND)?;
+        let manifest_trust = store(MANIFEST_TRUST)?;
+        let manifest_history = store(MANIFEST_HISTORY)?;
+        let contacts = store(CONTACTS)?;
+        let local_profile = store(LOCAL_PROFILE)?;
+        let peer_profiles = store(PEER_PROFILES)?;
+        let meta = store(META)?;
 
         let mut operations = Vec::new();
         if let Some(value) = writes.local_identity.take() {
@@ -653,19 +750,43 @@ impl ChatDb for IndexedDbChatDb {
     }
 }
 
-type Operation<'a> = Pin<Box<dyn Future<Output = rexie::Result<()>> + 'a>>;
+type Operation<'a> = Pin<Box<dyn Future<Output = std::result::Result<(), idb::Error>> + 'a>>;
 
-fn put_op(store: &Store, value: JsValue, key: JsValue) -> Operation<'_> {
-    Box::pin(async move { store.put(&value, Some(&key)).await.map(|_| ()) })
+fn put_op(store: &idb::ObjectStore, value: JsValue, key: JsValue) -> Operation<'_> {
+    Box::pin(async move { store.put(&value, Some(&key))?.await.map(|_| ()) })
 }
 
-fn delete_op(store: &Store, key: JsValue) -> Operation<'_> {
-    Box::pin(async move { store.delete(key).await })
+fn delete_op(store: &idb::ObjectStore, key: JsValue) -> Operation<'_> {
+    Box::pin(async move { store.delete(idb::Query::Key(key))?.await })
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    /// `IDBDatabase.transaction(names, mode, options)`. web-sys exposes the
+    /// options only behind its unstable-API flag; the call itself is in every
+    /// current browser, and one without `durability` ignores the member.
+    #[wasm_bindgen(extends = js_sys::Object)]
+    type DurableDatabase;
+
+    #[wasm_bindgen(method, catch, js_name = transaction)]
+    fn transaction_with_options(
+        this: &DurableDatabase,
+        names: &js_sys::Array,
+        mode: &str,
+        options: &js_sys::Object,
+    ) -> std::result::Result<web_sys::IdbTransaction, JsValue>;
+}
+
+/// The error a write gets when another tab took the store over.
+pub(crate) const WRITER_SUPERSEDED: &str = "chat storage was taken over by another tab";
+
+fn write_error(error: impl std::fmt::Display) -> ChatError {
+    ChatError::Db(format!("IndexedDB write: {error}"))
 }
 
 fn stage_puts<'a, K>(
     operations: &mut Vec<Operation<'a>>,
-    store: &'a Store,
+    store: &'a idb::ObjectStore,
     writes: impl IntoIterator<Item = (K, JsValue)>,
 ) where
     K: IntoKey,
@@ -677,7 +798,7 @@ fn stage_puts<'a, K>(
 
 fn stage_map<'a, K>(
     operations: &mut Vec<Operation<'a>>,
-    store: &'a Store,
+    store: &'a idb::ObjectStore,
     writes: impl IntoIterator<Item = (K, Option<JsValue>)>,
 ) where
     K: IntoKey,
@@ -691,16 +812,26 @@ fn stage_map<'a, K>(
     }
 }
 
-async fn finish_write(
-    transaction: rexie::Transaction,
-    operations: Vec<Operation<'_>>,
-) -> Result<()> {
+async fn finish_write(transaction: idb::Transaction, operations: Vec<Operation<'_>>) -> Result<()> {
     let results = join_all(operations).await;
     if let Some(error) = results.into_iter().find_map(std::result::Result::err) {
-        let _ = transaction.abort().await;
-        return Err(ChatError::Db(error.to_string()));
+        if let Ok(aborting) = transaction.abort() {
+            let _ = aborting.await;
+        }
+        return Err(write_error(error));
     }
-    idb(transaction.commit().await)
+    // Resolves on `complete`, which with strict durability fires only once
+    // the browser reports the data flushed to disk.
+    let result = transaction
+        .commit()
+        .map_err(write_error)?
+        .await
+        .map_err(write_error)?;
+    if result.is_committed() {
+        Ok(())
+    } else {
+        Err(ChatError::Db("IndexedDB write was not committed".into()))
+    }
 }
 
 trait IntoKey {

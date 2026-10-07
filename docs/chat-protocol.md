@@ -677,6 +677,25 @@ journal and are never silently acknowledged. The one exception is an
 unreadable message from a known sender device, which is acknowledged together
 with the session repair and the visible record described in §6.
 
+### Browser storage
+
+In the browser every commit is one IndexedDB transaction opened with
+`durability: "strict"`: it completes only once the browser reports the data on
+disk. (Chrome's default, relaxed, can lose a commit to a power cut after the
+code acted on it: a ratchet step after its message went out.)
+
+Every tab runs its own engine over the same store, and they take turns under
+one Web Lock. The holder announces itself every 5 seconds on a
+BroadcastChannel while it holds the lock. A tab waiting for it takes the lock
+over once the holder has been silent for 30 seconds (a tab the browser froze
+mid-operation); one that is merely busy keeps announcing and keeps the lock.
+Taking over moves a writer generation kept in the store on, and every write
+checks, inside its own transaction, that its tab still holds the current
+generation: a frozen tab that resumes has its writes refused instead of
+writing over the new holder's. A tab runs its own operations one after
+another before reaching the lock, so it never takes the lock from itself.
+Browser spec 46 injects this fault.
+
 Network unavailability retains the last valid pin and retries. Cryptographic
 contradictions block. Unknown suites and malformed canonical encodings return
 explicit errors. No code path silently exports an HSM key, replaces a pin,
