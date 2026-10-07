@@ -722,6 +722,37 @@ What it needs, found while starting it:
   do. Also still to come:
 shared files in Drive search.
 
+### Office · LaTeX documents (Overleaf-like)
+
+Recorded 2026-10-07. Collaborative LaTeX editing with a live PDF preview,
+end-to-end encrypted. Overleaf compiles on its server; Kutup's server cannot
+read documents, so compilation happens in the browser, as local-first editors
+such as TeXlyre do.
+
+- **Step 1, editing (small, no new dependencies):** open `.tex` (and `.bib`,
+  `.sty`, `.cls`) in the existing collaborative text editor (Yjs over the E2EE
+  collab layer, CodeMirror). Add the extensions to `TEXT_EXT` and LaTeX
+  highlighting (`@codemirror/legacy-modes` `stex`) to `text/lang.ts`. Shared
+  cursors, versions and offline edits come with the editor.
+- **Step 2, compiling in the browser:** a WebAssembly TeX engine in a worker,
+  output shown with pdf.js beside the source. Candidates: SwiftLaTeX's pdfTeX
+  and XeTeX engines (AGPL-3.0, like Kutup; TeXlyre maintains a fork) or
+  BusyTeX (TeX Live 2026 in WASM). Engines are large (tens of MB) and are
+  loaded only when a LaTeX document is opened.
+- **TeX Live packages:** fetched on demand. Serve them from the Kutup server
+  (or a CDN under its domain), never from a third party: the package list a
+  document asks for says something about it. The files are public, so they
+  need no encryption, and the browser caches them.
+- **Projects:** a document with figures, `.bib` and included files is a
+  Drive folder; the compiler reads the folder's files, decrypted in the
+  browser, through a virtual file system.
+- **Later:** BibTeX/biber, SyncTeX (click in the PDF to jump to the source),
+  LuaLaTeX, a template gallery in Office's "New" menu, and Typst (a much
+  smaller WASM compiler) as a lighter alternative.
+- **Open questions:** engine choice and size budget; the license of whatever
+  TeX Live subset is served; how far package coverage reaches without
+  LuaLaTeX.
+
 ### Office · editor start-up race on reload
 
 On roughly one warm reload in four, ONLYOFFICE's own editor frame loads its
