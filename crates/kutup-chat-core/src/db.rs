@@ -641,6 +641,10 @@ pub struct Pending {
     /// are current, which are retired and since when, which one-time Kyber
     /// keys were used): replaced whole.
     pub(crate) prekey_rotation: Option<Vec<u8>>,
+    /// Serialized session-repair limits (when a peer device's session was
+    /// last reset, when a message was last sent again): replaced whole, so
+    /// the once-an-hour limits outlast a reload.
+    pub(crate) repair_limits: Option<Vec<u8>>,
     /// Retired signed prekeys whose last message could have arrived: deleted.
     pub(crate) delete_signed_pre_keys: HashSet<u32>,
     /// Kyber prekeys no longer needed (used one-time keys past their grace,
@@ -691,6 +695,7 @@ impl Pending {
             && self.delete_imported_history_ids.is_empty()
             && self.prekey_upload.is_none()
             && self.prekey_rotation.is_none()
+            && self.repair_limits.is_none()
             && self.delete_signed_pre_keys.is_empty()
             && self.delete_kyber_pre_keys.is_empty()
             && self.registration_upload.is_none()
@@ -843,6 +848,9 @@ pub trait ChatDb {
 
     /// The serialized prekey rotation state, if one was ever written.
     async fn load_prekey_rotation(&self) -> Result<Option<Vec<u8>>>;
+
+    /// The serialized session-repair limits, if any were written.
+    async fn load_repair_limits(&self) -> Result<Option<Vec<u8>>>;
 
     /// Exact device-registration request whose private material is installed,
     /// but whose server-assigned id is not yet confirmed locally.

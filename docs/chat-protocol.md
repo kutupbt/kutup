@@ -327,7 +327,10 @@ the rest (a typing indicator, a receipt it no longer has, an id it never
 sent) it sends one `sessionControl` `{action: "unavailable", sendIds}`;
 for a message it did send but cannot send again (too large to wrap, one
 stored before the size check below) it sends `{action: "lost", sendIds}`. A
-message is sent again at most once an hour per peer. The receiver handles a
+message is sent again at most once an hour per peer. Both once-an-hour
+limits (resetting a session, sending a message again) are kept in the device's
+store, not in memory, so a reload or a second tab does not start them over.
+The receiver handles a
 `resend` as the message inside it: it is stored and shown with its original
 id and sender time, so it takes its place in the conversation, and the
 record that waited for it is removed. A device that had read the message the

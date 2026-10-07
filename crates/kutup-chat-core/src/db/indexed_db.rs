@@ -85,6 +85,7 @@ const LAST_CURSOR: &str = "last_cursor";
 const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
 const PREKEY_ROTATION: &str = "prekey_rotation";
+const REPAIR_LIMITS: &str = "repair_limits";
 const PENDING_REGISTRATION: &str = "pending_registration";
 
 /// One account/device-scoped browser chat database.
@@ -403,6 +404,10 @@ impl ChatDb for IndexedDbChatDb {
         self.get(META, string_key(PREKEY_ROTATION)).await
     }
 
+    async fn load_repair_limits(&self) -> Result<Option<Vec<u8>>> {
+        self.get(META, string_key(REPAIR_LIMITS)).await
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_REGISTRATION)).await
     }
@@ -618,6 +623,9 @@ impl ChatDb for IndexedDbChatDb {
         if let Some(value) = writes.prekey_rotation {
             operations.push(put_op(&meta, value, string_key(PREKEY_ROTATION)));
         }
+        if let Some(value) = writes.repair_limits {
+            operations.push(put_op(&meta, value, string_key(REPAIR_LIMITS)));
+        }
         if let Some(value) = writes.prekey_upload {
             match value {
                 Some(value) => {
@@ -738,6 +746,7 @@ struct PreparedWrites {
     peer_profiles: Vec<(String, JsValue)>,
     prekey_upload: Option<Option<JsValue>>,
     prekey_rotation: Option<JsValue>,
+    repair_limits: Option<JsValue>,
     delete_signed_pre_keys: Vec<u32>,
     delete_kyber_pre_keys: Vec<u32>,
     registration_upload: Option<Option<JsValue>>,
@@ -791,6 +800,7 @@ impl PreparedWrites {
                 .map(|value| value.as_ref().map(to_js).transpose())
                 .transpose()?,
             prekey_rotation: pending.prekey_rotation.as_ref().map(to_js).transpose()?,
+            repair_limits: pending.repair_limits.as_ref().map(to_js).transpose()?,
             delete_signed_pre_keys: pending.delete_signed_pre_keys.iter().copied().collect(),
             delete_kyber_pre_keys: pending.delete_kyber_pre_keys.iter().copied().collect(),
             registration_upload: pending

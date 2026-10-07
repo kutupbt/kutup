@@ -602,7 +602,10 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     replaced pair is kept as long as the mailbox can still hold a message
     for it, and used one-time ML-KEM prekeys are deleted after the same
     14-day grace as EC ones (`docs/chat-protocol.md`, "Prekeys").
-  - Next: the re-send's once-an-hour limits are kept in memory only.
+  - Done: the once-an-hour limits on session resets and re-sends are kept
+    in the device's store, so a reload or a second tab does not start them
+    over; a restore no longer fails when another device writes or compacts
+    the history backup meanwhile.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after
     a send); a write generation checked in every transaction and a lock

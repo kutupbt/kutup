@@ -214,6 +214,10 @@ CREATE TABLE IF NOT EXISTS prekey_rotation (
     id    INTEGER PRIMARY KEY CHECK (id = 1),
     state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS repair_limits (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    state BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
@@ -801,6 +805,15 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_repair_limits(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row("SELECT state FROM repair_limits WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional())
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
@@ -1300,6 +1313,13 @@ impl ChatDb for SqliteChatDb {
         if let Some(state) = &pending.prekey_rotation {
             db(tx.execute(
                 "INSERT INTO prekey_rotation (id, state) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET state = excluded.state",
+                [state],
+            ))?;
+        }
+        if let Some(state) = &pending.repair_limits {
+            db(tx.execute(
+                "INSERT INTO repair_limits (id, state) VALUES (1, ?1)
                  ON CONFLICT(id) DO UPDATE SET state = excluded.state",
                 [state],
             ))?;
