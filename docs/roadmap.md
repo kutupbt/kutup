@@ -603,6 +603,10 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     for it, and used one-time ML-KEM prekeys are deleted after the same
     14-day grace as EC ones (`docs/chat-protocol.md`, "Prekeys").
   - Next: the re-send's once-an-hour limits are kept in memory only.
+  - Found 2026-10-06, to fix: a reload that cuts off a history-backup
+    upload (the request ends unanswered) can leave the next open failing
+    with "Chat backup restore stopped before its cursor", so Chat shows
+    "could not open" on that browser.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after
     a send); a write generation checked in every transaction and a lock
@@ -623,20 +627,9 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   media and voice notes to another person travel by sealed delivery, which
   needs their profile key (it arrives when they accept the message request)
   and a server that offers sealed sender. Where either is missing the attach
-  button stays and says why. Still open: a server only offers sealed sender
-  once its operator provisions an offline root (`docs/self-hosting.md`,
-  "Contacts-only sealed sender").
-  Planned, after the direct-chat hardening (kutup.dev does not need it, its
-  root is provisioned): a server that has no root provisions sealed sender
-  itself with a root that is generated, used and thrown away. On first
-  start it generates a root, signs a long-lived online certificate with it,
-  publishes the policy, then deletes the root's private key. Before that
-  certificate expires it repeats the cycle with a new root under the
-  policy's existing rules (the new root is published first, and the switch
-  waits 24 hours). Self-hosters need no setup, no root key is stored
-  anywhere for a leaked backup to mint certificates with, and recovery from
-  a breach is the same as today. The offline-root mode stays for operators
-  who want it.
+  button stays and says why. A server with no offline root provisions
+  sealed sender itself, with roots it generates, uses once and drops
+  (`docs/self-hosting.md`, "Contacts-only sealed sender").
 - **Meetings: decisions (2026-10-03).** Recorded here so the next round
   starts from them (`docs/chat-calls.md`, "Meetings", has the design):
   - Conversation calls and meetings stay separate. A one-to-one or group

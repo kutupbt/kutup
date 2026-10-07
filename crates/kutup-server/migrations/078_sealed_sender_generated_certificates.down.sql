@@ -1,0 +1,1 @@
+DROP TABLE sealed_sender_generated_certificates;

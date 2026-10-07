@@ -70,10 +70,9 @@ blobs.
 > You need to expose the SeaweedFS S3 port to the host. Add `ports: ["8333:8333"]` to the `seaweedfs-s3` service in `docker-compose.yml` temporarily for local dev.
 
 **Full Chat locally.** Without further configuration the server makes its
-own identity and group ordering key, so direct messages and MLS groups work
-among local accounts. Sealed sender (and with it attachments to other people)
-needs an offline root and is not made automatically. To test everything on
-one machine:
+own identity, group ordering key and sealed-sender root, so direct messages,
+attachments to other people and MLS groups work among local accounts. To test
+everything on one machine:
 
 - federation identity (optional; needed to talk to a second local server):
   `FEDERATION_SERVER_NAME` equal to `CHAT_SERVER_NAME`
@@ -81,7 +80,8 @@ one machine:
   `SERVER_URL=http://kutup.localhost`, and, because the name is private,
   `FEDERATION_TEST_ALLOW_PRIVATE=true` with `APP_ENV=test`. A database whose
   server already made its own identity keeps it (see `docs/self-hosting.md`);
-- sealed sender: generate a throw-away root and policy for that name with
+- sealed sender: nothing to set. To try the offline-root mode, generate a root
+  and policy for that name with
   `cargo run -p kutup-server --bin kutup-sealed-sender-provision -- root-generate root.key`
   and `… server-issue --domain kutup.localhost --root-key root.key
   --online-key online.key --certificate-id 1001 --activates-at 0

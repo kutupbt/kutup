@@ -585,9 +585,17 @@ HKDF-SHA256(
 The destination stores only `SHA-256(capability)` and compares it in constant
 time. Capability publication and encrypted-profile revision are atomic.
 Blocking rotates both before the new profile key is sent to remaining contacts.
+The blocked contact keeps the old capability, so the server refuses their
+sealed sends with its uniform 404 (`sealed delivery unavailable`). As in Signal,
+their client is not told why: the message counts as sent, is never delivered,
+and leaves the queue so it does not hold the conversation back. Unblocking an
+accepted contact sends them the current profile key, and their next message
+goes through.
 Unrestricted anonymous delivery is forbidden.
 
-An offline root signs an online server certificate. The online signer issues
+A root signs an online server certificate: an operator's offline root, or,
+with none configured, a root the server generates, uses once and drops
+(`docs/self-hosting.md`, "Contacts-only sealed sender"). The online signer issues
 sender certificates valid for at most 24 hours and binding canonical account,
 device ID, Signal identity public key, expiry and server certificate. Root
 rotation publishes old+new, activates a new server certificate, waits at least

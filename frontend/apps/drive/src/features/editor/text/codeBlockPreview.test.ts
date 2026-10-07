@@ -1,5 +1,5 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { ensureSyntaxTree } from '@codemirror/language'
+import { forceParsing } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it } from 'vitest'
@@ -13,8 +13,11 @@ function view(cursor: number): EditorView {
     selection: { anchor: cursor },
     extensions: [markdown({ base: markdownLanguage }), codeBlockPreview({ copy: 'Copy code', copied: 'Copied' })],
   })
-  ensureSyntaxTree(state, state.doc.length, 5000)
-  return new EditorView({ state, parent: document.body })
+  const view = new EditorView({ state, parent: document.body })
+  // Finish the parse through the view, as its background parser does in the
+  // app, so the preview is rebuilt from the full tree however slow the run.
+  forceParsing(view, state.doc.length, 5000)
+  return view
 }
 
 describe('code block live preview', () => {

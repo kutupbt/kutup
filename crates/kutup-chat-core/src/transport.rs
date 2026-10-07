@@ -29,6 +29,11 @@ pub enum SendOutcome {
     Delivered { deduplicated: bool },
     /// The request's device set didn't match the recipient's active devices.
     Mismatch(DeviceListMismatch),
+    /// Sealed delivery only: the server's uniform refusal ("sealed delivery
+    /// unavailable"). The recipient no longer accepts this capability (they
+    /// blocked the sender, so their profile key was replaced) or the account
+    /// is gone. Nothing was stored.
+    Refused,
 }
 
 /// The chat server, as the engine sees it. Implementations translate these to the

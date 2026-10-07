@@ -780,6 +780,20 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.unblock_contact(peer).await?;
+        // The block replaced the profile key and kept the new one from this
+        // contact, so their sealed messages are refused. Give it to them again
+        // when the conversation is back to accepted.
+        if matches!(
+            record.state,
+            ContactState::PendingOutgoing | ContactState::Accepted
+        ) && self
+            .session
+            .local_profile()
+            .await?
+            .is_some_and(|profile| profile.pending_upload.is_none())
+        {
+            self.send_profile_key_update(peer, sent_at, rng).await?;
+        }
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))
     }
@@ -2229,6 +2243,18 @@ impl Engine {
                     summary.deduplicated = deduplicated;
                     return Ok(());
                 }
+                // As Signal does for a blocked sender: the message counts as
+                // sent and is never delivered, and the sender is not told why.
+                // It leaves the queue, so it does not hold the conversation
+                // back; the recipient's new profile key, when they unblock,
+                // gives the next message a capability that works.
+                SendOutcome::Refused => {
+                    self.session
+                        .complete_send(send_id, OutboxLeg::Primary, false)
+                        .await?;
+                    summary.delivered = true;
+                    return Ok(());
+                }
                 SendOutcome::Mismatch(_) => {
                     let bundles = self
                         .fetch_verified_sealed_bundles(peer_user, &capability)
@@ -2286,6 +2312,11 @@ impl Engine {
                     summary.delivered = true;
                     summary.deduplicated = deduplicated;
                     return Ok(());
+                }
+                SendOutcome::Refused => {
+                    return Err(ChatError::Transport(
+                        "identified delivery cannot be refused as sealed".into(),
+                    ));
                 }
                 SendOutcome::Mismatch(mismatch) => {
                     let bundles = self.fetch_verified_bundles(peer_user).await?;

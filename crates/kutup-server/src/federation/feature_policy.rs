@@ -25,6 +25,18 @@ use crate::AppState;
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
 
+/// Whether a local policy that differs from the persisted one may replace it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PolicyRotation {
+    /// No: the operator must run `kutup-server feature-policy rotate`.
+    Refuse,
+    /// Yes, because the operator ran that command.
+    Operator,
+    /// Yes, because the server keeps this policy itself (a self-provisioned
+    /// sealed-sender root renewing its certificate).
+    Automatic,
+}
+
 const FEATURE_POLICY_LOCK: i64 = 0x4b55_5455_5046_504f;
 const JSON_CONTENT_TYPE: &str = "application/json";
 
@@ -143,13 +155,16 @@ impl FeaturePolicyStore {
         Ok(Some(history))
     }
 
+    /// Publish `payload` as this server's policy for `feature_type`: the
+    /// first sequence, or the next when it differs from the persisted one
+    /// and `rotation` allows that.
     #[tracing::instrument(name = "federation.feature_policy.ensure_local", skip_all)]
     pub async fn ensure_local(
         &self,
         federation: &FederationStack,
         feature_type: FederatedFeaturePolicyTypeV1,
         payload: &[u8],
-        allow_rotation: bool,
+        rotation: PolicyRotation,
         now: OffsetDateTime,
     ) -> anyhow::Result<FederatedFeaturePolicyEnvelopeV1> {
         validate_feature_payload(feature_type, payload)?;
@@ -164,7 +179,7 @@ impl FeaturePolicyStore {
                 tx.rollback().await?;
                 return Ok(previous.clone());
             }
-            if !allow_rotation {
+            if rotation == PolicyRotation::Refuse {
                 anyhow::bail!(
                     "configured {} policy differs from persisted sequence {}; run `kutup-server feature-policy rotate {}`",
                     feature_name(feature_type),
@@ -197,7 +212,10 @@ impl FeaturePolicyStore {
                 "federation.feature-policy.bootstrap"
             },
             json!({
-                "actorType": if allow_rotation { "operator-command" } else { "system" },
+                "actorType": match rotation {
+                    PolicyRotation::Operator => "operator-command",
+                    PolicyRotation::Refuse | PolicyRotation::Automatic => "system",
+                },
                 "domain": envelope.domain,
                 "featureType": envelope.feature_type.as_u16(),
                 "sequence": envelope.sequence,

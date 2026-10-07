@@ -117,9 +117,10 @@ CHAT_WEB_PUSH=true
 # relay is offered under.
 # CHAT_SFU_TURN_DOMAIN=sfu-turn.example.com
 
-# Optional contacts-only sealed sender. The policy contains public offline roots
-# and root-signed online certificates; the normal server receives only the
-# active online private key.
+# Optional: contacts-only sealed sender from an offline root. Leave both out
+# and the server provisions sealed sender itself. The policy contains public
+# offline roots and root-signed online certificates; the normal server receives
+# only the active online private key.
 # CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
 # CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
 
@@ -522,10 +523,47 @@ charged Chat bytes.
 
 ## Contacts-only sealed sender
 
-Without this, people can still message each other, but attachments, stickers,
-view-once media and voice notes work only in Note to Self and in groups: in a
-direct chat they travel by sealed delivery, and the app hides those controls
-on a server that does not offer it.
+Attachments, stickers, view-once media and voice notes in a direct chat travel
+by sealed delivery; on a server that does not offer it they work only in Note
+to Self and in groups.
+
+### Provisioned by the server (the default)
+
+With neither `CHAT_SEALED_SENDER_*` setting, a server with a federation
+identity (configured, or the one it makes for itself) offers sealed sender with
+no setup:
+
+- On first start it generates a root in memory, signs a 90-day online
+  certificate with it, stores the root's public key, the certificate and the
+  online private key (`sealed_sender_generated_certificates`), publishes the
+  signed policy, and drops the root's private key. It is never written
+  anywhere.
+- 30 days before a certificate runs out it does the same with a new root. The
+  new root and certificate are published at once and issue sender
+  certificates from 24 hours and 5 minutes later, the same rule as for an
+  offline root. The old certificate keeps issuing until then and leaves the
+  policy when it expires; its online key is then wiped. Every instance checks
+  hourly; a database lock makes them agree.
+- A server that was down for most of a window renews at once rather than
+  leaving a day in which nothing can issue.
+
+What this gives up against an offline root is small. A copy of the database
+holds the online key, which signs sender certificates until its certificate
+expires, as the configured online key does; it cannot sign another server
+certificate under that root. The policy itself is signed by the federation
+identity key, which lives on the server in both modes, so whoever holds that
+key could publish a root of their own either way. Sender certificates never
+let anyone speak as an account: a recipient checks the identity key in each
+one against the sender's signed device list, and the message inside is
+authenticated by the device's own Signal identity.
+
+### From an offline root
+
+For an operator who wants the root kept off the server. Setting both values
+replaces the server's own provisioning; a server that has published a policy
+under an offline root does not switch back to its own by itself (start it
+once with `feature-policy rotate sealed-sender` and the settings removed to do
+so).
 
 Provision the trust root on a machine that is not the Kutup application server.
 The image contains an offline helper; copying that binary to the offline system

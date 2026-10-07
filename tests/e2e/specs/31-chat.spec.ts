@@ -125,11 +125,19 @@ test.describe('Signal-backed chat', () => {
     await pageB.getByRole('button', { name: /^Block / }).click()
     await expect(pageB.getByRole('button', { name: 'Unblock', exact: true }).first()).toBeVisible({ timeout: 30_000 })
     await closeDetails(pageB)
+    // With sealed sender (a server that offers it, and Bob accepted) the
+    // block also replaced Bob's delivery capability: Alice's send is refused
+    // with the uniform 404 and never reaches Bob's device.
+    const refused: number[] = []
+    pageA.on('response', (response) => {
+      if (response.request().method() === 'POST' && /\/api\/chat\/anonymous\/users\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.status() === 404) refused.push(Date.now())
+    })
     const whileBlocked = `while-blocked-${tag}`
     const sentAt = Date.now()
     await send(pageA, whileBlocked)
     await expect
       .poll(() => {
+        if (refused.some((t) => t >= sentAt)) return true
         const last = arrivals.filter((t) => t >= sentAt).at(-1)
         return last !== undefined && acks.some((t) => t >= last) && Date.now() - last > 1_500
       }, { timeout: 45_000 })

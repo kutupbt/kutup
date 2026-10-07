@@ -34,6 +34,7 @@ mod models;
 mod openapi;
 mod photos;
 mod ratelimit;
+mod sealed_sender_provision;
 mod sealed_sender_service;
 mod server_keys;
 mod sessions;
@@ -163,13 +164,18 @@ async fn main() -> anyhow::Result<()> {
             "loaded unified federation identity"
         );
     }
-    let sealed_sender = sealed_sender_service::SealedSenderService::from_config(
+    let sealed_sender = sealed_sender_service::SealedSenderService::load(
+        &pool,
         &config,
-        federation
-            .as_deref()
-            .map(|federation| federation.server_name()),
+        federation.as_deref(),
+        if rotate_sealed_sender_policy {
+            federation::PolicyRotation::Operator
+        } else {
+            federation::PolicyRotation::Refuse
+        },
         time::OffsetDateTime::now_utc(),
-    )?;
+    )
+    .await?;
     // Without the ordering service there are no groups: nothing is
     // advertised and every group route answers "unavailable".
     let mls_ordering = if config.chat_groups {
@@ -189,7 +195,11 @@ async fn main() -> anyhow::Result<()> {
                     .policy()
                     .canonical_bytes()
                     .map_err(anyhow::Error::msg)?,
-                rotate_sealed_sender_policy,
+                if rotate_sealed_sender_policy {
+                    federation::PolicyRotation::Operator
+                } else {
+                    federation::PolicyRotation::Refuse
+                },
                 time::OffsetDateTime::now_utc(),
             )
             .await?;
@@ -230,7 +240,11 @@ async fn main() -> anyhow::Result<()> {
                     .policy()
                     .canonical_bytes()
                     .map_err(anyhow::Error::msg)?,
-                rotate_mls_ordering_policy,
+                if rotate_mls_ordering_policy {
+                    federation::PolicyRotation::Operator
+                } else {
+                    federation::PolicyRotation::Refuse
+                },
                 time::OffsetDateTime::now_utc(),
             )
             .await?;
@@ -349,6 +363,9 @@ async fn main() -> anyhow::Result<()> {
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
+        if let Some(sealed_sender) = state.sealed_sender.as_ref() {
+            sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
+        }
     }
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
