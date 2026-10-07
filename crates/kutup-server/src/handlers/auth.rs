@@ -270,7 +270,12 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         }
         None => false,
     };
-    let sealed_sender_policy = if federation_enabled && state.sealed_sender.is_some() {
+    // Sealed delivery between two accounts of this server needs only the
+    // server's identity and its sealed-sender service. The federation policy
+    // decides whether other servers can be reached, not whether this one
+    // offers sealed delivery: closing federation must not switch off media in
+    // direct chats on the server itself.
+    let sealed_sender_policy = if state.sealed_sender.is_some() {
         let federation = state
             .federation
             .as_ref()
