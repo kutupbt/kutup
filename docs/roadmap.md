@@ -603,10 +603,6 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     for it, and used one-time ML-KEM prekeys are deleted after the same
     14-day grace as EC ones (`docs/chat-protocol.md`, "Prekeys").
   - Next: the re-send's once-an-hour limits are kept in memory only.
-  - Found 2026-10-06, to fix: a reload that cuts off a history-backup
-    upload (the request ends unanswered) can leave the next open failing
-    with "Chat backup restore stopped before its cursor", so Chat shows
-    "could not open" on that browser.
   - Later: writes with strict durability (the IndexedDB wrapper in use
     cannot ask for it; without it a power loss can roll a ratchet back after
     a send); a write generation checked in every transaction and a lock

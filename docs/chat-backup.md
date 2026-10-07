@@ -155,6 +155,13 @@ client:
 6. imports the verified result, persists its pin, and exposes the restored
    conversations.
 
+Other devices keep writing while a restore reads. Each page of segments and
+the cursor reported with it come from one database snapshot. When the history
+moves under a restore anyway (another device compacted it, so the base or the
+segments right after it are gone, or the tail ends short of the cursor), the
+client reads and verifies the status again and starts over, up to three times;
+any other inconsistency is an integrity failure and is not retried.
+
 Restore alone does not acknowledge a mailbox message, emit a delivery/read
 receipt, or advance a mailbox cursor. New and overlapping live messages
 deduplicate against stable backup record IDs. Deletes and expiry tombstones are

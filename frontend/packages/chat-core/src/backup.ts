@@ -345,6 +345,12 @@ interface MediaProtection {
   storageFull: boolean
 }
 
+/** How many times a restore starts over when the history moves under it. */
+const RESTORE_ATTEMPTS = 3
+
+/** The server's history changed while a restore read it; read it again. */
+class BackupHistoryMoved extends Error {}
+
 export class ChatBackupCoordinator {
   private readonly listeners = new Set<() => void>()
   private readonly media = new Map<string, MediaProtection>()
@@ -1007,7 +1013,25 @@ export class ChatBackupCoordinator {
     await resetBackupDeviceChain(this.db, sequence, digest, this.runtime.clock.now())
   }
 
+  /**
+   * Restore from the server's base and tail. Another device can compact the
+   * history (a new base, older segments deleted) or add to it while this
+   * reads; the restore then finds the history moved under it, reads the
+   * server's verified status again and starts over, a bounded number of
+   * times. Anything else is an integrity failure and is not retried.
+   */
   private async restore(force = false, persist = true): Promise<StoredRecord[] | undefined> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.restoreOnce(force, persist)
+      } catch (error) {
+        if (!(error instanceof BackupHistoryMoved) || attempt >= RESTORE_ATTEMPTS) throw error
+        await this.refreshServerStatus(this.mediaViewState())
+      }
+    }
+  }
+
+  private async restoreOnce(force: boolean, persist: boolean): Promise<StoredRecord[] | undefined> {
     const state = await loadState(this.db, this.runtime.clock.now())
     if (!force && state.restoredCursor >= this.status.currentCursor
         && (await countStore(this.db, 'records')) > 0) {
@@ -1018,7 +1042,11 @@ export class ChatBackupCoordinator {
     let after = 0
     const manifest = this.status.manifest
     if (manifest) {
-      const bytes = await this.runtime.transport.downloadBase(manifest.baseObjectId)
+      // A compaction elsewhere may have replaced this base since the status
+      // was read.
+      const bytes = await this.runtime.transport.downloadBase(manifest.baseObjectId).catch((error: unknown) => {
+        throw new BackupHistoryMoved('Chat backup base is gone', { cause: error })
+      })
       if (bytes.length !== manifest.baseCiphertextBytes || await sha256Hex(bytes) !== manifest.baseCiphertextSha256) {
         throw new Error('Chat backup base differs from its signed manifest')
       }
@@ -1037,10 +1065,16 @@ export class ChatBackupCoordinator {
     const tailDeviceHeads = new Map<number, { sequence: number; digest: string }>()
     const tailOperations = new Set<string>()
     let restoreComplete = false
+    const tailStart = after
     for (let pages = 0; pages < 100_000; pages++) {
       const page = await this.runtime.transport.listSegments(after, 256)
       for (const segment of page.segments) {
-        if (segment.cursor !== after + 1) throw new Error('Chat backup tail has a cursor gap')
+        if (segment.cursor !== after + 1) {
+          // At the very start of the tail, the segments this base needs were
+          // compacted away after the status was read.
+          if (after === tailStart) throw new BackupHistoryMoved('Chat backup was compacted during restore')
+          throw new Error('Chat backup tail has a cursor gap')
+        }
         if (tailOperations.has(segment.operationId)) {
           throw new Error('Chat backup tail repeats an operation')
         }
@@ -1074,7 +1108,7 @@ export class ChatBackupCoordinator {
         after = segment.cursor
       }
       if (!page.more) {
-        if (after !== page.currentCursor) throw new Error('Chat backup restore stopped before its cursor')
+        if (after !== page.currentCursor) throw new BackupHistoryMoved('Chat backup restore stopped before its cursor')
         restoreComplete = true
         break
       }
