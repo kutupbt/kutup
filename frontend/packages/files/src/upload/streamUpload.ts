@@ -27,8 +27,9 @@ import {
   resumeFileBlobStreamEncryptorV1,
 } from '@kutup/crypto/fileBlob'
 import { ABYTES } from '@kutup/crypto/streamEncryptor'
+import { newContentHasher } from '@kutup/crypto/contentHash'
 import { resolveApiBase } from '@kutup/session/apiBase'
-import { EncryptedFileSource, fileSource } from './encryptedSource'
+import { EncryptedFileSource, fileSource, type PlaintextSource } from './encryptedSource'
 import { holdUpload, pendingUploads, type PendingUpload } from './pendingUploads'
 
 export interface StreamUploadOptions {
@@ -50,6 +51,8 @@ export interface StreamUploadOptions {
   media?: MediaMetadataV1
   /** Keep what is needed to go on after a reload, for this account. */
   resumable?: { owner: string }
+  /** The name's hash in the folder (docs/plans/drive-unique-names.md): the server keeps it unique. */
+  nameHash?: string
 }
 
 /** What an upload made: enough to seal things beside it (a thumbnail). */
@@ -59,6 +62,21 @@ export interface UploadedFile {
   /** A new file's key is generation 1. */
   keyGeneration: 1
   collectionId: string
+  /**
+   * SHA-256 of the plaintext (base64), read while it was encrypted; null
+   * if not every byte was read in order here.
+   */
+  contentSha256: string | null
+}
+
+/**
+ * The name is taken in the folder (`409 name_taken`), with what holds it
+ * when the server said (docs/plans/drive-unique-names.md).
+ */
+export class UploadNameTaken extends Error {
+  constructor(readonly holder: { kind: 'file' | 'folder'; id: string; contentHash: string | null } | null) {
+    super('an item with this name is already here')
+  }
 }
 
 /** The file chosen to resume an upload is not the one it started with. */
@@ -115,8 +133,10 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
         prefix: toBase64(first.prefix),
       }
     : null
+  const hashed = await hashingSource(fileSource(opts.file))
   await send({
     ...opts,
+    plaintext: hashed.source,
     fileId: record.fileId,
     prefix: first.prefix,
     // The first pass uses the encryptor that made the prefix; a pass that
@@ -134,6 +154,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
         collectionId: opts.collection.id,
         metadataEnvelope: record.metadataEnvelope,
         fileKeyEnvelope: record.fileKeyEnvelope,
+        ...(opts.nameHash ? { nameHash: opts.nameHash } : {}),
       },
       remember: pending
         ? async (uploadUrl) => {
@@ -146,7 +167,41 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
     },
     pending,
   })
-  return { fileId: record.fileId, fileKey: record.fileKey, keyGeneration: record.keyGeneration, collectionId: opts.collection.id }
+  return {
+    fileId: record.fileId,
+    fileKey: record.fileKey,
+    keyGeneration: record.keyGeneration,
+    collectionId: opts.collection.id,
+    contentSha256: hashed.digest(),
+  }
+}
+
+/**
+ * The plaintext, hashed as it is read. Encryption always reads it from the
+ * start and in order (a pass that starts over reads it again from the
+ * start), so each byte is hashed the first time it is read in sequence.
+ */
+export async function hashingSource(source: PlaintextSource): Promise<{ source: PlaintextSource; digest: () => string | null }> {
+  const hasher = await newContentHasher()
+  let hashedTo = 0
+  let result: string | null | undefined
+  return {
+    source: {
+      size: source.size,
+      read: async (start, end) => {
+        const bytes = await source.read(start, end)
+        if (start === hashedTo && result === undefined) {
+          hasher.update(bytes)
+          hashedTo = start + bytes.length
+        }
+        return bytes
+      },
+    },
+    digest: () => {
+      if (result === undefined) result = hashedTo === source.size ? hasher.finish() : null
+      return result
+    },
+  }
 }
 
 export interface ResumeUploadOptions {
@@ -196,22 +251,37 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
   if (opts.collection.id !== upload.collectionId) throw new Error('not the folder the upload started in')
   if (opts.collection.keyEpoch !== upload.keyEpoch) throw new FolderKeyChanged()
   const { fileKey, metadata } = await openPendingRecord(upload, opts.collection.collectionKey)
-  if (opts.file.name !== metadata.name || opts.file.size !== upload.size || opts.file.lastModified !== upload.lastModified) {
+  if (!sameName(opts.file.name, metadata.name) || opts.file.size !== upload.size || opts.file.lastModified !== upload.lastModified) {
     throw new NotTheSameFile()
   }
   const context = { fileId: upload.fileId, generation: 1 }
   const prefix = fromBase64(upload.prefix)
   // The stored prefix must be this file's, under this key: Rust checks it.
   await resumeFileBlobStreamEncryptorV1(fileKey, context, prefix)
+  // Going on re-encrypts what the server already holds from the start, so
+  // the whole file is read (and hashed) here too.
+  const hashed = await hashingSource(fileSource(opts.file))
   await send({
     ...opts,
+    plaintext: hashed.source,
     fileId: upload.fileId,
     prefix,
     openStream: () => resumeFileBlobStreamEncryptorV1(fileKey, context, prefix),
     uploadUrl: upload.uploadUrl,
     pending: upload,
   })
-  return { fileId: upload.fileId, fileKey, keyGeneration: 1, collectionId: upload.collectionId }
+  return { fileId: upload.fileId, fileKey, keyGeneration: 1, collectionId: upload.collectionId, contentSha256: hashed.digest() }
+}
+
+/**
+ * The file chosen again is the one uploaded under `stored`: the same name,
+ * or the name with the ` (2)` its folder's clash gave it ("Keep both").
+ */
+function sameName(chosen: string, stored: string): boolean {
+  if (chosen === stored) return true
+  const dot = stored.lastIndexOf('.')
+  const [stem, extension] = dot > 0 ? [stored.slice(0, dot), stored.slice(dot)] : [stored, '']
+  return `${stem.replace(/ \(\d+\)$/, '')}${extension}` === chosen
 }
 
 /** How long to wait before trying a lost connection again: growing, at most a minute. */
@@ -224,6 +294,24 @@ function statusOf(error: unknown): number {
   return response ? response.getStatus() : 0
 }
 
+/** The refusal of a taken name (at create, or when the upload ends); null for anything else. */
+function nameTakenOf(error: unknown): UploadNameTaken | null {
+  const response = (error as { originalResponse?: { getStatus(): number; getBody(): string } | null }).originalResponse
+  if (!response || response.getStatus() !== 409) return null
+  try {
+    const body = JSON.parse(response.getBody()) as { code?: string; holder?: UploadNameTaken['holder'] }
+    if (body.code !== 'name_taken') return null
+    const holder = body.holder
+    return new UploadNameTaken(
+      holder && (holder.kind === 'file' || holder.kind === 'folder') && typeof holder.id === 'string'
+        ? { kind: holder.kind, id: holder.id, contentHash: holder.contentHash ?? null }
+        : null,
+    )
+  } catch {
+    return null
+  }
+}
+
 /** A failure that waiting does not cure: the server refused, or the upload is gone. */
 function isFinal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 423 && status !== 429
@@ -231,6 +319,8 @@ function isFinal(status: number): boolean {
 
 interface SendOptions {
   file: File
+  /** The file's bytes as encryption reads them. */
+  plaintext: PlaintextSource
   fileId: string
   prefix: Uint8Array
   openStream: () => ReturnType<typeof resumeFileBlobStreamEncryptorV1>
@@ -247,7 +337,7 @@ interface SendOptions {
 }
 
 async function send(opts: SendOptions): Promise<void> {
-  const source = new EncryptedFileSource(fileSource(opts.file), opts.openStream, opts.prefix)
+  const source = new EncryptedFileSource(opts.plaintext, opts.openStream, opts.prefix)
   const uploadsEndpoint = `${await resolveApiBase()}/uploads/`
   const plainTotal = opts.file.size
   let lastPlainSent = 0
@@ -320,7 +410,7 @@ async function send(opts: SendOptions): Promise<void> {
       onShouldRetry(err, _attempt, options) {
         const status = statusOf(err)
         if (status === 401) return true
-        if (isFinal(status)) return false
+        if (isFinal(status) || nameTakenOf(err)) return false
         return (options.retryDelays?.length ?? 0) > 0
       },
       metadata: opts.create?.metadata ?? {},
@@ -360,6 +450,13 @@ async function send(opts: SendOptions): Promise<void> {
       onError(err) {
         if (finished || opts.signal?.aborted) return
         const status = statusOf(err)
+        // Someone else took the name meanwhile: the server discarded the upload.
+        const taken = nameTakenOf(err)
+        if (taken) {
+          void forget()
+          finish(taken)
+          return
+        }
         if (status === 404 || status === 410) {
           void forget()
           finish(opts.uploadUrl ? new UploadNoLongerOnServer() : err)

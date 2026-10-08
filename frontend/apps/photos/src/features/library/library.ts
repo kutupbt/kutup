@@ -5,6 +5,7 @@ import { mediaKindOf } from '@kutup/files/media'
 import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { canonicalName, unnumberedName } from '@kutup/drive-core/names'
 import { folderTree, useFolders, usePhotosPreferences, type PhotosPreferences } from './preferences'
 import { daysOf, newestFirst, type Dated } from './timeline'
 
@@ -150,6 +151,11 @@ export function duplicateKeys(photos: readonly Photo[]): Map<string, string> {
   return keys
 }
 
+/**
+ * Name and content, as Ente compares; the name as the server compares it
+ * and without the ` (2)` a clash in the upload folder gave it
+ * (docs/plans/drive-unique-names.md), so the same photo is not kept twice.
+ */
 export function duplicateKey(name: string, hash: string): string {
-  return `${name.normalize('NFC').toLocaleLowerCase()}\n${hash}`
+  return `${canonicalName(unnumberedName(name))}\n${hash}`
 }

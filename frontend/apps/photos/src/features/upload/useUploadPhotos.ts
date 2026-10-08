@@ -6,6 +6,7 @@ import type { MediaMetadataV1 } from '@kutup/crypto'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
+import { uploadUnderFreeName } from '@kutup/drive-core/names'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
@@ -118,18 +119,24 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
       const owner = getSession()?.userId
+      const folderKey = folder.key
       try {
-        uploaded = await streamUpload({
-          file,
-          collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
-          accessToken: freshAccessToken,
-          onProgress: progress,
-          onWaiting: waiting,
-          signal,
-          media,
-          // A reload or a crash leaves it to go on with (the upload panel).
-          resumable: owner ? { owner } : undefined,
-        })
+        // Cameras reuse names: a different photo under a taken one is kept
+        // as `name (2)` (the same photo was skipped above).
+        uploaded = await uploadUnderFreeName(folder, file, (named, nameHash) =>
+          streamUpload({
+            file: named,
+            collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folderKey },
+            accessToken: freshAccessToken,
+            onProgress: progress,
+            onWaiting: waiting,
+            signal,
+            media,
+            // A reload or a crash leaves it to go on with (the upload panel).
+            resumable: owner ? { owner } : undefined,
+            nameHash,
+          }),
+        )
       } catch (error) {
         done(null)
         throw error

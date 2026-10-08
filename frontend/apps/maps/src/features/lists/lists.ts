@@ -2,6 +2,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
 import { useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
+import { canonicalName, uploadUnderFreeName } from '@kutup/drive-core/names'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
 import { encodeListJson, isListName, LIST_EXTENSION, LIST_MIME, type Place } from '@kutup/map/list'
@@ -84,10 +85,10 @@ export function useSaveFolder(): { folder: Folder | undefined; fellBack: boolean
 
 /** `Trip.kutupmap`, then `Trip (1).kutupmap`, … — never a name the folder has. */
 export function uniqueListName(title: string, taken: Iterable<string>): string {
-  const names = new Set([...taken].map((n) => n.toLocaleLowerCase()))
+  const names = new Set([...taken].map(canonicalName))
   for (let n = 0; ; n++) {
     const candidate = n === 0 ? `${title}.${LIST_EXTENSION}` : `${title} (${n}).${LIST_EXTENSION}`
-    if (!names.has(candidate.toLocaleLowerCase())) return candidate
+    if (!names.has(canonicalName(candidate))) return candidate
   }
 }
 
@@ -98,11 +99,15 @@ export function useCreateList() {
     if (!folder.key || !folder.canUpload) throw new Error('folder is not open')
     const existing = await loadFolderFiles(folder)
     const name = uniqueListName(title.trim(), existing.flatMap((f) => (f.name ? [f.name] : [])))
-    const uploaded = await streamUpload({
-      file: new File([encodeListJson(places).slice()], name, { type: LIST_MIME }),
-      collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
-      accessToken: freshAccessToken,
-    })
+    const key = folder.key
+    const uploaded = await uploadUnderFreeName(folder, new File([encodeListJson(places).slice()], name, { type: LIST_MIME }), (file, nameHash) =>
+      streamUpload({
+        file,
+        collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: key },
+        accessToken: freshAccessToken,
+        nameHash,
+      }),
+    )
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['files'] }),
       queryClient.invalidateQueries({ queryKey: foldersKey }),

@@ -136,6 +136,19 @@
     "discard": "Bırak",
     "discardNamed": "{{name}} yüklemesini bırak",
     "unreadable": "Yeni bir anahtara geçmiş bir klasöre yükleme",
-    "myFiles": "Dosyalarım"
+    "myFiles": "Dosyalarım",
+    "alreadyHere": "Bu klasörde zaten var",
+    "skippedByChoice": "Atlandı",
+    "conflict": {
+      "title": "“{{name}}” burada zaten var",
+      "fileThere": "{{folder}} içinde bu adda bir dosya zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
+      "folderThere": "{{folder}} içinde bu adda bir klasör zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
+      "replaceHint": "Değiştir: oradaki dosya çöp kutusuna taşınır, oradan geri yükleyebilirsiniz.",
+      "keepBothHint": "İkisini de tut: bu dosya “{{name}}” adıyla yüklenir.",
+      "applyToAll": "Bu yüklemedeki diğer ad çakışmalarında da aynısını yap",
+      "replace": "Değiştir",
+      "keepBoth": "İkisini de tut",
+      "skip": "Atla"
+    }
   }
 }

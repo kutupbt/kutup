@@ -1,124 +1,24 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
-import { readMedia } from '@kutup/files/media'
-import { newFileBlobStreamEncryptorV1 } from '@kutup/crypto/fileBlob'
-import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import type { PendingUpload } from '@kutup/files/upload/pendingUploads'
-import { resumeUpload, streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
-import { uploadFolder, type FolderEntry } from '@kutup/files/upload/uploadFolder'
+import { resumeUpload } from '@kutup/files/upload/streamUpload'
+import type { FolderEntry } from '@kutup/files/upload/uploadFolder'
 import api, { freshAccessToken } from '@kutup/session/client'
-import { getSession, updateSession } from '@kutup/session/store'
+import { updateSession } from '@kutup/session/store'
 import { filesKey } from '@kutup/drive-core/files'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { folderLocation, type Folder } from '@kutup/drive-core/model'
+import type { Folder } from '@kutup/drive-core/model'
+import { recordContentHash } from '@kutup/drive-core/names'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
-import type { CreatedFile } from '../drive/embedded'
+import { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
 import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
 import { uploads } from '@kutup/drive-ui/uploadStore'
+import { uploadDirectoryInto } from './folderUpload'
+import { BatchListing, placeFile } from './upload'
 
-/**
- * A file into a federated folder: the other server takes one multipart body,
- * which our server spools to disk and streams on. It is encrypted a chunk at
- * a time into a Blob (which the browser may keep on disk), never whole in
- * memory.
- */
-async function uploadRemote(
-  folder: Folder,
-  shareId: string,
-  file: File,
-  media: MediaMetadataV1 | undefined,
-  signal: AbortSignal,
-  progress: (s: number, t: number) => void,
-): Promise<CreatedFile> {
-  if (!folder.key) throw new Error('folder is not open')
-  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
-  if (media) metadata.media = media
-  const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, metadata)
-  const enc = await newFileBlobStreamEncryptorV1(record.fileKey, {
-    fileId: record.fileId,
-    generation: record.keyGeneration,
-  })
-  const parts: BlobPart[] = [enc.prefix as BlobPart]
-  if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)
-  for (let pos = 0; pos < file.size; ) {
-    if (signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
-    const end = Math.min(pos + PLAIN_CHUNK, file.size)
-    const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
-    parts.push(enc.push(plain, end === file.size) as BlobPart)
-    pos = end
-  }
-  const form = new FormData()
-  form.append('fileId', record.fileId)
-  form.append('metadataEnvelope', record.metadataEnvelope)
-  form.append('fileKeyEnvelope', record.fileKeyEnvelope)
-  form.append('file', new Blob(parts, { type: 'application/octet-stream' }), 'encrypted')
-  await api.post(`/drive/federation/shares/${shareId}/files`, form, {
-    signal,
-    onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
-  })
-  return { fileId: record.fileId, fileKey: record.fileKey, keyGeneration: record.keyGeneration }
-}
-
-/**
- * Put a file into `folder`, returning what was made (null for a folder on
- * another server, whose files this server does not hold). A photo's or
- * video's details are read first and sealed with its name
- * (docs/plans/photos.md); `media` gives them instead (a copy keeps the
- * original's). Its thumbnail is queued from the plaintext still in hand.
- */
-export async function uploadOne(
-  folder: Folder,
-  file: File,
-  signal?: AbortSignal,
-  progress?: (s: number, t: number) => void,
-  media?: MediaMetadataV1 | null,
-  waiting?: (waiting: boolean) => void,
-): Promise<UploadedFile | null> {
-  if (!folder.key) throw new Error('folder is not open')
-  const details = media === undefined ? await readMedia(file, signal) : (media ?? undefined)
-  const location = folderLocation(folder)
-  if (location.kind === 'remote') {
-    await uploadRemote(folder, location.shareId, file, details, signal ?? new AbortController().signal, progress ?? (() => {}))
-    return null
-  }
-  const owner = getSession()?.userId
-  const uploaded = await streamUpload({
-    file,
-    collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
-    accessToken: freshAccessToken,
-    onProgress: progress,
-    onWaiting: waiting,
-    signal,
-    media: details,
-    // A reload or a crash leaves it to go on with (the upload panel).
-    resumable: owner ? { owner } : undefined,
-  })
-  thumbnailAfterUpload(uploaded, file)
-  return uploaded
-}
-
-/**
- * As `uploadOne`, for a copy: the new file's id and key wherever it went
- * (here, or a folder on another server), so what belongs to it (its
- * pictures) can be sealed for it too.
- */
-export async function uploadCreating(
-  folder: Folder,
-  file: File,
-  signal: AbortSignal,
-  progress: (s: number, t: number) => void,
-  media: MediaMetadataV1 | undefined,
-): Promise<CreatedFile> {
-  if (!folder.key) throw new Error('folder is not open')
-  const location = folderLocation(folder)
-  if (location.kind === 'remote') return uploadRemote(folder, location.shareId, file, media, signal, progress)
-  const uploaded = await uploadOne(folder, file, signal, progress, media)
-  if (!uploaded) throw new Error('upload made no file')
-  return uploaded
-}
+export { uploadCreating, uploadOne } from './upload'
 
 export function useUploadActions() {
   const queryClient = useQueryClient()
@@ -150,20 +50,32 @@ export function useUploadActions() {
     [queryClient],
   )
 
+  const subfoldersOf = useCallback(
+    (folder: Folder) => () => cachedFolderIndex(queryClient)?.childrenOf(folder.id) ?? [],
+    [queryClient],
+  )
+
   const uploadFiles = useCallback(
     (folder: Folder, files: File[]) => {
+      // One batch: its listing read once, and "apply to all" for its clashes.
+      const policy = new ConflictPolicy(files.length)
+      const listing = new BatchListing(folder, subfoldersOf(folder))
+      const folderName = displayName(folder)
       uploads.add(
         files.map((file) => ({
           name: file.name,
-          folderName: displayName(folder),
+          folderName,
           total: file.size,
           run: async (signal, progress, waiting) => {
+            const place = (into: Folder, list: BatchListing) =>
+              placeFile({ folder: into, file, folderName, listing: list, policy, signal, progress, waiting })
             try {
-              await uploadOne(folder, file, signal, progress, undefined, waiting)
+              return await place(folder, listing)
             } catch (error) {
               // Its owner removed someone meanwhile: once more, under the new key.
               if (!isFolderKeyChanged(error)) throw error
-              await uploadOne(await reloadFolder(folder), file, signal, progress, undefined, waiting)
+              const fresh = await reloadFolder(folder)
+              return place(fresh, new BatchListing(fresh, subfoldersOf(fresh)))
             }
           },
         })),
@@ -171,7 +83,7 @@ export function useUploadActions() {
         classifyUploadError,
       )
     },
-    [settled, displayName, reloadFolder],
+    [settled, displayName, reloadFolder, subfoldersOf],
   )
 
   /** A dropped or picked directory: its tree becomes folders, one queue entry. */
@@ -188,17 +100,15 @@ export function useUploadActions() {
             total: entries.length,
             unit: 'files',
             run: async (signal, progress, waiting) => {
-              await uploadFolder({
-                onWaiting: waiting,
-                resumable: { owner: me.userId },
+              await uploadDirectoryInto({
+                me,
+                parent: { ...folder, key },
                 entries,
-                parentCollection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: key },
-                masterKey: me.masterKey,
-                ownerUserId: me.userId,
-                accessToken: freshAccessToken,
+                folderName: displayName(folder),
+                subfoldersOf: (parent) => cachedFolderIndex(queryClient)?.childrenOf(parent.id) ?? [],
                 signal,
+                waiting,
                 onProgress: (done, total) => progress(done, total),
-                onFileUploaded: thumbnailAfterUpload,
               })
             },
           },
@@ -207,7 +117,7 @@ export function useUploadActions() {
         classifyUploadError,
       )
     },
-    [identity.data, settled, displayName],
+    [identity.data, settled, displayName, queryClient],
   )
 
   const refreshFolder = useCallback(
@@ -235,6 +145,7 @@ export function useUploadActions() {
                 onWaiting: waiting,
                 signal,
               })
+              await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
               thumbnailAfterUpload(uploaded, file)
             },
           },

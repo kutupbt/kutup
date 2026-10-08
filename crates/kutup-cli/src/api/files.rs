@@ -70,8 +70,12 @@ impl Client {
     pub fn move_file(&self, file_id: &str, req: &super::MoveFileRequest) -> Result<MoveOutcome> {
         let resp = self.post_json(&format!("/files/{file_id}/move"), req)?;
         if resp.status().as_u16() == 409 {
-            let super::ApiError { message, .. } = super::api_error(resp).downcast()?;
-            return Ok(MoveOutcome::Conflict(message));
+            let error: super::ApiError = super::api_error(resp).downcast()?;
+            // A taken name is not cured by sealing again.
+            if error.name_taken.is_some() {
+                return Err(anyhow::Error::new(error));
+            }
+            return Ok(MoveOutcome::Conflict(error.message));
         }
         let moved: MoveFileResponse = super::decode_json(resp)?;
         Ok(MoveOutcome::Moved(moved))
@@ -79,11 +83,17 @@ impl Client {
 
     /// Puts a folder under another of the owner's folders, or at the top
     /// level (`None`). Owner only.
-    pub fn move_collection(&self, collection_id: &str, parent: Option<&str>) -> Result<()> {
+    pub fn move_collection(
+        &self,
+        collection_id: &str,
+        parent: Option<&str>,
+        name_hash: Option<String>,
+    ) -> Result<()> {
         let resp = self.post_json(
             &format!("/collections/{collection_id}/move"),
             &super::MoveCollectionRequest {
                 parent_collection_id: parent.map(str::to_string),
+                name_hash,
             },
         )?;
         super::check_ok(resp)

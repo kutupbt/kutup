@@ -349,6 +349,7 @@ fn is_zero(v: &i64) -> bool {
 
 fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec<u8>> {
     let collection = crate::api::Collection {
+        name_hash: None,
         id: s.remote_collection_id.clone(),
         owner_user_id: s.owner_user_id.clone(),
         name_envelope: s.name_envelope.clone(),
@@ -584,6 +585,7 @@ struct IncomingDisplay {
 fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
     let col_key = unwrap_shared_collection_key(s, sess)?;
     let collection = crate::api::Collection {
+        name_hash: None,
         id: s.remote_collection_id.clone(),
         owner_user_id: s.owner_user_id.clone(),
         name_envelope: s.name_envelope.clone(),

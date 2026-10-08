@@ -2,6 +2,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
+import { uploadUnderFreeName } from '@kutup/drive-core/names'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { documentKindOf, newDocument, type DocumentKind } from '@kutup/drive-core/documents'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
@@ -118,11 +119,15 @@ export function useCreateDocument() {
     if (!folder.key || !folder.canUpload) throw new Error('folder is not open')
     const existing = await loadFolderFiles(folder)
     const file = newDocument(kind, title, existing.flatMap((f) => (f.name ? [f.name] : [])))
-    const uploaded = await streamUpload({
-      file,
-      collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
-      accessToken: freshAccessToken,
-    })
+    const key = folder.key
+    const uploaded = await uploadUnderFreeName(folder, file, (named, nameHash) =>
+      streamUpload({
+        file: named,
+        collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: key },
+        accessToken: freshAccessToken,
+        nameHash,
+      }),
+    )
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['files'] }),
       queryClient.invalidateQueries({ queryKey: foldersKey }),

@@ -47,6 +47,8 @@ export interface Folder {
   /** Owner-only actions: rename, colour, share, public link, subfolders, delete. */
   canManage: boolean
   isRoot: boolean
+  /** Its name's hash in its place; null until filled in (docs/plans/drive-unique-names.md). */
+  nameHash?: string | null
 }
 
 export interface DriveFile {
@@ -82,6 +84,9 @@ export interface DriveFile {
   thumbnailStale: boolean
   /** The owner shared it with someone by itself. */
   shared: boolean
+  /** Its name's and content's hashes in its folder; null until known (docs/plans/drive-unique-names.md). */
+  nameHash: string | null
+  contentHash: string | null
 }
 
 /**

@@ -1,7 +1,18 @@
 import { useSyncExternalStore } from 'react'
 
-/** `skipped`: nothing to upload (Photos: the library already has it). */
+/** `skipped`: nothing was uploaded (`skipReason` says why). */
 export type UploadStatus = 'queued' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+/**
+ * Why nothing was uploaded: `library`, the Photos library already has it;
+ * `here`, the same file is already in the folder under that name; `chosen`,
+ * its name was taken and the person chose to skip it
+ * (docs/plans/drive-unique-names.md).
+ */
+export type SkipReason = 'library' | 'here' | 'chosen'
+
+/** What a job's `run` resolves: uploaded, or skipped and why (`skipped` is `library`). */
+export type UploadOutcome = void | 'skipped' | { skipped: SkipReason }
 
 export interface UploadJob {
   id: string
@@ -16,12 +27,13 @@ export interface UploadJob {
   /** The connection is gone; the upload waits and goes on where it stopped. */
   waiting?: boolean
   failure?: import('./uploadError').UploadFailure
-  /** Resolves `skipped` when there was nothing to upload. */
+  skipReason?: SkipReason
+  /** Resolves skipped (with why) when nothing was uploaded. */
   run: (
     signal: AbortSignal,
     progress: (sent: number, total: number) => void,
     waiting: (waiting: boolean) => void,
-  ) => Promise<void | 'skipped'>
+  ) => Promise<UploadOutcome>
   controller: AbortController
 }
 
@@ -52,7 +64,8 @@ async function pump(onSettled: () => void, classify: (error: unknown) => UploadJ
           (sent, total) => patch(job.id, { sent, total }),
           (waiting) => patch(job.id, { waiting }),
         )
-        patch(job.id, outcome === 'skipped' ? { status: 'skipped', waiting: false } : { status: 'done', sent: job.total, waiting: false })
+        const skipReason = outcome === 'skipped' ? 'library' : outcome ? outcome.skipped : null
+        patch(job.id, skipReason ? { status: 'skipped', skipReason, waiting: false } : { status: 'done', sent: job.total, waiting: false })
       } catch (error) {
         const aborted = error instanceof DOMException && error.name === 'AbortError'
         patch(job.id, aborted ? { status: 'cancelled', waiting: false } : { status: 'failed', waiting: false, failure: classify(error) })

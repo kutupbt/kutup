@@ -241,11 +241,32 @@ fn check_names(
 /// What the decrypt helpers name an item whose name does not open.
 const UNREADABLE: &str = "[encrypted]";
 
-/// Whether `name` is already used among `taken`, ignoring case (as the web
-/// app compares).
+/// Whether `name` is already used among `taken`, compared as the server
+/// compares names (docs/plans/drive-unique-names.md).
 fn name_taken(name: &str, taken: &[&str]) -> bool {
-    let name = name.to_lowercase();
-    taken.iter().any(|other| other.to_lowercase() == name)
+    let name = crate::names::canonical(name);
+    taken
+        .iter()
+        .any(|other| crate::names::canonical(other) == name)
+}
+
+/// The hash key of a place names live in: folder `parent`, or the
+/// account's top level (`None`).
+fn place_hash_key(
+    ctx: &SessionContext,
+    cols: &[Collection],
+    parent: Option<&str>,
+) -> Result<[u8; 32]> {
+    let master_key = ctx.session.master_key_bytes()?;
+    let Some(parent) = parent else {
+        return crate::names::top_level_hash_key(&master_key);
+    };
+    let col = cols
+        .iter()
+        .find(|c| c.id == parent)
+        .with_context(|| format!("folder {parent} not found"))?;
+    let keys = crate::cryptohelpers::folder_keyring(&ctx.client, col, &master_key, &ctx.session)?;
+    crate::names::folder_hash_key(&keys, &col.id)
 }
 
 fn rename_file(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
@@ -259,7 +280,9 @@ fn rename_file(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
     let mut meta = crate::file_crypto::open_metadata(&found.file, &found.file_key)
         .context("decrypt existing metadata")?;
     meta.name = new_name.to_string();
-    let request = crate::file_crypto::rename_request(&found.file, &found.file_key, &meta)?;
+    let mut request = crate::file_crypto::rename_request(&found.file, &found.file_key, &meta)?;
+    let hash_key = crate::names::folder_hash_key(&found.keys, &found.collection.id)?;
+    request.name_hash = Some(crate::names::name_hash(&hash_key, new_name)?);
     ctx.client.update_file_metadata(id, &request)
 }
 
@@ -274,8 +297,10 @@ fn rename_folder(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
     }
     let collection_key =
         decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")?;
-    let rename = crate::collection_crypto::rename_request(col, &collection_key, new_name)
+    let mut rename = crate::collection_crypto::rename_request(col, &collection_key, new_name)
         .context("encrypt name")?;
+    let hash_key = place_hash_key(ctx, &cols, col.parent_collection_id.as_deref())?;
+    rename.name_hash = Some(crate::names::name_hash(&hash_key, new_name)?);
     ctx.client
         .rename_collection(id, &rename)
         .context("rename folder")
@@ -311,9 +336,19 @@ fn move_folder(
     if col.parent_collection_id == parent {
         bail!("the folder is already there");
     }
+    // Its name's hash in the new place (docs/plans/drive-unique-names.md).
+    let master_key = ctx.session.master_key_bytes()?;
+    let name = crate::collection_crypto::open_name(
+        col,
+        &decrypt_collection_key(col, &master_key, &ctx.session)
+            .context("decrypt collection key")?,
+    )
+    .context("decrypt folder name")?;
+    let name_hash =
+        crate::names::name_hash(&place_hash_key(ctx, &cols, parent.as_deref())?, &name)?;
     // The server checks the destination is not the folder or anything in it.
     ctx.client
-        .move_collection(id, parent.as_deref())
+        .move_collection(id, parent.as_deref(), Some(name_hash))
         .context("move folder")?;
     Ok(parent)
 }
@@ -338,13 +373,23 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
         let found = rekey_if_behind(&ctx.client, found)?;
         let dest_key = decrypt_collection_key(dest, &master_key, &ctx.session)
             .context("decrypt destination folder key")?;
-        let request = crate::file_crypto::move_request(
+        let mut request = crate::file_crypto::move_request(
             &found.file,
             &found.file_key,
             &dest.id,
             dest.key_epoch,
             &dest_key,
         )?;
+        // Its name's hash in the destination; its content hash belongs to
+        // the folder it leaves and is dropped (docs/plans/drive-unique-names.md).
+        let name = crate::file_crypto::open_metadata(&found.file, &found.file_key)
+            .context("decrypt file metadata")?
+            .name;
+        let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &master_key)?;
+        request.name_hash = Some(crate::names::name_hash(
+            &crate::names::folder_hash_key(&dest_keys, &dest.id)?,
+            &name,
+        )?);
         match ctx.client.move_file(id, &request)? {
             MoveOutcome::Moved(moved) => return Ok(moved.collection_id),
             MoveOutcome::Conflict(_) if attempt < 2 => continue,
@@ -352,6 +397,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
                 return Err(anyhow::Error::new(ApiError {
                     status: 409,
                     message,
+                    name_taken: None,
                 })
                 .context("move file (retried once after a conflict)"))
             }
@@ -418,6 +464,7 @@ mod tests {
 
     fn folder(id: &str, owner: &str, shared: bool, can_upload: bool) -> Collection {
         Collection {
+            name_hash: None,
             id: id.into(),
             owner_user_id: owner.into(),
             name_envelope: String::new(),

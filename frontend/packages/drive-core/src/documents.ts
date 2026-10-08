@@ -2,6 +2,8 @@
 // whiteboards): which files they are, and what a new one starts as. Shared
 // by Drive's New menu and the Office home.
 
+import { canonicalName } from './names'
+
 export const DOCUMENT_KINDS = ['note', 'document', 'spreadsheet', 'presentation', 'whiteboard'] as const
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number]
 
@@ -39,12 +41,12 @@ export function documentKindOf(name: string | null): DocumentKind | null {
   return KIND_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? null
 }
 
-/** `Untitled.docx`, then `Untitled (1).docx`, … — never an existing name (case-insensitive). */
+/** `Untitled.docx`, then `Untitled (1).docx`, … — never an existing name (compared as the server does). */
 export function uniqueName(base: string, extension: string, taken: Iterable<string>): string {
-  const names = new Set([...taken].map((n) => n.toLocaleLowerCase()))
+  const names = new Set([...taken].map(canonicalName))
   for (let n = 0; ; n++) {
     const candidate = n === 0 ? `${base}.${extension}` : `${base} (${n}).${extension}`
-    if (!names.has(candidate.toLocaleLowerCase())) return candidate
+    if (!names.has(canonicalName(candidate))) return candidate
   }
 }
 

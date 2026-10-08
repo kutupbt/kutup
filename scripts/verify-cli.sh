@@ -3,7 +3,10 @@
 # verify-cli.sh — end-to-end differential check for the Rust kutup CLI against a
 # live kutup backend. Exercises the full encrypted round-trip:
 #
-#   login → whoami → mkdir → upload → ls → download → checksum-compare → rm → logout
+#   login → whoami → mkdir → upload → ls → download → checksum-compare →
+#   unique names (the same file again is skipped, a different one under a
+#   taken name stops or is kept beside, a directory uploaded twice sends
+#   nothing new, a synced edit replaces its file) → rm → logout
 #
 # This is the Phase-2 verification gate (see docs/roadmap.md / the Go→Rust
 # rewrite). Run it on a VM/host that can reach a running stack.
@@ -63,8 +66,41 @@ GOT="$(sha256sum "$TMP/out.bin" | cut -d' ' -f1)"
 [ "$WANT" = "$GOT" ] || fail "checksum mismatch: $WANT != $GOT"
 pass "download + checksum match"
 
-run rm "$FILE" >/dev/null && pass "rm file"
-run rm --folder "$FOLDER" >/dev/null && pass "rm folder"
+# Names are unique in a folder (docs/plans/drive-unique-names.md).
+[ "$(run --json upload "$TMP/in.bin" "$FOLDER" | jq -r .alreadyThere)" = true ] \
+  || fail "the same file uploaded again was not skipped"
+pass "same file again: already there"
+mkdir -p "$TMP/other" && head -c 1000 /dev/urandom > "$TMP/other/IN.BIN"
+if run upload "$TMP/other/IN.BIN" "$FOLDER" >/dev/null 2>&1; then
+  fail "a different file under a taken name (other case) was uploaded"
+fi
+pass "different file under a taken name: refused"
+KEPT="$(run --json upload --keep-both "$TMP/other/IN.BIN" "$FOLDER" | jq -r .name)"
+[ "$KEPT" = "IN (2).BIN" ] || fail "--keep-both named it $KEPT"
+pass "--keep-both: $KEPT"
+if run mkdir --parent "$FOLDER" "in.bin" >/dev/null 2>&1; then
+  fail "a folder took a file's name"
+fi
+pass "folder under a file's name: refused"
+
+mkdir -p "$TMP/tree/sub" && echo one > "$TMP/tree/a.txt" && echo two > "$TMP/tree/sub/b.txt"
+run upload -r "$TMP/tree" "$FOLDER" >/dev/null
+AGAIN="$(run --json upload -r "$TMP/tree" "$FOLDER")"
+[ "$(jq '.uploaded | length' <<<"$AGAIN")" = 0 ] && [ "$(jq '.alreadyThere | length' <<<"$AGAIN")" = 2 ] \
+  || fail "a directory uploaded again sent files: $AGAIN"
+pass "directory uploaded again: nothing new"
+
+SYNCED="$(run --json mkdir --parent "$FOLDER" "synced" | jq -r .id)"
+mkdir -p "$TMP/sync" && echo first > "$TMP/sync/note.txt"
+run sync "$TMP/sync" "$SYNCED" >/dev/null 2>&1
+sleep 1 && echo second > "$TMP/sync/note.txt"
+run sync "$TMP/sync" "$SYNCED" >/dev/null 2>&1
+NOTES="$(run --json ls "$SYNCED" | jq '[.[] | select(.type=="file")] | length')"
+[ "$NOTES" = 1 ] || fail "a synced edit left $NOTES files"
+pass "synced edit replaces its file"
+
+run rm --yes "$FILE" >/dev/null || fail "rm file"; pass "rm file"
+run rm --yes --folder "$FOLDER" >/dev/null || fail "rm folder"; pass "rm folder"
 run logout >/dev/null && pass "logout"
 
 echo "==> all checks passed"

@@ -64,6 +64,8 @@ pub fn create_owned(
             owner_key_envelope,
             epoch_statement,
             parent_collection_id,
+            // Set by the caller, who knows the place's hash key.
+            name_hash: None,
         },
         collection_key,
     ))
@@ -165,6 +167,7 @@ pub fn rename_request(
     Ok(RenameCollectionRequest {
         name_envelope,
         name_revision,
+        name_hash: None,
     })
 }
 
@@ -219,6 +222,7 @@ mod tests {
         let statement = CollectionEpochStatementV1::decode_b64(&created.epoch_statement).unwrap();
         (
             Collection {
+                name_hash: None,
                 id: created.id,
                 owner_user_id: owner_user_id.into(),
                 name_envelope: created.name_envelope,

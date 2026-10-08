@@ -25,6 +25,7 @@ import { isWithin } from '../drive/copy'
 import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '../drive/downloads'
 import { useFolderFiles } from '@kutup/drive-core/files'
 import { useRestore } from '@kutup/drive-core/trash'
+import { canonicalName } from '@kutup/drive-core/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
@@ -473,7 +474,7 @@ export function FolderPage() {
     intoItself: t('dialogs.move.intoItself'),
     alreadyThere: t('dialogs.move.alreadyThere'),
   }
-  const taken = new Set(items.map((i) => i.name.toLocaleLowerCase()))
+  const taken = new Set(items.map((i) => canonicalName(i.name)))
 
   return (
     <div

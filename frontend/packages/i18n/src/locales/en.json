@@ -136,6 +136,19 @@
     "discard": "Discard",
     "discardNamed": "Discard {{name}}",
     "unreadable": "An upload into a folder that moved to a new key",
-    "myFiles": "My files"
+    "myFiles": "My files",
+    "alreadyHere": "Already in this folder",
+    "skippedByChoice": "Skipped",
+    "conflict": {
+      "title": "“{{name}}” is already here",
+      "fileThere": "{{folder}} already has a file with this name. Names are compared without letter case.",
+      "folderThere": "{{folder}} already has a folder with this name. Names are compared without letter case.",
+      "replaceHint": "Replace: the file there goes to the trash, where you can restore it.",
+      "keepBothHint": "Keep both: this one is uploaded as “{{name}}”.",
+      "applyToAll": "Do the same for the other name clashes in this upload",
+      "replace": "Replace",
+      "keepBoth": "Keep both",
+      "skip": "Skip"
+    }
   }
 }
