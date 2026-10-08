@@ -736,6 +736,26 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · sharing a file: roles and the dialog's layout
+
+In the file share dialog (`frontend/packages/drive-ui/src/FileShareDialog.tsx`)
+each person shows "Can view" or "Can edit" as plain text with only a Remove
+button: making a viewer an editor, or the other way round, means removing
+them and sharing again. The server already updates a person's permission in
+place when the file is shared with them again (`ON CONFLICT … can_edit =
+EXCLUDED.can_edit`), so this is mostly the dialog:
+- a role control on each person's row (Viewer, Editor, and Remove in the
+  same menu, as Google Drive and Proton Drive do), for people on this
+  server and on others, changed in place without re-adding anyone;
+- lowering an editor to viewer stops their writes on the server; they keep
+  the file key they already had, as a viewer would, so no key rotation is
+  needed (removal still rotates it, as today);
+- a pass over the dialog's layout: who has access first, with roles in
+  reach; adding people and choosing their role in one row; links and the
+  "editors can share" switch grouped below; clear states while a change or
+  a key rotation is in progress. The folder share dialog gets the same
+  pass, so both work alike.
+
 ### Drive · large uploads from the browser
 
 The web client streams an upload: it reads 5 MB, encrypts it as one
