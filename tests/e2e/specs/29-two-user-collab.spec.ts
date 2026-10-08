@@ -67,9 +67,10 @@ test('a note in a shared folder is edited together by two people', async ({ brow
   await expect(dialog.getByRole('alert')).toContainText(/no account|not found|No one/i, { timeout: 30_000 })
   await a.keyboard.press('Escape')
 
-  // Bob finds it under Shared with me and opens the note.
-  const b = await contextB.newPage()
-  await b.goto(appUrl('drive', '/shared'))
+  // Bob finds it under Shared with me and opens the note. Drive signs in
+  // through the account app first: reloading before it has settled would
+  // cut that redirect short.
+  const b = await openDrive(contextB, 'primary', '/shared')
   await expect.poll(
     async () => {
       if ((await item(b, folder).count()) > 0) return true

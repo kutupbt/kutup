@@ -736,25 +736,26 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
-### Drive · sharing a file: roles and the dialog's layout
+### Drive · share dialogs: what is left
 
-In the file share dialog (`frontend/packages/drive-ui/src/FileShareDialog.tsx`)
-each person shows "Can view" or "Can edit" as plain text with only a Remove
-button: making a viewer an editor, or the other way round, means removing
-them and sharing again. The server already updates a person's permission in
-place when the file is shared with them again (`ON CONFLICT … can_edit =
-EXCLUDED.can_edit`), so this is mostly the dialog:
-- a role control on each person's row (Viewer, Editor, and Remove in the
-  same menu, as Google Drive and Proton Drive do), for people on this
-  server and on others, changed in place without re-adding anyone;
-- lowering an editor to viewer stops their writes on the server; they keep
-  the file key they already had, as a viewer would, so no key rotation is
-  needed (removal still rotates it, as today);
-- a pass over the dialog's layout: who has access first, with roles in
-  reach; adding people and choosing their role in one row; links and the
-  "editors can share" switch grouped below; clear states while a change or
-  a key rotation is in progress. The folder share dialog gets the same
-  pass, so both work alike.
+Done (October 2026): each person in the file and folder share dialogs has a
+role menu on their row (file: Can view, Can edit; folder: Can view, Can add
+and edit, Can delete files they added) with Remove in the same menu. A
+change re-seals that person's access at the current key and the server
+updates their permission in place (`POST /api/files/:id/share`,
+`POST /api/collections/:id/share`); nobody is re-added and no key rotates.
+Lowering someone stops their writes; they keep the key they already had, as
+a viewer does. The file dialog takes the role beside the address. Browser
+spec 47 covers both.
+
+Still open:
+- People on other servers keep the permissions their invite gave; changing
+  them means removing them and sharing again (the dialog says so). In-place
+  changes need a federated update of the outgoing share.
+- The rest of the layout pass: links and the "editors can share" switch
+  grouped apart from the people, the folder dialog's add form in the same
+  one-row shape as the file dialog's, and a clear in-progress state on a
+  row while its change or a key rotation runs.
 
 ### Drive · large uploads from the browser
 

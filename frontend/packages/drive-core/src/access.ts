@@ -211,6 +211,44 @@ export async function rotateFolder(
   }
 }
 
+/**
+ * Change what someone here may do in a folder (the folder's manager only):
+ * add and edit, delete what they added, keeping their upload quota. Their
+ * access is sealed again at the folder's current key and the server
+ * changes their permissions in place; nobody is removed or re-added, so
+ * the folder keeps its key.
+ */
+export function useSetFolderPermissions() {
+  const queryClient = useQueryClient()
+  return useDriveMutation(
+    async (
+      { folder, member, canUpload, canDelete }: { folder: Folder; member: AccessMember; canUpload: boolean; canDelete: boolean },
+      me,
+    ) => {
+      if (!folder.key || !folder.canManage) throw new Error('only the folder\'s manager changes what people may do')
+      try {
+        const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.masterKey, member.drivePublicKey, {
+          collectionId: folder.id,
+          epoch: folder.keyEpoch,
+          senderAccount: me.account,
+          senderIncarnationId: me.incarnationId,
+          recipientAccount: member.account,
+          recipientIncarnationId: member.accountIncarnationId,
+        })
+        await api.post(`/collections/${folder.id}/share`, {
+          recipientUserId: member.userId,
+          namedShareEnvelope,
+          canUpload,
+          canDelete,
+          uploadQuotaBytes: canUpload ? member.uploadQuotaBytes : null,
+        })
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: accessKey(folder.id) })
+      }
+    },
+  )
+}
+
 /** Remove people or links from a folder (a rotation). */
 export function useRemoveAccess() {
   const queryClient = useQueryClient()

@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ChatHistoryEntry } from '@kutup/chat-core/types'
 
 /** A conversation of 350 messages, newest first, paged as the service does. */
-const all: ChatHistoryEntry[] = Array.from({ length: 350 }, (_, i) => ({
+const all: ChatHistoryEntry[] = Array.from({ length: 350 }, (_, i): ChatHistoryEntry => ({
   id: `m${350 - i}`,
   conversation: { kind: 'group', groupId: 'g1' },
   peer: '',
@@ -13,12 +13,12 @@ const all: ChatHistoryEntry[] = Array.from({ length: 350 }, (_, i) => ({
   delivered: true,
   deduplicated: false,
   content: { version: 1, kind: 'text', sentAt: '', seq: '1', body: {}, text: '' },
-}) as ChatHistoryEntry)
+}))
 
-const conversationPage = vi.fn(async (_key: string, before: string | undefined, limit: number) => {
+const conversationPage = vi.fn((_key: string, before: string | undefined, limit: number) => {
   const start = before === undefined ? 0 : all.findIndex((entry) => entry.id === before)
   const entries = all.slice(start, start + limit)
-  return { entries, before: start + limit < all.length ? all[start + limit].id : undefined }
+  return Promise.resolve({ entries, before: start + limit < all.length ? all[start + limit].id : undefined })
 })
 const chat = { service: { conversationPage }, snapshot: { history: [] } }
 

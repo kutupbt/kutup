@@ -174,7 +174,7 @@
       "quotaInvalid": "Enter a size above zero.",
       "canDelete": "Can delete files they added",
       "canDeleteHint": "They never delete other people's files.",
-      "note": "Sharing again with the same person changes their permissions.",
+      "note": "To change someone's permissions, or remove them, use the menu on their row below.",
       "submit": "Share",
       "shared": "Shared with {{account}}",
       "notFound": "No one with that address. For another Kutup server use user@server.",
@@ -250,7 +250,11 @@
       "removed": "Access removed",
       "changed": "Who has access changed meanwhile. Check the list and try again.",
       "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to.",
-      "failed": "Access could not be removed. Try again."
+      "failed": "Access could not be removed. Try again.",
+      "roleFor": "What {{name}} can do",
+      "updated": "{{name}}'s access is updated",
+      "changeFailed": "That could not be changed. Try again.",
+      "otherServerFixed": "For people on other servers this is set by their invite: remove them and share again to change it."
     }
   },
   "shared": {

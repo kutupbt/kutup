@@ -509,6 +509,32 @@ export function useShareFile() {
   )
 }
 
+/**
+ * Make someone who has the file here a viewer or an editor (the owner
+ * only). Their access is sealed again at the file's current key and the
+ * server changes their permission in place; nobody is removed or re-added,
+ * and no key changes hands that they did not already hold.
+ */
+export function useSetFileRole() {
+  const queryClient = useQueryClient()
+  return useDriveMutation(
+    async (input: { folder: Folder; file: DriveFile; member: FileAccessMember; canEdit: boolean }, me) => {
+      if (!canShareFile(input.folder, input.file)) throw new Error('only the owner changes what people may do')
+      try {
+        const file = await bringFileSharesUpToDate(input.folder, input.file, me)
+        const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
+          account: input.member.account,
+          accountIncarnationId: input.member.accountIncarnationId,
+          drivePublicKey: input.member.drivePublicKey,
+        })
+        await api.post(`/files/${file.id}/share`, { recipientUserId: input.member.userId, shareEnvelope, canEdit: input.canEdit })
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })
+      }
+    },
+  )
+}
+
 /** Stop seeing a file shared from another server. */
 export function useLeaveRemoteFileShare() {
   return useDriveMutation(async (shared: SharedFile) => {

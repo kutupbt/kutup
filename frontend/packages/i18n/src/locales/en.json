@@ -47,9 +47,9 @@
     "recipient": "Email or Kutup address",
     "recipientHint": "A Kutup address (user@server) or, for someone on this server, their email. Someone on another server gets an invite link, and can edit too, through their server, if you allow it.",
     "canEdit": "Can edit",
-    "canEditHint": "They can change it and save versions. Without this they can only view it. Only you can rename, move or delete it.",
+    "canEditHint": "Editors can change it and save versions; viewers can only open it. Only you can rename, move or delete it.",
     "canView": "Can view",
-    "note": "Sharing again with the same person changes what they can do.",
+    "note": "To change what someone can do, or remove them, use the menu on their row below.",
     "submit": "Share",
     "shared": "Shared with {{account}}",
     "notFound": "No one with that address. For another Kutup server use user@server.",
@@ -87,7 +87,13 @@
     "inviteBody": "They are on another Kutup server: they add it under Shared with me. It works only for them.",
     "inviteLink": "Invite link",
     "otherServer": "on another server",
-    "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to."
+    "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to.",
+    "roleLabel": "What they can do",
+    "roleFor": "What {{name}} can do",
+    "nowEditor": "{{name}} can now edit it",
+    "nowViewer": "{{name}} can now only view it",
+    "roleFailed": "That could not be changed. Try again.",
+    "otherServerFixed": "For people on other servers this is set by their invite: remove them and share again to change it."
   },
   "storage": {
     "label": "Storage used",

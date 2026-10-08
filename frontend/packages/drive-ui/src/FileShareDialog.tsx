@@ -1,4 +1,4 @@
-import { Link2, Server, User } from 'lucide-react'
+import { Check, ChevronDown, Link2, Server, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -7,14 +7,16 @@ import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
 import { AccessChanged, RecipientChanged } from '@kutup/drive-core/access'
-import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useShareFile, type ShareRole } from '@kutup/drive-core/fileShares'
+import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useSetFileRole, useShareFile, type FileAccessMember, type ShareRole } from '@kutup/drive-core/fileShares'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
@@ -86,17 +88,22 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
         <form className="space-y-4" onSubmit={submit}>
           <Field label={t('fileShare.recipient')} description={t('fileShare.recipientHint')} required>
             {(field) => (
-              <Input {...field} value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus
-                autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
+              <div className="flex gap-2">
+                <Input {...field} className="min-w-0 flex-1" value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus
+                  autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
+                <Select value={canEdit ? 'edit' : 'view'} onValueChange={(value) => setCanEdit(value === 'edit')}>
+                  <SelectTrigger className="w-auto shrink-0" aria-label={t('fileShare.roleLabel')} data-testid="file-share-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="view">{t('fileShare.canView')}</SelectItem>
+                    <SelectItem value="edit">{t('fileShare.canEdit')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             )}
           </Field>
-          <div className="flex items-start gap-2">
-            <Checkbox id="share-file-edit" checked={canEdit} onCheckedChange={(v) => setCanEdit(v === true)} />
-            <div>
-              <Label htmlFor="share-file-edit">{t('fileShare.canEdit')}</Label>
-              <p className="text-xs text-muted-foreground">{t('fileShare.canEditHint')}</p>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground">{t('fileShare.canEditHint')}</p>
           <Alert>{t('fileShare.note')}</Alert>
           {invite ? (
             <Alert>
@@ -144,6 +151,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const setEditorsCanShare = useSetEditorsCanShare()
   const owner = target.role === 'owner'
   const remove = useRemoveFileAccess()
+  const setRole = useSetFileRole()
   const people = usePeople()
   // Someone, or a link, about to be removed (either moves the file to a new key).
   const [pending, setPending] = useState<{ userId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
@@ -183,7 +191,20 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
     )
   }
 
-  const error = remove.error
+  function changeRole(member: FileAccessMember, name: string, canEdit: boolean) {
+    if (member.canEdit === canEdit) return
+    setRole.mutate(
+      { ...target, member, canEdit },
+      { onSuccess: () => toast.success(t(canEdit ? 'fileShare.nowEditor' : 'fileShare.nowViewer', { name })) },
+    )
+  }
+
+  const busy = remove.isPending || setRole.isPending
+  const error = setRole.error
+    ? setRole.error instanceof AccessChanged
+      ? t('fileShare.changed')
+      : t('fileShare.roleFailed')
+    : remove.error
     ? remove.error instanceof AccessChanged
       ? t('fileShare.changed')
       : remove.error instanceof RecipientChanged
@@ -207,10 +228,18 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 key={m.userId}
                 icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
                 name={person.name}
-                detail={[person.profile ? m.account : null, permission, behind].filter(Boolean).join(' · ')}
-                onRemove={owner ? () => setPending({ userId: m.userId, name: person.name }) : undefined}
-                removeLabel={t('fileShare.removeNamed', { name: person.name })}
-                busy={remove.isPending}
+                detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
+                control={
+                  owner ? (
+                    <RoleMenu
+                      name={person.name}
+                      canEdit={m.canEdit}
+                      busy={busy}
+                      onRole={(canEdit) => changeRole(m, person.name, canEdit)}
+                      onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                    />
+                  ) : null
+                }
               />
             )
           })}
@@ -223,10 +252,19 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 key={f.id}
                 icon={person.profile ? <PersonAvatar {...person} /> : <Server className="size-4" aria-hidden />}
                 name={person.name}
-                detail={[person.profile ? account : null, f.canEdit ? t('fileShare.canEdit') : t('fileShare.canView'), t('fileShare.otherServer'), behind].filter(Boolean).join(' · ')}
-                onRemove={owner ? () => setPending({ federatedId: f.id, name: person.name }) : undefined}
-                removeLabel={t('fileShare.removeNamed', { name: person.name })}
-                busy={remove.isPending}
+                detail={[person.profile ? account : null, owner ? null : f.canEdit ? t('fileShare.canEdit') : t('fileShare.canView'), t('fileShare.otherServer'), behind].filter(Boolean).join(' · ')}
+                control={
+                  owner ? (
+                    // Across servers the role is set by the invite; changing it means a new one.
+                    <RoleMenu
+                      name={person.name}
+                      canEdit={f.canEdit}
+                      busy={busy}
+                      fixedNote={t('fileShare.otherServerFixed')}
+                      onRemove={() => setPending({ federatedId: f.id, name: person.name })}
+                    />
+                  ) : null
+                }
               />
             )
           })}
@@ -338,35 +376,63 @@ function PersonAvatar({ name, profile }: ReturnType<typeof personOf>) {
   return <Avatar name={name} image={profile?.avatar} contentType={profile?.avatarContentType} size={24} />
 }
 
-function Row({
-  icon,
-  name,
-  detail,
-  onRemove,
-  removeLabel,
-  busy,
-}: {
-  icon: ReactNode
-  name: string
-  detail: string
-  /** Absent: this person cannot be removed from here (only the owner removes). */
-  onRemove?: () => void
-  removeLabel: string
-  busy: boolean
-}) {
-  const { t } = useTranslation()
+function Row({ icon, name, detail, control }: { icon: ReactNode; name: string; detail: string; control: ReactNode }) {
   return (
     <li className="flex items-center gap-3 px-3 py-2">
       <span className="text-muted-foreground">{icon}</span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{name}</p>
-        <p className="truncate text-xs text-muted-foreground">{detail}</p>
+        {detail ? <p className="truncate text-xs text-muted-foreground">{detail}</p> : null}
       </div>
-      {onRemove ? (
-        <Button size="sm" variant="ghost" onClick={onRemove} disabled={busy} aria-label={removeLabel}>
-          {t('fileShare.remove')}
-        </Button>
-      ) : null}
+      {control}
     </li>
+  )
+}
+
+/**
+ * What someone may do with the file, and removing them, in one menu on their
+ * row (as Google Drive and Proton Drive have it). Without `onRole` the role
+ * is fixed and `fixedNote` says why.
+ */
+function RoleMenu({
+  name,
+  canEdit,
+  busy,
+  onRole,
+  onRemove,
+  fixedNote,
+}: {
+  name: string
+  canEdit: boolean
+  busy: boolean
+  onRole?: (canEdit: boolean) => void
+  onRemove: () => void
+  fixedNote?: string
+}) {
+  const { t } = useTranslation()
+  const choice = (value: boolean, label: string) => (
+    <DropdownMenuItem disabled={!onRole} onSelect={() => onRole?.(value)}>
+      <Check className={canEdit === value ? 'opacity-100' : 'opacity-0'} aria-hidden />
+      {label}
+    </DropdownMenuItem>
+  )
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" disabled={busy} aria-label={t('fileShare.roleFor', { name })} className="shrink-0 gap-1">
+          {canEdit ? t('fileShare.canEdit') : t('fileShare.canView')}
+          <ChevronDown aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {choice(false, t('fileShare.canView'))}
+        {choice(true, t('fileShare.canEdit'))}
+        {fixedNote ? <p className="max-w-56 px-2 py-1.5 text-xs text-muted-foreground">{fixedNote}</p> : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive" onSelect={onRemove} aria-label={t('fileShare.removeNamed', { name })}>
+          {t('fileShare.remove')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
