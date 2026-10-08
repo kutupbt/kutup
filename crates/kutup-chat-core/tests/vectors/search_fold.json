@@ -1,0 +1,17 @@
+{
+  "description": "Search folding (crates/kutup-chat-core/src/search.rs, frontend/packages/chat-core/src/search.ts): both must give these exactly.",
+  "cases": [
+    { "input": "İstanbul", "folded": "istanbul", "words": ["istanbul"] },
+    { "input": "ISTANBUL", "folded": "istanbul", "words": ["istanbul"] },
+    { "input": "ıstanbul", "folded": "istanbul", "words": ["istanbul"] },
+    { "input": "Çağrı ŞÜPHE öğün", "folded": "cagri suphe ogun", "words": ["cagri", "suphe", "ogun"] },
+    { "input": "Kitaplar, kitaplık; KİTAP!", "folded": "kitaplar, kitaplik; kitap!", "words": ["kitaplar", "kitaplik", "kitap"] },
+    { "input": "Crème brûlée à la française", "folded": "creme brulee a la francaise", "words": ["creme", "brulee", "a", "la", "francaise"] },
+    { "input": "Straße groß", "folded": "straße groß", "words": ["straße", "groß"] },
+    { "input": "rapor-2026_v3.pdf", "folded": "rapor-2026_v3.pdf", "words": ["rapor", "2026", "v3", "pdf"] },
+    { "input": "ﬁle ①", "folded": "file 1", "words": ["file", "1"] },
+    { "input": "  hello   hello  ", "folded": "  hello   hello  ", "words": ["hello"] },
+    { "input": "мир Привет", "folded": "мир привет", "words": ["мир", "привет"] },
+    { "input": "", "folded": "", "words": [] }
+  ]
+}
