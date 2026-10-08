@@ -91,6 +91,18 @@ describe('ChatService history', () => {
     expect(updates).toHaveBeenCalledTimes(1)
   })
 
+  it('shows a group invitation that arrived without anything written here', async () => {
+    const { svc, updates } = service(() => [], () => 4)
+    let changed = true
+    Object.assign(svc, {
+      mls: { reconcile: vi.fn().mockResolvedValue([]), takeInvitationsChanged: () => { const value = changed; changed = false; return value } },
+    })
+    await svc.reconcile()
+    expect(updates).toHaveBeenCalledTimes(1)
+    await svc.reconcile()
+    expect(updates).toHaveBeenCalledTimes(1)
+  })
+
   it('enters attachments from the conversations that changed, and retries what could not be entered', async () => {
     const attachment = (id: string, attachmentId: string): ChatHistoryEntry => {
       const value = entry(id)

@@ -1383,6 +1383,10 @@ export class ChatService {
         if (commits === undefined || after !== commits) {
           await this.reconcileAttachmentLedger()
           this.notifyPeers()
+        } else if (this.mls?.takeInvitationsChanged()) {
+          // Invitations are kept on the server: a new one wrote nothing
+          // here, but the list shows it. Other tabs list it on their own pass.
+          this.emitUpdate()
         }
         return report
       })

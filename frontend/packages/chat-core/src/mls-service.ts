@@ -122,6 +122,9 @@ export class MlsConversationService {
   private readonly deferredOptionalSendIds = new Set<string>()
   /** Mailbox envelopes already reported as unreadable (reported once each). */
   private readonly unreadableApplicationEnvelopes = new Set<string>()
+  /** The pending invitations last listed (`invitations`), and whether that changed. */
+  private listedInvitations = ''
+  private invitationsChanged = false
   /** When each (conversation, account) device mismatch was first seen. */
   private readonly memberDeviceMismatchSince = new Map<string, number>()
 
@@ -1493,7 +1496,26 @@ export class MlsConversationService {
     const now = Math.floor(Date.now() / 1000)
     const invitations = await this.transport.listMlsInvitations()
     for (const invitation of invitations) validateInvitation(invitation, now)
+    const listed = invitations
+      .map(invitation => `${invitation.conversationId}:${invitation.incarnation}`)
+      .sort()
+      .join(',')
+    if (listed !== this.listedInvitations) {
+      this.listedInvitations = listed
+      this.invitationsChanged = true
+    }
     return invitations
+  }
+
+  /**
+   * Whether the pending invitations changed since this was last asked. They
+   * live on the server only, so an invitation that arrives writes nothing
+   * locally; a pass that lists a new one says so here.
+   */
+  takeInvitationsChanged(): boolean {
+    const changed = this.invitationsChanged
+    this.invitationsChanged = false
+    return changed
   }
 
   async invitationFeedback(): Promise<MlsInvitationFeedback[]> {
