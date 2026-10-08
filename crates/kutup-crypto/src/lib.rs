@@ -38,6 +38,7 @@ pub mod chat_media;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod drive_envelope;
+pub mod drive_names;
 pub mod drive_object;
 pub mod envelope;
 pub mod error;

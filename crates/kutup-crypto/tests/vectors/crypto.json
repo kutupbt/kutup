@@ -250,5 +250,53 @@
       "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgI",
       "envelope": "S1VUUFBMMQAAAQEAoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaEAAAAAAAAAAnUCMeowOLMWk9e579txizaMCOm80FH0F0CS4cU6ZneZCAgICAgICAgICAgICAgICAgICAgICAgIAAAAO3VZCYysiByy8BjuslYMetOZOt4BVONfOqMqh7BRS7G81Kx0Cn0/BySQZI9dxhWZXjSny8Xsav4pzQlt"
     }
+  },
+  "driveNames": {
+    "description": "Folder hash key, name and content hashes (kutup-crypto/src/drive_names.rs).",
+    "firstFolderKey": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+    "collectionId": "11111111-1111-4111-8111-111111111111",
+    "hashKey": "7pcbVOLqBeGKBsyx0HiDi2Zkkdd5m1fKPfPmjK9ZNv0=",
+    "names": [
+      {
+        "name": "Report.pdf",
+        "canonical": "report.pdf",
+        "hash": "5286ce1ce644e4e7b75d7e833ac2e01f38e1ec801c3118e2e755289e332cbf9a"
+      },
+      {
+        "name": "report.PDF",
+        "canonical": "report.pdf",
+        "hash": "5286ce1ce644e4e7b75d7e833ac2e01f38e1ec801c3118e2e755289e332cbf9a"
+      },
+      {
+        "name": "Café.txt",
+        "canonical": "café.txt",
+        "hash": "126b1c9e5eb6f0b4075658e7bf34651a5eacef79484791c1f4db4863d796d4af"
+      },
+      {
+        "name": "Café.txt",
+        "canonical": "café.txt",
+        "hash": "126b1c9e5eb6f0b4075658e7bf34651a5eacef79484791c1f4db4863d796d4af"
+      },
+      {
+        "name": "ISTANBUL.md",
+        "canonical": "istanbul.md",
+        "hash": "59e1181178211705879f72d90fe22830f18a20d38d84927d2bff6eb1a37fbb05"
+      },
+      {
+        "name": "İstanbul.md",
+        "canonical": "i̇stanbul.md",
+        "hash": "bfe670f256207ea6370163a8d1e832bb3df94dadeb7ff1d8e73b74fbc6f0fdce"
+      },
+      {
+        "name": "şeker.txt",
+        "canonical": "şeker.txt",
+        "hash": "cbbaedc6c567cc6b3acd733b9cfc032f05435661cb26227947a247375a3169c5"
+      }
+    ],
+    "content": {
+      "plaintext": "a3V0dXA=",
+      "sha256": "XQfapCZwe60o9JKABSPv4Ek/O3wVGT2/ITGKpzhdL80=",
+      "hash": "5d7b229f40c6325c0f25afbd8fbd0644b53f80bd1b44c1805d59e9bf6bcc9a20"
+    }
   }
 }

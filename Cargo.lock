@@ -2572,12 +2572,14 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac 0.12.1",
  "hpke-rs",
  "hpke-rs-rust-crypto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+ "unicode-normalization",
  "zeroize",
 ]
 

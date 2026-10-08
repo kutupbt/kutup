@@ -847,3 +847,75 @@ fn photos_library_matches_canonical_vector() {
     );
     assert_eq!(v.second.previous_digest, v.first.digest);
 }
+
+/// Prints the `driveNames` vectors for `tests/vectors/crypto.json`:
+/// `cargo test -p kutup-crypto --test vectors print_drive_names_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_names_vectors() {
+    use kutup_crypto::drive_names;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let first = [0x61u8; 32];
+    let collection_id = "11111111-1111-4111-8111-111111111111";
+    let hash_key = drive_names::folder_hash_key(&first, collection_id).unwrap();
+    let names: Vec<_> = [
+        "Report.pdf",
+        "report.PDF",
+        "Caf\u{e9}.txt",
+        "Cafe\u{301}.txt",
+        "ISTANBUL.md",
+        "İstanbul.md",
+        "şeker.txt",
+    ]
+    .iter()
+    .map(|name| {
+        serde_json::json!({
+            "name": name,
+            "canonical": drive_names::canonical_name(name),
+            "hash": drive_names::name_hash(&hash_key, name).unwrap(),
+        })
+    })
+    .collect();
+    let digest = drive_names::content_sha256(b"kutup");
+    let v = serde_json::json!({
+        "description": "Folder hash key, name and content hashes (kutup-crypto/src/drive_names.rs).",
+        "firstFolderKey": e(&first),
+        "collectionId": collection_id,
+        "hashKey": e(&hash_key),
+        "names": names,
+        "content": { "plaintext": e(b"kutup"), "sha256": e(&digest), "hash": drive_names::content_hash(&hash_key, &digest).unwrap() },
+    });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap());
+}
+
+#[test]
+fn drive_names_vector() {
+    use kutup_crypto::drive_names;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["driveNames"];
+    let s = |key: &str| v[key].as_str().unwrap().to_owned();
+    let hash_key =
+        drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
+    assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
+    for case in v["names"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        assert_eq!(
+            drive_names::canonical_name(name),
+            case["canonical"].as_str().unwrap()
+        );
+        assert_eq!(
+            drive_names::name_hash(&hash_key, name).unwrap(),
+            case["hash"].as_str().unwrap()
+        );
+    }
+    let content = &v["content"];
+    let digest = drive_names::content_sha256(&b64(content["plaintext"].as_str().unwrap()));
+    assert_eq!(
+        digest.as_slice(),
+        b64(content["sha256"].as_str().unwrap()).as_slice()
+    );
+    assert_eq!(
+        drive_names::content_hash(&hash_key, &digest).unwrap(),
+        content["hash"].as_str().unwrap()
+    );
+}
