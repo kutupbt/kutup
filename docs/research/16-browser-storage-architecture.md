@@ -1,6 +1,6 @@
 # Browser storage: encrypted blobs in IndexedDB
 
-**Status:** decided (October 2026); Phase 1 done, Phase 2 next. Builds on
+**Status:** decided (October 2026); Phases 1 and 2 (2a, 2b) done; Phase 3 next. Builds on
 [15-client-side-search-index.md](15-client-side-search-index.md), whose
 Phase 2 (SQLite with full-text search in the browser) this document replaces
 for the web. Entries in [`../roadmap.md`](../roadmap.md) track the work.
@@ -102,7 +102,16 @@ engine lock Kutup already has.
    `conversationHistory(key, before, limit)` newest-first by chunk (edits,
    reactions and receipts come after their targets, so they are included),
    and which conversations each commit touched, so the UI reloads only those.
-   Phase 2c renders only the rows on screen.
+   The web client keeps a live window (`liveTimeline.ts`): each
+   conversation's newest and unread entries, its timer and the account's
+   controls, read again only for the conversations a change touched. The
+   list, unread counts, notifications, receipts and ringing work on it; the
+   conversation on screen reads its older pages as it scrolls, and only its
+   thread view sees them. Search reads the whole history until Phase 3.
+   Left for later: rendering only the rows on screen (a conversation now
+   renders only the pages read in), and moving the attachment ledger and the
+   backup's collection step, which still read the whole history once per
+   change, to the change journal.
 5. **Search (Phase 3).** A Rust inverted index from Turkish-folded words
    (İ/I/ı/i → i, accents removed) to message ids, sharded by word prefix into
    encrypted blobs beside the chunks and updated in the same write; prefix

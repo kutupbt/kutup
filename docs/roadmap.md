@@ -565,9 +565,14 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     signed-in app (the page has no account key; the app moves each stay into
     the account's encrypted list and deletes it), and active live shares in
     `sessionStorage`, which ends with the tab.
-  - Next (Phase 2): messages in encrypted chunks per conversation with a
-    header each, so the conversation list and a conversation load without
-    reading the whole history; windowed rendering.
+  - Done (Phase 2): history is read once per change and not at all when
+    nothing was written; a per-conversation timeline index in the core,
+    written with each commit, gives the list, unread counts and the open
+    conversation without reading the whole history (older pages load as the
+    view scrolls up).
+  - Next: the attachment ledger and the backup's collection step read the
+    whole history once per change; move them to the change journal. Later:
+    render only the rows on screen.
   - Then (Phase 3): a Rust search engine over encrypted index shards with
     Turkish folding (İ, I, ı, i → i), replacing today's linear scan.
   - Later (Phase 4): the Office home catalog and name search, one record per
