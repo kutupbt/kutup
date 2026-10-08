@@ -631,10 +631,18 @@ pub async fn list_segments(
         .limit
         .unwrap_or(MAX_CHAT_BACKUP_PAGE_SEGMENTS)
         .clamp(1, MAX_CHAT_BACKUP_PAGE_SEGMENTS);
+    // The cursor and the page come from one snapshot. Read separately, a
+    // segment another device commits in between can land in the page beyond
+    // the cursor reported with it (or the other way round), and a restore
+    // that checks the two against each other refuses to open.
+    let mut snapshot = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *snapshot)
+        .await?;
     let current_cursor: i64 =
         sqlx::query_scalar("SELECT current_cursor FROM chat_backups WHERE user_id=$1")
             .bind(user_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *snapshot)
             .await?
             .ok_or_else(|| AppError::not_found("Chat history is not provisioned"))?;
     type SegmentRow = (
@@ -657,8 +665,9 @@ pub async fn list_segments(
     .bind(user_id)
     .bind(after)
     .bind(i64::from(limit) + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *snapshot)
     .await?;
+    snapshot.commit().await?;
     let more = rows.len() > usize::from(limit);
     let segments = rows
         .into_iter()

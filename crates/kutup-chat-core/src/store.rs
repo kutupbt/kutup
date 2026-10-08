@@ -421,6 +421,11 @@ impl ChatStore {
         stage_rotation(&self.pending, state)
     }
 
+    /// Stage the serialized session-repair limits (replaced whole).
+    pub(crate) fn stage_repair_limits(&self, state: Vec<u8>) {
+        self.pending.borrow_mut().repair_limits = Some(state);
+    }
+
     /// Stage deleting keys no longer needed (`PrekeyRotation::sweep`).
     pub(crate) fn stage_expired_pre_keys(&self, signed: &[u32], kyber: &[u32]) {
         let mut pending = self.pending.borrow_mut();

@@ -30,6 +30,8 @@ sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 sqlcipher = ["sqlite", "rusqlite/bundled-sqlcipher-vendored-openssl"]
 wasm = [
     "dep:rexie",
+    "dep:idb",
+    "dep:web-sys",
     "dep:serde-wasm-bindgen",
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
@@ -91,6 +93,11 @@ uuid = { version = "1", features = ["js"] }
 js-sys = "0.3"
 # IndexedDB transactions are the browser's atomic persistence boundary.
 rexie = { version = "0.6.2", optional = true }
+# Writes go through the lower layer rexie wraps, on a transaction opened with
+# `durability: "strict"` (rexie cannot ask for it): a committed ratchet step
+# must be on disk before the message it encrypted leaves.
+idb = { version = "0.6.5", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["IdbDatabase", "IdbTransaction"] }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }

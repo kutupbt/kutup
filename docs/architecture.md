@@ -299,8 +299,10 @@ flowchart LR
   a device.
 - The client persists ratchets, plaintext history, pending ciphertext,
   message-request state, encrypted-profile capabilities, and account-identity
-  pins in an account-scoped IndexedDB database. Web Locks serialize ratchet
-  transactions across tabs. Ciphertext is durably journaled before decrypt and
+  pins in an account-scoped IndexedDB database, committed with strict
+  durability. Web Locks serialize ratchet transactions across tabs; a tab
+  that freezes holding the lock is taken over, and a writer generation fences
+  its late writes (`docs/chat-protocol.md`, "Browser storage"). Ciphertext is durably journaled before decrypt and
   acknowledged only after the ratchet advance and plaintext commit together.
 - The server stores public directory material and opaque per-device mailbox
   ciphertext. REST drain/ack is the source of truth; a one-use-ticket WebSocket

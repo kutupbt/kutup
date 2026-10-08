@@ -2656,6 +2656,21 @@ impl Session {
         self.store.commit().await
     }
 
+    /// The serialized session-repair limits, if any were written.
+    pub(crate) async fn repair_limits(&self) -> Result<Option<Vec<u8>>> {
+        self.db().load_repair_limits().await
+    }
+
+    /// Replace the serialized session-repair limits in their own commit.
+    pub(crate) async fn save_repair_limits(&mut self, state: Vec<u8>) -> Result<()> {
+        self.store.stage_repair_limits(state);
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub async fn has_kyber_pre_key_for_testing(&self, id: u32) -> Result<bool> {
         Ok(self.db().load_kyber_pre_key(id).await?.is_some())

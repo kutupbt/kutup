@@ -1157,6 +1157,7 @@ dependencies = [
  "hpke-rs",
  "hpke-rs-crypto",
  "hpke-rs-rust-crypto",
+ "idb",
  "js-sys",
  "kutup-chat-proto",
  "kutup-crypto",
@@ -1181,6 +1182,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
  "x25519-dalek",
  "zeroize",
 ]

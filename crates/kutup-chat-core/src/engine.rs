@@ -46,6 +46,13 @@ const DRAIN_LIMIT: u32 = 500;
 /// this often, as in Signal: a device that keeps sending under a session it
 /// cannot leave must not drive an endless reset loop.
 const SESSION_RESET_INTERVAL_MS: i64 = 60 * 60 * 1000;
+
+/// The once-an-hour repair limits as stored (`Engine::save_repair_limits`).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RepairLimits {
+    session_resets: Vec<(String, u32, i64)>,
+    resent: Vec<(String, String, i64)>,
+}
 /// Keep used EC prekey private material for late concurrent prekey messages.
 const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 
@@ -253,6 +260,16 @@ impl Engine {
     /// The server's mailbox retention (`mailboxRetentionDays`, 0: for ever).
     pub fn set_mailbox_retention_days(&mut self, days: u32) {
         self.mailbox_retention_days = days;
+    }
+
+    /// Drop what a reload loses (everything held only in memory). Tests only.
+    #[doc(hidden)]
+    pub fn forget_run_state_for_testing(&mut self) {
+        self.session_resets.clear();
+        self.resent.clear();
+        self.asked_again.clear();
+        self.known_devices.clear();
+        self.known_devices_at.clear();
     }
 
     /// Age the prekey rotation state by `ms` (as if that much time had
@@ -1955,6 +1972,7 @@ impl Engine {
                         // under the old one drain without resetting again.
                         let now = unix_millis();
                         let device = (sender.clone(), device_id);
+                        self.load_repair_limits().await?;
                         let reset = self.session_resets.get(&device).is_none_or(|last| {
                             now.saturating_sub(*last) >= SESSION_RESET_INTERVAL_MS
                         });
@@ -1971,6 +1989,7 @@ impl Engine {
                             .await?;
                         if repair.reset {
                             self.session_resets.insert(device, now);
+                            self.save_repair_limits().await?;
                             self.known_devices.remove(&sender);
                         }
                         if repair.refresh_peer || repair.request.is_some() {
@@ -2047,6 +2066,56 @@ impl Engine {
         Ok(())
     }
 
+    /// Merge in the once-an-hour repair limits kept in the store, so a reload
+    /// or another tab does not start them over. Read before each check and
+    /// each write: these events are rare, and another tab's engine may have
+    /// recorded one since.
+    async fn load_repair_limits(&mut self) -> Result<()> {
+        if let Some(bytes) = self.session.repair_limits().await? {
+            let stored: RepairLimits = serde_json::from_slice(&bytes)
+                .map_err(|error| ChatError::Db(format!("decode repair limits: {error}")))?;
+            for (account, device, at) in stored.session_resets {
+                let entry = self.session_resets.entry((account, device)).or_insert(at);
+                *entry = (*entry).max(at);
+            }
+            for (account, send_id, at) in stored.resent {
+                let entry = self.resent.entry((account, send_id)).or_insert(at);
+                *entry = (*entry).max(at);
+            }
+        }
+        Ok(())
+    }
+
+    /// Write the repair limits back (merged with what another tab may have
+    /// written), keeping only the last hour's.
+    async fn save_repair_limits(&mut self) -> Result<()> {
+        self.load_repair_limits().await?;
+        self.write_repair_limits().await
+    }
+
+    /// Write the repair limits as held, keeping only the last hour's.
+    async fn write_repair_limits(&mut self) -> Result<()> {
+        let now = unix_millis();
+        let live = |at: &i64| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS;
+        self.session_resets.retain(|_, at| live(at));
+        self.resent.retain(|_, at| live(at));
+        let state = RepairLimits {
+            session_resets: self
+                .session_resets
+                .iter()
+                .map(|((account, device), at)| (account.clone(), *device, *at))
+                .collect(),
+            resent: self
+                .resent
+                .iter()
+                .map(|((account, send_id), at)| (account.clone(), send_id.clone(), *at))
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&state)
+            .map_err(|error| ChatError::Db(format!("encode repair limits: {error}")))?;
+        self.session.save_repair_limits(bytes).await
+    }
+
     async fn send_session_control<R: Rng + CryptoRng>(
         &mut self,
         peer: &str,
@@ -2078,6 +2147,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         let now = unix_millis();
+        self.load_repair_limits().await?;
         self.resent
             .retain(|_, at| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS);
         let mut unavailable = Vec::new();
@@ -2088,6 +2158,9 @@ impl Engine {
                 continue;
             }
             self.resent.insert(key.clone(), now);
+            // Recorded before it goes out: a crash after the send must not
+            // let a reload send it again within the hour.
+            self.save_repair_limits().await?;
             let Some(content) = self.session.resendable_content(peer, &original).await? else {
                 unavailable.push(original);
                 continue;
@@ -2114,7 +2187,9 @@ impl Engine {
                 // Anything else (a key fetch that failed, say): this device
                 // may answer again when the request is repeated.
                 Err(_) => {
+                    self.load_repair_limits().await?;
                     self.resent.remove(&key);
+                    self.write_repair_limits().await?;
                 }
             }
         }

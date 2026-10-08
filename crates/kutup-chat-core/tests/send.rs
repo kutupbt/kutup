@@ -1036,7 +1036,9 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     assert_eq!(report.messages[0].content.as_text().unwrap().text, "again");
 
     // A second unreadable message within the hour is dropped quietly: no
-    // second reset, no second record, nothing more sent.
+    // second reset, no second record, nothing more sent. Bob reloaded in
+    // between: the limit is kept with his store, not in memory.
+    bob.forget_run_state_for_testing();
     block_on(alice.send(
         "r5",
         "bob",
@@ -1305,7 +1307,9 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     assert!(undecryptable_records(&bob).is_empty());
     assert_eq!(block_on(bob.session().history()).unwrap().len(), 2);
 
-    // Asked a second time within the hour, Alice does not send it again.
+    // Asked a second time within the hour, Alice does not send it again,
+    // even after a reload.
+    alice.forget_run_state_for_testing();
     relay(&bob_server, &alice_server, "bob", 2, 2, false);
     alice_server
         .sync_mailbox

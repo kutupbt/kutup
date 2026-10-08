@@ -527,6 +527,11 @@ Attachments, stickers, view-once media and voice notes in a direct chat travel
 by sealed delivery; on a server that does not offer it they work only in Note
 to Self and in groups.
 
+Sealed delivery between accounts of the same server does not depend on
+federation: turning federation off (Admin → Federation) stops other servers
+from being reached, and leaves sealed delivery, and with it media in direct
+chats, working on the server itself.
+
 ### Provisioned by the server (the default)
 
 With neither `CHAT_SEALED_SENDER_*` setting, a server with a federation

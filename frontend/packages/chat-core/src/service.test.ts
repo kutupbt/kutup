@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import api from '@kutup/session/client'
 import { ChatService } from './service'
+import { EngineLock } from './engineLock'
 
 vi.mock('@kutup/session/client', () => ({
   default: {
@@ -28,6 +29,15 @@ function installQueuedWebLocks() {
   return request
 }
 
+const engineLocks: EngineLock[] = []
+
+/** The service's lock over the stubbed Web Locks, closed after each test. */
+function testEngineLock(): EngineLock {
+  const lock = new EngineLock('kutup-chat-engine:test', async () => {})
+  engineLocks.push(lock)
+  return lock
+}
+
 function deferred() {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
@@ -40,6 +50,7 @@ describe('ChatService MLS workflow coordination', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     Reflect.deleteProperty(navigator, 'locks')
+    for (const lock of engineLocks.splice(0)) lock.close()
   })
 
   it('does not interleave an authority change with background reconciliation', async () => {
@@ -63,6 +74,7 @@ describe('ChatService MLS workflow coordination', () => {
         reconcile: vi.fn().mockResolvedValue({ received: 0 }),
       },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
       mls,
       channel: { postMessage: vi.fn() },
@@ -105,6 +117,7 @@ describe('ChatService MLS workflow coordination', () => {
     Object.assign(service, {
       client,
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
       mls: null,
       channel: { postMessage: vi.fn() },
@@ -186,6 +199,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       mls: null,
@@ -224,6 +238,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       mls: null,
@@ -266,6 +281,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       mls: null,
@@ -308,6 +324,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       mls: null,
@@ -353,6 +370,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       mls: null,
@@ -384,6 +402,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       mls: null,
     })
 
@@ -418,6 +437,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       mls: null,
       channel,
       listeners: new Set(),
@@ -459,6 +479,7 @@ describe('ChatService MLS workflow coordination', () => {
     Object.assign(service, {
       client,
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       channel,
       listeners: new Set(),
       mls: null,
@@ -515,6 +536,7 @@ describe('ChatService MLS workflow coordination', () => {
       username: 'alice',
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
     })
 
     await expect(service.history()).rejects.toThrow('offline')
@@ -548,6 +570,7 @@ describe('ChatService MLS workflow coordination', () => {
       attachmentLedger: null,
       attachmentExpiryListeners: new Set([purgeLocal]),
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
     })
     await expect(service.history()).resolves.toEqual([])
     expect(purgeLocal).toHaveBeenCalledWith(['temporary-attachment'])
@@ -591,6 +614,7 @@ describe('ChatService MLS workflow coordination', () => {
       client,
       mls,
       lockName: 'kutup-chat-engine:test',
+      engineLock: testEngineLock(),
       mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
       channel,
       listeners: new Set(),

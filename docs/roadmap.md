@@ -602,17 +602,18 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     replaced pair is kept as long as the mailbox can still hold a message
     for it, and used one-time ML-KEM prekeys are deleted after the same
     14-day grace as EC ones (`docs/chat-protocol.md`, "Prekeys").
-  - Next: the re-send's once-an-hour limits are kept in memory only.
-  - Found 2026-10-06, to fix: a reload that cuts off a history-backup
-    upload (the request ends unanswered) can leave the next open failing
-    with "Chat backup restore stopped before its cursor", so Chat shows
-    "could not open" on that browser.
-  - Later: writes with strict durability (the IndexedDB wrapper in use
-    cannot ask for it; without it a power loss can roll a ratchet back after
-    a send); a write generation checked in every transaction and a lock
-    timeout, so a second or frozen tab cannot corrupt or stall the engine;
-    detection of a restored older snapshot; fault-injection tests (killed
-    mid-write, stale snapshot, two tabs).
+  - Done: the once-an-hour limits on session resets and re-sends are kept
+    in the device's store, so a reload or a second tab does not start them
+    over; a restore no longer fails when another device writes or compacts
+    the history backup meanwhile.
+  - Done: writes commit with strict durability; a tab that freezes holding
+    the engine lock is taken over after 30 s of silence, and a writer
+    generation checked in every write transaction refuses its late writes
+    (`docs/chat-protocol.md`, "Browser storage"; browser spec 46).
+  - Later: detection of a restored older snapshot of the browser store (the
+    server deletes acknowledged mailbox rows, so it holds nothing to compare
+    a rolled-back device with; needs its own design); more fault-injection
+    tests (killed mid-write, stale snapshot).
 - **Group device repair: what is left.** A group now recovers when a
   member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
   Still open: it takes up to two minutes (the device check's period), plus
@@ -720,6 +721,37 @@ What it needs, found while starting it:
 - Socket, versions, restore and thumbnails taking the remote base, as notes
   do. Also still to come:
 shared files in Drive search.
+
+### Office · LaTeX documents (Overleaf-like)
+
+Recorded 2026-10-07. Collaborative LaTeX editing with a live PDF preview,
+end-to-end encrypted. Overleaf compiles on its server; Kutup's server cannot
+read documents, so compilation happens in the browser, as local-first editors
+such as TeXlyre do.
+
+- **Step 1, editing (small, no new dependencies):** open `.tex` (and `.bib`,
+  `.sty`, `.cls`) in the existing collaborative text editor (Yjs over the E2EE
+  collab layer, CodeMirror). Add the extensions to `TEXT_EXT` and LaTeX
+  highlighting (`@codemirror/legacy-modes` `stex`) to `text/lang.ts`. Shared
+  cursors, versions and offline edits come with the editor.
+- **Step 2, compiling in the browser:** a WebAssembly TeX engine in a worker,
+  output shown with pdf.js beside the source. Candidates: SwiftLaTeX's pdfTeX
+  and XeTeX engines (AGPL-3.0, like Kutup; TeXlyre maintains a fork) or
+  BusyTeX (TeX Live 2026 in WASM). Engines are large (tens of MB) and are
+  loaded only when a LaTeX document is opened.
+- **TeX Live packages:** fetched on demand. Serve them from the Kutup server
+  (or a CDN under its domain), never from a third party: the package list a
+  document asks for says something about it. The files are public, so they
+  need no encryption, and the browser caches them.
+- **Projects:** a document with figures, `.bib` and included files is a
+  Drive folder; the compiler reads the folder's files, decrypted in the
+  browser, through a virtual file system.
+- **Later:** BibTeX/biber, SyncTeX (click in the PDF to jump to the source),
+  LuaLaTeX, a template gallery in Office's "New" menu, and Typst (a much
+  smaller WASM compiler) as a lighter alternative.
+- **Open questions:** engine choice and size budget; the license of whatever
+  TeX Live subset is served; how far package coverage reaches without
+  LuaLaTeX.
 
 ### Office · editor start-up race on reload
 

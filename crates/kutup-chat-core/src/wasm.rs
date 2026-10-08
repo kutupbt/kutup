@@ -2902,6 +2902,22 @@ impl WasmChatClient {
         self.engine.set_mailbox_retention_days(days);
     }
 
+    /// Fence this tab's writes behind the store's writer generation, at the
+    /// start of each turn under the cross-tab lock. `takeOver` when the lock
+    /// was taken from a tab that stopped answering: its writes are then
+    /// refused if it resumes.
+    #[wasm_bindgen(js_name = claimWriter)]
+    pub async fn claim_writer(&self, take_over: bool) -> std::result::Result<f64, JsValue> {
+        let generation = self
+            .engine
+            .session()
+            .db()
+            .claim_writer(take_over)
+            .await
+            .map_err(chat_error)?;
+        Ok(generation as f64)
+    }
+
     #[wasm_bindgen(js_name = maintainPrekeys)]
     pub async fn maintain_prekeys(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();

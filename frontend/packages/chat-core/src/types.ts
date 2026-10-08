@@ -1835,6 +1835,8 @@ export interface WasmChatClientHandle {
   unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
+  /** Fence this tab's writes behind the store's writer generation. */
+  claimWriter?(takeOver: boolean): Promise<number>
   /** The server's mailbox retention (0: for ever); replaced prekeys are kept that long plus a margin. */
   setMailboxRetentionDays?(days: number): void
   /** The next send to anyone fetches their device list again. */

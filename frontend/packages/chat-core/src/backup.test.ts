@@ -502,6 +502,37 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(stages).toBe(3)
   })
 
+  it('opens when the history moves under a restore, and gives up when it never settles', async () => {
+    const transport = new ScriptedTransport()
+    const first = `backup-moved-writer:${crypto.randomUUID()}`
+    databaseNames.push(first)
+    await (await open(transport, first)).settled()
+    expect(transport.segments.length).toBeGreaterThan(0)
+
+    // Another device commits (or compacts) between the reads: the page ends
+    // short of the cursor reported with it, then starts past a gap.
+    const list = transport.listSegments.bind(transport)
+    let glitches = 2
+    transport.listSegments = async (after: number) => {
+      const page = await list(after)
+      if (glitches === 2) { glitches--; return { ...page, segments: [], currentCursor: page.currentCursor + 1 } }
+      if (glitches === 1) { glitches--; return { ...page, segments: page.segments.map(segment => ({ ...segment, cursor: segment.cursor + 1 })) } }
+      return page
+    }
+    const status = vi.spyOn(transport, 'status')
+    const second = `backup-moved-reader:${crypto.randomUUID()}`
+    databaseNames.push(second)
+    await expect(open(transport, second, async () => [], undefined, 10)).resolves.toBeDefined()
+    expect(glitches).toBe(0)
+    expect(status.mock.calls.length).toBeGreaterThanOrEqual(3)
+
+    // A server that never settles is an integrity failure, not a retry loop.
+    transport.listSegments = async (after: number) => ({ ...(await list(after)), segments: [] })
+    const third = `backup-moved-never:${crypto.randomUUID()}`
+    databaseNames.push(third)
+    await expect(open(transport, third, async () => [], undefined, 11)).rejects.toThrow('stopped before its cursor')
+  })
+
   it('starts its own chain when a repaired browser keeps the old device\'s bookkeeping', async () => {
     // "Repair this browser" keeps the backup database and registers a new
     // device. Continuing the old device's sequence under the new number is
