@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatService } from './service'
 import type { ChatHistoryEntry } from './types'
+import api from '@kutup/session/client'
 
-vi.mock('@kutup/session/client', () => ({ default: { post: vi.fn(), get: vi.fn() } }))
+vi.mock('@kutup/session/client', () => ({ default: { post: vi.fn(), get: vi.fn(), delete: vi.fn() } }))
 
 function entry(id: string, expiresAtMs?: number): ChatHistoryEntry {
   return {
@@ -23,7 +24,7 @@ function service(history: () => ChatHistoryEntry[], commits: () => number = () =
     history: vi.fn(async () => history()),
     reconcile: vi.fn().mockResolvedValue({ messages: [] }),
     storeCommits: vi.fn(commits),
-  }
+  } as Record<string, ReturnType<typeof vi.fn>>
   const updates = vi.fn()
   const svc = Object.create(ChatService.prototype) as ChatService
   Object.assign(svc, {
@@ -40,6 +41,9 @@ function service(history: () => ChatHistoryEntry[], commits: () => number = () =
     withLock: (work: () => Promise<unknown>) => work(),
     withMlsWorkflow: (work: () => Promise<unknown>) => work(),
     mls: null,
+    ledgerMark: 0,
+    ledgerScanned: false,
+    pendingAttachments: new Map(),
   })
   return { svc, client, updates }
 }
@@ -85,5 +89,72 @@ describe('ChatService history', () => {
     })
     await svc.reconcile()
     expect(updates).toHaveBeenCalledTimes(1)
+  })
+
+  it('enters attachments from the conversations that changed, and retries what could not be entered', async () => {
+    const attachment = (id: string, attachmentId: string): ChatHistoryEntry => {
+      const value = entry(id)
+      value.content = {
+        ...value.content,
+        kind: 'attachment',
+        messageId: id,
+        attachment: { attachmentId, ciphertextBytes: 10, ciphertextSha256: 'h' },
+      } as ChatHistoryEntry['content']
+      return value
+    }
+    let commits = 0
+    let changed: string[] | null = []
+    const { svc, client } = service(() => [attachment('m1', 'att-1')], () => commits)
+    Object.assign(client, {
+      changedConversations: vi.fn(() => changed),
+      conversationHistory: vi.fn(async () => ({ entries: [attachment('m2', 'att-2')] })),
+      contacts: vi.fn().mockResolvedValue([]),
+    })
+    const entered = new Set<string>()
+    Object.assign(svc, {
+      timeline: { coreKeyOf: () => undefined },
+      attachmentLedger: {
+        sync: vi.fn(),
+        entries: () => [],
+        hasAttachment: (_message: string, id: string) => entered.has(id),
+      },
+      withAttachmentLedgerLock: (work: () => Promise<unknown>) => work(),
+      deleteAttachmentReference: vi.fn(),
+      createAttachmentLedgerEntry: vi.fn(async (_c: unknown, _m: string, descriptor: { attachmentId: string }) => {
+        entered.add(descriptor.attachmentId)
+      }),
+      username: 'me',
+      capabilities: { serverName: 'kutup.test' },
+    })
+    const reference = (id: string) => ({ data: { attachmentId: id, storageReferenceId: 'r', ciphertextBytes: 10, ciphertextSha256: 'h' } })
+    const notFound = Object.assign(new Error('missing'), { response: { status: 404 } })
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url.includes('att-2') && !entered.has('retry')) {
+        entered.add('retry')
+        throw notFound
+      }
+      return reference(url.split('/').at(-1)!)
+    })
+    const pass = () => (svc as unknown as { reconcileAttachmentLedger(): Promise<void> }).reconcileAttachmentLedger()
+
+    // The first pass looks at the whole history.
+    await pass()
+    expect(client.history).toHaveBeenCalledTimes(1)
+    expect(entered.has('att-1')).toBe(true)
+
+    // Then only the conversation that changed: its attachment is not there yet.
+    commits = 1
+    changed = ['group:g1']
+    await pass()
+    expect(client.history).toHaveBeenCalledTimes(1)
+    expect(client.conversationHistory).toHaveBeenCalledTimes(1)
+    expect(entered.has('att-2')).toBe(false)
+
+    // Nothing changed since, but the waiting attachment is tried again.
+    changed = []
+    await pass()
+    expect(client.conversationHistory).toHaveBeenCalledTimes(1)
+    expect(entered.has('att-2')).toBe(true)
+    expect((svc as unknown as { pendingAttachments: Map<string, unknown> }).pendingAttachments.size).toBe(0)
   })
 })

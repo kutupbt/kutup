@@ -163,6 +163,11 @@ export class ChatService {
   private readonly engineLock: EngineLock
   /** The live window of the history (`liveTimeline.ts`). */
   private readonly timeline: LiveTimeline
+  /** Where the attachment ledger has followed the history to (`changesSince`). */
+  private ledgerMark = 0
+  private ledgerScanned = false
+  /** Attachments still to be entered in the ledger, by message and attachment id. */
+  private readonly pendingAttachments = new Map<string, ChatHistoryEntry>()
   /** Restored backup history by conversation, until the backup changes. */
   private restoredByKey: Promise<Map<string, ChatHistoryEntry[]>> | null = null
   /** Bumped on every change; history loads are shared within one revision. */
@@ -529,6 +534,52 @@ export class ChatService {
     const ids = new Set(page.entries.map((entry) => entry.id))
     const older = restored.filter((entry) => !ids.has(entry.id)).reverse()
     return { entries: [...page.entries, ...older] }
+  }
+
+  /**
+   * For work that follows the history (the attachment ledger, the backup):
+   * the conversations (app keys) this tab's writes changed since `mark` (a
+   * value this returned before; 0 at first), or `null` when that is not
+   * known and everything should be looked at.
+   */
+  async changesSince(mark: number): Promise<{ mark: number; keys: string[] | null }> {
+    return await this.withLock(async () => {
+      const commits = this.client.storeCommits?.()
+      if (commits === undefined || !this.client.changedConversations) return { mark: 0, keys: null }
+      const core = this.client.changedConversations(mark)
+      return { mark: commits, keys: core === null ? null : core.map((key) => this.appKeyOfCore(key)) }
+    })
+  }
+
+  /** The newest `limit` entries of one conversation (app key), newest first. */
+  private async newestEntries(key: string, limit: number): Promise<ChatHistoryEntry[]> {
+    const coreKey = this.timeline.coreKeyOf(key) ?? key
+    const page = await this.withLock(async () =>
+      (await this.client.conversationHistory?.(coreKey, undefined, limit) ?? { entries: [] }) as CorePage)
+    return page.entries.map((entry) => this.withHomeServerEntry(entry))
+  }
+
+  /** Every entry of one conversation (app key), oldest first. */
+  async conversationEntries(key: string): Promise<ChatHistoryEntry[]> {
+    const coreKey = this.timeline.coreKeyOf(key) ?? key
+    const entries: ChatHistoryEntry[] = []
+    let before: string | undefined
+    do {
+      const page = await this.withLock(async () =>
+        (await this.client.conversationHistory?.(coreKey, before, 500) ?? { entries: [] }) as CorePage)
+      entries.push(...page.entries.map((entry) => this.withHomeServerEntry(entry)))
+      before = page.before ?? undefined
+    } while (before)
+    return entries.reverse()
+  }
+
+  /** The app's key for a conversation key from the core. */
+  private appKeyOfCore(coreKey: string): string {
+    if (!coreKey.startsWith('direct:')) return coreKey
+    const address = parseAccountAddress(coreKey.slice('direct:'.length))
+    return address
+      ? conversationKey({ kind: 'direct', address: withHomeServer(address, this.capabilities.serverName) })
+      : coreKey
   }
 
   private restoredHistory(): Promise<Map<string, ChatHistoryEntry[]>> {
@@ -1722,9 +1773,31 @@ export class ChatService {
     )
   }
 
+  /**
+   * Give every attachment in the history its ledger entry. The whole
+   * history is looked at once per session (and when changes are not known);
+   * after that only the newest entries of the conversations this tab's
+   * writes changed. An attachment that cannot be entered yet (its delivery
+   * still retrying, a message request not yet accepted) waits in
+   * `pendingAttachments` and is tried again on every pass.
+   */
   private async reconcileAttachmentLedger(): Promise<void> {
     if (!this.attachmentLedger) return
-    const [history, contacts] = await Promise.all([this.history(), this.contacts()])
+    const changes = await this.changesSince(this.ledgerMark)
+    let seen: ChatHistoryEntry[] = []
+    if (!this.ledgerScanned || changes.keys === null) {
+      seen = await this.history()
+      this.ledgerScanned = true
+    } else {
+      for (const key of changes.keys) seen.push(...await this.newestEntries(key, LEDGER_PAGE))
+    }
+    this.ledgerMark = changes.mark
+    for (const message of seen) {
+      const descriptor = message.content.attachment
+      const messageId = message.content.messageId
+      if (descriptor && messageId) this.pendingAttachments.set(`${messageId}\u0000${descriptor.attachmentId}`, message)
+    }
+    const contacts = await this.contacts()
     const accepted = new Set(
       contacts.filter(contact => contact.state === 'accepted').map(contact => contact.peer),
     )
@@ -1739,11 +1812,13 @@ export class ChatService {
           await this.deleteAttachmentReference(entity.entry.attachmentId)
         }
       }
-      for (const message of history) {
-        const descriptor = message.content.attachment
-        const messageId = message.content.messageId
-        if (!descriptor || !messageId ||
-            this.attachmentLedger!.hasAttachment(messageId, descriptor.attachmentId)) continue
+      for (const [pendingKey, message] of [...this.pendingAttachments]) {
+        const descriptor = message.content.attachment!
+        const messageId = message.content.messageId!
+        if (this.attachmentLedger!.hasAttachment(messageId, descriptor.attachmentId)) {
+          this.pendingAttachments.delete(pendingKey)
+          continue
+        }
         if (message.conversation.kind === 'direct') {
           const peer = canonicalAccountAddress(message.conversation.address)
           if (peer !== self && !accepted.has(peer)) continue
@@ -1767,6 +1842,7 @@ export class ChatService {
             descriptor,
             reference.storageReferenceId,
           )
+          this.pendingAttachments.delete(pendingKey)
         } catch (error: unknown) {
           const status = typeof error === 'object' && error !== null && 'response' in error
             ? (error as { response?: { status?: number } }).response?.status
@@ -2214,6 +2290,9 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
 }
+
+/** Newest entries per changed conversation the attachment ledger looks at. */
+const LEDGER_PAGE = 100
 
 /** Restored entries per conversation that join the live window. */
 const RESTORED_RECENT = 30
