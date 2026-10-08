@@ -27,7 +27,7 @@ use crate::error::{ChatError, Result};
 
 /// Raised whenever what is indexed or how changes; a store with an older
 /// directory is indexed again from its records.
-pub(crate) const TIMELINE_VERSION: u32 = 1;
+pub(crate) const TIMELINE_VERSION: u32 = 2;
 /// References per chunk before it splits.
 pub(crate) const CHUNK_LIMIT: usize = 256;
 const DIRECTORY_KEY: &[u8] = b"timeline/directory";
@@ -54,6 +54,8 @@ pub const EXPIRY_START: u8 = 8;
 /// This account's own control in Note to Self (list state, read position,
 /// deletion, opened view-once media, sticker), where it travels.
 pub const ACCOUNT_CONTROL: u8 = 16;
+/// A disappearing-timer change: the newest one is the conversation's timer.
+pub const TIMER: u8 = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryRef {
@@ -83,6 +85,9 @@ pub struct Header {
     /// Oldest first.
     pub chunks: Vec<ChunkMeta>,
     pub next_chunk: u32,
+    /// The newest disappearing-timer change, wherever it is.
+    #[serde(default)]
+    pub timer: Option<EntryRef>,
 }
 
 impl Header {
@@ -218,6 +223,9 @@ fn place(
     }
     if expiry_start {
         flags |= EXPIRY_START;
+    }
+    if kind_name == Some(kind::DISAPPEARING_TIMER) {
+        flags |= TIMER;
     }
     let account_control = matches!(
         kind_name,
@@ -390,6 +398,7 @@ pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Change
     for indexed in added {
         writer.add(indexed).await?;
     }
+    writer.refresh_timers().await?;
     writer.finish()
 }
 
@@ -444,6 +453,11 @@ pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
             conversation,
             chunks: Vec::new(),
             next_chunk: 0,
+            timer: entries
+                .iter()
+                .rev()
+                .find(|entry| entry.flags & TIMER != 0)
+                .cloned(),
         };
         for slice in entries.chunks(CHUNK_LIMIT / 2) {
             let id = header.next_chunk;
@@ -642,6 +656,7 @@ struct Writer<'a> {
     directory: &'a mut Directory,
     chunks: HashMap<(String, u32), Vec<EntryRef>>,
     dropped: HashSet<(String, u32)>,
+    stale_timers: HashSet<String>,
     touched: bool,
 }
 
@@ -652,6 +667,7 @@ impl<'a> Writer<'a> {
             directory,
             chunks: HashMap::new(),
             dropped: HashSet::new(),
+            stale_timers: HashSet::new(),
             touched: false,
         }
     }
@@ -675,7 +691,16 @@ impl<'a> Writer<'a> {
                 conversation: indexed.conversation.clone(),
                 chunks: Vec::new(),
                 next_chunk: 0,
+                timer: None,
             });
+        if indexed.entry.flags & TIMER != 0
+            && header
+                .timer
+                .as_ref()
+                .is_none_or(|timer| timer.order() <= indexed.entry.order())
+        {
+            header.timer = Some(indexed.entry.clone());
+        }
         // The chunk the time falls in: the last one starting at or before it,
         // or the first.
         let position = header
@@ -724,6 +749,13 @@ impl<'a> Writer<'a> {
             })
             .map(|(position, chunk)| (position, chunk.id))
             .collect();
+        if header
+            .timer
+            .as_ref()
+            .is_some_and(|timer| timer.order() == indexed.entry.order())
+        {
+            self.stale_timers.insert(key.clone());
+        }
         for (position, id) in candidates {
             let target = &indexed.entry;
             let chunk = self.chunk(&key, id).await?;
@@ -736,11 +768,47 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Find a conversation's newest timer change again after the one the
+    /// header named was removed.
+    async fn refresh_timers(&mut self) -> Result<()> {
+        let stale: Vec<String> = self.stale_timers.drain().collect();
+        for key in stale {
+            let Some(header) = self.directory.conversations.get(&key) else {
+                continue;
+            };
+            let ids: Vec<u32> = header.chunks.iter().rev().map(|chunk| chunk.id).collect();
+            let mut timer = None;
+            for id in ids {
+                timer = self
+                    .chunk(&key, id)
+                    .await?
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.flags & TIMER != 0)
+                    .cloned();
+                if timer.is_some() {
+                    break;
+                }
+            }
+            if let Some(header) = self.directory.conversations.get_mut(&key) {
+                header.timer = timer;
+            }
+        }
+        Ok(())
+    }
+
     /// Remove every reference into `source` from a conversation.
     async fn remove_source(&mut self, conversation: &str, source: Source) -> Result<()> {
         let Some(header) = self.directory.conversations.get(conversation) else {
             return Ok(());
         };
+        if header
+            .timer
+            .as_ref()
+            .is_some_and(|timer| timer.source == source)
+        {
+            self.stale_timers.insert(conversation.to_owned());
+        }
         let ids: Vec<u32> = header.chunks.iter().map(|chunk| chunk.id).collect();
         for id in ids {
             let chunk = self.chunk(conversation, id).await?;
@@ -1075,6 +1143,66 @@ mod tests {
         let current = 3 + JOURNAL_LIMIT as u64;
         assert_eq!(journal.since(0, current), None, "older than what is kept");
         assert_eq!(journal.since(current - 1, current), Some(vec!["c".into()]));
+    }
+
+    #[test]
+    fn the_header_keeps_the_newest_timer_change() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(ensure_built(&db)).unwrap();
+        let timer = |seconds: u32| {
+            control(
+                kind::DISAPPEARING_TIMER,
+                serde_json::json!({ "seconds": seconds }),
+            )
+        };
+        let mut pending = Pending::default();
+        pending
+            .sent_messages
+            .insert("t-1".into(), sent("t-1", "alice@a.test", 100, timer(30)));
+        pending
+            .sent_messages
+            .insert("t-2".into(), sent("t-2", "alice@a.test", 300, timer(60)));
+        pending.messages.push(inbox("in-1", "alice@a.test", 200));
+        block_on(db.apply(&pending)).unwrap();
+        let header = |db: &SqliteChatDb| {
+            block_on(load_directory(db)).unwrap().unwrap().conversations["direct:alice@a.test"]
+                .clone()
+        };
+        assert_eq!(header(&db).timer.unwrap().id, "t-2");
+
+        let mut older = Pending::default();
+        older
+            .sent_messages
+            .insert("t-0".into(), sent("t-0", "alice@a.test", 50, timer(5)));
+        block_on(db.apply(&older)).unwrap();
+        assert_eq!(
+            header(&db).timer.unwrap().id,
+            "t-2",
+            "an older change does not win"
+        );
+
+        let mut removal = Pending::default();
+        removal.delete_sent_message_ids.insert("t-2".into());
+        block_on(db.apply(&removal)).unwrap();
+        assert_eq!(
+            header(&db).timer.unwrap().id,
+            "t-1",
+            "the one before takes over"
+        );
+
+        let fresh = SqliteChatDb::open_in_memory().unwrap();
+        let mut all = Pending::default();
+        for message in block_on(db.list_sent_messages()).unwrap() {
+            all.sent_messages.insert(message.send_id.clone(), message);
+        }
+        all.messages = block_on(db.list_messages()).unwrap();
+        block_on(fresh.apply(&all)).unwrap();
+        block_on(ensure_built(&fresh)).unwrap();
+        assert_eq!(
+            header(&fresh).timer,
+            header(&db).timer,
+            "as a rebuild finds it"
+        );
     }
 
     #[test]

@@ -728,6 +728,8 @@ struct ConversationSummaryView {
     unread: u32,
     /// Newest first.
     recent: Vec<HistoryEntry>,
+    /// The newest disappearing-timer change, when it is older than `recent`.
+    timer: Option<HistoryEntry>,
 }
 
 #[derive(Serialize)]
@@ -3133,15 +3135,18 @@ impl WasmChatClient {
         to_output(&history)
     }
 
-    /// Every conversation from its timeline (`timeline.rs`), newest activity
-    /// first: its latest time, how many incoming messages are newer than
-    /// `readThrough[key]` (milliseconds), and its newest `recent` entries.
-    /// Reads headers and only the newest chunks, not the whole history.
+    /// Conversations from their timelines (`timeline.rs`), newest activity
+    /// first: each one's latest time, how many incoming messages are newer
+    /// than `readThrough[key]` (milliseconds), its newest entries (`recent`
+    /// plus the unread ones, up to 200 more) and its disappearing timer.
+    /// Only `keys` when given. Reads headers and the newest chunks, not the
+    /// whole history.
     #[wasm_bindgen(js_name = conversationSummaries)]
     pub async fn conversation_summaries(
         &self,
         read_through: JsValue,
         recent: u32,
+        keys: Option<Vec<String>>,
     ) -> std::result::Result<JsValue, JsValue> {
         let read_through: std::collections::HashMap<String, f64> =
             if read_through.is_undefined() || read_through.is_null() {
@@ -3157,25 +3162,63 @@ impl WasmChatClient {
         else {
             return to_output(&Vec::<ConversationSummaryView>::new());
         };
+        let wanted: Option<std::collections::HashSet<String>> =
+            keys.map(|keys| keys.into_iter().collect());
         let mut summaries = Vec::with_capacity(directory.conversations.len());
         for (key, header) in &directory.conversations {
+            if wanted.as_ref().is_some_and(|wanted| !wanted.contains(key)) {
+                continue;
+            }
             let through = read_through.get(key).copied().unwrap_or(0.0) as i64;
             let unread = crate::timeline::unread(db, &directory, key, through)
                 .await
                 .map_err(chat_error)?;
-            let refs = crate::timeline::page(db, &directory, key, None, recent as usize)
+            let window = recent as usize + (unread as usize).min(200);
+            let mut refs = crate::timeline::page(db, &directory, key, None, window)
                 .await
                 .map_err(chat_error)?;
+            // The list shows the latest visible message: reach back to it past
+            // a run of reactions, receipts or controls.
+            let shows = |entry: &crate::timeline::EntryRef| {
+                entry.flags & (crate::timeline::VISIBLE | crate::timeline::ROUTED)
+                    == crate::timeline::VISIBLE
+            };
+            while refs.len() >= window && !refs.iter().any(shows) && refs.len() < window + 1_000 {
+                let more = crate::timeline::page(db, &directory, key, refs.last(), 100)
+                    .await
+                    .map_err(chat_error)?;
+                if more.is_empty() {
+                    break;
+                }
+                let found = more.iter().position(shows);
+                match found {
+                    Some(at) => {
+                        refs.extend(more.into_iter().take(at + 1));
+                        break;
+                    }
+                    None => refs.extend(more),
+                }
+            }
             let entries = self
                 .timeline_entries(&directory, key, &refs, true)
                 .await
                 .map_err(chat_error)?;
+            let timer = match &header.timer {
+                Some(timer) if !refs.contains(timer) => self
+                    .timeline_entries(&directory, key, std::slice::from_ref(timer), false)
+                    .await
+                    .map_err(chat_error)?
+                    .into_iter()
+                    .next(),
+                _ => None,
+            };
             summaries.push(ConversationSummaryView {
                 key: key.clone(),
                 conversation: header.conversation.clone(),
                 latest_ms: header.latest_ms(),
                 unread,
                 recent: entries,
+                timer,
             });
         }
         summaries.sort_by(|left, right| right.latest_ms.cmp(&left.latest_ms));
