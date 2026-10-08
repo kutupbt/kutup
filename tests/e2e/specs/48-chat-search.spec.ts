@@ -16,8 +16,12 @@ const PASSWORD = 'Deneme123*ChatSearchPassword'
 
 /** Searches from the chat list and returns the message results. */
 async function search(page: Page, query: string) {
-  await openChats(page)
-  await page.getByTestId('chat-search-input').fill(query)
+  const input = page.getByTestId('chat-search-input')
+  // Going back to the list clears the box when it lands: only when needed,
+  // and before typing.
+  if (!(await input.isVisible())) await openChats(page)
+  await input.fill(query)
+  await expect(input).toHaveValue(query)
   return page.getByTestId('chat-search-result')
 }
 
