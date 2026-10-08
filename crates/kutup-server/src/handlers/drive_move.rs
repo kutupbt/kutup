@@ -32,6 +32,12 @@ pub struct MoveFileRequest {
     pub to_key_epoch: i32,
     /// The file's current key sealed under the destination's key.
     pub file_key_envelope: String,
+    /// Its name's and content's hashes under the destination's hash key
+    /// (docs/plans/drive-unique-names.md); they belong to the folder.
+    #[serde(default)]
+    pub name_hash: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -44,7 +50,7 @@ pub struct MoveFileResult {
 /// Whether `user_id` may add to or remove from `collection_id`, and its
 /// owner: the owner, or a member who can edit. Holds the folder until the
 /// transaction ends, so a rotation or removal waits.
-async fn writable_folder(
+pub(crate) async fn writable_folder(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     collection_id: Uuid,
@@ -139,15 +145,29 @@ pub async fn move_file(
         )
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
+    // The hashes belong to the folder: the destination's, or none (an older
+    // client) until a client fills them in.
+    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    let content_hash = crate::drive_names::parse_content_hash(req.content_hash.as_deref())?;
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::Folder(to);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
+    }
     sqlx::query(
-        "UPDATE files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4 WHERE id = $1",
+        "UPDATE files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
+                          name_hash = $5, content_hash = $6
+         WHERE id = $1",
     )
     .bind(file_id)
     .bind(to)
     .bind(target_epoch)
     .bind(&req.file_key_envelope)
+    .bind(&name_hash)
+    .bind(&content_hash)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(crate::drive_names::map_unique_violation)?;
     tx.commit().await?;
     // Who may open it changed: live sessions reconnect and are checked again.
     state.hub.close_room(&file_id.to_string());
@@ -164,6 +184,9 @@ pub async fn move_file(
 pub struct MoveCollectionRequest {
     /// The new parent folder, or none for the top level.
     pub parent_collection_id: Option<String>,
+    /// Its name's hash in the new place (docs/plans/drive-unique-names.md).
+    #[serde(default)]
+    pub name_hash: Option<String>,
 }
 
 /// `POST /api/collections/{id}/move` — put a folder under another of the
@@ -240,11 +263,19 @@ pub async fn move_collection(
             ));
         }
     }
-    sqlx::query("UPDATE collections SET parent_collection_id = $2 WHERE id = $1")
+    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::of(parent, user_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(folder)).await?;
+    }
+    sqlx::query("UPDATE collections SET parent_collection_id = $2, name_hash = $3 WHERE id = $1")
         .bind(folder)
         .bind(parent)
+        .bind(&name_hash)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(crate::drive_names::map_unique_violation)?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

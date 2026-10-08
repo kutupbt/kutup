@@ -8,6 +8,9 @@
 //! (`collection_keyring`): the same key whatever the folder has been
 //! rotated to since, so a rotation rehashes nothing. From it:
 //!
+//! An account's top-level folders, with no folder above them, use one hash
+//! key derived from the account master key.
+//!
 //! - a **name hash**, `HMAC-SHA256(hash key, "name" ‖ 0 ‖ canonical name)`,
 //!   stored with every file and folder; the server keeps them unique in a
 //!   folder;
@@ -30,6 +33,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::error::{CryptoError, Result};
 
 const HASH_KEY_INFO: &[u8] = b"kutup/drive/folder-hash-key/v1";
+const TOP_LEVEL_INFO: &[u8] = b"kutup/drive/top-level-names/v1";
 const NAME_LABEL: &[u8] = b"name\0";
 const CONTENT_LABEL: &[u8] = b"content\0";
 
@@ -47,6 +51,19 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
     let mut key = [0u8; 32];
     hkdf.expand(HASH_KEY_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("folder hash key derivation failed".into()))?;
+    Ok(key)
+}
+
+/// The hash key for an account's top-level folders, which have no folder
+/// above them: from the account master key.
+pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
+    if master_key.len() != 32 {
+        return Err(CryptoError::InvalidInput("master key must be 32 bytes".into()));
+    }
+    let hkdf = Hkdf::<Sha256>::new(None, master_key);
+    let mut key = [0u8; 32];
+    hkdf.expand(TOP_LEVEL_INFO, &mut key)
+        .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;
     Ok(key)
 }
 
@@ -111,6 +128,10 @@ mod tests {
             folder_hash_key(&[7u8; 32], "22222222-2222-4222-8222-222222222222").unwrap()
         );
         assert!(folder_hash_key(&[7u8; 31], ID).is_err());
+        let top = top_level_hash_key(&[7u8; 32]).unwrap();
+        assert_ne!(top, key);
+        assert_ne!(top, top_level_hash_key(&[8u8; 32]).unwrap());
+        assert!(top_level_hash_key(&[7u8; 31]).is_err());
     }
 
     #[test]

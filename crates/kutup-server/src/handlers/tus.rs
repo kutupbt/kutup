@@ -53,6 +53,16 @@ pub(crate) fn tus_text(status: StatusCode, body: &'static str) -> Response {
     (status, [("Tus-Resumable", TUS_VERSION)], body).into_response()
 }
 
+/// An `AppError` (its JSON body, a refused name's details) as a tus answer.
+fn tus_error(error: crate::error::AppError) -> Response {
+    let mut response = error.into_response();
+    response.headers_mut().insert(
+        "Tus-Resumable",
+        axum::http::HeaderValue::from_static(TUS_VERSION),
+    );
+    response
+}
+
 /// Enforces the protocol-version header on every non-OPTIONS request — mirrors
 /// `requireTusResumable`. Returns the 412 response if it doesn't match.
 pub(crate) fn require_tus_resumable(headers: &HeaderMap) -> Option<Response> {
@@ -187,7 +197,14 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     let coll_id = meta.get("collectionId").unwrap_or(&empty);
     let metadata_envelope = meta.get("metadataEnvelope").unwrap_or(&empty);
     let file_key_envelope = meta.get("fileKeyEnvelope").unwrap_or(&empty);
-    if meta.len() != 4
+    // The name's hash (docs/plans/drive-unique-names.md), from clients that
+    // keep names unique.
+    let name_hash =
+        match crate::drive_names::parse_name_hash(meta.get("nameHash").map(String::as_str)) {
+            Ok(hash) => hash,
+            Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid name hash"),
+        };
+    if meta.len() != 4 + usize::from(name_hash.is_some())
         || file_id_text.is_empty()
         || coll_id.is_empty()
         || metadata_envelope.is_empty()
@@ -290,6 +307,17 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db quota"),
     }
 
+    // A name already here refuses the upload before anything is sent.
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::Folder(coll_uuid);
+        if let Err(error) = crate::drive_names::lock_place(&mut tx, place).await {
+            return tus_error(error);
+        }
+        if let Err(error) = crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await {
+            return tus_error(error);
+        }
+    }
+
     // Allocate the upload-session id; the client allocated the file id before
     // constructing its object-bound envelopes. Open the S3 multipart directly at
     // the canonical {userId}/{collectionId}/{fileId} key (no temp→final copy — S3 hides
@@ -310,8 +338,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         "INSERT INTO uploads \
             (id, user_id, collection_id, file_id, total_bytes, \
              metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-             storage_path, s3_upload_id) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+             storage_path, s3_upload_id, name_hash) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -324,6 +352,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(1_i64)
     .bind(&storage_path)
     .bind(&s3_upload_id)
+    .bind(&name_hash)
     .execute(&mut *tx)
     .await;
     if ins.is_err() {
@@ -501,11 +530,12 @@ pub async fn patch(
         String,            // s3_upload_id
         serde_json::Value, // s3_part_etags
         Vec<u8>,           // pending_bytes
+        Option<String>,    // name_hash
     );
     let row: Option<UploadRow> = sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-                storage_path, s3_upload_id, s3_part_etags, pending_bytes \
+                storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash \
          FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
@@ -527,6 +557,7 @@ pub async fn patch(
         s3_upload_id,
         part_etags_json,
         pending,
+        name_hash,
     )) = row
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
@@ -656,6 +687,32 @@ pub async fn patch(
         return refusal;
     }
 
+    // The name it was started under must still be free: another upload or a
+    // rename may have taken it meanwhile. Checked before the parts are
+    // stitched, under the folder's name lock, which is held to the commit.
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::Folder(coll_id);
+        let taken = match crate::drive_names::lock_place(&mut tx, place).await {
+            Ok(()) => crate::drive_names::ensure_name_free(&mut tx, place, hash, None)
+                .await
+                .err(),
+            Err(error) => Some(error),
+        };
+        if let Some(error) = taken {
+            // Released first: the row it locks is deleted below.
+            drop(tx);
+            let _ = state
+                .storage
+                .abort_multipart(&storage_path, &s3_upload_id)
+                .await;
+            let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+                .bind(upload_id)
+                .execute(&state.pool)
+                .await;
+            return tus_error(error);
+        }
+    }
+
     // complete-multipart (stitched in place at the canonical key) → INSERT files → bump
     // quota → DELETE the uploads row. Complete runs before the DB commit, so a crash
     // between them leaves an orphan S3 object for the orphan-sweep job.
@@ -676,8 +733,9 @@ pub async fn patch(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
-             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation) \
-         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1)",
+             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
+             name_hash) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10)",
     )
     .bind(file_id)
     .bind(coll_id)
@@ -688,6 +746,7 @@ pub async fn patch(
     .bind(metadata_revision)
     .bind(&storage_path)
     .bind(total_bytes)
+    .bind(&name_hash)
     .execute(&mut *tx)
     .await
     .is_err()

@@ -36,6 +36,9 @@ pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 pub struct UpdateFileMetadataRequest {
     metadata_envelope: String,
     metadata_revision: i64,
+    /// The new name's hash (docs/plans/drive-unique-names.md); none keeps
+    /// the stored one (the metadata changed, not the name).
+    name_hash: Option<String>,
 }
 
 pub(crate) fn canonical_uuid(value: &str) -> AppResult<Uuid> {
@@ -202,6 +205,10 @@ pub async fn upload(
     {
         return Err(AppError::bad_request("missing required fields"));
     }
+    let name_hash =
+        crate::drive_names::parse_name_hash(fields.get("nameHash").map(String::as_str))?;
+    let content_hash =
+        crate::drive_names::parse_content_hash(fields.get("contentHash").map(String::as_str))?;
     let Some((tmp_file, file_size)) = tmp else {
         return Err(AppError::bad_request("no file provided"));
     };
@@ -252,6 +259,12 @@ pub async fn upload(
     // Claim the id, then check room — both held until commit, so neither a
     // retry with the same id nor a concurrent write can slip past.
     let mut tx = state.pool.begin().await?;
+    // Before anything is stored: a name already here refuses the upload.
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::Folder(coll_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
+    }
     if !crate::drive_writes::claim_file_id(&mut tx, file_id, None).await? {
         return Err(AppError::conflict("file id already in use"));
     }
@@ -287,8 +300,9 @@ pub async fn upload(
         r#"INSERT INTO files (id, collection_id, uploader_user_id,
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
-                              storage_path, encrypted_size_bytes, original_key_generation)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1)"#,
+                              storage_path, encrypted_size_bytes, original_key_generation,
+                              name_hash, content_hash)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -298,11 +312,16 @@ pub async fn upload(
     .bind(key_epoch)
     .bind(&storage_path)
     .bind(file_size)
+    .bind(&name_hash)
+    .bind(&content_hash)
     .execute(&mut *tx)
     .await;
-    if insert.is_err() {
+    if let Err(error) = insert {
         let _ = state.storage.delete(&storage_path).await;
-        return Err(AppError::internal("insert file"));
+        return Err(match crate::drive_names::map_unique_violation(error) {
+            conflict if conflict.status == StatusCode::CONFLICT => conflict,
+            _ => AppError::internal("insert file"),
+        });
     }
 
     if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
@@ -469,14 +488,24 @@ pub async fn update_metadata(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
+    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::Folder(coll_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
+    }
     sqlx::query(
-        "UPDATE files SET metadata_envelope = $1, metadata_revision = $2, updated_at = NOW() WHERE id = $3",
+        "UPDATE files SET metadata_envelope = $1, metadata_revision = $2,
+                          name_hash = COALESCE($4, name_hash), updated_at = NOW()
+         WHERE id = $3",
     )
-        .bind(&req.metadata_envelope)
-        .bind(req.metadata_revision)
-        .bind(file_id)
-        .execute(&mut *tx)
-        .await?;
+    .bind(&req.metadata_envelope)
+    .bind(req.metadata_revision)
+    .bind(file_id)
+    .bind(&name_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::drive_names::map_unique_violation)?;
     tx.commit().await?;
     Ok(Json(MessageResponse {
         message: "updated".to_string(),
@@ -625,9 +654,11 @@ pub(crate) async fn file_rows(
         content_key_generation: i32,
         key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
         shared: bool,
+        name_hash: Option<String>,
+        content_hash: Option<String>,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.uploader_user_id,
+        r#"SELECT f.id, f.collection_id, f.uploader_user_id, f.name_hash, f.content_hash,
                   f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
                   f.original_key_generation,
@@ -688,6 +719,8 @@ pub(crate) async fn file_rows(
             content_key_generation: r.content_key_generation,
             key_history: r.key_history.0,
             shared: r.shared,
+            name_hash: r.name_hash,
+            content_hash: r.content_hash,
         })
         .collect())
 }

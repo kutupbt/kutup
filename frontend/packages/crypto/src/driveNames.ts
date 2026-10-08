@@ -11,6 +11,12 @@ export async function folderHashKey(firstFolderKey: Uint8Array, collectionId: st
   return fromBase64(wasm.driveFolderHashKey(toBase64(firstFolderKey), collectionId))
 }
 
+/** The hash key for the account's top-level folders, from its master key. */
+export async function topLevelHashKey(masterKey: Uint8Array): Promise<Uint8Array> {
+  const wasm = await getCryptoWasm()
+  return fromBase64(wasm.driveTopLevelHashKey(toBase64(masterKey)))
+}
+
 /** The hash a name is kept unique by in its folder (case and composition aside). */
 export async function nameHash(hashKey: Uint8Array, name: string): Promise<string> {
   const wasm = await getCryptoWasm()

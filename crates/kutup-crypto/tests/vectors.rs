@@ -882,6 +882,8 @@ fn print_drive_names_vectors() {
         "firstFolderKey": e(&first),
         "collectionId": collection_id,
         "hashKey": e(&hash_key),
+        "masterKey": e(&[0x62u8; 32]),
+        "topLevelHashKey": e(&drive_names::top_level_hash_key(&[0x62u8; 32]).unwrap()),
         "names": names,
         "content": { "plaintext": e(b"kutup"), "sha256": e(&digest), "hash": drive_names::content_hash(&hash_key, &digest).unwrap() },
     });
@@ -897,6 +899,10 @@ fn drive_names_vector() {
     let hash_key =
         drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
     assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
+    assert_eq!(
+        drive_names::top_level_hash_key(&b64(&s("masterKey"))).unwrap().as_slice(),
+        b64(&s("topLevelHashKey")).as_slice()
+    );
     for case in v["names"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         assert_eq!(

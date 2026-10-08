@@ -18,6 +18,7 @@ mod db;
 mod drive_federation;
 mod drive_federation_albums;
 mod drive_federation_files;
+mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
 mod error;
@@ -674,6 +675,18 @@ fn build_router(state: AppState) -> Router {
         .route("/api/shared-by-me", get(file_shares::shared_by_me))
         // --- Moving files and folders (docs/plans/drive-move.md). ---
         .route("/api/files/:id/move", post(drive_move::move_file))
+        .route(
+            "/api/files/:id/content-hash",
+            put(handlers::name_hashes::set_content_hash),
+        )
+        .route(
+            "/api/collections/:id/name-hashes",
+            post(handlers::name_hashes::fill_name_hashes),
+        )
+        .route(
+            "/api/drive/top-level-name-hashes",
+            post(handlers::name_hashes::fill_top_level_name_hashes),
+        )
         .route(
             "/api/collections/:id/move",
             post(drive_move::move_collection),

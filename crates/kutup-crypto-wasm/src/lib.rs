@@ -1630,6 +1630,15 @@ pub fn drive_folder_hash_key(
         .map_err(|error| js_error(&error.to_string()))
 }
 
+/// The hash key for an account's top-level folders, from its master key.
+#[wasm_bindgen(js_name = driveTopLevelHashKey)]
+pub fn drive_top_level_hash_key(master_key_base64: &str) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(master_key_base64, "master key")?;
+    kutup_crypto::drive_names::top_level_hash_key(&key)
+        .map(|key| STANDARD.encode(key))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// The hash a name is kept unique by in its folder (lowercase hex).
 #[wasm_bindgen(js_name = driveNameHash)]
 pub fn drive_name_hash(hash_key_base64: &str, name: &str) -> Result<String, JsValue> {
