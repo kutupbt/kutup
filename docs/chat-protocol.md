@@ -679,6 +679,21 @@ with the session repair and the visible record described in §6.
 
 ### Browser storage
 
+The browser store is encrypted at rest (`kutup-chat-core/src/db/store_cipher.rs`,
+`docs/research/16-browser-storage-architecture.md`). A random 256-bit store key
+is wrapped with XChaCha20-Poly1305 under a key derived from the account master
+key (HKDF-SHA256, `kutup/chat-store/wrap/v1`) and bound to the database name;
+the wrapped key and a format marker are the only plain entries. Each record is
+stored under `HMAC-SHA256(index key, object store ‖ key)`, so no address or id
+is readable, and its value (CBOR) is sealed with XChaCha20-Poly1305 together
+with its original key, the object store and hashed key bound as associated
+data, so a record moved to another key or store does not open. A store written
+before this is converted on first open: read whole, then cleared and written
+back sealed with the key and marker in one durable transaction. The key opens
+only with the account master key, so a signed-out browser keeps an unreadable
+store and stays the same device when the account signs in again. Native
+clients use SQLCipher.
+
 In the browser every commit is one IndexedDB transaction opened with
 `durability: "strict"`: it completes only once the browser reports the data on
 disk. (Chrome's default, relaxed, can lose a commit to a power cut after the

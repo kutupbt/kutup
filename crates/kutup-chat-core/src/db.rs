@@ -29,6 +29,7 @@ use kutup_chat_proto::{
 pub mod indexed_db;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+pub(crate) mod store_cipher;
 
 /// The local device's long-term chat identity. Persisted as a single row and
 /// cached in the store for the hot `get_identity_key_pair` path.

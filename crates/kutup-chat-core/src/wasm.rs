@@ -649,7 +649,7 @@ impl WasmChatClient {
         let profile_wrapping_key =
             crate::profile::derive_wrapping_key(&master_key).map_err(chat_error)?;
         let db = Rc::new(
-            IndexedDbChatDb::open(&database_name)
+            IndexedDbChatDb::open(&database_name, &master_key)
                 .await
                 .map_err(chat_error)?,
         );
