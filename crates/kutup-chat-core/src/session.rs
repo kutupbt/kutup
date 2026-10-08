@@ -212,6 +212,7 @@ impl Session {
     pub async fn open(db: Rc<dyn ChatDb>, user: impl Into<String>, device_id: u32) -> Result<Self> {
         let address = ChatAddress::from_sender(&user.into(), device_id)?;
         let account = address.name();
+        crate::timeline::ensure_built(db.as_ref()).await?;
         let local = db
             .load_local_identity()
             .await?

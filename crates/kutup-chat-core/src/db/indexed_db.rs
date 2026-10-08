@@ -57,8 +57,10 @@ const CONTACTS: &str = "contacts";
 const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
+/// Derived index records (conversation timelines), sealed like the rest.
+const INDEX: &str = "index_values";
 
-const ALL_STORES: [&str; 25] = [
+const ALL_STORES: [&str; 26] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -84,6 +86,7 @@ const ALL_STORES: [&str; 25] = [
     LOCAL_PROFILE,
     PEER_PROFILES,
     META,
+    INDEX,
 ];
 
 const SINGLETON: &str = "value";
@@ -128,7 +131,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(11);
+        let mut builder = Rexie::builder(name).version(12);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -656,6 +659,14 @@ impl ChatDb for IndexedDbChatDb {
         Ok(messages)
     }
 
+    async fn load_message(&self, id: &str) -> Result<Option<InboxMessage>> {
+        self.get(MESSAGES, string_key(id)).await
+    }
+
+    async fn load_index_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get(INDEX, key.to_vec()).await
+    }
+
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
         self.get(SENT_MESSAGES, string_key(send_id)).await
     }
@@ -892,6 +903,11 @@ impl ChatDb for IndexedDbChatDb {
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.
         let mut writes = PreparedWrites::from_pending(pending)?;
+        // The conversation timelines move with the records they index.
+        let mut index_values = crate::timeline::changes(self, pending).await?;
+        for (key, value) in &pending.index_values {
+            index_values.insert(key.clone(), value.clone());
+        }
 
         let transaction = self.fenced_write_transaction(&ALL_STORES).await?;
         let store = |name: &'static str| target(&transaction, name);
@@ -920,8 +936,15 @@ impl ChatDb for IndexedDbChatDb {
         let local_profile = store(LOCAL_PROFILE)?;
         let peer_profiles = store(PEER_PROFILES)?;
         let meta = store(META)?;
+        let index = store(INDEX)?;
 
         let mut operations = Vec::new();
+        for (key, value) in &index_values {
+            match value {
+                Some(value) => operations.push(self.put(&index, key.clone(), &encode(value)?)?),
+                None => operations.push(self.delete(&index, key.clone())),
+            }
+        }
         if let Some(value) = writes.local_identity.take() {
             operations.push(self.put(&local_identity, string_key(SINGLETON), &value)?);
         }

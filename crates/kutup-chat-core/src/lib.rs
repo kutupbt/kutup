@@ -31,6 +31,7 @@ mod profile;
 mod sealed_sender;
 mod session;
 mod store;
+pub(crate) mod timeline;
 mod transport;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod wasm;

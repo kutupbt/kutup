@@ -218,6 +218,10 @@ CREATE TABLE IF NOT EXISTS repair_limits (
     id    INTEGER PRIMARY KEY CHECK (id = 1),
     state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS index_values (
+    key   BLOB PRIMARY KEY,
+    value BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
@@ -535,6 +539,29 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
+    async fn load_message(&self, id: &str) -> Result<Option<InboxMessage>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT id, peer, sender_device_id, cursor, content, received_at \
+                 FROM messages WHERE id = ?1",
+                [id],
+                message_row,
+            )
+            .optional())
+    }
+
+    async fn load_index_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM index_values WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
         let conn = self.conn.borrow();
         db(conn
@@ -828,6 +855,11 @@ impl ChatDb for SqliteChatDb {
     }
 
     async fn apply(&self, pending: &Pending) -> Result<()> {
+        // The conversation timelines move with the records they index.
+        let mut index_values = crate::timeline::changes(self, pending).await?;
+        for (key, value) in &pending.index_values {
+            index_values.insert(key.clone(), value.clone());
+        }
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
@@ -1325,6 +1357,16 @@ impl ChatDb for SqliteChatDb {
                  ON CONFLICT(id) DO UPDATE SET state = excluded.state",
                 [state],
             ))?;
+        }
+        for (key, value) in &index_values {
+            match value {
+                Some(value) => db(tx.execute(
+                    "INSERT INTO index_values (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![key, value],
+                ))?,
+                None => db(tx.execute("DELETE FROM index_values WHERE key = ?1", [key]))?,
+            };
         }
         for id in &pending.delete_signed_pre_keys {
             db(tx.execute("DELETE FROM signed_pre_keys WHERE id = ?1", [id]))?;

@@ -81,11 +81,28 @@ engine lock Kutup already has.
    the old plaintext format is converted on first open: everything is read,
    then written encrypted and the plaintext deleted in one durable
    transaction, so a crash leaves either the old store or the new one.
-4. **Messages in chunks (Phase 2).** Messages grouped per conversation into
-   encrypted chunks of about 100, with a small encrypted header per
-   conversation (last message, unread count, list of chunks), keyed by an
-   HMAC of the conversation id. The conversation list reads headers; a
-   conversation opens on its newest chunks and pages older ones in.
+4. **A timeline per conversation (Phase 2).** Phase 2a removes repeated
+   work: history is loaded once per change and not at all when a reconcile
+   committed nothing (the stores count their commits). Phase 2b adds a
+   per-conversation index in the Rust core, written in the same transaction
+   as the messages it indexes:
+   - a sealed header per conversation (activity time, latest entry, the list
+     of chunks) and sealed chunks of up to 256 references (time, store, id),
+     with a reverse entry per record so a delete finds its chunk;
+   - message content stays in its existing record, read by point lookups, so
+     a conversation's entries are built by the same code as today;
+   - controls that travel in Note to Self but act on another conversation
+     (read position, delete for me, view-once opened, conversation state,
+     disappearing expiry start) are indexed under the conversation they act
+     on;
+   - stored in one generic sealed key-value store in both backends, which the
+     search shards of Phase 3 reuse; an existing store is indexed once on
+     first open, behind a format marker.
+   The core then answers `conversations()` from headers,
+   `conversationHistory(key, before, limit)` newest-first by chunk (edits,
+   reactions and receipts come after their targets, so they are included),
+   and which conversations each commit touched, so the UI reloads only those.
+   Phase 2c renders only the rows on screen.
 5. **Search (Phase 3).** A Rust inverted index from Turkish-folded words
    (İ/I/ı/i → i, accents removed) to message ids, sharded by word prefix into
    encrypted blobs beside the chunks and updated in the same write; prefix
