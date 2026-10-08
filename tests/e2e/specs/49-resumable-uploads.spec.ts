@@ -299,3 +299,47 @@ test('an upload into a folder that moved to a new key is offered only to discard
   await expect(panel.getByRole('button', { name: /^Discard/ })).toBeVisible()
   await context.close()
 })
+
+test('a folder upload interrupted by a reload: the file under way goes on, the ones not started are not offered', async ({ browser }, testInfo) => {
+  test.slow()
+  const account = newAccount('folderresume', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, account)
+  const page = await openDrive(context)
+
+  // Two files of three parts each; the folder goes up one file at a time.
+  const folder = `dropped-${Date.now()}`
+  const dir = testInfo.outputPath(folder)
+  await mkdir(dir, { recursive: true })
+  const names = ['one.bin', 'two.bin']
+  for (const name of names) await writeFile(`${dir}/${name}`, 15 * MB)
+
+  const slow = await slowUploads(context)
+  const patches: string[] = []
+  page.on('response', (r) => {
+    if (r.request().method() === 'PATCH' && /\/api\/uploads\//.test(r.url()) && r.ok()) patches.push(r.url())
+  })
+  await page.getByRole('button', { name: 'New' }).first().click()
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('menuitem', { name: 'Upload folder' }).click()])
+  await chooser.setFiles(dir)
+  // In the middle of the first file.
+  await expect.poll(() => patches.length, { timeout: 120_000 }).toBeGreaterThanOrEqual(1)
+  expect(new Set(patches).size).toBe(1)
+  await page.reload()
+
+  slow.slow = false
+  const panel = page.getByRole('region', { name: 'Interrupted uploads' })
+  await expect(panel.getByTestId('interrupted-upload')).toHaveCount(1, { timeout: 60_000 })
+  await expect(panel.getByText(`In ${folder}`, { exact: false })).toBeVisible()
+  const underWay = (await panel.getByTestId('interrupted-upload').first().innerText()).includes('one.bin') ? 'one.bin' : 'two.bin'
+  const notStarted = names.find((name) => name !== underWay)!
+  await resumeFromPanel(page, underWay, `${dir}/${underWay}`)
+  await expect(page.getByText('Uploads complete')).toBeVisible({ timeout: 120_000 })
+
+  await openItem(page, folder)
+  await expect(item(page, underWay)).toBeVisible({ timeout: 60_000 })
+  // Not started before the reload: nothing remembered it (docs/roadmap.md).
+  await expect(item(page, notStarted)).toHaveCount(0)
+  await expect(page.getByRole('region', { name: 'Interrupted uploads' })).toHaveCount(0)
+  await context.close()
+})

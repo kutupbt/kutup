@@ -731,6 +731,16 @@ needs tus (or a chunked equivalent) on the federated upload route, so each
 part is acknowledged by the folder's server and an upload can go on from
 its offset there.
 
+### Drive · resuming a whole folder upload
+
+A folder upload sends its files one at a time. After a reload or a crash,
+the file that was under way is offered to go on (browser spec 49), but the
+files not started yet are not remembered: the person drops the folder
+again and gets copies of what had already arrived. Remembering the folder
+upload as a whole (its tree, which files are done, the folders it made)
+and offering the rest needs the files chosen again as a folder, matched by
+their paths, sizes and modified times.
+
 ### Drive · share dialogs: what is left
 
 Done (October 2026): each person in the file and folder share dialogs has a
