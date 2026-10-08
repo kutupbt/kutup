@@ -162,6 +162,13 @@ segments right after it are gone, or the tail ends short of the cursor), the
 client reads and verifies the status again and starts over, up to three times;
 any other inconsistency is an integrity failure and is not retried.
 
+The browser keeps the reduced records as its local mirror of the backup.
+Each is sealed at rest (`{ id, sealed }`, XChaCha20-Poly1305 under a key
+derived from the account master key and bound to the record id, sealed by
+Rust: `sealLocalData`, `docs/research/16-browser-storage-architecture.md`); a
+mirror from before this is sealed the first time it is read, and a record
+that does not open is an integrity failure.
+
 Restore alone does not acknowledge a mailbox message, emit a delivery/read
 receipt, or advance a mailbox cursor. New and overlapping live messages
 deduplicate against stable backup record IDs. Deletes and expiry tombstones are

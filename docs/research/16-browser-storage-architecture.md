@@ -1,6 +1,6 @@
 # Browser storage: encrypted blobs in IndexedDB
 
-**Status:** decided (October 2026); Phase 1 in progress. Builds on
+**Status:** decided (October 2026); Phase 1 done, Phase 2 next. Builds on
 [15-client-side-search-index.md](15-client-side-search-index.md), whose
 Phase 2 (SQLite with full-text search in the browser) this document replaces
 for the web. Entries in [`../roadmap.md`](../roadmap.md) track the work.
@@ -99,7 +99,7 @@ engine lock Kutup already has.
 
 | Phase | What |
 |---|---|
-| 1 | Encrypted chat store (keys, records, conversion of existing stores); the backup mirror, drafts, joined meetings, live-share secrets and read positions moved into encrypted storage |
+| 1 | Encrypted chat store (keys, records, conversion of existing stores); the backup mirror's records, drafts and read positions sealed (`SealedStorage`, `sealLocalData`). Not sealed, on purpose: the meeting hand-off list (written by a page with no account key, moved into the account's encrypted list and deleted) and live shares in `sessionStorage` |
 | 2 | Chunked messages, conversation headers, paging, windowed rendering |
 | 3 | Search engine with Turkish folding, replacing the linear scan |
 | 4 | Office and Drive catalog and name search in their own origins (needs a server change feed, see document 15) |

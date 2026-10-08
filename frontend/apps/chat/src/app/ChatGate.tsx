@@ -7,7 +7,6 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
-import { loadReadMarks } from '../state/readState'
 import { openChat, reopenChat, useChat } from './chatStore'
 
 /**
@@ -23,7 +22,6 @@ export function ChatGate({ children }: { children: ReactNode }) {
   const [repairing, setRepairing] = useState(false)
 
   useEffect(() => {
-    loadReadMarks(session.userId)
     openChat(session)
   }, [session])
 

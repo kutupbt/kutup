@@ -1978,6 +1978,10 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
   accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
   /** Seal the next profile revision (or the first) as the account app. */
   accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string): unknown
+  /** Seal small browser-side values for an account scope, one purpose each. */
+  sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
+  /** Open what `sealLocalData` sealed; a value that does not open is `null`. */
+  openLocalData(masterKey: Uint8Array, scope: string, purposes: string[], sealed: Uint8Array[]): (Uint8Array | null)[]
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
     open(

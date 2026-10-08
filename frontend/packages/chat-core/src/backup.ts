@@ -15,12 +15,14 @@ import {
   loadBackupState as loadState,
   openBackupStore as openBackupDb,
   putValue,
+  readBackupRecords,
   replaceBackupMedia,
   replaceRestoredRecords,
   resetBackupDeviceChain,
 } from './backup-store'
 import type {
   BackupOutboxEntry as OutboxEntry,
+  BackupRecordSealer,
   StoredBackupMedia,
   StoredBackupRecord,
 } from './backup-store'
@@ -157,6 +159,8 @@ export interface ChatBackupOptions {
     descriptor: ChatAttachmentDescriptorV1,
     signal?: AbortSignal,
   ) => AsyncIterable<Uint8Array>
+  /** Seals the mirror's records at rest (the service's `SealedStorage`). */
+  sealer: BackupRecordSealer
 }
 
 export interface BackupConnectivity {
@@ -476,7 +480,7 @@ export class ChatBackupCoordinator {
   }
 
   async restoredHistoryAsync(): Promise<ChatHistoryEntry[]> {
-    const stored = await getAll<StoredRecord>(this.db, 'records')
+    const stored = await readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer)
     return stored
       .map(({ record }) => record)
       .filter(record => !record.tombstone && record.content)
@@ -780,7 +784,7 @@ export class ChatBackupCoordinator {
   private async collectAndQueue(): Promise<void> {
     const [history, stored, localState] = await Promise.all([
       this.options.history(),
-      getAll<StoredRecord>(this.db, 'records'),
+      readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer),
       loadState(this.db, this.runtime.clock.now()),
     ])
     const localRecordIds = new Set(await Promise.all(
@@ -876,7 +880,7 @@ export class ChatBackupCoordinator {
     }
     if (mutations.length === 0) {
       if (replacements.some(value => !prior.get(value.id)?.local)) {
-        await commitQueue(this.db, replacements, [], localState)
+        await commitQueue(this.db, this.options.sealer, replacements, [], localState)
       }
       await this.refreshView()
       return
@@ -915,7 +919,7 @@ export class ChatBackupCoordinator {
       })
       previousDigest = ciphertextSha256
     }
-    await commitQueue(this.db, replacements, outbox, {
+    await commitQueue(this.db, this.options.sealer, replacements, outbox, {
       ...localState,
       deviceSequence: sequence,
       lastSegmentDigest: previousDigest,
@@ -1136,6 +1140,7 @@ export class ChatBackupCoordinator {
       }
       await replaceRestoredRecords(
         this.db,
+        this.options.sealer,
         stored,
         after,
         this.runtime.clock.now(),

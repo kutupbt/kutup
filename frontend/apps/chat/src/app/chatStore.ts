@@ -18,6 +18,7 @@ import type {
 import { privateCiphertextCacheForAccountV1, type PrivateCiphertextCacheV1 } from '@kutup/files/mediaCache'
 import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
+import { setSealedStorage } from '../state/sealedState'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -285,8 +286,15 @@ export function openChat(session: Session): void {
     teardown = () => {
       window.clearInterval(ticker)
       for (const unsubscribe of unsubscribers) unsubscribe()
+      setSealedStorage(null)
       service.dispose()
     }
+    // Drafts and read positions an older version kept in plaintext are
+    // taken over once: sealed for the account and the plaintext removed.
+    const sealed = service.sealedStorage
+    sealed.read('drafts', `kutup.chat.drafts.v1:${canonicalAccountAddress(account)}`)
+    sealed.read('read-marks', `kutup:chat:read:${session.userId}`)
+    setSealedStorage(sealed)
     reopenAttempt = 0
     set({
       status: 'ready',

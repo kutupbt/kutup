@@ -3815,6 +3815,68 @@ struct CallLinkKeysOutput {
 }
 
 /// A fresh public nonce for a new call link (docs/chat-calls.md).
+fn local_cipher(
+    master_key: &[u8],
+    scope: &str,
+) -> std::result::Result<crate::db::store_cipher::LocalCipher, JsValue> {
+    let master_key: &[u8; 32] = master_key
+        .try_into()
+        .map_err(|_| js_error("local chat data requires a 32-byte master key"))?;
+    crate::db::store_cipher::LocalCipher::new(master_key, scope).map_err(chat_error)
+}
+
+/// Seal small browser-side chat data (drafts, read positions, the backup
+/// mirror's records) for this account (`scope`), one value per purpose, under
+/// a key derived from the account master key (`db/store_cipher.rs`). One call
+/// seals a whole batch.
+#[wasm_bindgen(js_name = sealLocalData)]
+pub fn seal_local_data(
+    master_key: Vec<u8>,
+    scope: String,
+    purposes: Vec<String>,
+    plaintexts: js_sys::Array,
+) -> std::result::Result<js_sys::Array, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    let local = local_cipher(&master_key, &scope)?;
+    if purposes.len() != plaintexts.length() as usize {
+        return Err(js_error("one purpose per value"));
+    }
+    let mut rng = rand_core::OsRng;
+    let sealed = js_sys::Array::new();
+    for (purpose, plaintext) in purposes.iter().zip(plaintexts.iter()) {
+        let plaintext = zeroize::Zeroizing::new(js_sys::Uint8Array::new(&plaintext).to_vec());
+        let value = local
+            .seal(purpose, &plaintext, &mut rng)
+            .map_err(chat_error)?;
+        sealed.push(&js_sys::Uint8Array::from(value.as_slice()));
+    }
+    Ok(sealed)
+}
+
+/// Open what `sealLocalData` sealed, one value per purpose. A value that does
+/// not open comes back as `null`, so one damaged value does not hide the rest.
+#[wasm_bindgen(js_name = openLocalData)]
+pub fn open_local_data(
+    master_key: Vec<u8>,
+    scope: String,
+    purposes: Vec<String>,
+    sealed: js_sys::Array,
+) -> std::result::Result<js_sys::Array, JsValue> {
+    let master_key = zeroize::Zeroizing::new(master_key);
+    let local = local_cipher(&master_key, &scope)?;
+    if purposes.len() != sealed.length() as usize {
+        return Err(js_error("one purpose per value"));
+    }
+    let opened = js_sys::Array::new();
+    for (purpose, value) in purposes.iter().zip(sealed.iter()) {
+        match local.open(purpose, &js_sys::Uint8Array::new(&value).to_vec()) {
+            Ok(plaintext) => opened.push(&js_sys::Uint8Array::from(plaintext.as_slice())),
+            Err(_) => opened.push(&JsValue::NULL),
+        };
+    }
+    Ok(opened)
+}
+
 #[wasm_bindgen(js_name = callLinkNonce)]
 pub fn call_link_nonce() -> String {
     crate::call_link::new_call_link_nonce()

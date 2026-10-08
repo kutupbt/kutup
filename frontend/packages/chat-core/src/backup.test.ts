@@ -40,6 +40,7 @@ import {
   type ChatBackupTransport,
   type SegmentPage,
 } from './backup'
+import { testSealer } from './testSealer'
 import { getAll, openBackupStore, putValue, type BackupOutboxEntry } from './backup-store'
 import type { ChatHistoryEntry } from './types'
 
@@ -257,6 +258,7 @@ async function open(
     manifestSequence: async () => 1,
     mediaSources: () => [],
     localMediaCiphertext: async function* () {},
+    sealer: testSealer,
   }, runtime(transport, checkpoint))
   openCoordinators.push(coordinator)
   return coordinator

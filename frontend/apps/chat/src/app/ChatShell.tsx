@@ -136,7 +136,7 @@ export function ChatShell() {
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             // A signed-out browser is not woken for this account any more.
-            if (chat.self) clearDrafts(chat.self.address)
+            clearDrafts()
             // Nor does it host this account's meetings any more.
             forgetAccountHostTokens(session.userId)
             void disableWebPush(chat.service)

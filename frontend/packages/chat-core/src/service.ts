@@ -45,6 +45,7 @@ import type {
 } from './types'
 import { loadChatWasm } from './wasm'
 import { EngineLock } from './engineLock'
+import { SealedStorage } from './sealedStorage'
 import { isSupportedChat } from './capabilities'
 import {
   canonicalAccountAddress,
@@ -152,6 +153,8 @@ export class ChatService {
   private readonly client: WasmChatClientHandle
   private readonly lockName: string
   private readonly engineLock: EngineLock
+  /** Drafts, read positions and other small state, sealed for this account. */
+  readonly sealedStorage: SealedStorage
   private readonly mlsWorkflowLockName: string
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
@@ -193,8 +196,10 @@ export class ChatService {
     private readonly username: string,
     private readonly attachmentLedger: ChatAttachmentLedger | null,
     inviteCrypto: InviteLinkCrypto,
+    sealedStorage: SealedStorage,
   ) {
     this.client = client
+    this.sealedStorage = sealedStorage
     this.deviceId = client.deviceId
     this.lockName = lockName
     this.engineLock = engineLock
@@ -299,6 +304,7 @@ export class ChatService {
       options.username,
       attachmentLedger,
       wasm,
+      new SealedStorage(wasm, options.masterKey, scope),
     )
     try {
       if (capabilities.backup?.alwaysEnabled) {
@@ -318,6 +324,7 @@ export class ChatService {
             privateCiphertextCacheForAccountV1(options.userId).readVerified(
               chatMediaCacheBindingV1(descriptor), signal,
             ),
+          sealer: service.sealedStorage,
         })
         service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }

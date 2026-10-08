@@ -558,10 +558,13 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   [earlier research](research/15-client-side-search-index.md)). On the web,
   Proton's model: IndexedDB holding encrypted records under a key wrapped by
   the account master key; no SQLite in the browser. Native keeps SQLCipher.
-  - In progress (Phase 1): the chat store encrypted at rest (record keys
-    hashed, values sealed, existing stores converted on first open); then the
-    backup mirror, drafts, joined meetings, live-share secrets and read
-    positions moved into encrypted storage.
+  - Done (Phase 1): the chat store encrypted at rest (record keys hashed,
+    values sealed, existing stores converted on first open); the backup
+    mirror's records, drafts and read positions sealed too. Left as they
+    are, on purpose: the hand-off list a meeting page leaves for the
+    signed-in app (the page has no account key; the app moves each stay into
+    the account's encrypted list and deletes it), and active live shares in
+    `sessionStorage`, which ends with the tab.
   - Next (Phase 2): messages in encrypted chunks per conversation with a
     header each, so the conversation list and a conversation load without
     reading the whole history; windowed rendering.

@@ -183,6 +183,83 @@ impl StoreCipher {
     }
 }
 
+const LOCAL_INFO: &[u8] = b"kutup/chat-local/v1";
+
+/// Seals small browser-side data kept outside the store (drafts, read
+/// positions, the backup mirror's records) under a key derived from the
+/// account master key, bound to the account scope and a purpose per value:
+/// what is sealed for one purpose or account does not open as another.
+/// Stateless towards the engine, so the page can use it while the engine is
+/// busy; one instance serves a whole batch.
+pub(crate) struct LocalCipher {
+    cipher: XChaCha20Poly1305,
+    scope: String,
+}
+
+impl LocalCipher {
+    pub(crate) fn new(master_key: &[u8; 32], scope: &str) -> Result<Self> {
+        Ok(Self {
+            cipher: local_cipher(master_key)?,
+            scope: scope.to_owned(),
+        })
+    }
+
+    pub(crate) fn seal<R: RngCore + CryptoRng>(
+        &self,
+        purpose: &str,
+        plaintext: &[u8],
+        rng: &mut R,
+    ) -> Result<Vec<u8>> {
+        let mut nonce = [0u8; NONCE_BYTES];
+        rng.fill_bytes(&mut nonce);
+        let sealed = self
+            .cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &local_aad(&self.scope, purpose),
+                },
+            )
+            .map_err(|_| ChatError::Db("cannot seal local chat data".into()))?;
+        let mut out = Vec::with_capacity(1 + NONCE_BYTES + sealed.len());
+        out.push(WRAPPED_VERSION);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&sealed);
+        Ok(out)
+    }
+
+    pub(crate) fn open(&self, purpose: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        if sealed.len() < 1 + NONCE_BYTES + 16 || sealed[0] != WRAPPED_VERSION {
+            return Err(ChatError::Db("local chat data is malformed".into()));
+        }
+        self.cipher
+            .decrypt(
+                XNonce::from_slice(&sealed[1..=NONCE_BYTES]),
+                Payload {
+                    msg: &sealed[1 + NONCE_BYTES..],
+                    aad: &local_aad(&self.scope, purpose),
+                },
+            )
+            .map(Zeroizing::new)
+            .map_err(|_| ChatError::Db("local chat data does not open".into()))
+    }
+}
+
+fn local_cipher(master_key: &[u8; 32]) -> Result<XChaCha20Poly1305> {
+    let key = Zeroizing::new(expand(master_key, LOCAL_INFO)?);
+    Ok(XChaCha20Poly1305::new(key.as_ref().into()))
+}
+
+fn local_aad(scope: &str, purpose: &str) -> Vec<u8> {
+    let mut aad = LOCAL_INFO.to_vec();
+    aad.push(0);
+    aad.extend_from_slice(scope.as_bytes());
+    aad.push(0);
+    aad.extend_from_slice(purpose.as_bytes());
+    aad
+}
+
 fn wrap_cipher(master_key: &[u8; 32]) -> Result<XChaCha20Poly1305> {
     let key = Zeroizing::new(expand(master_key, WRAP_INFO)?);
     Ok(XChaCha20Poly1305::new(key.as_ref().into()))
@@ -304,6 +381,23 @@ mod tests {
         );
         assert!(StoreCipher::unwrap(&[8; 32], "kutup-chat-v2:abc", &wrapped).is_err());
         assert!(StoreCipher::unwrap(&MASTER, "kutup-chat-v2:other", &wrapped).is_err());
+    }
+
+    #[test]
+    fn local_data_opens_only_for_its_account_and_purpose() {
+        let local = LocalCipher::new(&MASTER, "scope-a").unwrap();
+        let sealed = local
+            .seal("drafts", b"half a sentence", &mut OsRng)
+            .unwrap();
+        assert_eq!(
+            local.open("drafts", &sealed).unwrap().as_slice(),
+            b"half a sentence"
+        );
+        assert!(local.open("read-marks", &sealed).is_err());
+        let other_scope = LocalCipher::new(&MASTER, "scope-b").unwrap();
+        assert!(other_scope.open("drafts", &sealed).is_err());
+        let other_account = LocalCipher::new(&[8; 32], "scope-a").unwrap();
+        assert!(other_account.open("drafts", &sealed).is_err());
     }
 
     #[test]
