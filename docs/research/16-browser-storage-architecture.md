@@ -137,6 +137,18 @@ engine lock Kutup already has.
    hit, and matches restored backup history (in memory) the same way. The
    browser and native clients fold identically (shared vectors). Matching is
    by word start, not substring, as in Signal and Proton.
+   Measured (October 2026, `search::tests::scale`, native release build on
+   the 8-core development VM, SQLite backend): 50,000 messages over two years,
+   eight words each from a 2,000-word vocabulary plus common words. Written
+   as they arrive in batches of 100: 4.3 s in all, the slowest batch 14 ms;
+   one new message with its index 1.9 ms; the whole history indexed on open
+   in 0.57 s. 3,200 shards, 37.4 MB (about 750 bytes of index per message:
+   each posting repeats the conversation and message ids per word; a later
+   compaction could share them per shard); median shard 7.7 KB, largest
+   200 KB. Queries: a very common word 9 ms, a two-letter prefix 24 ms, a
+   rarer word 1.5 ms. In the browser each shard read adds an IndexedDB read
+   and unsealing, so short prefixes, which read the most shards, are the
+   slowest; not yet measured there.
 6. **Tabs.** The existing engine lock (one holder, take-over after 30 s of
    silence) and the writer generation checked in every write.
 7. **Sign-out keeps the encrypted store**, so the same browser stays the same

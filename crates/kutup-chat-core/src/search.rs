@@ -1088,4 +1088,303 @@ mod tests {
         assert_eq!(indexed(&db), expected(&db));
         assert_eq!(search(&db, &mut cache, "toplanti daha"), vec!["new"]);
     }
+
+    fn attachment(id: &str, filename: &str, caption: &str) -> Vec<u8> {
+        use base64::Engine as _;
+        use kutup_crypto::chat_media::{object_ciphertext_size, ChatMediaSuiteId};
+        let descriptor = kutup_chat_proto::ChatAttachmentDescriptorV1 {
+            version: 1,
+            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
+            attachment_id: "55555555-5555-4555-8555-555555555555".into(),
+            origin_domain: "a.test".into(),
+            retrieval_token: base64::engine::general_purpose::STANDARD.encode([1; 32]),
+            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            ciphertext_sha256: "22".repeat(32),
+            attachment_key: base64::engine::general_purpose::STANDARD.encode([3; 32]),
+            plaintext_bytes: 7,
+            filename: filename.into(),
+            mime_type: "application/pdf".into(),
+            media_class: kutup_chat_proto::ChatMediaClassV1::File,
+            caption: Some(caption.into()),
+            width: None,
+            height: None,
+            duration_ms: None,
+            preview: None,
+            backup_media_id: None,
+        };
+        serde_json::to_vec(
+            &ChatContent::attachment_with_id(id, "2026-10-08T10:00:00Z", 1, descriptor).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn attachment_names_captions_and_place_labels_are_searchable() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        let place = kutup_chat_proto::LocationBody {
+            lat: 40.99,
+            lon: 29.02,
+            label: Some("Kadıköy iskelesi".into()),
+        };
+        let mut pending = Pending::default();
+        pending.messages.push(inbox(
+            "file",
+            "alice@a.test",
+            1,
+            attachment(
+                "66666666-6666-4666-8666-666666666666",
+                "Bütçe-2026.pdf",
+                "Çeyrek raporu",
+            ),
+        ));
+        pending.messages.push(inbox(
+            "place",
+            "alice@a.test",
+            2,
+            serde_json::to_vec(
+                &ChatContent::location_with_id(
+                    "77777777-7777-4777-8777-777777777777",
+                    "2026-10-08T10:00:00Z",
+                    1,
+                    &place,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        ));
+        block_on(db.apply(&pending)).unwrap();
+        let mut cache = ShardCache::default();
+        assert_eq!(
+            search(&db, &mut cache, "butce"),
+            vec!["file"],
+            "a file name"
+        );
+        assert_eq!(
+            search(&db, &mut cache, "2026 pdf"),
+            vec!["file"],
+            "its parts"
+        );
+        assert_eq!(
+            search(&db, &mut cache, "ceyrek rapor"),
+            vec!["file"],
+            "a caption"
+        );
+        assert_eq!(
+            search(&db, &mut cache, "kadikoy"),
+            vec!["place"],
+            "a place's label"
+        );
+        assert_eq!(indexed(&db), expected(&db));
+    }
+
+    #[test]
+    fn at_most_twenty_decoded_shards_are_kept() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        // 30 words with 30 different prefixes, all under "a".
+        let letters: Vec<char> = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+        let mut pending = Pending::default();
+        for i in 0..30usize {
+            let word = format!("a{}{}x", letters[i / 26], letters[i % 26]);
+            pending.messages.push(inbox(
+                &format!("w-{i}"),
+                "alice@a.test",
+                i as i64,
+                text(&format!("m-w-{i}"), &word),
+            ));
+        }
+        block_on(db.apply(&pending)).unwrap();
+        assert!(block_on(load_directory(&db)).unwrap().unwrap().shards.len() >= 30);
+        let mut cache = ShardCache::default();
+        // One letter reads every one of them, and finds them all…
+        assert_eq!(search(&db, &mut cache, "a").len(), 30);
+        // …but keeps no more than the cap decoded.
+        assert_eq!(cache.shards.len(), CACHED_SHARDS);
+        assert_eq!(cache.order.len(), CACHED_SHARDS);
+        // The most recently read are the ones kept.
+        let kept: BTreeSet<&String> = cache.shards.keys().collect();
+        assert_eq!(kept, cache.order.iter().collect::<BTreeSet<_>>());
+        assert_eq!(
+            search(&db, &mut cache, "a").len(),
+            30,
+            "and answers again the same"
+        );
+    }
+
+    #[test]
+    fn a_new_index_format_is_built_again_from_the_records() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        let mut pending = Pending::default();
+        pending
+            .messages
+            .push(inbox("one", "alice@a.test", 1, text("m-1", "eski biçim")));
+        block_on(db.apply(&pending)).unwrap();
+
+        // As if an older version had written it: another version, and a
+        // shard this version would never write.
+        let mut directory = block_on(load_directory(&db)).unwrap().unwrap();
+        directory.version = SEARCH_VERSION - 1;
+        directory.shards.insert("zzz\u{1f}0".into(), 1);
+        let mut old = Pending::default();
+        old.index_values
+            .insert(DIRECTORY_KEY.to_vec(), Some(encode(&directory).unwrap()));
+        let mut stale = Shard::new();
+        stale.insert("zzzold".into(), vec![]);
+        old.index_values
+            .insert(shard_key("zzz\u{1f}0"), Some(encode(&stale).unwrap()));
+        block_on(db.apply(&old)).unwrap();
+        let mut cache = ShardCache::default();
+        assert!(
+            search(&db, &mut cache, "eski").is_empty(),
+            "an index of another format is not read"
+        );
+
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        assert!(
+            block_on(db.load_index_value(&shard_key("zzz\u{1f}0")))
+                .unwrap()
+                .is_none(),
+            "the old shards are gone"
+        );
+        assert_eq!(indexed(&db), expected(&db));
+        assert_eq!(search(&db, &mut cache, "bicim"), vec!["one"]);
+    }
+
+    /// The index at the size Proton capped theirs: 50,000 messages over two
+    /// years. Run with `cargo test --features sqlite --release --lib
+    /// search::tests::scale -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn scale() {
+        use std::time::Instant;
+        let vocabulary: Vec<String> = (0..2_000)
+            .map(|i| {
+                let syllables = [
+                    "ka", "le", "mi", "to", "ru", "sa", "ne", "bi", "ço", "ğü", "şa", "ır",
+                ];
+                let mut word = String::new();
+                let mut n = i * 7 + 3;
+                for _ in 0..(2 + i % 3) {
+                    word.push_str(syllables[n % syllables.len()]);
+                    n /= syllables.len();
+                    n += i;
+                }
+                word
+            })
+            .collect();
+        // A few very common words, as in any language.
+        let common = ["bir", "ve", "bu", "da", "için", "ama", "çok", "ne"];
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        const MESSAGES: usize = 50_000;
+        const BATCH: usize = 100;
+        let span_ms: i64 = 2 * 365 * 24 * 60 * 60 * 1000;
+        let started = Instant::now();
+        let mut slowest_batch = std::time::Duration::ZERO;
+        let mut seed: u64 = 42;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        for batch in 0..MESSAGES / BATCH {
+            let mut pending = Pending::default();
+            for i in 0..BATCH {
+                let n = batch * BATCH + i;
+                let mut words: Vec<&str> = (0..6)
+                    .map(|_| vocabulary[next() % vocabulary.len()].as_str())
+                    .collect();
+                words.push(common[next() % common.len()]);
+                words.push(common[next() % common.len()]);
+                let ts = (n as i64) * (span_ms / MESSAGES as i64);
+                let peer = format!("peer{}@a.test", next() % 40);
+                pending.messages.push(inbox(
+                    &format!("in-{n}"),
+                    &peer,
+                    ts,
+                    text(&format!("m-{n}"), &words.join(" ")),
+                ));
+            }
+            let t = Instant::now();
+            block_on(db.apply(&pending)).unwrap();
+            slowest_batch = slowest_batch.max(t.elapsed());
+        }
+        let incremental = started.elapsed();
+        let directory = block_on(load_directory(&db)).unwrap().unwrap();
+        let mut sizes: Vec<usize> = directory
+            .shards
+            .keys()
+            .map(|name| {
+                block_on(db.load_index_value(&shard_key(name)))
+                    .unwrap()
+                    .unwrap()
+                    .len()
+            })
+            .collect();
+        sizes.sort_unstable();
+        let total: usize = sizes.iter().sum();
+
+        // The same history indexed whole, as on first open.
+        let mut clear = Pending::default();
+        for name in directory.shards.keys() {
+            clear.index_values.insert(shard_key(name), None);
+        }
+        clear.index_values.insert(DIRECTORY_KEY.to_vec(), None);
+        block_on(db.apply(&clear)).unwrap();
+        let t = Instant::now();
+        block_on(ensure_built(&db)).unwrap();
+        let rebuild = t.elapsed();
+
+        // A new message at the end, written with its index.
+        let mut pending = Pending::default();
+        pending.messages.push(inbox(
+            "last",
+            "peer1@a.test",
+            span_ms,
+            text("m-last", "bir yeni mesaj"),
+        ));
+        let t = Instant::now();
+        block_on(db.apply(&pending)).unwrap();
+        let one_write = t.elapsed();
+
+        let mut queries = Vec::new();
+        for query_text in [
+            "bir",
+            "bi",
+            vocabulary[17].as_str(),
+            &format!("{} bir", vocabulary[17]),
+            "zzzz",
+        ] {
+            let mut cache = ShardCache::default();
+            let t = Instant::now();
+            let hits = block_on(query(&db, &mut cache, query_text, 200))
+                .unwrap()
+                .len();
+            let cold = t.elapsed();
+            let t = Instant::now();
+            block_on(query(&db, &mut cache, query_text, 200)).unwrap();
+            let warm = t.elapsed();
+            queries.push(format!(
+                "{query_text:>14}: {hits:>3} hits, cold {cold:>10.2?}, warm {warm:>10.2?}"
+            ));
+        }
+        println!("messages: {MESSAGES} over 2 years, batches of {BATCH}");
+        println!("written incrementally: {incremental:.2?} (slowest batch {slowest_batch:.2?})");
+        println!("rebuilt whole on open: {rebuild:.2?}");
+        println!("one new message with its index: {one_write:.2?}");
+        println!(
+            "shards: {} totalling {:.1} MB; median {} B, p99 {} B, largest {} B",
+            sizes.len(),
+            total as f64 / 1_048_576.0,
+            sizes[sizes.len() / 2],
+            sizes[sizes.len() * 99 / 100],
+            sizes[sizes.len() - 1]
+        );
+        for line in queries {
+            println!("{line}");
+        }
+    }
 }
