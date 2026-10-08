@@ -1383,10 +1383,16 @@ export class ChatService {
         if (commits === undefined || after !== commits) {
           await this.reconcileAttachmentLedger()
           this.notifyPeers()
-        } else if (this.mls?.takeInvitationsChanged()) {
+        } else {
+          // An attachment whose server copy was not there yet (a delivery
+          // still on its way from another server) is tried again on every
+          // pass, as it was before passes that wrote nothing were skipped;
+          // waiting for the next local write could leave it unrecorded for
+          // long.
+          const entered = this.pendingAttachments.size > 0 && await this.reconcileAttachmentLedger()
           // Invitations are kept on the server: a new one wrote nothing
           // here, but the list shows it. Other tabs list it on their own pass.
-          this.emitUpdate()
+          if (this.mls?.takeInvitationsChanged() || entered) this.emitUpdate()
         }
         return report
       })
@@ -1798,8 +1804,9 @@ export class ChatService {
    * still retrying, a message request not yet accepted) waits in
    * `pendingAttachments` and is tried again on every pass.
    */
-  private async reconcileAttachmentLedger(): Promise<void> {
-    if (!this.attachmentLedger) return
+  private async reconcileAttachmentLedger(): Promise<boolean> {
+    if (!this.attachmentLedger) return false
+    let entered = false
     const changes = await this.changesSince(this.ledgerMark)
     let seen: ChatHistoryEntry[] = []
     if (changes.keys === null) {
@@ -1859,6 +1866,7 @@ export class ChatService {
             reference.storageReferenceId,
           )
           this.pendingAttachments.delete(pendingKey)
+          entered = true
         } catch (error: unknown) {
           const status = typeof error === 'object' && error !== null && 'response' in error
             ? (error as { response?: { status?: number } }).response?.status
@@ -1869,6 +1877,7 @@ export class ChatService {
         }
       }
     })
+    return entered
   }
 
   private async releaseExpiredAttachments(report: ChatExpiryReport): Promise<void> {

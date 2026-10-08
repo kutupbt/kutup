@@ -103,6 +103,23 @@ describe('ChatService history', () => {
     expect(updates).toHaveBeenCalledTimes(1)
   })
 
+  it('retries a waiting attachment on a pass that wrote nothing, and does nothing when none waits', async () => {
+    const { svc, updates } = service(() => [], () => 7)
+    const reconcileLedger = vi.fn(async () => true)
+    Object.assign(svc, {
+      mls: { reconcile: vi.fn().mockResolvedValue([]), takeInvitationsChanged: () => false },
+      reconcileAttachmentLedger: reconcileLedger,
+    })
+    await svc.reconcile()
+    expect(reconcileLedger).not.toHaveBeenCalled()
+    expect(updates).not.toHaveBeenCalled()
+
+    ;(svc as unknown as { pendingAttachments: Map<string, unknown> }).pendingAttachments.set('m\u0000a', {})
+    await svc.reconcile()
+    expect(reconcileLedger).toHaveBeenCalledTimes(1)
+    expect(updates).toHaveBeenCalledTimes(1)
+  })
+
   it('enters attachments from the conversations that changed, and retries what could not be entered', async () => {
     const attachment = (id: string, attachmentId: string): ChatHistoryEntry => {
       const value = entry(id)
