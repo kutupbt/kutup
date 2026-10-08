@@ -147,7 +147,8 @@ export async function signIn(context: BrowserContext, account: Account): Promise
   await page.goto(appUrl('account', '/login', account.server))
   await page.getByLabel('Email', { exact: true }).fill(account.email)
   await page.getByLabel('Password', { exact: true }).fill(account.password)
-  await submitThroughRateLimit(page, 'Sign in', page.getByRole('heading', { name: /Welcome/ }))
+  // The launcher greets in the account's language, which may be Turkish.
+  await submitThroughRateLimit(page, 'Sign in', page.getByRole('heading', { name: /Welcome|Hoş geldiniz/ }))
   await sessionSaved(page)
   await page.close()
 }
