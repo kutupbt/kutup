@@ -4,6 +4,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -20,6 +21,7 @@ export function AccountShell() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const session = useRequiredSession()
+  useAccountUiPreferences()
 
   return (
     <AppShell

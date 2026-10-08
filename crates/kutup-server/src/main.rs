@@ -45,6 +45,7 @@ mod storage_check;
 mod storage_probe;
 mod telemetry;
 mod totp;
+mod ui_preferences;
 mod version_retention;
 mod web_push;
 
@@ -611,6 +612,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/drive/people", get(drive_profile_keys::list_people))
         // --- Maps (docs/plans/maps.md). ---
         .route("/api/maps", get(maps::get_config))
+        .route(
+            "/api/account/ui-preferences",
+            get(ui_preferences::get_ui_preferences).put(ui_preferences::put_ui_preferences),
+        )
         .route("/api/maps/preferences", put(maps::put_preferences))
         .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
         // --- Photos (docs/plans/photos.md). ---

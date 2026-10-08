@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
@@ -37,6 +38,7 @@ import { closeChat, useChat } from './chatStore'
 export function ChatShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  useAccountUiPreferences()
   const chat = useChat()
   const readThrough = useReadThrough()
   const { lists } = useAccountState()

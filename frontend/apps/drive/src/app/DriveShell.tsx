@@ -5,6 +5,7 @@ import { Outlet } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -16,6 +17,7 @@ import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  useAccountUiPreferences()
   // Exchange profile keys with the people you share with while Drive is open.
   usePeople()
   return (

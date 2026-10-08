@@ -853,9 +853,18 @@ importers:
       '@types/react':
         specifier: ^18.3.3
         version: 18.3.28
+      i18next:
+        specifier: ^26.0.6
+        version: 26.4.2(typescript@5.9.3)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
 
   packages/ui:
     dependencies:

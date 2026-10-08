@@ -157,23 +157,6 @@ packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
-### Web · theme and language follow the account
-
-Each app keeps its own theme (`next-themes`, `localStorage` key
-`kutup-theme`) and language (`LANGUAGE_STORAGE_KEY`, see
-`frontend/packages/i18n/src/index.ts`). The apps are separate origins, so
-choosing Dark or Turkish on `account.<domain>` leaves Drive, Chat, Office,
-Photos and Maps as they were until the same choice is made in each (left at
-"System", they all follow the OS and match). Planned, as Proton does:
-- both stored as account preferences on the server (not secret, so not
-  end-to-end encrypted), changed from any app's theme or language control;
-- each app keeps its local copy for the first paint (no flash of the wrong
-  theme) and takes the account's value when it loads and when the tab
-  comes back into focus, so a change reaches every app and every device;
-- public pages (shared links, public albums) keep the local choice.
-A cookie on the shared parent domain was set aside: it syncs one browser
-only, and self-hosters may serve the apps from unrelated domains.
-
 ### Responsive web · mobile selection mode
 
 Per the design + user direction: long-press / "Select" button on mobile turns the page into Google-Drive-style full-screen takeover with checkboxes, top "Cancel · N selected · Select all" bar, bottom action bar (Share / Move / Delete / More).

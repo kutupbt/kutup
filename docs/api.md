@@ -493,6 +493,29 @@ Look up another local user's registered Drive identity (used when sharing a coll
 }
 ```
 
+
+### GET /api/account/ui-preferences · PUT /api/account/ui-preferences
+
+The account's theme and language, the same in every web app and on every
+device. Not secret, so stored as they are (not end-to-end encrypted).
+
+**Auth:** Bearer JWT
+
+**Body (PUT) and response:**
+```json
+{ "theme": "light" | "dark" | "system" | null, "language": "en" | "tr" | null }
+```
+
+A null value means the account has not chosen; each app then keeps its own
+(the system theme, the browser's language). `PUT` replaces both values; an
+unknown value or an extra field is a `400`.
+
+Each signed-in app keeps a local copy for its first paint, takes the
+account's values when it opens and when its tab comes back into view, and
+saves a change made in its theme or language control
+(`useAccountUiPreferences`, `frontend/packages/session/src/uiPreferences.ts`).
+The first app to load for an account that never chose saves its own choice.
+Public pages (shared links, public albums) keep only the local choice.
 ---
 
 ## Collections
