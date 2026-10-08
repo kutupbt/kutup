@@ -153,6 +153,12 @@ export class ChatService {
   private readonly client: WasmChatClientHandle
   private readonly lockName: string
   private readonly engineLock: EngineLock
+  /** Bumped on every change; history loads are shared within one revision. */
+  private revision = 0
+  private readonly historyCache = new Map<
+    'all' | 'live',
+    { revision: number; validUntil: number; value: Promise<ChatHistoryEntry[]> }
+  >()
   /** Drafts, read positions and other small state, sealed for this account. */
   readonly sealedStorage: SealedStorage
   private readonly mlsWorkflowLockName: string
@@ -387,7 +393,31 @@ export class ChatService {
     return () => this.attachmentExpiryListeners.delete(listener)
   }
 
-  async history(): Promise<ChatHistoryEntry[]> {
+  /**
+   * The whole history, loaded once per change: the reload, the attachment
+   * ledger and the backup share one load until something changes
+   * (`emitUpdate`) or a disappearing message reaches its deadline.
+   */
+  history(): Promise<ChatHistoryEntry[]> {
+    return this.cachedHistory('all', () => this.loadHistory())
+  }
+
+  private cachedHistory(
+    kind: 'all' | 'live',
+    load: () => Promise<ChatHistoryEntry[]>,
+  ): Promise<ChatHistoryEntry[]> {
+    const hit = this.historyCache.get(kind)
+    if (hit && hit.revision === this.revision && Date.now() < hit.validUntil) return hit.value
+    const entry = { revision: this.revision, validUntil: Infinity, value: load() }
+    this.historyCache.set(kind, entry)
+    entry.value.then(
+      (entries) => { entry.validUntil = nextDeadline(entries) },
+      () => { if (this.historyCache.get(kind) === entry) this.historyCache.delete(kind) },
+    )
+    return entry.value
+  }
+
+  private async loadHistory(): Promise<ChatHistoryEntry[]> {
     const [live, restored] = await Promise.all([
       this.liveHistory(),
       this.backup?.restoredHistoryAsync() ?? Promise.resolve([]),
@@ -411,7 +441,11 @@ export class ChatService {
     return this.backup.fetchMediaCiphertext(mediaId, accessToken, signal)
   }
 
-  private async liveHistory(): Promise<ChatHistoryEntry[]> {
+  private liveHistory(): Promise<ChatHistoryEntry[]> {
+    return this.cachedHistory('live', () => this.loadLiveHistory())
+  }
+
+  private async loadLiveHistory(): Promise<ChatHistoryEntry[]> {
     const { history, expiry } = await this.withLock(async () => {
       const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
       return { expiry, history: await this.client.history() }
@@ -1122,10 +1156,11 @@ export class ChatService {
       return this.reconcilePromise
     }
     this.reconcilePromise = this.withLock(async () => {
+      const commits = this.client.storeCommits?.()
       const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
-      return { expiry, report: await this.client.reconcile() }
+      return { commits, expiry, report: await this.client.reconcile() }
     })
-      .then(async ({ expiry, report }) => {
+      .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
         const mlsTyping = await this.withMlsWorkflow(async () => {
           return await this.mls?.reconcile() ?? []
@@ -1161,8 +1196,13 @@ export class ChatService {
           }]
         })
         for (const event of [...directTyping, ...mlsTyping]) this.emitTyping(event, true)
-        await this.reconcileAttachmentLedger()
-        this.notifyPeers()
+        // Most passes (a poll, a socket hint) find nothing: then nothing was
+        // written, and neither this tab nor the others reload anything.
+        const after = await this.withLock(async () => this.client.storeCommits?.())
+        if (commits === undefined || after !== commits) {
+          await this.reconcileAttachmentLedger()
+          this.notifyPeers()
+        }
         return report
       })
       .finally(() => {
@@ -1716,7 +1756,9 @@ export class ChatService {
     return result
   }
 
+  /** Something may have changed (here, in another tab, in the backup). */
   private emitUpdate(): void {
+    this.revision += 1
     for (const listener of this.listeners) listener()
   }
 
@@ -2054,4 +2096,15 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 /** The server's answer when it does not know this browser's Chat device. */
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
+}
+
+/** When the soonest disappearing message among `entries` is due (or never). */
+function nextDeadline(entries: readonly ChatHistoryEntry[]): number {
+  const now = Date.now()
+  let next = Infinity
+  for (const entry of entries) {
+    const at = entry.content.expiresAtMs
+    if (at !== undefined && at > now && at < next) next = at
+  }
+  return next
 }

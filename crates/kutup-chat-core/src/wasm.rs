@@ -675,6 +675,13 @@ impl WasmChatClient {
         })
     }
 
+    /// How many writes this browser's store has committed in this session:
+    /// read before and after an operation, it tells whether anything changed.
+    #[wasm_bindgen(js_name = storeCommits)]
+    pub fn store_commits(&self) -> f64 {
+        self.engine.session().db().commit_count() as f64
+    }
+
     #[wasm_bindgen(getter, js_name = deviceId)]
     pub fn device_id(&self) -> u32 {
         self.engine.session().device_id()

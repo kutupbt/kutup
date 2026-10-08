@@ -114,6 +114,7 @@ pub struct IndexedDbChatDb {
     /// write checks it inside its own transaction. `None` until claimed.
     fence: std::cell::Cell<Option<u64>>,
     cipher: StoreCipher,
+    commits: std::cell::Cell<u64>,
 }
 
 impl IndexedDbChatDb {
@@ -167,6 +168,7 @@ impl IndexedDbChatDb {
             writer,
             fence: std::cell::Cell::new(None),
             cipher,
+            commits: std::cell::Cell::new(0),
         })
     }
 
@@ -1052,7 +1054,13 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(self.put(&meta, string_key(LAST_SENT_SEQ), &seq)?);
         }
 
-        finish_write(transaction, operations).await
+        finish_write(transaction, operations).await?;
+        self.commits.set(self.commits.get() + 1);
+        Ok(())
+    }
+
+    fn commit_count(&self) -> u64 {
+        self.commits.get()
     }
 }
 

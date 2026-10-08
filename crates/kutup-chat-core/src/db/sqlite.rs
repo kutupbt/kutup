@@ -260,6 +260,7 @@ CREATE TABLE IF NOT EXISTS meta (
 /// A device store backed by a single SQLite database.
 pub struct SqliteChatDb {
     conn: RefCell<Connection>,
+    commits: std::cell::Cell<u64>,
 }
 
 impl SqliteChatDb {
@@ -316,6 +317,7 @@ impl SqliteChatDb {
         ensure_schema_upgrades(&conn)?;
         Ok(Self {
             conn: RefCell::new(conn),
+            commits: std::cell::Cell::new(0),
         })
     }
 }
@@ -1367,7 +1369,13 @@ impl ChatDb for SqliteChatDb {
             ))?;
         }
 
-        db(tx.commit())
+        db(tx.commit())?;
+        self.commits.set(self.commits.get() + 1);
+        Ok(())
+    }
+
+    fn commit_count(&self) -> u64 {
+        self.commits.get()
     }
 }
 

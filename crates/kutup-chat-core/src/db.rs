@@ -860,6 +860,11 @@ pub trait ChatDb {
     /// commits are refused if it ever resumes. Otherwise this adopts the
     /// current generation. Returns the generation now held. A store with one
     /// owner (native SQLite) has nothing to fence.
+    /// How many units of work this connection has committed. A caller that
+    /// reads it before and after an operation learns whether anything was
+    /// written, without reading the store.
+    fn commit_count(&self) -> u64;
+
     async fn claim_writer(&self, take_over: bool) -> Result<u64> {
         let _ = take_over;
         Ok(0)
