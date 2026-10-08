@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Request } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { backupCursor, bubble, openChat, openNoteToSelf, send, waitForProtection } from '../fixtures/chat'
+import { backupCursor, bubble, openChat, openChats, openNoteToSelf, send, waitForProtection } from '../fixtures/chat'
 import { recordSafeCheckpoint } from '../safe-diagnostics'
 
 const PASSWORD = 'Deneme123*ContinuousBackupPassword'
@@ -83,6 +83,16 @@ test('a clean browser automatically restores server-protected Chat history', asy
 
   await restored.reload()
   await expect(bubble(restored, message)).toBeVisible({ timeout: 90_000 })
+
+  // Restored history (held in memory, not in this browser's own index) is
+  // searchable like the rest.
+  await openChats(restored)
+  await restored.getByTestId('chat-search-input').fill(`browser loss ${run}`)
+  const found = restored.getByTestId('chat-search-result')
+  await expect(found).toHaveCount(1, { timeout: 30_000 })
+  await expect(found.first()).toContainText(message)
+  await found.first().click()
+  await expect(bubble(restored, message)).toBeVisible({ timeout: 30_000 })
 
   await bubble(restored, message).hover()
   await bubble(restored, message).getByTestId('chat-reply-button').click()

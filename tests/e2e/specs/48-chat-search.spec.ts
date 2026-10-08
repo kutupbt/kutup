@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
 import {
+  acceptGroup,
   acceptRequest,
+  composer,
+  createGroup,
   deleteForEveryone,
   editMessage,
   message,
@@ -76,9 +79,27 @@ test('search finds messages through the encrypted index: Turkish folding, word s
   await expectNothing(pageA, `eski ${tag}`)
   await expectNothing(pageA, `silinecek ${tag}`)
 
+  // Group messages are indexed too, on both sides.
+  const groupId = await createGroup(pageA, bob.username, `Arama ${tag}`)
+  await acceptGroup(pageB, groupId)
+  await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
+  await expect(composer(pageA)).toBeVisible()
+  const groupText = `Grup toplantısı Çarşamba ${tag}`
+  await send(pageA, groupText)
+  await expect(message(pageB, groupText)).toBeVisible({ timeout: 45_000 })
+  for (const page of [pageA, pageB]) {
+    const inGroup = await search(page, `carsamba ${tag}`)
+    await expect(inGroup).toHaveCount(1, { timeout: 30_000 })
+    await expect(inGroup.first()).toContainText(groupText)
+  }
+
   // A result opens the conversation at the message.
-  const result = (await search(pageB, `kitap ${tag}`)).first()
-  await result.click()
+  // (Wait for this query's result: the previous query's stays on screen
+  // until the new answer arrives.)
+  const results = await search(pageB, `kitap ${tag}`)
+  await expect(results).toHaveCount(1, { timeout: 30_000 })
+  await expect(results.first()).toContainText(books)
+  await results.first().click()
   await expect(message(pageB, books)).toBeVisible({ timeout: 30_000 })
 
   // The index is stored, encrypted, with the history: it answers after a reload.
