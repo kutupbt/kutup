@@ -19,6 +19,8 @@ import { privateCiphertextCacheForAccountV1, type PrivateCiphertextCacheV1 } fro
 import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
 import { setSealedStorage } from '../state/sealedState'
+import { currentReadMarks } from '../state/readState'
+import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -150,7 +152,12 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
       })
     const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals] =
       await Promise.all([
-        service.history(),
+        // The live window, not the whole history (Phase 2b): read again only
+        // for the conversations that changed.
+        service.liveWindow((controls) => {
+          const self = state.self?.address ?? ''
+          return mergeReadMarks(currentReadMarks(), foldAccountState(controls, self).readThrough)
+        }).then((window) => window.history),
         orPrevious(service.inboundAttention(), previous.attention),
         service.contacts(),
         orPrevious(service.profile(), previous.profile),

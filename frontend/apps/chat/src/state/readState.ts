@@ -68,6 +68,11 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
+/** The marks now, outside React (the chat store). */
+export function currentReadMarks(): Readonly<ReadMarks> {
+  return load().marks
+}
+
 export function useReadMarks(): Readonly<ReadMarks> {
   return useSyncExternalStore(subscribe, () => load().marks)
 }

@@ -430,6 +430,7 @@ export function ConversationView({
 
       <MessageScroller
         conversationKey={model.key}
+        onNearTop={model.complete ? undefined : model.loadOlder}
         anchorId={focus ? null : rows.some((r) => r.kind === 'unread') ? 'chat-unread-marker' : null}
         itemKeys={itemKeys}
         jumpToLatestLabel={t('chat.jumpToLatest')}

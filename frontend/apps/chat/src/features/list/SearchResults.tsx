@@ -11,6 +11,7 @@ import { conversationTitle, personName } from '../../lib/names'
 import { formatShortTime } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { conversationList, foldMutations, messageIdOf } from '../../state/views'
+import { useFullHistory } from '../../state/fullHistory'
 import { conversationPath } from './paths'
 
 /** Conversations whose name matches, then messages that do (newest first). */
@@ -21,6 +22,7 @@ export function SearchResults({ query }: { query: string }) {
   const self = chat.self!
   const { snapshot } = chat
   const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
+  const history = useFullHistory()
 
   const all = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
   const byKey = useMemo(() => new Map(all.map((c) => [c.key, c])), [all])
@@ -33,9 +35,9 @@ export function SearchResults({ query }: { query: string }) {
   }, [query, all, self.address, t])
 
   const messages = useMemo(() => {
-    const visible = snapshot.history.filter((m) => isVisibleChatMessage(m, now))
-    return searchChatHistory(visible, query, foldMutations(snapshot.history, self.address)).reverse()
-  }, [query, snapshot.history, self.address, now])
+    const visible = history.filter((m) => isVisibleChatMessage(m, now))
+    return searchChatHistory(visible, query, foldMutations(history, self.address)).reverse()
+  }, [query, history, self.address, now])
 
   if (conversations.length === 0 && messages.length === 0) {
     return (

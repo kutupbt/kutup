@@ -27,7 +27,12 @@ interface MessageScrollerProps {
   itemKeys: string[]
   jumpToLatestLabel: string
   timelineLabel: string
+  /** Scrolled near the top: older messages can be read in. */
+  onNearTop?: () => void
 }
+
+/** How close to the top older messages start loading. */
+const NEAR_TOP_PX = 400
 
 function isAtLiveEdge(element: HTMLElement): boolean {
   return element.scrollHeight - element.clientHeight - element.scrollTop <= LIVE_EDGE_THRESHOLD_PX
@@ -41,6 +46,7 @@ export function MessageScroller({
   itemKeys,
   jumpToLatestLabel,
   timelineLabel,
+  onNearTop,
 }: MessageScrollerProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -134,6 +140,7 @@ export function MessageScroller({
         onScroll={() => {
           const viewport = viewportRef.current
           if (viewport && isAtLiveEdge(viewport)) setHasOffscreenArrival(false)
+          if (viewport && viewport.scrollTop < NEAR_TOP_PX) onNearTop?.()
           captureSnapshot()
         }}
       >

@@ -46,9 +46,17 @@ import type {
 import { loadChatWasm } from './wasm'
 import { EngineLock } from './engineLock'
 import { SealedStorage } from './sealedStorage'
+import {
+  LiveTimeline,
+  windowHistory,
+  type ConversationSummary,
+  type CoreConversationSummary,
+  type CorePage,
+} from './liveTimeline'
 import { isSupportedChat } from './capabilities'
 import {
   canonicalAccountAddress,
+  conversationKey,
   parseAccountAddress,
   toCoreAccountAddress,
   withHomeServer,
@@ -153,6 +161,10 @@ export class ChatService {
   private readonly client: WasmChatClientHandle
   private readonly lockName: string
   private readonly engineLock: EngineLock
+  /** The live window of the history (`liveTimeline.ts`). */
+  private readonly timeline: LiveTimeline
+  /** Restored backup history by conversation, until the backup changes. */
+  private restoredByKey: Promise<Map<string, ChatHistoryEntry[]>> | null = null
   /** Bumped on every change; history loads are shared within one revision. */
   private revision = 0
   private readonly historyCache = new Map<
@@ -206,6 +218,34 @@ export class ChatService {
   ) {
     this.client = client
     this.sealedStorage = sealedStorage
+    this.timeline = new LiveTimeline(
+      {
+        changes: async (mark) => {
+          const { expiry, commits, keys } = await this.withLock(async () => {
+            // Expired disappearing messages go first; their removal is a change.
+            const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
+            return {
+              expiry,
+              commits: this.client.storeCommits?.() ?? 0,
+              keys: this.client.changedConversations?.(mark) ?? null,
+            }
+          })
+          await this.releaseExpiredAttachments(expiry)
+          return { commits, keys }
+        },
+        accountControls: () => this.withLock(async () => await this.client.accountControls?.() ?? []),
+        summaries: (readThrough, recent, keys) => this.withLock(async () =>
+          (await this.client.conversationSummaries?.(readThrough, recent, keys) ?? []) as CoreConversationSummary[]),
+        page: (key, before, limit) => this.withLock(async () =>
+          (await this.client.conversationHistory?.(key, before, limit) ?? { entries: [] }) as CorePage),
+      },
+      (entry) => this.withHomeServerEntry(entry),
+      (conversation) => {
+        const complete = this.withHomeServerConversation(conversation)
+        return { key: conversationKey(complete), conversation: complete }
+      },
+      conversationKey({ kind: 'direct', address: withHomeServer({ username }, capabilities.serverName) }),
+    )
     this.deviceId = client.deviceId
     this.lockName = lockName
     this.engineLock = engineLock
@@ -238,7 +278,11 @@ export class ChatService {
       const call = parseCallBroadcast(message.data)
       if (event) this.emitTyping(event, false)
       else if (call) this.emitCall(call, false)
-      else this.emitUpdate()
+      else {
+        // Another tab wrote: this tab's journal does not know what.
+        this.timeline.invalidateAll()
+        this.emitUpdate()
+      }
     }
     window.addEventListener('online', this.handleOnline)
     window.addEventListener('offline', this.handleOffline)
@@ -332,7 +376,10 @@ export class ChatService {
             ),
           sealer: service.sealedStorage,
         })
-        service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
+        service.backupUnsubscribe = service.backup.subscribe(() => {
+          service.restoredByKey = null
+          service.emitUpdate()
+        })
       }
       await service.initializeMls()
       await service.revokeReplacedDevice(options.userId)
@@ -443,6 +490,76 @@ export class ChatService {
 
   private liveHistory(): Promise<ChatHistoryEntry[]> {
     return this.cachedHistory('live', () => this.loadLiveHistory())
+  }
+
+  /**
+   * The live window: each conversation's newest and unread entries, its
+   * timer and the account's controls, as one history, with the summaries
+   * (unread counts against `readThroughFor`). Only what changed is read
+   * again (`liveTimeline.ts`).
+   */
+  async liveWindow(
+    readThroughFor: (controls: readonly ChatHistoryEntry[]) => Readonly<Record<string, number>>,
+  ): Promise<{ history: ChatHistoryEntry[]; summaries: ConversationSummary[] }> {
+    const [window, restored] = await Promise.all([
+      this.timeline.refresh(readThroughFor),
+      this.restoredHistory(),
+    ])
+    // Restored history counts as read: its newest entries per conversation
+    // join the window, so a restored conversation is listed.
+    const restoredRecent: ChatHistoryEntry[] = []
+    for (const entries of restored.values()) restoredRecent.push(...entries.slice(-RESTORED_RECENT))
+    return { history: windowHistory(window, restoredRecent), summaries: window.summaries }
+  }
+
+  /**
+   * One page of a conversation (by app key), newest first, older than
+   * `before`; for the conversation on screen. With no `before` in the
+   * result, the page reaches the start, and the conversation's restored
+   * history is included.
+   */
+  async conversationPage(
+    key: string,
+    before: string | undefined,
+    limit: number,
+  ): Promise<{ entries: ChatHistoryEntry[]; before?: string }> {
+    const page = await this.timeline.page(key, before, limit)
+    if (page.before !== undefined) return page
+    const restored = (await this.restoredHistory()).get(key) ?? []
+    const ids = new Set(page.entries.map((entry) => entry.id))
+    const older = restored.filter((entry) => !ids.has(entry.id)).reverse()
+    return { entries: [...page.entries, ...older] }
+  }
+
+  private restoredHistory(): Promise<Map<string, ChatHistoryEntry[]>> {
+    if (!this.backup) return Promise.resolve(new Map())
+    if (!this.restoredByKey) {
+      const loading = this.backup.restoredHistoryAsync().then((entries) => {
+        const byKey = new Map<string, ChatHistoryEntry[]>()
+        for (const entry of entries.map((value) => this.withHomeServerEntry(value))) {
+          const key = conversationKey(entry.conversation)
+          const list = byKey.get(key)
+          if (list) list.push(entry)
+          else byKey.set(key, [entry])
+        }
+        for (const list of byKey.values()) list.sort((left, right) => left.timestampMs - right.timestampMs)
+        return byKey
+      })
+      loading.catch(() => { if (this.restoredByKey === loading) this.restoredByKey = null })
+      this.restoredByKey = loading
+    }
+    return this.restoredByKey
+  }
+
+  private withHomeServerConversation(conversation: ConversationId): ConversationId {
+    if (conversation.kind !== 'direct') return conversation
+    return { kind: 'direct', address: withHomeServer(conversation.address, this.capabilities.serverName) }
+  }
+
+  private withHomeServerEntry(entry: ChatHistoryEntry): ChatHistoryEntry {
+    if (entry.conversation.kind !== 'direct') return entry
+    const conversation = this.withHomeServerConversation(entry.conversation) as Extract<ConversationId, { kind: 'direct' }>
+    return { ...entry, conversation, peer: canonicalAccountAddress(conversation.address) }
   }
 
   private async loadLiveHistory(): Promise<ChatHistoryEntry[]> {
@@ -2097,6 +2214,9 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
 }
+
+/** Restored entries per conversation that join the live window. */
+const RESTORED_RECENT = 30
 
 /** When the soonest disappearing message among `entries` is due (or never). */
 function nextDeadline(entries: readonly ChatHistoryEntry[]): number {

@@ -1837,6 +1837,14 @@ export interface WasmChatClientHandle {
   maintainPrekeys(): Promise<unknown>
   /** Writes this browser's store has committed in this session. */
   storeCommits?(): number
+  /** The conversations changed since a `storeCommits` mark (null: unknown). */
+  changedConversations?(since: number): string[] | null
+  /** Per-conversation summaries from the core's timelines. */
+  conversationSummaries?(readThrough: Record<string, number>, recent: number, keys?: string[]): Promise<unknown>
+  /** One newest-first page of a conversation. */
+  conversationHistory?(key: string, before: string | undefined, limit: number): Promise<unknown>
+  /** This account's own controls in Note to Self. */
+  accountControls?(): Promise<ChatHistoryEntry[]>
   /** Fence this tab's writes behind the store's writer generation. */
   claimWriter?(takeOver: boolean): Promise<number>
   /** The server's mailbox retention (0: for ever); replaced prekeys are kept that long plus a margin. */
