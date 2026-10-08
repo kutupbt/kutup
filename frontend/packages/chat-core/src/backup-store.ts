@@ -91,6 +91,8 @@ export interface BackupLocalState {
   highestGeneration: number
   highestCursor: number
   highestManifestDigest: string
+  /** Bumped by every write to the records, so a copy kept in memory knows when it is stale. */
+  recordsRevision: number
 }
 
 export function openBackupStore(name: string): Promise<IDBDatabase> {
@@ -167,6 +169,7 @@ export async function loadBackupState(
     highestGeneration: 0,
     highestCursor: 0,
     highestManifestDigest: ZERO_DIGEST,
+    recordsRevision: 0,
   }
   return value ? { ...defaults, ...value } : defaults
 }
@@ -217,6 +220,7 @@ export async function replaceRestoredRecords<T>(
 ): Promise<void> {
   const state = await loadBackupState(db, now)
   state.restoredCursor = cursor
+  state.recordsRevision += 1
   const rows = sealRecords(sealer, records)
   const stores = media ? ['meta', 'records', 'media'] : ['meta', 'records']
   const transaction = db.transaction(stores, 'readwrite')

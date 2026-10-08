@@ -30,6 +30,12 @@ vi.mock('@kutup/crypto/rustWasm', () => ({
     sealChatBackupObject: (plaintext: Uint8Array) => bytesBase64(plaintext),
     openChatBackupObject: (ciphertext: string) => ciphertext,
     signChatBackupManifest: (manifest: unknown) => manifest,
+    prepareChatBackupMedia: (_root: string, _account: string, _backup: string, attachmentId: string) => ({
+      mediaId: `media-${attachmentId}`,
+      paddedPlaintextBytes: 256n,
+      outerEncryptionKey: 'outer',
+      objectHeader: '',
+    }),
   })),
 }))
 
@@ -42,7 +48,8 @@ import {
 } from './backup'
 import { testSealer } from './testSealer'
 import { getAll, openBackupStore, putValue, type BackupOutboxEntry } from './backup-store'
-import type { ChatHistoryEntry } from './types'
+import { conversationKey } from './identity'
+import type { ChangeMark, ChatHistoryEntry } from './types'
 
 const zeroDigest = '0'.repeat(64)
 const openCoordinators: ChatBackupCoordinator[] = []
@@ -784,3 +791,152 @@ describe('ChatBackupCoordinator durable retry', () => {
     }
   }, 30_000)
 })
+
+describe('ChatBackupCoordinator collection by conversation', () => {
+  const HOUR = 60 * 60 * 1000
+
+  function message(id: number, conversation: string, text: string, extra: Partial<ChatHistoryEntry['content']> = {}): ChatHistoryEntry {
+    const entry = historyEntry()
+    return {
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
+      conversation: { kind: 'group', groupId: conversation },
+      peer: '',
+      timestampMs: 1_700_000_000_000 + id,
+      content: { ...entry.content, messageId: `10000000-0000-4000-8000-${String(id).padStart(12, '0')}`, body: { text }, text, ...extra },
+    }
+  }
+
+  /** Two coordinators over the same history: one reads it whole every cycle, one by conversation. */
+  async function pair() {
+    let now = 1_700_000_000_000
+    let history: ChatHistoryEntry[] = []
+    let commits = 0
+    let journal: string[] | null = []
+    const sources: { attachmentId: string; referenceId: string; ciphertextBytes: number }[] = []
+    const reads: string[] = []
+    const conversations = {
+      changes: async (mark: ChangeMark | null) => ({
+        mark: { commits, epoch: 0 },
+        keys: mark === null ? null : journal,
+      }),
+      keys: async () => [...new Set(history.map(entry => conversationKey(entry.conversation)))],
+      entries: async (key: string) => {
+        reads.push(key)
+        return history.filter(entry => conversationKey(entry.conversation) === key)
+      },
+    }
+    const start = async (name: string, byConversation: boolean) => {
+      const transport = new ScriptedTransport()
+      const database = `backup-${name}:${crypto.randomUUID()}`
+      databaseNames.push(database)
+      const base = runtime(transport)
+      const coordinator = await ChatBackupCoordinator.open({
+        databaseName: database,
+        email: 'user@kutup.dev',
+        username: 'user',
+        serverName: 'kutup.dev',
+        masterKey: new Uint8Array(32).fill(3),
+        deviceId: 9,
+        history: async () => history,
+        manifestSequence: async () => 1,
+        mediaSources: () => sources,
+        localMediaCiphertext: async function* () {},
+        sealer: testSealer,
+        ...(byConversation ? { conversations } : {}),
+      }, { ...base, clock: { now: () => now } })
+      openCoordinators.push(coordinator)
+      return { coordinator, transport }
+    }
+    const records = (transport: ScriptedTransport, from: number) => transport.appendRequests.slice(from)
+      .flatMap(request => (bytesJson(base64Bytes(request.ciphertext)) as { records: { recordId: string; tombstone: boolean }[] }).records)
+      .sort((left, right) => left.recordId.localeCompare(right.recordId))
+    return {
+      start,
+      records,
+      reads,
+      set: (value: ChatHistoryEntry[]) => { history = value },
+      commit: (touched: string[] | null) => { commits += 1; journal = touched },
+      advance: (ms: number) => { now += ms },
+      addSource: (attachmentId: string) => sources.push({ attachmentId, referenceId: `ref-${attachmentId}`, ciphertextBytes: 128 }),
+    }
+  }
+
+  it('queues what reading everything would, reading only what changed', async () => {
+    const world = await pair()
+    const attachment = {
+      version: 1 as const, suite: 1 as const, attachmentId: '55555555-5555-4555-8555-555555555555',
+      originDomain: 'kutup.dev', retrievalToken: 'opaque-token', ciphertextBytes: 128,
+      ciphertextSha256: 'a'.repeat(64), attachmentKey: Buffer.alloc(32, 6).toString('base64'),
+      plaintextBytes: 7, filename: 'photo.txt', mimeType: 'text/plain', mediaClass: 'file' as const,
+    }
+    const a1 = message(1, 'a', 'hello')
+    const a2 = message(2, 'a', 'there')
+    const b1 = message(3, 'b', 'soon gone', { expiresAtMs: 1_700_000_000_000 + 25 * HOUR, expiresAfterSeconds: 90_000 })
+    const c1 = message(4, 'c', 'a file', { attachment })
+    world.set([a1, a2, b1, c1])
+    const full = await world.start('full', false)
+    const incremental = await world.start('incremental', true)
+    await full.coordinator.settled()
+    await incremental.coordinator.settled()
+    expect(world.records(incremental.transport, 0)).toEqual(world.records(full.transport, 0))
+    expect(world.records(full.transport, 0)).toHaveLength(4)
+
+    const step = async (expectedReads: string[]) => {
+      const before = [full.transport.appendRequests.length, incremental.transport.appendRequests.length]
+      world.reads.length = 0
+      await full.coordinator.flushNow()
+      await incremental.coordinator.flushNow()
+      expect(world.reads.sort()).toEqual(expectedReads)
+      const queued = world.records(full.transport, before[0])
+      expect(world.records(incremental.transport, before[1])).toEqual(queued)
+      return queued
+    }
+
+    // An edit in one conversation, a new message and a removal in two more.
+    world.set([a1, message(2, 'a', 'there!'), b1, c1])
+    world.commit(['group:a'])
+    expect(await step(['group:a'])).toHaveLength(1)
+    world.set([a1, b1, c1, message(5, 'c', 'another')])
+    world.commit(['group:a', 'group:c'])
+    expect((await step(['group:a', 'group:c'])).map(record => record.tombstone).sort())
+      .toEqual([false, true])
+
+    // Nothing written, but the disappearing message is now within a day of
+    // its end: its conversation is read again and the record removed.
+    world.advance(2 * HOUR)
+    world.commit([])
+    const expired = await step(['group:b'])
+    expect(expired).toMatchObject([{ tombstone: true }])
+
+    // The attachment is now protected: its record gains the backup media,
+    // read again from its conversation.
+    world.addSource(attachment.attachmentId)
+    world.commit([])
+    const protectedRecord = await step(['group:c'])
+    expect(protectedRecord).toMatchObject([{ content: { attachment: { backupMediaId: `media-${attachment.attachmentId}` } } }])
+
+    // Nothing at all changed: nothing read, nothing queued.
+    world.commit([])
+    expect(await step([])).toEqual([])
+
+    // The journal cannot tell: everything is read, and nothing differs.
+    world.commit(null)
+    expect(await step(['group:a', 'group:b', 'group:c'])).toEqual([])
+  })
+
+  it('serves the restored history from memory, and says when it changed', async () => {
+    const world = await pair()
+    world.set([message(1, 'a', 'hello')])
+    const { coordinator } = await world.start('restored', true)
+    await coordinator.settled()
+    const version = coordinator.restoredVersion()
+    // Local rows show from the live history, not as restored.
+    expect(await coordinator.restoredHistoryAsync()).toEqual([])
+    world.set([message(1, 'a', 'hello'), message(2, 'a', 'again')])
+    world.commit(['group:a'])
+    await coordinator.flushNow()
+    expect(coordinator.restoredVersion()).toBe(version)
+  })
+})
+

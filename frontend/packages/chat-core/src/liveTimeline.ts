@@ -128,11 +128,6 @@ export class LiveTimeline {
     return { summaries: [...this.summaries.values()], controls: this.controls }
   }
 
-  /** The core's key for a conversation (by app key), once known. */
-  coreKeyOf(key: string): string | undefined {
-    return this.coreKeys.get(key)
-  }
-
   /**
    * One page of a conversation (by app key), newest first, older than
    * `before`; `before` in the result continues it, absent at the start.

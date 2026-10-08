@@ -296,6 +296,15 @@ export type ConversationId =
   | { kind: 'direct'; address: AccountAddress }
   | { kind: 'group'; groupId: string }
 
+/**
+ * A position in one tab's change journal (`ChatService.changesSince`):
+ * its store commits, and how many times another tab wrote since it opened.
+ */
+export interface ChangeMark {
+  commits: number
+  epoch: number
+}
+
 export interface ChatHistoryEntry {
   id: string
   conversation: ConversationId
@@ -1841,6 +1850,8 @@ export interface WasmChatClientHandle {
   changedConversations?(since: number): string[] | null
   /** Per-conversation summaries from the core's timelines. */
   conversationSummaries?(readThrough: Record<string, number>, recent: number, keys?: string[]): Promise<unknown>
+  /** The key of every conversation with a timeline. */
+  conversationKeys?(): Promise<string[]>
   /** One newest-first page of a conversation. */
   conversationHistory?(key: string, before: string | undefined, limit: number): Promise<unknown>
   /** This account's own controls in Note to Self. */

@@ -3225,6 +3225,18 @@ impl WasmChatClient {
         to_output(&summaries)
     }
 
+    /// The key of every conversation with a timeline, for work that reads
+    /// the whole history one conversation at a time (the backup).
+    #[wasm_bindgen(js_name = conversationKeys)]
+    pub async fn conversation_keys(&self) -> std::result::Result<Vec<String>, JsValue> {
+        let db = self.engine.session().db().as_ref();
+        Ok(crate::timeline::load_directory(db)
+            .await
+            .map_err(chat_error)?
+            .map(|directory| directory.conversations.into_keys().collect())
+            .unwrap_or_default())
+    }
+
     /// One conversation's entries, newest first, older than `before` (a
     /// cursor from an earlier page), at most `limit`; with the cursor to ask
     /// for the next page, or none at the start of the conversation.

@@ -5,6 +5,7 @@ import { ApiChatTransport } from './transport'
 import type {
   AccountAddress,
   ChatCapabilities,
+  ChangeMark,
   ChatAttachmentDescriptorV1,
   ChatDevice,
   ChatHistoryEntry,
@@ -163,13 +164,16 @@ export class ChatService {
   private readonly engineLock: EngineLock
   /** The live window of the history (`liveTimeline.ts`). */
   private readonly timeline: LiveTimeline
+  /** Writes by other tabs seen so far; their changes are not in this tab's journal. */
+  private remoteWrites = 0
   /** Where the attachment ledger has followed the history to (`changesSince`). */
-  private ledgerMark = 0
-  private ledgerScanned = false
+  private ledgerMark: ChangeMark | null = null
   /** Attachments still to be entered in the ledger, by message and attachment id. */
   private readonly pendingAttachments = new Map<string, ChatHistoryEntry>()
   /** Restored backup history by conversation, until the backup changes. */
   private restoredByKey: Promise<Map<string, ChatHistoryEntry[]>> | null = null
+  /** The backup's `restoredVersion` that `restoredByKey` was read at. */
+  private restoredByKeyVersion = -1
   /** Bumped on every change; history loads are shared within one revision. */
   private revision = 0
   private readonly historyCache = new Map<
@@ -285,6 +289,7 @@ export class ChatService {
       else if (call) this.emitCall(call, false)
       else {
         // Another tab wrote: this tab's journal does not know what.
+        this.remoteWrites += 1
         this.timeline.invalidateAll()
         this.emitUpdate()
       }
@@ -380,11 +385,15 @@ export class ChatService {
               chatMediaCacheBindingV1(descriptor), signal,
             ),
           sealer: service.sealedStorage,
+          conversations: client.conversationKeys && client.changedConversations && client.storeCommits
+            ? {
+                changes: (mark) => service.changesSince(mark),
+                keys: () => service.conversationKeys(),
+                entries: (key) => service.conversationEntries(key),
+              }
+            : undefined,
         })
-        service.backupUnsubscribe = service.backup.subscribe(() => {
-          service.restoredByKey = null
-          service.emitUpdate()
-        })
+        service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }
       await service.initializeMls()
       await service.revokeReplacedDevice(options.userId)
@@ -538,53 +547,57 @@ export class ChatService {
 
   /**
    * For work that follows the history (the attachment ledger, the backup):
-   * the conversations (app keys) this tab's writes changed since `mark` (a
-   * value this returned before; 0 at first), or `null` when that is not
-   * known and everything should be looked at.
+   * the conversations (the core's keys) this tab's writes changed since
+   * `mark` (one this returned before), or `null` when that is not known (no
+   * mark yet, another tab wrote, the journal no longer reaches back) and
+   * everything should be looked at.
    */
-  async changesSince(mark: number): Promise<{ mark: number; keys: string[] | null }> {
+  async changesSince(mark: ChangeMark | null): Promise<{ mark: ChangeMark; keys: string[] | null }> {
     return await this.withLock(async () => {
+      const epoch = this.remoteWrites
       const commits = this.client.storeCommits?.()
-      if (commits === undefined || !this.client.changedConversations) return { mark: 0, keys: null }
-      const core = this.client.changedConversations(mark)
-      return { mark: commits, keys: core === null ? null : core.map((key) => this.appKeyOfCore(key)) }
+      if (commits === undefined || !this.client.changedConversations) return { mark: { commits: 0, epoch }, keys: null }
+      const keys = mark === null || mark.epoch !== epoch ? null : this.client.changedConversations(mark.commits)
+      return { mark: { commits, epoch }, keys }
     })
   }
 
-  /** The newest `limit` entries of one conversation (app key), newest first. */
+  /** The core's key of every conversation. */
+  async conversationKeys(): Promise<string[]> {
+    return await this.withLock(async () => await this.client.conversationKeys?.() ?? [])
+  }
+
+  /** The newest `limit` entries of one conversation (the core's key), newest first. */
   private async newestEntries(key: string, limit: number): Promise<ChatHistoryEntry[]> {
-    const coreKey = this.timeline.coreKeyOf(key) ?? key
     const page = await this.withLock(async () =>
-      (await this.client.conversationHistory?.(coreKey, undefined, limit) ?? { entries: [] }) as CorePage)
+      (await this.client.conversationHistory?.(key, undefined, limit) ?? { entries: [] }) as CorePage)
     return page.entries.map((entry) => this.withHomeServerEntry(entry))
   }
 
-  /** Every entry of one conversation (app key), oldest first. */
+  /**
+   * The entries of one conversation (the core's key), oldest first: those
+   * of the full history that belong to it, without the controls that only
+   * act on it from Note to Self.
+   */
   async conversationEntries(key: string): Promise<ChatHistoryEntry[]> {
-    const coreKey = this.timeline.coreKeyOf(key) ?? key
     const entries: ChatHistoryEntry[] = []
     let before: string | undefined
     do {
       const page = await this.withLock(async () =>
-        (await this.client.conversationHistory?.(coreKey, before, 500) ?? { entries: [] }) as CorePage)
-      entries.push(...page.entries.map((entry) => this.withHomeServerEntry(entry)))
+        (await this.client.conversationHistory?.(key, before, 500) ?? { entries: [] }) as CorePage)
+      for (const entry of page.entries) {
+        if (conversationKey(entry.conversation) === key) entries.push(this.withHomeServerEntry(entry))
+      }
       before = page.before ?? undefined
     } while (before)
     return entries.reverse()
   }
 
-  /** The app's key for a conversation key from the core. */
-  private appKeyOfCore(coreKey: string): string {
-    if (!coreKey.startsWith('direct:')) return coreKey
-    const address = parseAccountAddress(coreKey.slice('direct:'.length))
-    return address
-      ? conversationKey({ kind: 'direct', address: withHomeServer(address, this.capabilities.serverName) })
-      : coreKey
-  }
-
   private restoredHistory(): Promise<Map<string, ChatHistoryEntry[]>> {
     if (!this.backup) return Promise.resolve(new Map())
-    if (!this.restoredByKey) {
+    const version = this.backup.restoredVersion()
+    if (!this.restoredByKey || this.restoredByKeyVersion !== version) {
+      this.restoredByKeyVersion = version
       const loading = this.backup.restoredHistoryAsync().then((entries) => {
         const byKey = new Map<string, ChatHistoryEntry[]>()
         for (const entry of entries.map((value) => this.withHomeServerEntry(value))) {
@@ -1785,9 +1798,8 @@ export class ChatService {
     if (!this.attachmentLedger) return
     const changes = await this.changesSince(this.ledgerMark)
     let seen: ChatHistoryEntry[] = []
-    if (!this.ledgerScanned || changes.keys === null) {
+    if (changes.keys === null) {
       seen = await this.history()
-      this.ledgerScanned = true
     } else {
       for (const key of changes.keys) seen.push(...await this.newestEntries(key, LEDGER_PAGE))
     }

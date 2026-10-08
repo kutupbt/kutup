@@ -37,6 +37,7 @@ function state(now = 1_700_000_000_000): BackupLocalState {
     highestGeneration: 0,
     highestCursor: 0,
     highestManifestDigest: zeroDigest,
+    recordsRevision: 0,
   }
 }
 

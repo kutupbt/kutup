@@ -26,7 +26,10 @@ import type {
   StoredBackupMedia,
   StoredBackupRecord,
 } from './backup-store'
-import type { ChatAttachmentDescriptorV1, ChatHistoryEntry } from './types'
+import { conversationKey } from './identity'
+import type { ChangeMark, ChatAttachmentDescriptorV1, ChatHistoryEntry } from './types'
+
+type ChatContent = ChatHistoryEntry['content']
 
 const ZERO_DIGEST = '0'.repeat(64)
 const SEGMENT_PURPOSE = 2
@@ -161,6 +164,41 @@ export interface ChatBackupOptions {
   ) => AsyncIterable<Uint8Array>
   /** Seals the mirror's records at rest (the service's `SealedStorage`). */
   sealer: BackupRecordSealer
+  /**
+   * The history one conversation at a time, following the change journal,
+   * so a cycle reads only the conversations that changed. Without it,
+   * every cycle reads the whole `history`.
+   */
+  conversations?: BackupConversationSource
+}
+
+export interface BackupConversationSource {
+  /** The conversations (keys) changed since `mark`; `null`: not known, read them all. */
+  changes(mark: ChangeMark | null): Promise<{ mark: ChangeMark; keys: string[] | null }>
+  /** Every conversation's key. */
+  keys(): Promise<string[]>
+  /** One conversation's entries, those of the full history that belong to it. */
+  entries(key: string): Promise<ChatHistoryEntry[]>
+}
+
+/**
+ * What the collection step keeps between cycles, so that one reads only the
+ * conversations that changed (`collectAndQueue`).
+ */
+interface Collected {
+  /** The `recordsRevision` of the records below; another value means they are stale. */
+  revision: number
+  /** Where the change journal was read to. */
+  mark: ChangeMark | null
+  /** Every record of the mirror, by id. */
+  records: Map<string, StoredRecord>
+  /** Local records by the conversation they were collected from, and back. */
+  members: Map<string, Set<string>>
+  groupOf: Map<string, string>
+  /** Per conversation, when its next entry leaves the backup by time. */
+  deadlines: Map<string, number>
+  /** Live records that hold an attachment or delete a message: what media protection reads. */
+  mediaRecords: Set<string>
 }
 
 export interface BackupConnectivity {
@@ -364,6 +402,9 @@ export class ChatBackupCoordinator {
   private disposed = false
   private compactionRequested = false
   private messageStorageFull = false
+  private collected: Collected | null = null
+  /** Bumped whenever the restored records (those with no local row) may have changed. */
+  private restoredChanges = 0
 
   private constructor(
     private readonly options: ChatBackupOptions,
@@ -479,22 +520,26 @@ export class ChatBackupCoordinator {
     return () => this.listeners.delete(listener)
   }
 
+  /**
+   * The restored history: records no local row has replaced (history from
+   * before this browser, or from another device's backup). Local rows are
+   * the live history's own and show from there.
+   */
   async restoredHistoryAsync(): Promise<ChatHistoryEntry[]> {
-    const stored = await readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer)
-    return stored
-      .map(({ record }) => record)
-      .filter(record => !record.tombstone && record.content)
-      .map(record => ({
-        id: record.recordId,
-        conversation: record.conversation,
-        peer: record.sender,
-        direction: record.outgoing ? 'outgoing' : 'incoming',
-        senderDeviceId: record.senderDeviceId || undefined,
-        timestampMs: record.timestampMs,
-        delivered: record.delivered,
-        deduplicated: false,
-        content: record.content!,
-      }))
+    const state = await loadState(this.db, this.runtime.clock.now())
+    const stored = this.collected?.revision === state.recordsRevision
+      ? this.collected.records.values()
+      : await readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer)
+    const restored: ChatHistoryEntry[] = []
+    for (const { record, local } of stored) {
+      if (!local && !record.tombstone && record.content) restored.push(entryOf(record))
+    }
+    return restored
+  }
+
+  /** Changes when `restoredHistoryAsync` may have; the same value, the same history. */
+  restoredVersion(): number {
+    return this.restoredChanges
   }
 
   async *fetchMediaCiphertext(
@@ -607,18 +652,19 @@ export class ChatBackupCoordinator {
     return this.running
   }
 
-  private async protectMedia(history: readonly ChatHistoryEntry[]): Promise<Map<string, string>> {
+  /** Protects the media of `contents` (the backed-up history's); attachment id → backup media id. */
+  private async protectMedia(contents: readonly ChatContent[]): Promise<Map<string, string>> {
     const wasm = await getCryptoWasm()
     const protectedIds = new Map<string, string>()
     const descriptors = new Map<string, ChatAttachmentDescriptorV1>()
-    const deletedMessageIds = new Set(history.flatMap(entry =>
-      entry.content.mutation?.operation === 'delete'
-        ? [entry.content.mutation.targetMessageId]
+    const deletedMessageIds = new Set(contents.flatMap(content =>
+      content.mutation?.operation === 'delete'
+        ? [content.mutation.targetMessageId]
         : []))
-    for (const entry of history) {
-      const descriptor = entry.content.attachment
-      if (descriptor && isEligible(entry, this.runtime.clock.now())
-          && (!entry.content.messageId || !deletedMessageIds.has(entry.content.messageId))) {
+    for (const content of contents) {
+      const descriptor = content.attachment
+      if (descriptor && isEligible(content, this.runtime.clock.now())
+          && (!content.messageId || !deletedMessageIds.has(content.messageId))) {
         descriptors.set(descriptor.attachmentId, descriptor)
       }
     }
@@ -781,93 +827,115 @@ export class ChatBackupCoordinator {
     await this.runtime.transport.uploadMedia(metadata, new Blob(parts))
   }
 
+  /**
+   * Brings the mirror up to date with the history and queues what changed
+   * as segments. The first cycle (and any after the records changed
+   * elsewhere, or when the change journal cannot tell) reads the whole
+   * history; later ones only the conversations that changed, those with an
+   * entry now due to leave the backup by time, and those whose media
+   * protection changed.
+   */
   private async collectAndQueue(): Promise<void> {
-    const [history, stored, localState] = await Promise.all([
-      this.options.history(),
-      readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer),
-      loadState(this.db, this.runtime.clock.now()),
-    ])
-    const localRecordIds = new Set(await Promise.all(
-      history.map(entry => canonicalRecordId(entry.id)),
-    ))
-    // A clean install restores display history before its new Chat engine has
-    // any local rows. Keep those server-authenticated records in the media
-    // protection set until a local row supersedes them. Otherwise the first
-    // startup cycle reconciles an empty media set and destroys the only copy
-    // capable of satisfying the restored attachment.
-    const protectionHistory = history.concat(stored
-      .filter(value => !value.local && !value.record.tombstone
-        && value.record.content && !localRecordIds.has(value.id))
-      .map(({ record }) => ({
-        id: record.recordId,
-        conversation: record.conversation,
-        peer: record.sender,
-        direction: record.outgoing ? 'outgoing' as const : 'incoming' as const,
-        senderDeviceId: record.senderDeviceId || undefined,
-        timestampMs: record.timestampMs,
-        delivered: record.delivered,
-        deduplicated: false,
-        content: record.content!,
-      })))
-    const backupMedia = await this.protectMedia(protectionHistory)
-    const prior = new Map(stored.map(value => [value.id, value]))
-    const current = new Set<string>()
+    try {
+      await this.collectAndQueueOnce()
+    } catch (error) {
+      this.collected = null
+      throw error
+    }
+  }
+
+  private async collectAndQueueOnce(): Promise<void> {
+    const now = this.runtime.clock.now()
+    const localState = await loadState(this.db, now)
+    const source = this.options.conversations
+    let collected = this.collected?.revision === localState.recordsRevision ? this.collected : null
+    const changes = source ? await source.changes(collected?.mark ?? null) : null
+    if (!collected) {
+      const stored = await readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer)
+      collected = {
+        revision: localState.recordsRevision,
+        mark: null,
+        records: new Map(stored.map(value => [value.id, value])),
+        members: new Map(),
+        groupOf: new Map(),
+        deadlines: new Map(),
+        mediaRecords: new Set(),
+      }
+      for (const value of stored) indexMediaRecord(collected, value)
+      this.restoredChanges += 1
+    }
+    const everything = !changes || changes.keys === null || collected.mark === null
+    const fresh = new Map<string, ChatHistoryEntry[]>()
+    if (everything) {
+      if (source) {
+        for (const key of await source.keys()) fresh.set(key, await source.entries(key))
+      } else {
+        for (const entry of await this.options.history()) {
+          const key = conversationKey(entry.conversation)
+          const list = fresh.get(key)
+          if (list) list.push(entry)
+          else fresh.set(key, [entry])
+        }
+      }
+    } else {
+      const due = new Set(changes!.keys)
+      for (const [key, at] of collected.deadlines) if (at <= now) due.add(key)
+      for (const key of due) fresh.set(key, await source!.entries(key))
+    }
+    const recordIds = new Map<ChatHistoryEntry, string>()
+    const freshIds = new Set<string>()
+    const identify = async (entries: readonly ChatHistoryEntry[]) => {
+      for (const entry of entries) {
+        const id = await canonicalRecordId(entry.id)
+        recordIds.set(entry, id)
+        freshIds.add(id)
+      }
+    }
+    for (const entries of fresh.values()) await identify(entries)
+    // What is backed up, for media protection: the fresh entries, and the
+    // records of everything else. A clean install restores display history
+    // before its new Chat engine has any local rows; those records stay in
+    // the protection set until a local row supersedes them. Otherwise the
+    // first startup cycle reconciles an empty media set and destroys the
+    // only copy capable of satisfying the restored attachment.
+    const kept = (id: string, value: StoredRecord) => !freshIds.has(id)
+      && (!value.local || (!everything && !fresh.has(collected!.groupOf.get(id) ?? '')))
+    const contents: ChatContent[] = []
+    for (const entries of fresh.values()) for (const entry of entries) contents.push(entry.content)
+    for (const id of collected.mediaRecords) {
+      const value = collected.records.get(id)!
+      if (kept(id, value)) contents.push(value.record.content!)
+    }
+    const backupMedia = await this.protectMedia(contents)
+    if (!everything) {
+      // A record elsewhere whose attachment was protected (or released) since
+      // it was written is written again, from its conversation.
+      const stale = new Set<string>()
+      for (const id of collected.mediaRecords) {
+        const value = collected.records.get(id)!
+        const attachment = value.record.content?.attachment
+        if (!value.local || !attachment || !kept(id, value)) continue
+        const mediaId = backupMedia.get(attachment.attachmentId)
+        const media = this.media.get(attachment.attachmentId)
+        const [wantedMedia, wantedReference] = mediaId && media ? [mediaId, media.referenceId] : [undefined, undefined]
+        if (attachment.backupMediaId !== wantedMedia || attachment.backupMediaReferenceId !== wantedReference) {
+          stale.add(collected.groupOf.get(id)!)
+        }
+      }
+      for (const key of stale) {
+        const entries = await source!.entries(key)
+        fresh.set(key, entries)
+        await identify(entries)
+      }
+    }
+
     const mutations: BackupDisplayRecord[] = []
     const replacements: StoredRecord[] = []
     // Removed content (a deletion, an expiry) should leave the base soon; a
     // superseded list-state or read-position record can wait for routine
     // compaction.
     let removesContent = false
-    for (const entry of history) {
-      const recordId = await canonicalRecordId(entry.id)
-      current.add(recordId)
-      const previous = prior.get(recordId)
-      const eligible = isEligible(entry, this.runtime.clock.now())
-      if (!eligible) {
-        if (previous && !previous.record.tombstone) {
-          if (!isReplaceableControl(previous.record)) removesContent = true
-          const tombstone = { ...previous.record, mutationSequence: previous.record.mutationSequence + 1,
-            content: undefined, tombstone: true }
-          mutations.push(tombstone)
-          replacements.push({ id: recordId, fingerprint: await fingerprint(tombstone), record: tombstone, local: true })
-        }
-        continue
-      }
-      const content = structuredClone(entry.content)
-      if (content.attachment) {
-        const mediaId = backupMedia.get(content.attachment.attachmentId)
-        const media = this.media.get(content.attachment.attachmentId)
-        if (mediaId && media) {
-          content.attachment.backupMediaId = mediaId
-          content.attachment.backupMediaReferenceId = media.referenceId
-        }
-      }
-      const record: BackupDisplayRecord = {
-        version: 1,
-        recordId,
-        mutationSequence: previous?.record.mutationSequence ?? 1,
-        conversation: entry.conversation,
-        sender: entry.direction === 'outgoing'
-          ? `${this.options.username}@${this.options.serverName}`
-          : entry.peer,
-        senderDeviceId: entry.senderDeviceId ?? this.options.deviceId,
-        outgoing: entry.direction === 'outgoing',
-        content,
-        timestampMs: entry.timestampMs,
-        delivered: entry.delivered,
-        ...(entry.content.expiresAtMs ? { absoluteExpiryMs: entry.content.expiresAtMs } : {}),
-        tombstone: false,
-      }
-      let recordFingerprint = await fingerprint(record)
-      if (previous && previous.fingerprint !== recordFingerprint) {
-        record.mutationSequence = previous.record.mutationSequence + 1
-        recordFingerprint = await fingerprint(record)
-      }
-      if (!previous || previous.fingerprint !== recordFingerprint) mutations.push(record)
-      replacements.push({ id: recordId, fingerprint: recordFingerprint, record, local: true })
-    }
-    for (const previous of stored) {
-      if (!previous.local || current.has(previous.id) || previous.record.tombstone) continue
+    const remove = async (id: string, previous: StoredRecord) => {
       if (!isReplaceableControl(previous.record)) removesContent = true
       const tombstone: BackupDisplayRecord = {
         ...previous.record,
@@ -876,11 +944,102 @@ export class ChatBackupCoordinator {
         tombstone: true,
       }
       mutations.push(tombstone)
-      replacements.push({ id: previous.id, fingerprint: await fingerprint(tombstone), record: tombstone, local: true })
+      replacements.push({ id, fingerprint: await fingerprint(tombstone), record: tombstone, local: true })
+    }
+    const members = new Map<string, Set<string>>()
+    const deadlines = new Map<string, number>()
+    for (const [key, entries] of fresh) {
+      const ids = new Set<string>()
+      members.set(key, ids)
+      for (const entry of entries) {
+        const recordId = recordIds.get(entry)!
+        ids.add(recordId)
+        const previous = collected.records.get(recordId)
+        if (!isEligible(entry.content, now)) {
+          if (previous && !previous.record.tombstone) await remove(recordId, previous)
+          continue
+        }
+        if (entry.content.expiresAtMs) {
+          const leaves = entry.content.expiresAtMs - ELIGIBLE_BEFORE_EXPIRY_MS
+          deadlines.set(key, Math.min(deadlines.get(key) ?? Infinity, leaves))
+        }
+        const content = structuredClone(entry.content)
+        if (content.attachment) {
+          const mediaId = backupMedia.get(content.attachment.attachmentId)
+          const media = this.media.get(content.attachment.attachmentId)
+          if (mediaId && media) {
+            content.attachment.backupMediaId = mediaId
+            content.attachment.backupMediaReferenceId = media.referenceId
+          }
+        }
+        const record: BackupDisplayRecord = {
+          version: 1,
+          recordId,
+          mutationSequence: previous?.record.mutationSequence ?? 1,
+          conversation: entry.conversation,
+          sender: entry.direction === 'outgoing'
+            ? `${this.options.username}@${this.options.serverName}`
+            : entry.peer,
+          senderDeviceId: entry.senderDeviceId ?? this.options.deviceId,
+          outgoing: entry.direction === 'outgoing',
+          content,
+          timestampMs: entry.timestampMs,
+          delivered: entry.delivered,
+          ...(entry.content.expiresAtMs ? { absoluteExpiryMs: entry.content.expiresAtMs } : {}),
+          tombstone: false,
+        }
+        let recordFingerprint = await fingerprint(record)
+        if (previous && previous.fingerprint !== recordFingerprint) {
+          record.mutationSequence = previous.record.mutationSequence + 1
+          recordFingerprint = await fingerprint(record)
+        }
+        if (!previous || previous.fingerprint !== recordFingerprint) mutations.push(record)
+        if (!previous || previous.fingerprint !== recordFingerprint || !previous.local) {
+          replacements.push({ id: recordId, fingerprint: recordFingerprint, record, local: true })
+        }
+      }
+    }
+    // Local records whose entries are gone.
+    const gone = everything
+      ? collected.records.keys()
+      : Array.from(fresh.keys()).flatMap(key => Array.from(collected!.members.get(key) ?? []))
+    for (const id of gone) {
+      const previous = collected.records.get(id)
+      if (!previous || !previous.local || freshIds.has(id) || previous.record.tombstone) continue
+      await remove(id, previous)
+    }
+
+    const done = (revision: number) => {
+      const next = collected!
+      if (everything) {
+        next.members.clear()
+        next.groupOf.clear()
+        next.deadlines.clear()
+      }
+      for (const [key, ids] of members) {
+        for (const id of next.members.get(key) ?? []) next.groupOf.delete(id)
+        next.members.set(key, ids)
+        for (const id of ids) next.groupOf.set(id, key)
+        const at = deadlines.get(key)
+        if (at === undefined) next.deadlines.delete(key)
+        else next.deadlines.set(key, at)
+      }
+      for (const value of replacements) {
+        if (next.records.get(value.id)?.local === false) this.restoredChanges += 1
+        next.records.set(value.id, value)
+        indexMediaRecord(next, value)
+      }
+      next.revision = revision
+      next.mark = changes?.mark ?? null
+      this.collected = next
     }
     if (mutations.length === 0) {
-      if (replacements.some(value => !prior.get(value.id)?.local)) {
-        await commitQueue(this.db, this.options.sealer, replacements, [], localState)
+      if (replacements.length > 0) {
+        const state = { ...localState, recordsRevision: localState.recordsRevision + 1 }
+        await commitQueue(this.db, this.options.sealer, replacements, [], state)
+        done(state.recordsRevision)
+      } else {
+        done(localState.recordsRevision)
       }
       await this.refreshView()
       return
@@ -919,11 +1078,14 @@ export class ChatBackupCoordinator {
       })
       previousDigest = ciphertextSha256
     }
-    await commitQueue(this.db, this.options.sealer, replacements, outbox, {
+    const state = {
       ...localState,
       deviceSequence: sequence,
       lastSegmentDigest: previousDigest,
-    })
+      recordsRevision: localState.recordsRevision + 1,
+    }
+    await commitQueue(this.db, this.options.sealer, replacements, outbox, state)
+    done(state.recordsRevision)
     await this.refreshView('backingUp')
   }
 
@@ -1146,6 +1308,7 @@ export class ChatBackupCoordinator {
         this.runtime.clock.now(),
         media,
       )
+      this.restoredChanges += 1
     }
     return stored
   }
@@ -1373,11 +1536,38 @@ function isReplaceableControl(record: BackupDisplayRecord): boolean {
   return kind === 'conversationState' || kind === 'readPosition'
 }
 
-function isEligible(entry: ChatHistoryEntry, now: number): boolean {
-  const kind = entry.content.kind.toLowerCase().replaceAll('_', '')
+/** Disappearing content leaves the backup this long before it disappears. */
+const ELIGIBLE_BEFORE_EXPIRY_MS = 24 * 60 * 60 * 1000
+
+function isEligible(content: ChatContent, now: number): boolean {
+  const kind = content.kind.toLowerCase().replaceAll('_', '')
   // View-once media never enters the backup (it is meant to be seen once).
-  if (kind === 'typing' || kind.includes('viewonce') || entry.content.viewOnce) return false
-  return !entry.content.expiresAtMs || entry.content.expiresAtMs > now + 24 * 60 * 60 * 1000
+  if (kind === 'typing' || kind.includes('viewonce') || content.viewOnce) return false
+  return !content.expiresAtMs || content.expiresAtMs > now + ELIGIBLE_BEFORE_EXPIRY_MS
+}
+
+/** Keeps `mediaRecords` current for a record just stored. */
+function indexMediaRecord(collected: Collected, value: StoredRecord): void {
+  const content = value.record.content
+  if (!value.record.tombstone && (content?.attachment || content?.mutation?.operation === 'delete')) {
+    collected.mediaRecords.add(value.id)
+  } else {
+    collected.mediaRecords.delete(value.id)
+  }
+}
+
+function entryOf(record: BackupDisplayRecord): ChatHistoryEntry {
+  return {
+    id: record.recordId,
+    conversation: record.conversation,
+    peer: record.sender,
+    direction: record.outgoing ? 'outgoing' : 'incoming',
+    senderDeviceId: record.senderDeviceId || undefined,
+    timestampMs: record.timestampMs,
+    delivered: record.delivered,
+    deduplicated: false,
+    content: record.content!,
+  }
 }
 
 function transportStatus(error: unknown): number | undefined {

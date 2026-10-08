@@ -41,8 +41,8 @@ function service(history: () => ChatHistoryEntry[], commits: () => number = () =
     withLock: (work: () => Promise<unknown>) => work(),
     withMlsWorkflow: (work: () => Promise<unknown>) => work(),
     mls: null,
-    ledgerMark: 0,
-    ledgerScanned: false,
+    ledgerMark: null,
+    remoteWrites: 0,
     pendingAttachments: new Map(),
   })
   return { svc, client, updates }
@@ -112,7 +112,6 @@ describe('ChatService history', () => {
     })
     const entered = new Set<string>()
     Object.assign(svc, {
-      timeline: { coreKeyOf: () => undefined },
       attachmentLedger: {
         sync: vi.fn(),
         entries: () => [],
