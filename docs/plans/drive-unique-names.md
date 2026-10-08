@@ -1,6 +1,8 @@
 # Unique names in a folder, and files not uploaded twice
 
-**Status:** in progress (October 2026). Follows Proton Drive's name and
+**Status:** done (October 2026): server, web (Drive, Photos, Office,
+Maps), CLI and its sync engine. Tests: `unique_names_live` (server),
+browser spec 50, `scripts/verify-cli.sh`, unit tests beside the code. Follows Proton Drive's name and
 content hashes (read in `kutup-references/WebClients`, `drive-store`), with
 SHA-256 for both: measured here, Kutup's Rust/WASM SHA-256 runs at about
 540 MB/s in the browser (10 GB in under 20 s), faster than encryption, the
@@ -13,14 +15,26 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
   letter case or Unicode composition: `Report.pdf` and `report.PDF` are the
   same name. The server enforces it without reading a name.
 - **An upload that would put an identical file under a name already there
-  is not sent.** Same name, different content: the person chooses
-  **Replace** (a new version of that file), **Keep both** (`name (2)`) or
-  **Skip**, with "apply to all". Dropping a folder again therefore uploads
-  only what is new or changed, and the file a reload interrupted goes on
-  (resumable uploads).
-- Rename, move, copy and restore follow the same rule: a rename onto a
-  taken name is refused; a move or copy into a clash asks as an upload
-  does; a restore into a clash keeps both.
+  is not sent** ("Already in this folder"). Same name, different content
+  (or a folder of that name): the person chooses **Replace** (the file
+  there goes to the trash, where it can be restored; the new one is
+  uploaded first, without a name hash, and takes the name once the old one
+  is gone), **Keep both** (`name (2)`) or **Skip**, with "apply to all" for
+  the rest of the batch. A dropped folder goes into the folder of its name
+  already there, so dropping it again uploads only what is new or changed;
+  the file a reload interrupted goes on (resumable uploads).
+- Photos, a new document (Office, Drive's New menu) and a new place list
+  never replace anything: a taken name becomes the next free one without a
+  question (cameras reuse names; the same photo is skipped by the
+  library's own check, which ignores the ` (2)`).
+- A rename onto a taken name is refused (the dialog says so before it is
+  sent). A move into a folder where the name is taken leaves the item
+  where it is, as before. A copy takes the next free name. A restore into
+  a taken name keeps both: the restored item comes back without its hash
+  and the owner's client names it `name (2)`.
+- Versions do not change a file's name. Saving one clears the content hash
+  (the upload is no longer what the file holds), so a clash with an edited
+  document asks.
 
 ## The hashes (`crates/kutup-crypto/src/drive_names.rs`)
 
@@ -55,33 +69,61 @@ differently.
   checks files and folders together in one transaction, so a file and a
   folder cannot share a name either.
 - Every write that sets a name or a folder carries the name hash: create
-  folder, rename folder, move folder, upload (tus and multipart), rename
-  file, move file, restore, and uploads arriving from another server. A
-  clash is `409 name_taken` with what holds the name (file or folder, its
-  id, its content hash).
+  folder, rename folder, move folder, upload (tus at create and again when
+  it finishes, multipart before anything is stored), rename file, move
+  file, and uploads arriving from another server. A clash is
+  `409 name_taken` with what holds the name (file or folder, its id, its
+  content hash); signed federation errors carry the same body. Restore
+  clears a hash that is taken where the item lands (or that belonged to
+  another place: a folder brought back at the top level).
+- A rename without a hash keeps a file's stored one when absent (Photos
+  updating a photo's details renames nothing) and clears it when `null` (a
+  file shared by itself renamed by an editor who has no folder key); a
+  folder renamed without one has it cleared. Cleared hashes are filled in
+  again by the owner.
 - `PUT /api/files/:id/content-hash` records a file's content hash after
   its upload (it is known only once the whole file has been read).
 - The folder listing returns each item's name hash and content hash, so the
   client compares against what it already decrypted.
-- Filling in: `POST /api/collections/:id/name-hashes` sets the hashes of
-  items that have none yet, by someone who can manage the folder.
+- Filling in: `POST /api/collections/:id/name-hashes` (and
+  `POST /api/drive/top-level-name-hashes`) sets the hashes of items that
+  have none yet, in the order given, by someone who can write the folder,
+  and reports the ones whose name another item holds.
 
 ## Clients
 
-- **Web**: the folder hash key per folder (cached), the name hash on every
-  write, the content hash computed while the upload encrypts (the bytes are
-  read anyway) and recorded at the end. Before an upload, a clash with a
-  name in the listing: same size → hash the local file and compare content
-  hashes; identical → skipped ("already there"); otherwise the choice
-  above. Existing items without hashes are filled in when someone who can
-  manage the folder opens it; two that turn out to share a name have the
-  later ones renamed `name (2)`, `name (3)`…
-- **CLI and its sync engine**: the same hashes from `kutup-crypto`.
+- **Web** (`frontend/packages/drive-core/src/names.ts`): the folder hash
+  key per folder (cached), the name hash on every write, the content hash
+  computed while the upload encrypts (every pass reads the file from its
+  start, a resumed one too) and recorded at the end. Before an upload
+  (`planUpload`), a clash with a name in the listing: same size and a known
+  content hash → hash the local file and compare; identical → skipped;
+  otherwise the choice above (`NameConflictDialog`, one question at a time,
+  answered for the batch when "apply to all" is ticked). A name taken
+  meanwhile (the server's 409) is looked at again once. Names are compared
+  on the device with the same folding as Rust (a unit test checks the two
+  agree); the hashes always come from Rust through WASM. Existing items
+  without hashes are filled in, in the background, when the folder's owner
+  opens it (and the top level when the folder list loads); of two that
+  share a name, the later is renamed `name (2)`, `name (3)`…
+- **CLI and its sync engine**: the same hashes from `kutup-crypto`
+  (`crates/kutup-cli/src/names.rs`). `kutup upload` skips the same file
+  ("Already there"), stops on a different one unless `--keep-both`, and
+  goes into a folder of the same name when uploading a directory again.
+  `mkdir`, `mv` (rename and move) send hashes. A sync push of an edited
+  file uploads without a hash, trashes the old file, then claims the name
+  (`name-hashes`), as the web's Replace does.
 - A file uploaded before this has no content hash: a clash with it always
   asks, never skips silently.
 
 ## Left for later
 
+- Content hashes in folders on other servers: their listings and uploads
+  carry none yet, so a clash there always asks. Names are kept unique there
+  (the upload carries its name hash).
+- A moved file loses its content hash (keyed to the folder it left; the
+  plaintext's SHA-256 is not kept with the file).
+- Replace from the CLI.
 - Uploads into folders on other servers whose server predates this: the
   server cannot enforce what it is not sent.
 - A server-side lookup by content hash across a whole library (Proton

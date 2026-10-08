@@ -733,13 +733,24 @@ its offset there.
 
 ### Drive · resuming a whole folder upload
 
-A folder upload sends its files one at a time. After a reload or a crash,
-the file that was under way is offered to go on (browser spec 49), but the
-files not started yet are not remembered: the person drops the folder
-again and gets copies of what had already arrived. Remembering the folder
-upload as a whole (its tree, which files are done, the folders it made)
-and offering the rest needs the files chosen again as a folder, matched by
-their paths, sizes and modified times.
+Done (October 2026) by names unique in a folder
+(docs/plans/drive-unique-names.md): a folder dropped again goes into the
+folder already there, files already there with the same content are not
+sent, and the file a reload interrupted is offered to go on (browser specs
+49 and 50). What is still not remembered across a reload is the folder
+upload as one job: the person drops the folder again to finish it.
+
+### Drive · names unique in a folder: what is left
+
+Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
+`unique_names_live`, `scripts/verify-cli.sh`. Still open:
+- Content hashes for files in folders on other servers: their listings and
+  uploads carry no content hash yet, so a clash there always asks.
+- A moved file loses its content hash (it is keyed to the folder it left,
+  and the plaintext's SHA-256 is not kept): it is asked about, not skipped,
+  until uploaded again.
+- The CLI has no Replace for a taken name (it skips the same file, and
+  `--keep-both` keeps both).
 
 ### Drive · share dialogs: what is left
 
