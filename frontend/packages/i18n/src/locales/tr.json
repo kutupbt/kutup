@@ -47,9 +47,9 @@
     "recipient": "E-posta veya Kutup adresi",
     "recipientHint": "Kutup adresi (kullanici@sunucu) ya da bu sunucudaki biri için e-postası. Başka sunucudaki biri davet bağlantısı alır; izin verirseniz kendi sunucusu üzerinden düzenleyebilir de.",
     "canEdit": "Düzenleyebilir",
-    "canEditHint": "Dosyayı değiştirip sürüm kaydedebilirler. Bu olmadan yalnızca görüntüleyebilirler. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
+    "canEditHint": "Düzenleyenler dosyayı değiştirip sürüm kaydedebilir; görüntüleyenler yalnızca açabilir. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
     "canView": "Görüntüleyebilir",
-    "note": "Aynı kişiyle yeniden paylaşmak neler yapabileceğini değiştirir.",
+    "note": "Birinin neler yapabileceğini değiştirmek ya da onu kaldırmak için aşağıda satırındaki menüyü kullanın.",
     "submit": "Paylaş",
     "shared": "{{account}} ile paylaşıldı",
     "notFound": "Bu adreste kimse yok. Başka bir Kutup sunucusu için kullanici@sunucu kullanın.",
@@ -87,7 +87,13 @@
     "inviteBody": "Başka bir Kutup sunucusundalar: bağlantıyı Benimle paylaşılanlar altında eklerler. Yalnızca onlar için çalışır.",
     "inviteLink": "Davet bağlantısı",
     "otherServer": "başka sunucuda",
-    "recipientChanged": "{{account}} hesabını sıfırladı. Onu kaldırın, isterseniz yeniden paylaşın."
+    "recipientChanged": "{{account}} hesabını sıfırladı. Onu kaldırın, isterseniz yeniden paylaşın.",
+    "roleLabel": "Neler yapabilecekleri",
+    "roleFor": "{{name}} neler yapabilir",
+    "nowEditor": "{{name}} artık düzenleyebilir",
+    "nowViewer": "{{name}} artık yalnızca görüntüleyebilir",
+    "roleFailed": "Bu değiştirilemedi. Yeniden deneyin.",
+    "otherServerFixed": "Başka sunuculardaki kişiler için bunu davetleri belirler: değiştirmek için kaldırıp yeniden paylaşın."
   },
   "storage": {
     "label": "Kullanılan alan",

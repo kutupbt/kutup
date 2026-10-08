@@ -174,7 +174,7 @@
       "quotaInvalid": "Sıfırdan büyük bir boyut girin.",
       "canDelete": "Eklediği dosyaları silebilir",
       "canDeleteHint": "Başkalarının dosyalarını asla silemez.",
-      "note": "Aynı kişiyle yeniden paylaşmak izinlerini değiştirir.",
+      "note": "Birinin izinlerini değiştirmek ya da onu kaldırmak için aşağıda satırındaki menüyü kullanın.",
       "submit": "Paylaş",
       "shared": "{{account}} ile paylaşıldı",
       "notFound": "Bu adreste kimse yok. Başka bir Kutup sunucusu için kullanici@sunucu kullanın.",
@@ -250,7 +250,11 @@
       "removed": "Erişim kaldırıldı",
       "changed": "Bu arada erişim değişti. Listeyi kontrol edip yeniden deneyin.",
       "recipientChanged": "{{account}} hesabını sıfırladı. Onu çıkarın, isterseniz sonra yeniden paylaşın.",
-      "failed": "Erişim kaldırılamadı. Yeniden deneyin."
+      "failed": "Erişim kaldırılamadı. Yeniden deneyin.",
+      "roleFor": "{{name}} neler yapabilir",
+      "updated": "{{name}} kişisinin erişimi güncellendi",
+      "changeFailed": "Bu değiştirilemedi. Yeniden deneyin.",
+      "otherServerFixed": "Başka sunuculardaki kişiler için bunu davetleri belirler: değiştirmek için kaldırıp yeniden paylaşın."
     }
   },
   "shared": {
