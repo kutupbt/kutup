@@ -118,6 +118,7 @@ pub struct IndexedDbChatDb {
     fence: std::cell::Cell<Option<u64>>,
     cipher: StoreCipher,
     commits: std::cell::Cell<u64>,
+    journal: std::cell::RefCell<crate::timeline::Journal>,
 }
 
 impl IndexedDbChatDb {
@@ -172,6 +173,7 @@ impl IndexedDbChatDb {
             fence: std::cell::Cell::new(None),
             cipher,
             commits: std::cell::Cell::new(0),
+            journal: std::cell::RefCell::new(crate::timeline::Journal::default()),
         })
     }
 
@@ -904,7 +906,10 @@ impl ChatDb for IndexedDbChatDb {
         // instead of lossy Numbers.
         let mut writes = PreparedWrites::from_pending(pending)?;
         // The conversation timelines move with the records they index.
-        let mut index_values = crate::timeline::changes(self, pending).await?;
+        let crate::timeline::Changes {
+            writes: mut index_values,
+            conversations: touched,
+        } = crate::timeline::changes(self, pending).await?;
         for (key, value) in &pending.index_values {
             index_values.insert(key.clone(), value.clone());
         }
@@ -1079,11 +1084,18 @@ impl ChatDb for IndexedDbChatDb {
 
         finish_write(transaction, operations).await?;
         self.commits.set(self.commits.get() + 1);
+        self.journal
+            .borrow_mut()
+            .record(self.commits.get(), touched);
         Ok(())
     }
 
     fn commit_count(&self) -> u64 {
         self.commits.get()
+    }
+
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>> {
+        self.journal.borrow().since(since, self.commits.get())
     }
 }
 

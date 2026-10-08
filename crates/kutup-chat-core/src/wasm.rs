@@ -627,6 +627,116 @@ impl WasmChatClient {
     fn mls_client(&self) -> MlsClient {
         MlsClient::new(Rc::clone(self.engine.session().db()))
     }
+
+    /// History entries for timeline references (newest first, as given),
+    /// built as the full history builds them; with `newest`, a group's
+    /// messages still being sent are added at the top.
+    async fn timeline_entries(
+        &self,
+        directory: &crate::timeline::Directory,
+        key: &str,
+        refs: &[crate::timeline::EntryRef],
+        newest: bool,
+    ) -> Result<Vec<HistoryEntry>> {
+        use crate::timeline::{Source, EXPIRY_START};
+        let db = self.engine.session().db().as_ref();
+        // Deadlines of incoming disappearing messages start when they were
+        // first seen, recorded by expiry starts indexed under the
+        // conversation.
+        let mut start_sent = Vec::new();
+        let mut start_imported = Vec::new();
+        for start in crate::timeline::flagged(db, directory, key, EXPIRY_START).await? {
+            match start.source {
+                Source::Sent => start_sent.extend(db.load_sent_message(&start.id).await?),
+                Source::Imported => {
+                    if let Some((transfer, record)) = start.id.split_once('\u{0}') {
+                        start_imported.extend(db.load_imported_history(transfer, record).await?);
+                    }
+                }
+                Source::Inbox | Source::Mls => {}
+            }
+        }
+        let starts = crate::session::collect_disappearing_expiry_starts(
+            &start_sent,
+            &start_imported,
+            self.engine.session().user(),
+        )?;
+        let mut entries = Vec::with_capacity(refs.len());
+        for entry in refs {
+            if entry.flags & EXPIRY_START != 0 {
+                continue;
+            }
+            let built = match entry.source {
+                Source::Inbox => match db.load_message(&entry.id).await? {
+                    Some(message) => Some(HistoryEntry::incoming(message)?),
+                    None => None,
+                },
+                Source::Sent => match db.load_sent_message(&entry.id).await? {
+                    Some(message) => Some(HistoryEntry::outgoing(message)?),
+                    None => None,
+                },
+                Source::Mls => match db.load_mls_message(&entry.id).await? {
+                    Some(message) => Some(HistoryEntry::mls(message)?),
+                    None => None,
+                },
+                Source::Imported => match entry.id.split_once('\u{0}') {
+                    Some((transfer, record)) => {
+                        match db.load_imported_history(transfer, record).await? {
+                            Some(message) => Some(HistoryEntry::imported(message)?),
+                            None => None,
+                        }
+                    }
+                    None => None,
+                },
+            };
+            if let Some(mut built) = built {
+                built.apply_disappearing_deadline(&starts);
+                entries.push(built);
+            }
+        }
+        if newest && key.starts_with("group:") {
+            let delivered: std::collections::HashSet<String> =
+                entries.iter().map(|entry| entry.id.clone()).collect();
+            let mut pending = Vec::new();
+            for outgoing in self.mls_client().pending_application_messages().await? {
+                let group = uuid::Uuid::from_bytes(outgoing.conversation_id).to_string();
+                if format!("group:{group}") != key
+                    || outgoing.content.is_empty()
+                    || delivered.contains(&outgoing.send_id)
+                    || is_invisible_control(&outgoing.content)?
+                {
+                    continue;
+                }
+                let mut entry = HistoryEntry::mls_pending(outgoing)?;
+                entry.apply_disappearing_deadline(&starts);
+                pending.push(entry);
+            }
+            pending.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
+            pending.extend(entries);
+            entries = pending;
+        }
+        Ok(entries)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationSummaryView {
+    key: String,
+    conversation: ConversationId,
+    latest_ms: i64,
+    unread: u32,
+    /// Newest first.
+    recent: Vec<HistoryEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationPageView {
+    /// Newest first.
+    entries: Vec<HistoryEntry>,
+    /// Give back to continue with older entries; none at the start.
+    before: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -3021,6 +3131,139 @@ impl WasmChatClient {
                 .then_with(|| left.id.cmp(&right.id))
         });
         to_output(&history)
+    }
+
+    /// Every conversation from its timeline (`timeline.rs`), newest activity
+    /// first: its latest time, how many incoming messages are newer than
+    /// `readThrough[key]` (milliseconds), and its newest `recent` entries.
+    /// Reads headers and only the newest chunks, not the whole history.
+    #[wasm_bindgen(js_name = conversationSummaries)]
+    pub async fn conversation_summaries(
+        &self,
+        read_through: JsValue,
+        recent: u32,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let read_through: std::collections::HashMap<String, f64> =
+            if read_through.is_undefined() || read_through.is_null() {
+                std::collections::HashMap::new()
+            } else {
+                serde_wasm_bindgen::from_value(read_through)
+                    .map_err(|error| js_error(&format!("read positions: {error}")))?
+            };
+        let db = self.engine.session().db().as_ref();
+        let Some(directory) = crate::timeline::load_directory(db)
+            .await
+            .map_err(chat_error)?
+        else {
+            return to_output(&Vec::<ConversationSummaryView>::new());
+        };
+        let mut summaries = Vec::with_capacity(directory.conversations.len());
+        for (key, header) in &directory.conversations {
+            let through = read_through.get(key).copied().unwrap_or(0.0) as i64;
+            let unread = crate::timeline::unread(db, &directory, key, through)
+                .await
+                .map_err(chat_error)?;
+            let refs = crate::timeline::page(db, &directory, key, None, recent as usize)
+                .await
+                .map_err(chat_error)?;
+            let entries = self
+                .timeline_entries(&directory, key, &refs, true)
+                .await
+                .map_err(chat_error)?;
+            summaries.push(ConversationSummaryView {
+                key: key.clone(),
+                conversation: header.conversation.clone(),
+                latest_ms: header.latest_ms(),
+                unread,
+                recent: entries,
+            });
+        }
+        summaries.sort_by(|left, right| right.latest_ms.cmp(&left.latest_ms));
+        to_output(&summaries)
+    }
+
+    /// One conversation's entries, newest first, older than `before` (a
+    /// cursor from an earlier page), at most `limit`; with the cursor to ask
+    /// for the next page, or none at the start of the conversation.
+    #[wasm_bindgen(js_name = conversationHistory)]
+    pub async fn conversation_history(
+        &self,
+        key: String,
+        before: Option<String>,
+        limit: u32,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let db = self.engine.session().db().as_ref();
+        let Some(directory) = crate::timeline::load_directory(db)
+            .await
+            .map_err(chat_error)?
+        else {
+            return to_output(&ConversationPageView {
+                entries: Vec::new(),
+                before: None,
+            });
+        };
+        let before = before
+            .as_deref()
+            .map(crate::timeline::from_cursor)
+            .transpose()
+            .map_err(chat_error)?;
+        let refs = crate::timeline::page(db, &directory, &key, before.as_ref(), limit as usize)
+            .await
+            .map_err(chat_error)?;
+        let next = if refs.len() < limit as usize {
+            None
+        } else {
+            refs.last()
+                .map(crate::timeline::cursor_of)
+                .transpose()
+                .map_err(chat_error)?
+        };
+        let entries = self
+            .timeline_entries(&directory, &key, &refs, before.is_none())
+            .await
+            .map_err(chat_error)?;
+        to_output(&ConversationPageView {
+            entries,
+            before: next,
+        })
+    }
+
+    /// This account's own controls in Note to Self (list state, read
+    /// positions, deletions, opened view-once media, stickers), oldest first.
+    #[wasm_bindgen(js_name = accountControls)]
+    pub async fn account_controls(&self) -> std::result::Result<JsValue, JsValue> {
+        let db = self.engine.session().db().as_ref();
+        let Some(directory) = crate::timeline::load_directory(db)
+            .await
+            .map_err(chat_error)?
+        else {
+            return to_output(&Vec::<HistoryEntry>::new());
+        };
+        let key = crate::timeline::direct(self.engine.session().user())
+            .map_err(chat_error)?
+            .key();
+        let refs = crate::timeline::flagged(db, &directory, &key, crate::timeline::ACCOUNT_CONTROL)
+            .await
+            .map_err(chat_error)?;
+        let mut entries = self
+            .timeline_entries(&directory, &key, &refs, false)
+            .await
+            .map_err(chat_error)?;
+        entries.reverse();
+        to_output(&entries)
+    }
+
+    /// The conversations changed by this browser's commits after `since`
+    /// (a `storeCommits` value), or `null` when that is no longer known.
+    #[wasm_bindgen(js_name = changedConversations)]
+    pub fn changed_conversations(&self, since: f64) -> std::result::Result<JsValue, JsValue> {
+        to_output(
+            &self
+                .engine
+                .session()
+                .db()
+                .changed_conversations(since as u64),
+        )
     }
 
     #[wasm_bindgen(js_name = purgeExpiredMessages)]

@@ -3965,7 +3965,7 @@ fn keep_newest<O: Ord>(
 
 pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, String), i64>;
 
-fn collect_disappearing_expiry_starts(
+pub(crate) fn collect_disappearing_expiry_starts(
     outgoing: &[SentMessage],
     imported: &[crate::ImportedHistoryRecordV1],
     local_account: &str,

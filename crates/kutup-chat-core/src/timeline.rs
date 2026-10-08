@@ -51,6 +51,9 @@ pub const ROUTED: u8 = 4;
 /// A disappearing expiry start: not a history entry, but needed to work out
 /// the conversation's deadlines.
 pub const EXPIRY_START: u8 = 8;
+/// This account's own control in Note to Self (list state, read position,
+/// deletion, opened view-once media, sticker), where it travels.
+pub const ACCOUNT_CONTROL: u8 = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryRef {
@@ -120,7 +123,7 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     ciborium::from_reader(bytes).map_err(|error| ChatError::Db(format!("timeline decode: {error}")))
 }
 
-fn direct(peer: &str) -> Result<ConversationId> {
+pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
     let address = peer
         .parse::<AccountAddress>()
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
@@ -216,6 +219,17 @@ fn place(
     if expiry_start {
         flags |= EXPIRY_START;
     }
+    let account_control = matches!(
+        kind_name,
+        Some(
+            kind::CONVERSATION_STATE
+                | kind::READ_POSITION
+                | kind::DELETE_FOR_ME
+                | kind::VIEW_ONCE_OPENED
+                | kind::STICKER_SAVED
+                | kind::STICKER_REMOVED
+        )
+    );
     let entry = EntryRef {
         ts,
         source,
@@ -236,9 +250,14 @@ fn place(
     }
     // An expiry start is not a history entry where it travels.
     if !expiry_start {
+        let flags = if account_control {
+            entry.flags | ACCOUNT_CONTROL
+        } else {
+            entry.flags
+        };
         placed.push(Indexed {
             conversation,
-            entry,
+            entry: EntryRef { flags, ..entry },
         });
     }
     placed
@@ -300,10 +319,14 @@ pub(crate) fn place_imported(message: &ImportedHistoryRecordV1) -> Vec<Indexed> 
 
 /// Index writes for `pending`, to commit with it. Nothing while the store
 /// has no current directory (it is indexed whole on open, [`ensure_built`]).
-pub(crate) async fn changes(
-    db: &dyn ChatDb,
-    pending: &Pending,
-) -> Result<HashMap<Vec<u8>, Option<Vec<u8>>>> {
+/// The index writes for one commit, and the conversations it touched.
+#[derive(Default)]
+pub(crate) struct Changes {
+    pub writes: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    pub conversations: HashSet<String>,
+}
+
+pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes> {
     let mut added: Vec<Indexed> = Vec::new();
     let mut removed: Vec<Indexed> = Vec::new();
     for message in &pending.messages {
@@ -324,13 +347,13 @@ pub(crate) async fn changes(
         && pending.delete_mls_message_ids.is_empty()
         && pending.delete_imported_history_ids.is_empty();
     if added.is_empty() && nothing_removed {
-        return Ok(HashMap::new());
+        return Ok(Changes::default());
     }
     let Some(mut directory) = load_directory(db).await? else {
-        return Ok(HashMap::new());
+        return Ok(Changes::default());
     };
     if directory.version != TIMELINE_VERSION {
-        return Ok(HashMap::new());
+        return Ok(Changes::default());
     }
     for id in &pending.delete_message_ids {
         if let Some(message) = db.load_message(id).await? {
@@ -497,6 +520,121 @@ pub(crate) async fn page(
     Ok(out)
 }
 
+/// Incoming visible messages newer than `read_through_ms`, counted from the
+/// newest back (only as far as needed).
+pub(crate) async fn unread(
+    db: &dyn ChatDb,
+    directory: &Directory,
+    conversation: &str,
+    read_through_ms: i64,
+) -> Result<u32> {
+    let Some(header) = directory.conversations.get(conversation) else {
+        return Ok(0);
+    };
+    let mut count = 0;
+    for chunk in header.chunks.iter().rev() {
+        if chunk.last_ms <= read_through_ms {
+            break;
+        }
+        for entry in load_chunk(db, conversation, chunk.id).await?.iter().rev() {
+            if entry.ts <= read_through_ms {
+                return Ok(count);
+            }
+            if entry.flags & (INCOMING | VISIBLE | ROUTED) == INCOMING | VISIBLE {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+/// Where a page left off: give it back to continue with older entries.
+pub(crate) fn cursor_of(entry: &EntryRef) -> Result<String> {
+    use base64::Engine as _;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(encode(entry)?))
+}
+
+pub(crate) fn from_cursor(cursor: &str) -> Result<EntryRef> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|_| ChatError::Invalid("malformed history cursor".into()))?;
+    decode(&bytes)
+}
+
+/// Every reference of `conversation` carrying `flag`, newest first.
+pub(crate) async fn flagged(
+    db: &dyn ChatDb,
+    directory: &Directory,
+    conversation: &str,
+    flag: u8,
+) -> Result<Vec<EntryRef>> {
+    let Some(header) = directory.conversations.get(conversation) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for chunk in header.chunks.iter().rev() {
+        for entry in load_chunk(db, conversation, chunk.id)
+            .await?
+            .into_iter()
+            .rev()
+        {
+            if entry.flags & flag != 0 {
+                out.push(entry);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Which conversations each recent commit of this connection touched, so a
+/// reader can reload just those. Bounded; a reader whose mark is older than
+/// what is kept reloads everything.
+#[derive(Default)]
+pub(crate) struct Journal {
+    entries: std::collections::VecDeque<(u64, HashSet<String>)>,
+}
+
+const JOURNAL_LIMIT: usize = 512;
+
+impl Journal {
+    pub(crate) fn record(&mut self, commit: u64, conversations: HashSet<String>) {
+        if conversations.is_empty() {
+            return;
+        }
+        if self.entries.len() == JOURNAL_LIMIT {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((commit, conversations));
+    }
+
+    /// The conversations touched by commits after `since` (up to `current`),
+    /// or `None` when some of them are no longer kept.
+    pub(crate) fn since(&self, since: u64, current: u64) -> Option<Vec<String>> {
+        if since >= current {
+            return Some(Vec::new());
+        }
+        let oldest_kept = self
+            .entries
+            .front()
+            .map_or(current + 1, |(commit, _)| *commit);
+        // Commits that touched no conversation are not recorded, so only a
+        // gap below the oldest recorded commit is unknown.
+        if self.entries.len() == JOURNAL_LIMIT && since + 1 < oldest_kept {
+            return None;
+        }
+        let mut out: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(commit, _)| *commit > since)
+            .flat_map(|(_, conversations)| conversations.iter().cloned())
+            .collect();
+        out.sort();
+        out.dedup();
+        Some(out)
+    }
+}
+
 /// Applies additions and removals to the chunks they fall in, loading each
 /// chunk once, and gives the writes to commit.
 struct Writer<'a> {
@@ -657,19 +795,25 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    fn finish(self) -> Result<HashMap<Vec<u8>, Option<Vec<u8>>>> {
-        let mut writes = HashMap::new();
+    fn finish(self) -> Result<Changes> {
+        let mut changes = Changes::default();
         if !self.touched {
-            return Ok(writes);
+            return Ok(changes);
         }
         for ((conversation, id), entries) in &self.chunks {
-            writes.insert(chunk_key(conversation, *id), Some(encode(entries)?));
+            changes
+                .writes
+                .insert(chunk_key(conversation, *id), Some(encode(entries)?));
+            changes.conversations.insert(conversation.clone());
         }
         for (conversation, id) in &self.dropped {
-            writes.insert(chunk_key(conversation, *id), None);
+            changes.writes.insert(chunk_key(conversation, *id), None);
+            changes.conversations.insert(conversation.clone());
         }
-        writes.insert(DIRECTORY_KEY.to_vec(), Some(encode(&*self.directory)?));
-        Ok(writes)
+        changes
+            .writes
+            .insert(DIRECTORY_KEY.to_vec(), Some(encode(&*self.directory)?));
+        Ok(changes)
     }
 }
 
@@ -857,9 +1001,16 @@ mod tests {
         let alice = &now["direct:alice@a.test"];
         let read = alice.iter().find(|entry| entry.id == "read-1").unwrap();
         assert_eq!(read.flags & (ROUTED | VISIBLE), ROUTED, "routed, not shown");
-        assert!(now["direct:myself@a.test"]
+        let travelled = now["direct:myself@a.test"]
             .iter()
-            .any(|entry| entry.id == "read-1"));
+            .find(|entry| entry.id == "read-1")
+            .unwrap();
+        assert_ne!(
+            travelled.flags & ACCOUNT_CONTROL,
+            0,
+            "flagged where it travels"
+        );
+        assert_eq!(read.flags & ACCOUNT_CONTROL, 0, "not on the routed copy");
         assert!(
             !alice.iter().any(|entry| entry.id == "typing-1"),
             "hidden kinds are not indexed"
@@ -908,6 +1059,22 @@ mod tests {
         let tail = newest_first.split_off(3);
         assert_eq!(first_page, newest_first);
         assert_eq!(rest, tail);
+    }
+
+    #[test]
+    fn the_journal_tells_which_conversations_changed_since_a_mark() {
+        let mut journal = Journal::default();
+        journal.record(1, HashSet::from(["a".to_string()]));
+        journal.record(3, HashSet::from(["b".to_string(), "a".to_string()]));
+        assert_eq!(journal.since(0, 3), Some(vec!["a".into(), "b".into()]));
+        assert_eq!(journal.since(1, 3), Some(vec!["a".into(), "b".into()]));
+        assert_eq!(journal.since(3, 3), Some(vec![]));
+        for commit in 4..(4 + JOURNAL_LIMIT as u64) {
+            journal.record(commit, HashSet::from(["c".to_string()]));
+        }
+        let current = 3 + JOURNAL_LIMIT as u64;
+        assert_eq!(journal.since(0, current), None, "older than what is kept");
+        assert_eq!(journal.since(current - 1, current), Some(vec!["c".into()]));
     }
 
     #[test]

@@ -878,6 +878,10 @@ pub trait ChatDb {
     /// written, without reading the store.
     fn commit_count(&self) -> u64;
 
+    /// The conversations whose timelines commits after `since` touched, or
+    /// `None` when that is no longer known (reload everything).
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>>;
+
     async fn claim_writer(&self, take_over: bool) -> Result<u64> {
         let _ = take_over;
         Ok(0)

@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS meta (
 pub struct SqliteChatDb {
     conn: RefCell<Connection>,
     commits: std::cell::Cell<u64>,
+    journal: std::cell::RefCell<crate::timeline::Journal>,
 }
 
 impl SqliteChatDb {
@@ -322,6 +323,7 @@ impl SqliteChatDb {
         Ok(Self {
             conn: RefCell::new(conn),
             commits: std::cell::Cell::new(0),
+            journal: std::cell::RefCell::new(crate::timeline::Journal::default()),
         })
     }
 }
@@ -856,7 +858,10 @@ impl ChatDb for SqliteChatDb {
 
     async fn apply(&self, pending: &Pending) -> Result<()> {
         // The conversation timelines move with the records they index.
-        let mut index_values = crate::timeline::changes(self, pending).await?;
+        let crate::timeline::Changes {
+            writes: mut index_values,
+            conversations: touched,
+        } = crate::timeline::changes(self, pending).await?;
         for (key, value) in &pending.index_values {
             index_values.insert(key.clone(), value.clone());
         }
@@ -1413,11 +1418,18 @@ impl ChatDb for SqliteChatDb {
 
         db(tx.commit())?;
         self.commits.set(self.commits.get() + 1);
+        self.journal
+            .borrow_mut()
+            .record(self.commits.get(), touched);
         Ok(())
     }
 
     fn commit_count(&self) -> u64 {
         self.commits.get()
+    }
+
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>> {
+        self.journal.borrow().since(since, self.commits.get())
     }
 }
 
