@@ -349,13 +349,31 @@ pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Change
     for message in pending.imported_history.values() {
         added.extend(place_imported(message));
     }
+    // A group message still being sent shows on its conversation's newest
+    // page without being indexed: its conversation changes all the same.
+    let mut queued = HashSet::new();
+    for (send_id, entry) in &pending.mls_outbox {
+        let conversation_id = match entry {
+            Some(entry) => Some(entry.conversation_id),
+            None => db
+                .load_mls_outbox(send_id)
+                .await?
+                .map(|entry| entry.conversation_id),
+        };
+        if let Some(conversation_id) = conversation_id {
+            queued.insert(format!("group:{}", uuid::Uuid::from_bytes(conversation_id)));
+        }
+    }
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
         && pending.delete_sent_message_ids.is_empty()
         && pending.delete_mls_message_ids.is_empty()
         && pending.delete_imported_history_ids.is_empty();
     if added.is_empty() && nothing_removed {
-        return Ok(Changes::default());
+        return Ok(Changes {
+            writes: HashMap::new(),
+            conversations: queued,
+        });
     }
     let Some(mut directory) = load_directory(db).await? else {
         return Ok(Changes::default());
@@ -399,7 +417,9 @@ pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Change
         writer.add(indexed).await?;
     }
     writer.refresh_timers().await?;
-    writer.finish()
+    let mut changes = writer.finish()?;
+    changes.conversations.extend(queued);
+    Ok(changes)
 }
 
 /// Index the whole store when it has no current directory: on first open
