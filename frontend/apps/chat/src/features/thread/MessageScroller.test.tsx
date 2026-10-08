@@ -147,4 +147,28 @@ describe('MessageScroller compatibility spike', () => {
     notifyResize()
     expect(scroller.scrollTop).toBe(200)
   })
+
+  it('says when the reader is back at the newest messages', () => {
+    const onLiveEdge = vi.fn()
+    render(
+      <MessageScroller
+        conversationKey="direct:alice"
+        itemKeys={['a', 'b']}
+        timelineLabel="Conversation timeline"
+        jumpToLatestLabel="Jump to latest"
+        onLiveEdge={onLiveEdge}
+      >
+        <div>a</div>
+      </MessageScroller>,
+    )
+    const scroller = screen.getByRole('log', { name: 'Conversation timeline' })
+    installGeometry(scroller, { height: 1_000, client: 400 })
+    scroller.scrollTop = 100
+    fireEvent.scroll(scroller)
+    expect(onLiveEdge).not.toHaveBeenCalled()
+    scroller.scrollTop = 600
+    fireEvent.scroll(scroller)
+    expect(onLiveEdge).toHaveBeenCalledTimes(1)
+  })
 })
+

@@ -9,6 +9,15 @@ import { cn } from '@kutup/ui/lib/cn'
 
 const LIVE_EDGE_THRESHOLD_PX = 56
 
+/**
+ * For each row of the timeline: the browser skips laying out and painting
+ * a row while it is off screen, keeping its last drawn height (an estimate
+ * before it was ever drawn). Rows stay in the document, so finding in the
+ * page, anchors and assistive technology see every one. A row paints only
+ * inside its own box: what hangs out of it needs padding to stay visible.
+ */
+export const TIMELINE_ROW = '[content-visibility:auto] [contain-intrinsic-height:auto_4rem]'
+
 interface ScrollSnapshot {
   atLiveEdge: boolean
   conversationKey: string | null
@@ -29,6 +38,8 @@ interface MessageScrollerProps {
   timelineLabel: string
   /** Scrolled near the top: older messages can be read in. */
   onNearTop?: () => void
+  /** Scrolled back to the newest messages: older ones can be let go. */
+  onLiveEdge?: () => void
 }
 
 /** How close to the top older messages start loading. */
@@ -47,6 +58,7 @@ export function MessageScroller({
   jumpToLatestLabel,
   timelineLabel,
   onNearTop,
+  onLiveEdge,
 }: MessageScrollerProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -139,7 +151,10 @@ export function MessageScroller({
         data-testid="chat-message-scroller"
         onScroll={() => {
           const viewport = viewportRef.current
-          if (viewport && isAtLiveEdge(viewport)) setHasOffscreenArrival(false)
+          if (viewport && isAtLiveEdge(viewport)) {
+            setHasOffscreenArrival(false)
+            onLiveEdge?.()
+          }
           if (viewport && viewport.scrollTop < NEAR_TOP_PX) onNearTop?.()
           captureSnapshot()
         }}

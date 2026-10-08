@@ -90,7 +90,13 @@ final tags, and noncanonical record sequences fail closed.
    corresponding mutation in the IndexedDB outbox before any upload. A reload
    repeats discovery, so a crash between the Chat commit and backup scan does
    not require the old process to survive. A mutation is never considered
-   protected merely because it was encrypted locally.
+   protected merely because it was encrypted locally. Discovery reads the
+   whole history on the first cycle after opening (and whenever it cannot
+   tell what changed: another tab wrote, the mirror was written elsewhere);
+   after that it reads only the conversations the store's change journal
+   names, those with an entry now due to leave the backup (24 hours before
+   it disappears), and those whose media protection changed, keeping the
+   mirror's records in memory between cycles.
 3. One serialized coordinator drains eligible work. It encrypts a bounded
    segment, preserving the stable record identity and deterministic mutation
    order, then appends it with a stable operation ID and per-device chain.
@@ -167,7 +173,9 @@ Each is sealed at rest (`{ id, sealed }`, XChaCha20-Poly1305 under a key
 derived from the account master key and bound to the record id, sealed by
 Rust: `sealLocalData`, `docs/research/16-browser-storage-architecture.md`); a
 mirror from before this is sealed the first time it is read, and a record
-that does not open is an integrity failure.
+that does not open is an integrity failure. Records that no local row has
+replaced (history from before this browser) are what Chat shows as restored
+history; local rows show from the live history.
 
 Restore alone does not acknowledge a mailbox message, emit a delivery/read
 receipt, or advance a mailbox cursor. New and overlapping live messages

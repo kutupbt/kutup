@@ -25,6 +25,8 @@ export interface ConversationModel {
   loadOlder: () => void
   /** Every message back to the start is read in. */
   complete: boolean
+  /** Back at the newest messages: let go of the older ones read in. */
+  trim: () => void
   conversation: ConversationId
   title: string
   /** Direct conversations and notes: the peer's canonical address. */
@@ -101,6 +103,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
       timerSeconds: activeTimers(history).get(key),
       loadOlder: thread.loadOlder,
       complete: thread.complete,
+      trim: thread.trim,
       readOnly,
       canSendMedia: !readOnly && established,
       canSetTimer: !readOnly && established,
@@ -125,7 +128,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
         : null,
       canStartGroupCall: group !== null && !readOnly && capabilities?.groupCalls === true,
     }
-  }, [conversation, snapshot, history, thread.loadOlder, thread.complete, selfAddress, now, t, capabilities])
+  }, [conversation, snapshot, history, thread.loadOlder, thread.complete, thread.trim, selfAddress, now, t, capabilities])
 }
 
 /** Two histories as one, oldest first, each entry once (the first wins). */

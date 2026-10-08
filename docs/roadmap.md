@@ -569,10 +569,10 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     nothing was written; a per-conversation timeline index in the core,
     written with each commit, gives the list, unread counts and the open
     conversation without reading the whole history (older pages load as the
-    view scrolls up).
-  - Next: the attachment ledger and the backup's collection step read the
-    whole history once per change; move them to the change journal. Later:
-    render only the rows on screen.
+    view scrolls up, and are let go again back at the newest messages); the
+    browser skips laying out and painting rows off screen; the attachment
+    ledger and the backup's collection step read only the conversations the
+    change journal names. Search still reads the whole history.
   - Then (Phase 3): a Rust search engine over encrypted index shards with
     Turkish folding (İ, I, ı, i → i), replacing today's linear scan.
   - Later (Phase 4): the Office home catalog and name search, one record per

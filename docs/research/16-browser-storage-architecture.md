@@ -108,10 +108,21 @@ engine lock Kutup already has.
    list, unread counts, notifications, receipts and ringing work on it; the
    conversation on screen reads its older pages as it scrolls, and only its
    thread view sees them. Search reads the whole history until Phase 3.
-   Left for later: rendering only the rows on screen (a conversation now
-   renders only the pages read in), and moving the attachment ledger and the
-   backup's collection step, which still read the whole history once per
-   change, to the change journal.
+   The work that follows the history reads only what the journal names:
+   the attachment ledger the newest page of each changed conversation
+   (everything once per session), the backup's collection step each changed
+   conversation whole, plus those with an entry due to leave the backup and
+   those whose media protection changed, with the mirror's records kept in
+   memory behind a revision. Another tab's write, which this tab's journal
+   cannot know, makes the next pass read everything.
+   Rendering: each timeline row has `content-visibility: auto`, so the
+   browser lays out and paints only rows near the screen while every row
+   stays in the document (find in page, anchors, assistive technology);
+   older pages read in are let go when the reader returns to the newest
+   messages, as Element does, so the rows rendered stay bounded. A
+   JavaScript virtual list was set aside: variable heights, prepends that
+   keep their place, jumps to a quoted message and the disappearing-message
+   visibility start all depend on rows being in the document.
 5. **Search (Phase 3).** A Rust inverted index from Turkish-folded words
    (İ/I/ı/i → i, accents removed) to message ids, sharded by word prefix into
    encrypted blobs beside the chunks and updated in the same write; prefix
