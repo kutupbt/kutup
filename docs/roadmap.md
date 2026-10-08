@@ -157,6 +157,23 @@ packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
+### Web · theme and language follow the account
+
+Each app keeps its own theme (`next-themes`, `localStorage` key
+`kutup-theme`) and language (`LANGUAGE_STORAGE_KEY`, see
+`frontend/packages/i18n/src/index.ts`). The apps are separate origins, so
+choosing Dark or Turkish on `account.<domain>` leaves Drive, Chat, Office,
+Photos and Maps as they were until the same choice is made in each (left at
+"System", they all follow the OS and match). Planned, as Proton does:
+- both stored as account preferences on the server (not secret, so not
+  end-to-end encrypted), changed from any app's theme or language control;
+- each app keeps its local copy for the first paint (no flash of the wrong
+  theme) and takes the account's value when it loads and when the tab
+  comes back into focus, so a change reaches every app and every device;
+- public pages (shared links, public albums) keep the local choice.
+A cookie on the shared parent domain was set aside: it syncs one browser
+only, and self-hosters may serve the apps from unrelated domains.
+
 ### Responsive web · mobile selection mode
 
 Per the design + user direction: long-press / "Select" button on mobile turns the page into Google-Drive-style full-screen takeover with checkboxes, top "Cancel · N selected · Select all" bar, bottom action bar (Share / Move / Delete / More).
@@ -718,6 +735,51 @@ folder-scoped search, creation menus, folder colors, sorting, selection,
 upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
+
+### Drive · sharing a file: roles and the dialog's layout
+
+In the file share dialog (`frontend/packages/drive-ui/src/FileShareDialog.tsx`)
+each person shows "Can view" or "Can edit" as plain text with only a Remove
+button: making a viewer an editor, or the other way round, means removing
+them and sharing again. The server already updates a person's permission in
+place when the file is shared with them again (`ON CONFLICT … can_edit =
+EXCLUDED.can_edit`), so this is mostly the dialog:
+- a role control on each person's row (Viewer, Editor, and Remove in the
+  same menu, as Google Drive and Proton Drive do), for people on this
+  server and on others, changed in place without re-adding anyone;
+- lowering an editor to viewer stops their writes on the server; they keep
+  the file key they already had, as a viewer would, so no key rotation is
+  needed (removal still rotates it, as today);
+- a pass over the dialog's layout: who has access first, with roles in
+  reach; adding people and choosing their role in one row; links and the
+  "editors can share" switch grouped below; clear states while a change or
+  a key rotation is in progress. The folder share dialog gets the same
+  pass, so both work alike.
+
+### Drive · large uploads from the browser
+
+The web client streams an upload: it reads 5 MB, encrypts it as one
+secretstream chunk and sends it as one tus request, so memory stays flat at
+any size, and the server accepts up to 1 TiB within the user's quota. Two
+gaps make large uploads (several GB, hours on a slow line) fragile:
+- **No resume across a page load.** Closing or reloading the tab, or a
+  browser crash, loses the upload and it starts again from zero:
+  tus-js-client's cross-session resume is turned off
+  (`storeFingerprintForResuming: false` in
+  `frontend/packages/files/src/upload/streamUpload.ts`). Resuming needs the
+  encryption state at the server's offset; the secretstream is sequential,
+  so the simplest safe way is to remember the upload (file name, size, last
+  modified, tus URL) and, on picking the same file again, re-encrypt it from
+  the start while skipping the bytes the server already holds. That costs
+  CPU, not network, and stores no key material.
+- **Short network drops only.** Each request is retried after 0, 1, 3, 5
+  and 10 seconds; an outage longer than about 20 seconds fails the whole
+  upload. It should keep retrying with growing gaps while the browser is
+  offline and continue from the server's offset when it comes back.
+
+With both, a browser test that uploads a multi-GB file, interrupts it
+(offline, reload) and checks it completes with flat memory; today spec 25
+covers 12 MB.
 
 ### Drive · office documents and whiteboards across servers
 
