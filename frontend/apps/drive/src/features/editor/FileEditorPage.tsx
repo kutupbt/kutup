@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { fileKind } from '@kutup/drive-core/kinds'
+import { kindTileSvg } from '@kutup/drive-ui/kindTile'
 import { appUrl } from '@kutup/session/apps'
 import { QuotaExceededError } from '@kutup/session/errors'
 import api from '@kutup/session/client'
@@ -270,6 +272,26 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       document.title = previous
     }
   }, [name, t])
+
+  // The tab shows the file's kind (a sheet for a spreadsheet), as the lists do.
+  const kind = name ? fileKind(name, liveFile?.mimeType) : null
+  useEffect(() => {
+    if (!kind) return
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (!icon) return
+    const previous = { href: icon.href, type: icon.type }
+    let current = true
+    void kindTileSvg(kind).then((svg) => {
+      if (!current) return
+      icon.type = 'image/svg+xml'
+      icon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`
+    }).catch(() => undefined)
+    return () => {
+      current = false
+      icon.href = previous.href
+      icon.type = previous.type
+    }
+  }, [kind])
 
   if (failure) return <FailurePanel failure={failure} folder={liveFolder} file={liveFile} />
   if (!opened || !keys || !liveFolder || !liveFile || !name) {
