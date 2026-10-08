@@ -939,4 +939,3 @@ describe('ChatBackupCoordinator collection by conversation', () => {
     expect(coordinator.restoredVersion()).toBe(version)
   })
 })
-

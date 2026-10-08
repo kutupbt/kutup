@@ -18,4 +18,3 @@ export async function kindTileSvg(kind: FileKind): Promise<string> {
   )
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="${tile}"/>${symbol}</svg>`
 }
-

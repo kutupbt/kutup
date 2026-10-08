@@ -171,4 +171,3 @@ describe('MessageScroller compatibility spike', () => {
     expect(onLiveEdge).toHaveBeenCalledTimes(1)
   })
 })
-
