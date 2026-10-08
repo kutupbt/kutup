@@ -1852,6 +1852,12 @@ export interface WasmChatClientHandle {
   conversationSummaries?(readThrough: Record<string, number>, recent: number, keys?: string[]): Promise<unknown>
   /** The key of every conversation with a timeline. */
   conversationKeys?(): Promise<string[]>
+  /**
+   * Search candidates from the core's index: entries whose words begin with
+   * every word of `query`, newest first, at most `limit`, with what edits or
+   * deletes them.
+   */
+  searchHistory?(query: string, limit: number): Promise<{ entries: ChatHistoryEntry[]; related: ChatHistoryEntry[] }>
   /** One newest-first page of a conversation. */
   conversationHistory?(key: string, before: string | undefined, limit: number): Promise<unknown>
   /** This account's own controls in Note to Self. */

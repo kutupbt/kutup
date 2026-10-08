@@ -185,4 +185,33 @@ describe('ChatService history', () => {
     expect(entered.has('att-2')).toBe(true)
     expect((svc as unknown as { pendingAttachments: Map<string, unknown> }).pendingAttachments.size).toBe(0)
   })
+
+  it('searches with the core index, adds restored history that can match, and falls back without an index', async () => {
+    const text = (id: string, body: string, extra: Partial<ChatHistoryEntry['content']> = {}): ChatHistoryEntry => {
+      const value = entry(id)
+      value.content = { ...value.content, text: body, ...extra }
+      return value
+    }
+    const hit = text('hit', 'Toplantı yarın')
+    const related = text('edit', '', { mutation: { targetMessageId: 'm-hit', operation: 'edit', replacementText: 'Toplantı bugün' } } as Partial<ChatHistoryEntry['content']>)
+    const restoredMatch = text('old-1', 'Eski toplantı notu')
+    const restoredOther = text('old-2', 'alakasız')
+    const { svc, client } = service(() => [hit, restoredOther])
+    Object.assign(client, { searchHistory: vi.fn(async () => ({ entries: [hit], related: [related] })) })
+    Object.assign(svc, {
+      backup: { restoredVersion: () => 1, restoredHistoryAsync: async () => [restoredMatch, restoredOther] },
+      restoredByKey: null,
+      restoredByKeyVersion: -1,
+    })
+    const ids = async (query: string) => (await svc.searchCandidates(query)).map((e) => e.id).sort()
+
+    expect(await ids('TOPLANTI')).toEqual(['edit', 'hit', 'old-1'])
+    expect(client.searchHistory).toHaveBeenCalledWith('TOPLANTI', 200)
+    expect(await ids('   ')).toEqual([])
+
+    // An older core without an index: the whole history (restored history
+    // included) goes to the matcher.
+    delete (client as Record<string, unknown>).searchHistory
+    expect(await ids('toplanti')).toEqual(['hit', 'old-1', 'old-2'])
+  })
 })

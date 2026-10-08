@@ -551,16 +551,30 @@ ordinary Note-to-Self sync traffic.
 Chat search is a client-only operation over decrypted history already present
 on that installation. Queries, result terms and plaintext indexes are never
 sent to or persisted by a homeserver, federation peer or MLS ordering
-authority. V1 performs an ephemeral in-memory scan, so a replacement browser
-can search only history it has recovered through the normal server-hosted
-encrypted backup restore.
+authority.
 
-The searchable view applies product state before matching: hidden controls,
-deleted messages and expired disappearing content are excluded; an edit
-replaces rather than supplements the original text. Text, attachment filenames
-and attachment captions are searchable. Results are bounded and ordered newest
-first, and selecting one navigates to the local conversation copy without a
-network lookup.
+The chat core keeps a search index beside its per-conversation timelines
+(`kutup-chat-core/src/search.rs`, `docs/research/16-browser-storage-architecture.md`):
+an inverted index from words to entries, sharded by a word's first three
+characters into records sealed under the store key like every other record,
+and written in the same transaction as the messages it indexes. A store from
+before the index is indexed once on open. Words are folded before indexing and
+querying: İ, I, ı and i are alike, accents are removed (canonical
+decomposition, combining marks dropped) and text is lowercased; every word of a
+query must begin a word of the message ("kitap" finds "kitaplar", "tap" does
+not). The browser and native clients fold identically (shared vectors in
+`kutup-chat-core/tests/vectors/search_fold.json`). Restored backup history,
+held in memory, is matched the same way without an index; a replacement
+browser can search only history it has recovered through the normal
+server-hosted encrypted backup restore.
+
+The index only proposes candidates; the searchable view applies product state
+before matching: hidden controls, deleted messages and expired disappearing
+content are excluded; an edit replaces rather than supplements the original
+text (each hit comes back with the edits and deletions that act on it). Text,
+attachment filenames and captions, and place labels are searchable. Results are
+bounded and ordered newest first, and selecting one navigates to the local
+conversation copy without a network lookup.
 
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.

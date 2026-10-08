@@ -1,6 +1,6 @@
 # Browser storage: encrypted blobs in IndexedDB
 
-**Status:** decided (October 2026); Phases 1 and 2 (2a, 2b) done; Phase 3 next. Builds on
+**Status:** decided (October 2026); Phases 1, 2 (2a, 2b) and 3 done; Phase 4 next. Builds on
 [15-client-side-search-index.md](15-client-side-search-index.md), whose
 Phase 2 (SQLite with full-text search in the browser) this document replaces
 for the web. Entries in [`../roadmap.md`](../roadmap.md) track the work.
@@ -107,7 +107,7 @@ engine lock Kutup already has.
    controls, read again only for the conversations a change touched. The
    list, unread counts, notifications, receipts and ringing work on it; the
    conversation on screen reads its older pages as it scrolls, and only its
-   thread view sees them. Search reads the whole history until Phase 3.
+   thread view sees them.
    The work that follows the history reads only what the journal names:
    the attachment ledger the newest page of each changed conversation
    (everything once per session), the backup's collection step each changed
@@ -123,10 +123,18 @@ engine lock Kutup already has.
    JavaScript virtual list was set aside: variable heights, prepends that
    keep their place, jumps to a quoted message and the disappearing-message
    visibility start all depend on rows being in the document.
-5. **Search (Phase 3).** A Rust inverted index from Turkish-folded words
-   (İ/I/ı/i → i, accents removed) to message ids, sharded by word prefix into
-   encrypted blobs beside the chunks and updated in the same write; prefix
-   queries; at most 20 decoded shards in memory; rebuildable from the chunks.
+5. **Search (Phase 3, done).** A Rust inverted index from Turkish-folded words
+   (İ/I/ı/i → i, accents removed) to history entries (`search.rs`), sharded by
+   a word's first three characters into sealed records beside the chunks,
+   listed in a directory and updated in the same write; built once on open;
+   word-start queries, every word required; at most 20 decoded shards kept
+   between queries, dropped on any commit. Each entry is also indexed under
+   its own message id and an edit or deletion under its target, so a query
+   returns with its hits what edits or deletes them; the client applies
+   those, the disappearing deadlines and the same matching before showing a
+   hit, and matches restored backup history (in memory) the same way. The
+   browser and native clients fold identically (shared vectors). Matching is
+   by word start, not substring, as in Signal and Proton.
 6. **Tabs.** The existing engine lock (one holder, take-over after 30 s of
    silence) and the writer generation checked in every write.
 7. **Sign-out keeps the encrypted store**, so the same browser stays the same

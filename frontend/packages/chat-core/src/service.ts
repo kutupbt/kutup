@@ -62,6 +62,7 @@ import {
   toCoreAccountAddress,
   withHomeServer,
 } from './identity'
+import { matchesWords, searchableText, searchWords } from './search'
 import { MlsConversationService, MlsSendError } from './mls-service'
 import {
   INVITE_LINK_POLL_MS,
@@ -560,6 +561,41 @@ export class ChatService {
       const keys = mark === null || mark.epoch !== epoch ? null : this.client.changedConversations(mark.commits)
       return { mark: { commits, epoch }, keys }
     })
+  }
+
+  /**
+   * Candidates for a search, for `searchChatHistory` to decide on: from the
+   * core's index, the entries whose words begin with every word of `query`
+   * (newest first) with what edits or deletes them; and the restored
+   * history that can match. Without an index (an older core), the whole
+   * history.
+   */
+  async searchCandidates(query: string): Promise<ChatHistoryEntry[]> {
+    const words = searchWords(query)
+    if (words.length === 0) return []
+    if (!this.client.searchHistory) return [...await this.history()]
+    const [found, restored] = await Promise.all([
+      this.withLock(() => this.client.searchHistory!(query, SEARCH_CANDIDATES)),
+      this.restoredHistory(),
+    ])
+    const byId = new Map<string, ChatHistoryEntry>()
+    // Restored history is held in memory: whatever can match, every edit or
+    // deletion among it, and what those act on.
+    const restoredEntries = [...restored.values()].flat()
+    const targeted = new Set(restoredEntries.flatMap((entry) =>
+      entry.content.mutation ? [entry.content.mutation.targetMessageId] : []))
+    for (const entry of restoredEntries) {
+      if (entry.content.mutation
+          || (entry.content.messageId && targeted.has(entry.content.messageId))
+          || matchesWords(searchWords(searchableText(entry)), words)) {
+        byId.set(entry.id, entry)
+      }
+    }
+    for (const entry of [...found.entries, ...found.related]) {
+      const normalized = this.withHomeServerEntry(entry)
+      byId.set(normalized.id, normalized)
+    }
+    return [...byId.values()]
   }
 
   /** The core's key of every conversation. */
@@ -2318,6 +2354,8 @@ function isNoSuchDevice(body: unknown): boolean {
 
 /** Newest entries per changed conversation the attachment ledger looks at. */
 const LEDGER_PAGE = 100
+/** Search candidates asked of the core's index (more than are shown: some are edited or deleted away). */
+const SEARCH_CANDIDATES = 200
 
 /** Restored entries per conversation that join the live window. */
 const RESTORED_RECENT = 30
