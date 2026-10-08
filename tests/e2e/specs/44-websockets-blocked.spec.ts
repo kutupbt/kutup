@@ -63,7 +63,7 @@ test('where WebSockets are blocked, a note opens read-only with the reason', asy
   await page.goto(appUrl('office'))
   await page.getByTestId('office-new-note').click()
   await page.waitForURL((url) => url.origin === appOrigin('drive') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
-  await expect(page.getByRole('link', { name: 'Back to My files' })).toBeVisible({ timeout: 120_000 })
+  await expect(page.getByRole('link', { name: 'Back to Office' })).toBeVisible({ timeout: 120_000 })
   const editor = page.url()
   // With the socket, it is an ordinary editable note.
   await expect(page.getByTestId('editor-live-blocked')).toHaveCount(0)

@@ -212,6 +212,7 @@ impl Session {
     pub async fn open(db: Rc<dyn ChatDb>, user: impl Into<String>, device_id: u32) -> Result<Self> {
         let address = ChatAddress::from_sender(&user.into(), device_id)?;
         let account = address.name();
+        crate::timeline::ensure_built(db.as_ref()).await?;
         let local = db
             .load_local_identity()
             .await?
@@ -3964,7 +3965,7 @@ fn keep_newest<O: Ord>(
 
 pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, String), i64>;
 
-fn collect_disappearing_expiry_starts(
+pub(crate) fn collect_disappearing_expiry_starts(
     outgoing: &[SentMessage],
     imported: &[crate::ImportedHistoryRecordV1],
     local_account: &str,

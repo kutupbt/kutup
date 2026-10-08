@@ -2,11 +2,12 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { mlsGroupInvitationReadiness, type MlsGroupInvitationReadiness } from '@kutup/chat-core/group-readiness'
 import { canonicalAccountAddress, conversationKey, directAddress } from '@kutup/chat-core/identity'
-import type { ChatGroupCall, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
+import type { ChatGroupCall, ChatHistoryEntry, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
 import { conversationTitle } from '../../lib/names'
 import { activeGroupCall } from '../calls/groupCallController'
 import { activeTimers, groupIdOf, threadView, type MessageView } from '../../state/views'
+import { useThreadPages } from '../../state/threadPages'
 
 /** Why nothing can be written here (the composer's place shows it). */
 export type ReadOnlyReason =
@@ -20,6 +21,12 @@ export type ReadOnlyReason =
 
 export interface ConversationModel {
   key: string
+  /** Read older messages in (scrolled to the top). */
+  loadOlder: () => void
+  /** Every message back to the start is read in. */
+  complete: boolean
+  /** Back at the newest messages: let go of the older ones read in. */
+  trim: () => void
   conversation: ConversationId
   title: string
   /** Direct conversations and notes: the peer's canonical address. */
@@ -53,6 +60,9 @@ export function useConversationModel(conversation: ConversationId, now: number):
   const { t } = useTranslation()
   const { snapshot, self, capabilities } = useChat()
   const selfAddress = self!.address
+  const thread = useThreadPages(conversationKey(conversation))
+  // The live window and the conversation's pages read in so far.
+  const history = useMemo(() => mergeHistory(snapshot.history, thread.entries), [snapshot.history, thread.entries])
 
   return useMemo(() => {
     const key = conversationKey(conversation)
@@ -89,8 +99,11 @@ export function useConversationModel(conversation: ConversationId, now: number):
       historyOnly,
       isAdmin,
       readiness,
-      views: threadView(snapshot.history, key, selfAddress, now),
-      timerSeconds: activeTimers(snapshot.history).get(key),
+      views: threadView(history, key, selfAddress, now),
+      timerSeconds: activeTimers(history).get(key),
+      loadOlder: thread.loadOlder,
+      complete: thread.complete,
+      trim: thread.trim,
       readOnly,
       canSendMedia: !readOnly && established,
       canSetTimer: !readOnly && established,
@@ -106,7 +119,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
       canCall: !readOnly && !note && conversation.kind === 'direct' && contact?.state === 'accepted',
       groupCall: group
         ? activeGroupCall(
-            snapshot.history.flatMap((entry) =>
+            history.flatMap((entry) =>
               entry.content.groupCall && conversationKey(entry.conversation) === key
                 ? [{ call: entry.content.groupCall, atMs: entry.timestampMs }]
                 : []),
@@ -115,5 +128,17 @@ export function useConversationModel(conversation: ConversationId, now: number):
         : null,
       canStartGroupCall: group !== null && !readOnly && capabilities?.groupCalls === true,
     }
-  }, [conversation, snapshot, selfAddress, now, t, capabilities])
+  }, [conversation, snapshot, history, thread.loadOlder, thread.complete, thread.trim, selfAddress, now, t, capabilities])
+}
+
+/** Two histories as one, oldest first, each entry once (the first wins). */
+function mergeHistory(
+  window: readonly ChatHistoryEntry[],
+  pages: readonly ChatHistoryEntry[],
+): ChatHistoryEntry[] {
+  if (pages.length === 0) return window as ChatHistoryEntry[]
+  const byId = new Map<string, ChatHistoryEntry>()
+  for (const entry of window) byId.set(entry.id, entry)
+  for (const entry of pages) if (!byId.has(entry.id)) byId.set(entry.id, entry)
+  return [...byId.values()].sort((left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id))
 }

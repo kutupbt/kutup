@@ -42,7 +42,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
   const actions = useListActions()
   const [deleting, setDeleting] = useState<ConversationSummary | null>(null)
   const self = chat.self!
-  const drafts = useDrafts(self.address)
+  const drafts = useDrafts()
   const typingIndicators = useTypingIndicators()
   const { snapshot } = chat
 

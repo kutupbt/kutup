@@ -19,10 +19,11 @@ test('the Office home starts a document in Drive and lists it afterwards', async
   await page.waitForURL((url) => url.origin === appOrigin('drive') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
   const editor = page.url()
   // Drive signs itself in through the account app first; let it settle.
-  await expect(page.getByRole('link', { name: 'Back to My files' })).toBeVisible({ timeout: 120_000 })
+  // Opened from Office, its back button returns there, not to the folder.
+  await expect(page.getByRole('link', { name: 'Back to Office' })).toBeVisible({ timeout: 120_000 })
   expect(page.url()).toBe(editor)
-
-  await page.goto(appUrl('office'))
+  await page.getByRole('link', { name: 'Back to Office' }).click()
+  await page.waitForURL((url) => url.origin === appOrigin('office'), { timeout: 60_000 })
   const cards = page.getByTestId('office-document')
   await expect(cards).toHaveCount(1, { timeout: 60_000 })
   await expect(cards).toContainText('Untitled note.md')

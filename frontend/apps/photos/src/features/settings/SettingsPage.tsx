@@ -57,7 +57,7 @@ export function SettingsPage() {
     )
 
   return (
-    <PageBody>
+    <PageBody className="px-4 py-6 md:px-8 md:py-8">
       <PageHeader title={t('settings.title')} description={t('settings.description')} />
       <Section title={t('settings.uploadTitle')} description={t('settings.uploadDescription')}>
         <div className="max-w-md space-y-2">

@@ -49,7 +49,7 @@ export function AlbumsPage() {
   const [inviting, setInviting] = useState(false)
   if (albums.isPending) return <LoadingPanel label={t('albums.loading')} />
   return (
-    <PageBody>
+    <PageBody className="px-4 py-6 md:px-8 md:py-8">
       <PageHeader
         title={t('albums.title')}
         description={t('albums.description')}

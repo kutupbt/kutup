@@ -7,12 +7,14 @@ import {
   getAll,
   loadBackupState,
   openBackupStore,
+  readBackupRecords,
   replaceBackupMedia,
   replaceRestoredRecords,
   type BackupLocalState,
   type BackupOutboxEntry,
   type StoredBackupRecord,
 } from './backup-store'
+import { testSealer } from './testSealer'
 
 const databases: string[] = []
 const zeroDigest = '0'.repeat(64)
@@ -35,6 +37,7 @@ function state(now = 1_700_000_000_000): BackupLocalState {
     highestGeneration: 0,
     highestCursor: 0,
     highestManifestDigest: zeroDigest,
+    recordsRevision: 0,
   }
 }
 
@@ -79,11 +82,12 @@ describe('ChatBackupStore durable transactions', () => {
       local: true,
     }]
     const outbox = [entry(1), entry(2)]
-    await commitBackupQueue(db, records, outbox, state())
+    await commitBackupQueue(db, testSealer, records, outbox, state())
     db.close()
 
     db = await openBackupStore(name)
-    expect(await getAll(db, 'records')).toEqual(records)
+    expect(await readBackupRecords(db, testSealer)).toEqual(records)
+    expect(JSON.stringify(await getAll(db, 'records'))).not.toContain('durable')
     expect(await getAll(db, 'outbox')).toEqual(outbox)
     expect(await loadBackupState(db)).toMatchObject({
       deviceSequence: 2,
@@ -96,7 +100,7 @@ describe('ChatBackupStore durable transactions', () => {
     const db = await openBackupStore(databaseName('ack'))
     const first = entry(1)
     const second = entry(2)
-    await commitBackupQueue(db, [], [first, second], state())
+    await commitBackupQueue(db, testSealer, [], [first, second], state())
 
     await acknowledgeBackupEntry(db, first, 7, 1_700_000_123_000, 1_700_000_000_000)
 
@@ -116,16 +120,34 @@ describe('ChatBackupStore durable transactions', () => {
     const oldRecord = {
       id: 'old', fingerprint: 'old', record: { value: 'old' }, local: false,
     }
-    await commitBackupQueue(db, [oldRecord], [], state())
+    await commitBackupQueue(db, testSealer, [oldRecord], [], state())
     const restored = [
       { id: 'new-1', fingerprint: 'one', record: { value: 'one' }, local: false },
       { id: 'new-2', fingerprint: 'two', record: { value: 'two' }, local: false },
     ]
 
-    await replaceRestoredRecords(db, restored, 19, 1_700_000_000_000)
+    await replaceRestoredRecords(db, testSealer, restored, 19, 1_700_000_000_000)
 
-    expect(await getAll(db, 'records')).toEqual(restored)
+    expect(await readBackupRecords(db, testSealer)).toEqual(restored)
     expect(await loadBackupState(db)).toMatchObject({ restoredCursor: 19 })
+    db.close()
+  })
+
+  it('seals records an older version kept in plaintext, and refuses ones that do not open', async () => {
+    const db = await openBackupStore(databaseName('legacy'))
+    const legacy = { id: 'legacy-1', fingerprint: 'f', record: { value: 'plain' }, local: true }
+    const write = db.transaction('records', 'readwrite')
+    write.objectStore('records').put(legacy)
+    await new Promise((resolve) => { write.oncomplete = resolve })
+
+    expect(await readBackupRecords(db, testSealer)).toEqual([legacy])
+    expect(JSON.stringify(await getAll(db, 'records'))).not.toContain('plain')
+    expect(await readBackupRecords(db, testSealer)).toEqual([legacy])
+
+    const foreign = db.transaction('records', 'readwrite')
+    foreign.objectStore('records').put({ id: 'moved', sealed: testSealer.sealValues([{ name: 'backup-record:other', value: {} }])[0] })
+    await new Promise((resolve) => { foreign.oncomplete = resolve })
+    await expect(readBackupRecords(db, testSealer)).rejects.toThrow('do not open')
     db.close()
   })
 

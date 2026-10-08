@@ -1,37 +1,39 @@
 import { useSyncExternalStore } from 'react'
+import type { SealedStorage } from '@kutup/chat-core/sealedStorage'
+import { activeSealedStorage, subscribeSealed } from './sealedState'
 
 /**
  * How far each conversation has been read on this device: the timestamp of
  * the newest message shown while it was open and the page visible. Unread
  * counts and the "unread messages" marker come from it. It is per device
- * (like the drafts), kept in localStorage per account; read receipts to
- * the other side are separate and optional.
+ * (like the drafts), sealed for the account; read receipts to the other
+ * side are separate and optional.
  */
 
 type ReadMarks = Record<string, number>
 
+const NAME = 'read-marks'
 const listeners = new Set<() => void>()
-let account: string | null = null
-let marks: ReadMarks = {}
-/** This device has no marks yet (first open): everything starts read. */
-let fresh = false
+/** `fresh`: this device has no marks yet (first open), so everything starts read. */
+let cache: { storage: SealedStorage | null; marks: ReadMarks; fresh: boolean } | null = null
 
-function storageKey(userId: string): string {
-  return `kutup:chat:read:${userId}`
+function load(): { marks: ReadMarks; fresh: boolean } {
+  const storage = activeSealedStorage()
+  if (cache?.storage !== storage) {
+    const stored = storage?.read<unknown>(NAME)
+    cache = {
+      storage,
+      marks: stored && typeof stored === 'object' ? (stored as ReadMarks) : {},
+      fresh: storage !== null && stored === undefined,
+    }
+  }
+  return cache
 }
 
-/** Load this account's marks (once per account). */
-export function loadReadMarks(userId: string): void {
-  if (account === userId) return
-  account = userId
-  try {
-    const raw = window.localStorage.getItem(storageKey(userId))
-    fresh = raw === null
-    const parsed: unknown = raw ? JSON.parse(raw) : {}
-    marks = parsed && typeof parsed === 'object' ? (parsed as ReadMarks) : {}
-  } catch {
-    marks = {}
-  }
+function store(marks: ReadMarks): void {
+  const storage = activeSealedStorage()
+  cache = { storage, marks, fresh: false }
+  storage?.write(NAME, marks)
   for (const listener of listeners) listener()
 }
 
@@ -41,45 +43,36 @@ export function loadReadMarks(userId: string): void {
  * from now on is new.
  */
 export function startFreshMarks(newestByKey: ReadonlyMap<string, number>): void {
-  if (!fresh || !account) return
-  fresh = false
-  marks = { ...Object.fromEntries(newestByKey), ...marks }
-  try {
-    window.localStorage.setItem(storageKey(account), JSON.stringify(marks))
-  } catch {
-    // Kept for this tab.
-  }
-  for (const listener of listeners) listener()
+  const { marks, fresh } = load()
+  if (!fresh) return
+  store({ ...Object.fromEntries(newestByKey), ...marks })
 }
 
 /** Mark `key` read up to `timestampMs` (never backwards). */
 export function markRead(key: string, timestampMs: number): void {
-  if (!account || (marks[key] ?? 0) >= timestampMs) return
-  marks = { ...marks, [key]: timestampMs }
-  try {
-    window.localStorage.setItem(storageKey(account), JSON.stringify(marks))
-  } catch {
-    // Storage full or blocked: the marks still hold for this tab.
-  }
-  for (const listener of listeners) listener()
+  if (!activeSealedStorage()) return
+  const { marks } = load()
+  if ((marks[key] ?? 0) >= timestampMs) return
+  store({ ...marks, [key]: timestampMs })
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
-  const onStorage = (event: StorageEvent) => {
-    if (account && event.key === storageKey(account)) {
-      account = null
-      const reload = event.key.slice('kutup:chat:read:'.length)
-      loadReadMarks(reload)
-    }
-  }
-  window.addEventListener('storage', onStorage)
+  const unsubscribe = subscribeSealed(NAME, () => {
+    cache = null
+    listener()
+  })
   return () => {
     listeners.delete(listener)
-    window.removeEventListener('storage', onStorage)
+    unsubscribe()
   }
 }
 
+/** The marks now, outside React (the chat store). */
+export function currentReadMarks(): Readonly<ReadMarks> {
+  return load().marks
+}
+
 export function useReadMarks(): Readonly<ReadMarks> {
-  return useSyncExternalStore(subscribe, () => marks)
+  return useSyncExternalStore(subscribe, () => load().marks)
 }

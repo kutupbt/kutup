@@ -1,38 +1,8 @@
-import {
-  AlignLeft,
-  Archive,
-  Code,
-  File,
-  FileText,
-  Folder,
-  Image,
-  Music,
-  NotebookPen,
-  PenTool,
-  Play,
-  Presentation,
-  Sheet,
-  MapPin,
-  type LucideIcon,
-} from 'lucide-react'
+import { Folder } from 'lucide-react'
 import { cn } from '@kutup/ui/lib/cn'
 import type { FileKind, ItemKind } from '@kutup/drive-core/kinds'
+import { KIND_GLYPHS } from './kindGlyphs'
 
-const GLYPHS: Record<FileKind, LucideIcon> = {
-  note: NotebookPen,
-  document: AlignLeft,
-  spreadsheet: Sheet,
-  presentation: Presentation,
-  whiteboard: PenTool,
-  map: MapPin,
-  pdf: FileText,
-  image: Image,
-  video: Play,
-  audio: Music,
-  code: Code,
-  archive: Archive,
-  other: File,
-}
 
 // Written out whole so Tailwind finds every class.
 const TILES: Record<FileKind, string> = {
@@ -70,7 +40,7 @@ export function KindIcon({ kind, color, className }: { kind: ItemKind; color?: s
       />
     )
   }
-  const Glyph = GLYPHS[kind]
+  const Glyph = KIND_GLYPHS[kind]
   return (
     <span
       aria-hidden

@@ -555,6 +555,7 @@
     "liveBlockedUnsent": "Son değişiklikleriniz sunucuya ulaşmadı. Bu sekmede tutuluyor ve bağlantı geri gelirse gönderiliyor; sekmeyi kapatmayın. Ya da dosyanın son kaydedilmiş halini indirin.",
     "failedTitle": "Bu dosya açılamıyor",
     "backToDrive": "Depo'ya dön",
+    "backToOffice": "Ofis'e dön",
     "backTo": "{{folder}} klasörüne dön",
     "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
     "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",

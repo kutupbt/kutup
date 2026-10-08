@@ -2,9 +2,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, UserPlus, WifiOff, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { fileKind } from '@kutup/drive-core/kinds'
+import { kindTileSvg } from '@kutup/drive-ui/kindTile'
+import { appUrl } from '@kutup/session/apps'
 import { QuotaExceededError } from '@kutup/session/errors'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
@@ -270,6 +273,26 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     }
   }, [name, t])
 
+  // The tab shows the file's kind (a sheet for a spreadsheet), as the lists do.
+  const kind = name ? fileKind(name, liveFile?.mimeType) : null
+  useEffect(() => {
+    if (!kind) return
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (!icon) return
+    const previous = { href: icon.href, type: icon.type }
+    let current = true
+    void kindTileSvg(kind).then((svg) => {
+      if (!current) return
+      icon.type = 'image/svg+xml'
+      icon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`
+    }).catch(() => undefined)
+    return () => {
+      current = false
+      icon.href = previous.href
+      icon.type = previous.type
+    }
+  }, [kind])
+
   if (failure) return <FailurePanel failure={failure} folder={liveFolder} file={liveFile} />
   if (!opened || !keys || !liveFolder || !liveFile || !name) {
     return (
@@ -335,8 +358,19 @@ function useDownload(folder: Folder | undefined, file: DriveFile | undefined) {
   }, [folder, file, t])
 }
 
+/**
+ * Opened from Office's home (`?from=office`): its back button returns there
+ * instead of to the file's folder. Only this one value is honoured, so the
+ * parameter cannot send anyone elsewhere.
+ */
+function useOpenedFromOffice(): boolean {
+  const [params] = useSearchParams()
+  return params.get('from') === 'office'
+}
+
 function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Folder; file?: DriveFile }) {
   const { t, i18n } = useTranslation()
+  const fromOffice = useOpenedFromOffice()
   const download = useDownload(folder, file)
   const description =
     failure === 'tooLarge'
@@ -352,9 +386,15 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
         <p className="text-sm text-muted-foreground">{description}</p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="outline" asChild>
-            <Link to={folder ? folderPath(folder) : '/'}>
-              <ArrowLeft /> {t('file.backToDrive')}
-            </Link>
+            {fromOffice ? (
+              <a href={appUrl('office')}>
+                <ArrowLeft /> {t('file.backToOffice')}
+              </a>
+            ) : (
+              <Link to={folder ? folderPath(folder) : '/'}>
+                <ArrowLeft /> {t('file.backToDrive')}
+              </Link>
+            )}
           </Button>
           {failure === 'tooLarge' ? (
             <Button onClick={() => void download()}>
@@ -403,6 +443,7 @@ function Workspace({
   onOutdated: (base?: SessionBase) => void
 }) {
   const { t } = useTranslation()
+  const fromOffice = useOpenedFromOffice()
   const download = useDownload(folder, file)
   const rename = useRenameFile()
   const [renaming, setRenaming] = useState(false)
@@ -463,14 +504,20 @@ function Workspace({
     <div className="flex h-svh flex-col overflow-hidden bg-background">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-2 sm:px-3">
         <Button variant="ghost" size="icon" asChild>
-          <Link
-            to={folderPath(folder)}
-            aria-label={t('file.backTo', {
-              folder: folder.isRoot ? t('nav.myFiles') : folder.source === 'file' ? t('nav.shared') : folder.name,
-            })}
-          >
-            <ArrowLeft />
-          </Link>
+          {fromOffice ? (
+            <a href={appUrl('office')} aria-label={t('file.backToOffice')}>
+              <ArrowLeft />
+            </a>
+          ) : (
+            <Link
+              to={folderPath(folder)}
+              aria-label={t('file.backTo', {
+                folder: folder.isRoot ? t('nav.myFiles') : folder.source === 'file' ? t('nav.shared') : folder.name,
+              })}
+            >
+              <ArrowLeft />
+            </Link>
+          )}
         </Button>
         <KutupLogo size={22} className="hidden shrink-0 sm:block" />
         {mayRename ? (

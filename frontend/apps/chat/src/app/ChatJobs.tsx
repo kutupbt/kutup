@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { disappearingMessageExpiresAt, isVisibleChatMessage } from '@kutup/chat-core/disappearing'
 import { conversationKey, directAddress } from '@kutup/chat-core/identity'
 import type { ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
-import { useNow } from '../lib/useNow'
 import { useJoinedMeetingsSync } from '../features/callLinks/useMeetings'
 import { parseConversationKey } from '../features/list/paths'
 import { nextListState } from '../state/accountState'
@@ -35,7 +34,6 @@ export function ChatJobs() {
   const chat = useChat()
   const viewed = useViewedConversation()
   const readReceipts = useReadReceipts()
-  const now = useNow(1_000)
   const attempted = useRef(new Set<string>())
   const synced = useRef(new Set<string>())
   const account = useAccountState()
@@ -173,19 +171,37 @@ export function ChatJobs() {
     })()
   }, [service, viewed, snapshot.history, account])
 
-  // Expired messages leave as soon as their time is up.
-  useEffect(() => {
-    if (purging.current) return
-    const due = snapshot.history.some((message) => {
+  // Expired messages leave as soon as their time is up: one timer for the
+  // soonest deadline, worked out once per change of the history.
+  const nextExpiry = useMemo(() => {
+    let next = Infinity
+    for (const message of snapshot.history) {
       const at = disappearingMessageExpiresAt(message)
-      return at !== undefined && now >= at
-    })
-    if (!due) return
-    purging.current = true
-    void refreshChat().finally(() => {
-      purging.current = false
-    })
-  }, [now, snapshot.history])
+      if (at !== undefined && at < next) next = at
+    }
+    return next
+  }, [snapshot.history])
+  const [rearm, setRearm] = useState(0)
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return
+    // Browsers fire at once past about 24.8 days; wait a day at most and
+    // look again.
+    const delay = Math.min(Math.max(0, nextExpiry - Date.now()), MAX_TIMER_MS)
+    const timer = window.setTimeout(() => {
+      if (Date.now() < nextExpiry) {
+        setRearm((count) => count + 1)
+        return
+      }
+      if (purging.current) return
+      purging.current = true
+      void refreshChat().finally(() => {
+        purging.current = false
+      })
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [nextExpiry, rearm])
 
   return null
 }
+
+const MAX_TIMER_MS = 24 * 60 * 60_000

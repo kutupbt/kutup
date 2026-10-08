@@ -7,6 +7,58 @@ export interface StoredBackupRecord<T> {
   local: boolean
 }
 
+/**
+ * Seals the mirror's records at rest (`SealedStorage` is one): each record is
+ * kept as `{ id, sealed }`, bound to its id.
+ */
+export interface BackupRecordSealer {
+  sealValues(entries: readonly { name: string; value: unknown }[]): Uint8Array[]
+  openValues<T>(entries: readonly { name: string; sealed: Uint8Array }[]): (T | undefined)[]
+}
+
+interface SealedRecordRow {
+  id: string
+  sealed: Uint8Array
+}
+
+function recordName(id: string): string {
+  return `backup-record:${id}`
+}
+
+function sealRecords<T>(sealer: BackupRecordSealer, records: StoredBackupRecord<T>[]): SealedRecordRow[] {
+  const sealed = sealer.sealValues(records.map(({ id, ...rest }) => ({ name: recordName(id), value: rest })))
+  return records.map((record, i) => ({ id: record.id, sealed: sealed[i] }))
+}
+
+/**
+ * Every record of the mirror, opened in one batch. Rows an older version
+ * kept in plaintext are sealed now. A row that does not open is a damaged or
+ * foreign store, not an empty one.
+ */
+export async function readBackupRecords<T>(
+  db: IDBDatabase,
+  sealer: BackupRecordSealer,
+): Promise<StoredBackupRecord<T>[]> {
+  const rows = await getAll<SealedRecordRow | StoredBackupRecord<T>>(db, 'records')
+  const sealed = rows.filter((row): row is SealedRecordRow => 'sealed' in row)
+  const legacy = rows.filter((row): row is StoredBackupRecord<T> => !('sealed' in row))
+  const opened = sealer.openValues<Omit<StoredBackupRecord<T>, 'id'>>(
+    sealed.map((row) => ({ name: recordName(row.id), sealed: row.sealed })),
+  )
+  const records = sealed.map((row, i) => {
+    const value = opened[i]
+    if (!value) throw new Error('Chat backup records do not open with this account')
+    return { id: row.id, ...value }
+  })
+  if (legacy.length > 0) {
+    const transaction = db.transaction('records', 'readwrite')
+    const store = transaction.objectStore('records')
+    for (const row of sealRecords(sealer, legacy)) store.put(row)
+    await transactionDone(transaction)
+  }
+  return [...records, ...legacy]
+}
+
 export interface BackupOutboxEntry {
   deviceSequence: number
   operationId: string
@@ -39,6 +91,8 @@ export interface BackupLocalState {
   highestGeneration: number
   highestCursor: number
   highestManifestDigest: string
+  /** Bumped by every write to the records, so a copy kept in memory knows when it is stale. */
+  recordsRevision: number
 }
 
 export function openBackupStore(name: string): Promise<IDBDatabase> {
@@ -115,19 +169,22 @@ export async function loadBackupState(
     highestGeneration: 0,
     highestCursor: 0,
     highestManifestDigest: ZERO_DIGEST,
+    recordsRevision: 0,
   }
   return value ? { ...defaults, ...value } : defaults
 }
 
 export async function commitBackupQueue<T>(
   db: IDBDatabase,
+  sealer: BackupRecordSealer,
   records: StoredBackupRecord<T>[],
   outbox: BackupOutboxEntry[],
   state: BackupLocalState,
 ): Promise<void> {
+  const rows = sealRecords(sealer, records)
   const transaction = db.transaction(['meta', 'records', 'outbox'], 'readwrite')
   const recordStore = transaction.objectStore('records')
-  for (const record of records) recordStore.put(record)
+  for (const row of rows) recordStore.put(row)
   const outboxStore = transaction.objectStore('outbox')
   for (const entry of outbox) outboxStore.add(entry)
   transaction.objectStore('meta').put(state)
@@ -155,6 +212,7 @@ export async function acknowledgeBackupEntry(
 
 export async function replaceRestoredRecords<T>(
   db: IDBDatabase,
+  sealer: BackupRecordSealer,
   records: StoredBackupRecord<T>[],
   cursor: number,
   now = Date.now(),
@@ -162,11 +220,13 @@ export async function replaceRestoredRecords<T>(
 ): Promise<void> {
   const state = await loadBackupState(db, now)
   state.restoredCursor = cursor
+  state.recordsRevision += 1
+  const rows = sealRecords(sealer, records)
   const stores = media ? ['meta', 'records', 'media'] : ['meta', 'records']
   const transaction = db.transaction(stores, 'readwrite')
   const store = transaction.objectStore('records')
   store.clear()
-  for (const record of records) store.put(record)
+  for (const row of rows) store.put(row)
   if (media) {
     const mediaStore = transaction.objectStore('media')
     mediaStore.clear()

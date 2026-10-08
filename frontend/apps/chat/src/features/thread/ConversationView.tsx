@@ -56,7 +56,7 @@ import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { ForwardDialog } from './ForwardDialog'
 import { ConversationBar } from './ConversationBar'
 import { MessageBubble } from './MessageBubble'
-import { MessageScroller } from './MessageScroller'
+import { MessageScroller, TIMELINE_ROW } from './MessageScroller'
 import { useConversationActions } from './useConversationActions'
 import { useConversationModel } from './useConversationModel'
 
@@ -430,6 +430,8 @@ export function ConversationView({
 
       <MessageScroller
         conversationKey={model.key}
+        onNearTop={model.complete ? undefined : model.loadOlder}
+        onLiveEdge={model.trim}
         anchorId={focus ? null : rows.some((r) => r.kind === 'unread') ? 'chat-unread-marker' : null}
         itemKeys={itemKeys}
         jumpToLatestLabel={t('chat.jumpToLatest')}
@@ -444,7 +446,7 @@ export function ConversationView({
         {rows.map((row) => {
           if (row.kind === 'day') {
             return (
-              <div key={row.key} className="px-4 pb-1 pt-5 text-center text-xs font-medium text-muted-foreground">
+              <div key={row.key} className={cn(TIMELINE_ROW, 'px-4 pb-1 pt-5 text-center text-xs font-medium text-muted-foreground')}>
                 {formatDayHeader(row.at, now, i18n.language, t)}
               </div>
             )
@@ -461,7 +463,7 @@ export function ConversationView({
           }
           if (row.kind === 'notice' && row.view.pollEnded) {
             return (
-              <p key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-1.5 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-poll-ended">
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-center justify-center gap-1.5 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-poll-ended">
                 <BarChart3 className="size-4 shrink-0" aria-hidden />
                 {row.view.outgoing
                   ? t('chat.polls.endedNotice_you', { question: row.view.pollEnded.question })
@@ -473,7 +475,7 @@ export function ConversationView({
             const log = row.view.callLog
             const missed = log.outcome === 'missed'
             return (
-              <div key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-call-notice">
+              <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-call-notice">
                 {log.media === 'video' ? <Video className={cn('size-4 shrink-0', missed && 'text-destructive')} aria-hidden /> : <Phone className={cn('size-4 shrink-0', missed && 'text-destructive')} aria-hidden />}
                 <span className={cn(missed && 'text-destructive')}>{callLogText(log, t)}</span>
                 {model.canCall ? (
@@ -486,7 +488,7 @@ export function ConversationView({
           }
           if (row.kind === 'notice' && row.view.undecryptable) {
             return (
-              <div key={row.key} className="mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-undecryptable-notice" data-state={row.view.undecryptable}>
+              <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-undecryptable-notice" data-state={row.view.undecryptable}>
                 <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                 <span>{t(row.view.undecryptable === 'waiting' ? 'chat.undecryptable.waiting' : 'chat.undecryptable.notice', { name: nameOf(row.view) })}</span>
               </div>
@@ -496,7 +498,7 @@ export function ConversationView({
             const started = row.view.groupCall
             const live = model.groupCall?.callId === started.callId
             return (
-              <div key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-group-call-notice">
+              <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-group-call-notice">
                 {started.media === 'video' ? <Video className="size-4 shrink-0" aria-hidden /> : <Phone className="size-4 shrink-0" aria-hidden />}
                 <span>
                   {row.view.outgoing
@@ -513,7 +515,7 @@ export function ConversationView({
           }
           if (row.kind === 'notice' && row.view.groupUpdate) {
             return (
-              <div key={row.key} className="mx-auto flex max-w-md flex-col items-center gap-0.5 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-group-notice">
+              <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-md flex-col items-center gap-0.5 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-group-notice">
                 <Users className="mb-0.5 size-4 shrink-0" aria-hidden />
                 {groupUpdateSentences(row.view.groupUpdate, self.address, (address) => personName(address, profiles, self.address, t), t).map((line, i) => (
                   <p key={i}>{line}</p>
@@ -525,7 +527,7 @@ export function ConversationView({
             const seconds = row.view.timerChange?.seconds
             const who = nameOf(row.view)
             return (
-              <p key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-1.5 px-4 py-2.5 text-center text-xs text-muted-foreground">
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-center justify-center gap-1.5 px-4 py-2.5 text-center text-xs text-muted-foreground')}>
                 <Timer className="size-4 shrink-0" aria-hidden />
                 {seconds === undefined
                   ? t('chat.disappearing.noticeOff', { name: who })

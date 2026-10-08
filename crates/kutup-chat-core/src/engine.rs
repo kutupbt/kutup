@@ -326,6 +326,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<Self> {
         let user = user.into();
+        crate::timeline::ensure_built(db.as_ref()).await?;
         // Registration is restart-safe. Generation persists both private keys
         // and the exact request atomically; a retry reuses that journal. Once a
         // device id is committed, initialization simply reopens the install.

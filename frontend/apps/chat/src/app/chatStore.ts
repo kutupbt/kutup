@@ -18,6 +18,9 @@ import type {
 import { privateCiphertextCacheForAccountV1, type PrivateCiphertextCacheV1 } from '@kutup/files/mediaCache'
 import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
+import { setSealedStorage } from '../state/sealedState'
+import { currentReadMarks } from '../state/readState'
+import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -149,7 +152,12 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
       })
     const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals] =
       await Promise.all([
-        service.history(),
+        // The live window, not the whole history (Phase 2b): read again only
+        // for the conversations that changed.
+        service.liveWindow((controls) => {
+          const self = state.self?.address ?? ''
+          return mergeReadMarks(currentReadMarks(), foldAccountState(controls, self).readThrough)
+        }).then((window) => window.history),
         orPrevious(service.inboundAttention(), previous.attention),
         service.contacts(),
         orPrevious(service.profile(), previous.profile),
@@ -285,8 +293,15 @@ export function openChat(session: Session): void {
     teardown = () => {
       window.clearInterval(ticker)
       for (const unsubscribe of unsubscribers) unsubscribe()
+      setSealedStorage(null)
       service.dispose()
     }
+    // Drafts and read positions an older version kept in plaintext are
+    // taken over once: sealed for the account and the plaintext removed.
+    const sealed = service.sealedStorage
+    sealed.read('drafts', `kutup.chat.drafts.v1:${canonicalAccountAddress(account)}`)
+    sealed.read('read-marks', `kutup:chat:read:${session.userId}`)
+    setSealedStorage(sealed)
     reopenAttempt = 0
     set({
       status: 'ready',

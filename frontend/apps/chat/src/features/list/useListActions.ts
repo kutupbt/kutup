@@ -117,12 +117,13 @@ export function useListActions() {
       /** Remove every message of the conversation from this account's history. */
       deleteChat: (conversation: ConversationId) => {
         const key = conversationKey(conversation)
-        const ids = snapshot.history.flatMap((message) =>
-          conversationKey(message.conversation) === key && message.content.messageId && !isAccountControl(message)
-            ? [message.content.messageId]
-            : [],
-        )
         return run(async () => {
+          // The whole conversation, not only what the window holds.
+          const ids = (await service!.history()).flatMap((message) =>
+            conversationKey(message.conversation) === key && message.content.messageId && !isAccountControl(message)
+              ? [message.content.messageId]
+              : [],
+          )
           if (ids.length > 0) await service!.deleteForMe(conversation, ids)
           const state = lists.get(key)
           if (state?.pinned || state?.archived) {
@@ -131,6 +132,6 @@ export function useListActions() {
         })
       },
     }),
-    [lists, pinnedCount, t, update, newestIncoming, run, service, snapshot.history],
+    [lists, pinnedCount, t, update, newestIncoming, run, service],
   )
 }

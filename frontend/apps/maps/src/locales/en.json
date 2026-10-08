@@ -59,6 +59,7 @@
     "opening": "Opening the map…",
     "failedTitle": "This map can't be opened",
     "backToLists": "Back to your maps",
+    "backToDrive": "Back to Drive",
     "failure": {
       "notFound": "It may have been moved to the trash, or you may no longer have access to it.",
       "undecryptable": "Its keys could not be decrypted with your account. Ask its owner to share it again.",

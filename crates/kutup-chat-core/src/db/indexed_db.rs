@@ -1,5 +1,10 @@
 //! Browser [`ChatDb`] backed by IndexedDB.
 //!
+//! Every record is encrypted at rest (`store_cipher`,
+//! `docs/research/16-browser-storage-architecture.md`): it is stored under a
+//! keyed hash of its key, its value sealed under a store key wrapped by the
+//! account master key. A store from before that is converted on first open.
+//!
 //! Each durable domain gets its own object store. A [`Pending`] unit of work is
 //! queued into one IndexedDB read-write transaction spanning every store, so a
 //! ratchet advance, ciphertext journal update, plaintext insert, and cursor move
@@ -11,13 +16,14 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures_util::future::join_all;
-use js_sys::Array;
+use js_sys::{Array, Uint8Array};
+use rand_core::OsRng;
 use rexie::{ObjectStore, Rexie, TransactionMode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
+use crate::db::store_cipher::{keys, StoreCipher};
 use crate::db::{
     AccountManifestHistoryRecordV1, ChatDb, ContactRecord, HistoryTransferJournalV1,
     ImportedHistoryRecordV1, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
@@ -51,8 +57,10 @@ const CONTACTS: &str = "contacts";
 const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
+/// Derived index records (conversation timelines), sealed like the rest.
+const INDEX: &str = "index_values";
 
-const ALL_STORES: [&str; 25] = [
+const ALL_STORES: [&str; 26] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -78,6 +86,7 @@ const ALL_STORES: [&str; 25] = [
     LOCAL_PROFILE,
     PEER_PROFILES,
     META,
+    INDEX,
 ];
 
 const SINGLETON: &str = "value";
@@ -88,6 +97,11 @@ const PREKEY_ROTATION: &str = "prekey_rotation";
 const REPAIR_LIMITS: &str = "repair_limits";
 const WRITER_GENERATION: &str = "writer_generation";
 const PENDING_REGISTRATION: &str = "pending_registration";
+/// Kept in `meta` under these plain names (not hashed, not sealed): the
+/// wrapped store key, and the format the records are in.
+const STORE_KEY: &str = "store_key";
+const STORE_FORMAT: &str = "store_format";
+const SEALED_FORMAT: &str = "sealed-v1";
 
 /// One account/device-scoped browser chat database.
 ///
@@ -102,18 +116,23 @@ pub struct IndexedDbChatDb {
     /// The writer generation this tab holds (`ChatDb::claim_writer`); every
     /// write checks it inside its own transaction. `None` until claimed.
     fence: std::cell::Cell<Option<u64>>,
+    cipher: StoreCipher,
+    commits: std::cell::Cell<u64>,
+    journal: std::cell::RefCell<crate::timeline::Journal>,
 }
 
 impl IndexedDbChatDb {
-    /// Open (or create) the versioned browser database.
-    pub async fn open(name: &str) -> Result<Self> {
+    /// Open (or create) the versioned browser database, encrypted under a key
+    /// wrapped by `master_key` (the account master key). A store written
+    /// before records were encrypted is converted here, in one transaction.
+    pub async fn open(name: &str, master_key: &[u8; 32]) -> Result<Self> {
         if name.trim().is_empty() {
             return Err(ChatError::Invalid(
                 "IndexedDB chat database name must not be empty".into(),
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(11);
+        let mut builder = Rexie::builder(name).version(12);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -126,11 +145,101 @@ impl IndexedDbChatDb {
             .map_err(write_error)?
             .await
             .map_err(write_error)?;
+        let writer: web_sys::IdbDatabase = writer.into();
+        let wrapped = plain_meta(&db, STORE_KEY)
+            .await?
+            .map(|value| Uint8Array::new(&value).to_vec());
+        let cipher = match wrapped {
+            Some(wrapped) => {
+                let format = plain_meta(&db, STORE_FORMAT)
+                    .await?
+                    .and_then(|v| v.as_string());
+                if format.as_deref() != Some(SEALED_FORMAT) {
+                    return Err(ChatError::Db(
+                        "the chat store is in an unknown format".into(),
+                    ));
+                }
+                StoreCipher::unwrap(master_key, name, &wrapped)?
+            }
+            None => {
+                let (cipher, wrapped) = StoreCipher::create(master_key, name, &mut OsRng)?;
+                convert_plaintext_store(&db, &writer, &cipher, &wrapped).await?;
+                cipher
+            }
+        };
         Ok(Self {
             db,
-            writer: writer.into(),
+            writer,
             fence: std::cell::Cell::new(None),
+            cipher,
+            commits: std::cell::Cell::new(0),
+            journal: std::cell::RefCell::new(crate::timeline::Journal::default()),
         })
+    }
+
+    /// Seal `value` for `key` in `store`, as an IndexedDB key and value.
+    fn sealed(&self, store: &str, key: &[u8], value: &[u8]) -> Result<(JsValue, JsValue)> {
+        let hashed = self.cipher.hashed_key(store, key);
+        let sealed = self.cipher.seal(store, &hashed, key, value, &mut OsRng)?;
+        Ok((
+            JsValue::from_str(&hashed),
+            Uint8Array::from(sealed.as_slice()).into(),
+        ))
+    }
+
+    fn hashed(&self, store: &str, key: &[u8]) -> JsValue {
+        JsValue::from_str(&self.cipher.hashed_key(store, key))
+    }
+
+    /// Open a stored record: its original key and value.
+    fn opened(
+        &self,
+        store: &str,
+        hashed: &JsValue,
+        value: &JsValue,
+    ) -> Result<(Vec<u8>, zeroize::Zeroizing<Vec<u8>>)> {
+        let hashed = hashed
+            .as_string()
+            .ok_or_else(|| ChatError::Db(format!("unexpected record key in {store}")))?;
+        self.cipher
+            .open(store, &hashed, &Uint8Array::new(value).to_vec())
+    }
+
+    fn put<'a>(&self, target: &'a Target, key: Vec<u8>, value: &[u8]) -> Result<Operation<'a>> {
+        let (key, value) = self.sealed(target.name, &key, value)?;
+        Ok(put_op(&target.store, value, key))
+    }
+
+    fn delete<'a>(&self, target: &'a Target, key: Vec<u8>) -> Operation<'a> {
+        delete_op(&target.store, self.hashed(target.name, &key))
+    }
+
+    fn stage_puts<'a, K: IntoKey>(
+        &self,
+        operations: &mut Vec<Operation<'a>>,
+        target: &'a Target,
+        writes: impl IntoIterator<Item = (K, Vec<u8>)>,
+    ) -> Result<()> {
+        for (key, value) in writes {
+            operations.push(self.put(target, key.into_key(), &value)?);
+        }
+        Ok(())
+    }
+
+    fn stage_map<'a, K: IntoKey>(
+        &self,
+        operations: &mut Vec<Operation<'a>>,
+        target: &'a Target,
+        writes: impl IntoIterator<Item = (K, Option<Vec<u8>>)>,
+    ) -> Result<()> {
+        for (key, value) in writes {
+            let key = key.into_key();
+            match value {
+                Some(value) => operations.push(self.put(target, key, &value)?),
+                None => operations.push(self.delete(target, key)),
+            }
+        }
+        Ok(())
     }
 
     /// A read-write transaction over every store that commits only once the
@@ -148,12 +257,17 @@ impl IndexedDbChatDb {
         let transaction = self.strict_write_transaction(&scope)?;
         if let Some(held) = self.fence.get() {
             let meta = transaction.object_store(META).map_err(write_error)?;
+            let key = string_key(WRITER_GENERATION);
+            let hashed = self.hashed(META, &key);
             let stored = meta
-                .get(string_key(WRITER_GENERATION))
+                .get(hashed.clone())
                 .map_err(write_error)?
                 .await
                 .map_err(write_error)?;
-            let current = stored.map(from_js::<u64>).transpose()?.unwrap_or(0);
+            let current = match stored {
+                Some(value) => decode::<u64>(&self.opened(META, &hashed, &value)?.1)?,
+                None => 0,
+            };
             if current != held {
                 if let Ok(aborting) = transaction.abort() {
                     let _ = aborting.await;
@@ -177,24 +291,225 @@ impl IndexedDbChatDb {
         Ok(transaction.into())
     }
 
-    async fn get<T: DeserializeOwned>(&self, store_name: &str, key: JsValue) -> Result<Option<T>> {
+    async fn get<T: DeserializeOwned>(&self, store_name: &str, key: Vec<u8>) -> Result<Option<T>> {
         let transaction = idb(self
             .db
             .transaction(&[store_name], TransactionMode::ReadOnly))?;
         let store = idb(transaction.store(store_name))?;
-        idb(store.get(key).await)?.map(from_js).transpose()
+        let hashed = self.hashed(store_name, &key);
+        match idb(store.get(hashed.clone()).await)? {
+            Some(value) => Ok(Some(decode(&self.opened(store_name, &hashed, &value)?.1)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Every record of a store, opened: original key and value.
+    async fn scan(&self, store_name: &str) -> Result<Vec<(Vec<u8>, zeroize::Zeroizing<Vec<u8>>)>> {
+        let transaction = idb(self
+            .db
+            .transaction(&[store_name], TransactionMode::ReadOnly))?;
+        let store = idb(transaction.store(store_name))?;
+        let mut records = Vec::new();
+        for (key, value) in idb(store.scan(None, None, None, None).await)? {
+            // `meta` also holds the plain store key and format entries.
+            if store_name == META
+                && matches!(key.as_string().as_deref(), Some(STORE_KEY | STORE_FORMAT))
+            {
+                continue;
+            }
+            records.push(self.opened(store_name, &key, &value)?);
+        }
+        Ok(records)
     }
 
     async fn all<T: DeserializeOwned>(&self, store_name: &str) -> Result<Vec<T>> {
-        let transaction = idb(self
-            .db
-            .transaction(&[store_name], TransactionMode::ReadOnly))?;
-        let store = idb(transaction.store(store_name))?;
-        idb(store.get_all(None, None).await)?
-            .into_iter()
-            .map(from_js)
+        self.scan(store_name)
+            .await?
+            .iter()
+            .map(|(_, value)| decode(value))
             .collect()
     }
+}
+
+/// How a store keyed its records before they were sealed.
+#[derive(Clone, Copy)]
+enum LegacyKey {
+    Text,
+    Number,
+    Pair,
+    TextNumber,
+    Triple,
+}
+
+fn legacy_key(shape: LegacyKey, key: &JsValue) -> Result<Vec<u8>> {
+    let bad = || ChatError::Db("unexpected key in the plaintext chat store".into());
+    let text = |value: JsValue| value.as_string().ok_or_else(bad);
+    let number = |value: JsValue| {
+        value
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX))
+            .map(|n| n as u32)
+            .ok_or_else(bad)
+    };
+    Ok(match shape {
+        LegacyKey::Text => string_key(&text(key.clone())?),
+        LegacyKey::Number => number_key(number(key.clone())?),
+        LegacyKey::Pair => {
+            let parts = Array::from(key);
+            pair_key(&text(parts.get(0))?, &text(parts.get(1))?)
+        }
+        LegacyKey::TextNumber => {
+            let parts = Array::from(key);
+            pair_number_key(&text(parts.get(0))?, number(parts.get(1))?)
+        }
+        LegacyKey::Triple => {
+            let parts = Array::from(key);
+            triple_key(
+                &text(parts.get(0))?,
+                &text(parts.get(1))?,
+                &text(parts.get(2))?,
+            )
+        }
+    })
+}
+
+async fn legacy_scan(db: &Rexie, name: &str) -> Result<Vec<(JsValue, JsValue)>> {
+    let transaction = idb(db.transaction(&[name], TransactionMode::ReadOnly))?;
+    let store = idb(transaction.store(name))?;
+    idb(store.scan(None, None, None, None).await)
+}
+
+/// Convert a store written before records were sealed: read every record
+/// the way it was written, then clear each object store and write it back
+/// sealed, with the wrapped key and the format marker, in one durable
+/// transaction. A crash leaves either the plaintext store or the sealed one.
+async fn convert_plaintext_store(
+    db: &Rexie,
+    writer: &web_sys::IdbDatabase,
+    cipher: &StoreCipher,
+    wrapped: &[u8],
+) -> Result<()> {
+    let mut records: Vec<(&'static str, Vec<u8>, Vec<u8>)> = Vec::new();
+    macro_rules! read {
+        ($store:expr, $shape:expr, $ty:ty) => {
+            for (key, value) in legacy_scan(db, $store).await? {
+                let value: $ty = from_js(value)?;
+                records.push(($store, legacy_key($shape, &key)?, encode(&value)?));
+            }
+        };
+    }
+    read!(LOCAL_IDENTITY, LegacyKey::Text, LocalIdentity);
+    read!(SESSIONS, LegacyKey::Text, Vec<u8>);
+    read!(IDENTITIES, LegacyKey::Text, Vec<u8>);
+    read!(PRE_KEYS, LegacyKey::Number, Vec<u8>);
+    read!(USED_PRE_KEYS, LegacyKey::Number, i64);
+    read!(SIGNED_PRE_KEYS, LegacyKey::Number, Vec<u8>);
+    read!(KYBER_PRE_KEYS, LegacyKey::Number, Vec<u8>);
+    read!(KYBER_SEEN, LegacyKey::Text, bool);
+    read!(SENDER_KEYS, LegacyKey::Pair, Vec<u8>);
+    read!(OUTBOX, LegacyKey::Text, OutboxEntry);
+    read!(MLS_STATE, LegacyKey::Text, Vec<u8>);
+    read!(MLS_OUTBOX, LegacyKey::Text, MlsOutboxEntry);
+    read!(MLS_MESSAGES, LegacyKey::Text, MlsHistoryMessage);
+    read!(MESSAGES, LegacyKey::Text, InboxMessage);
+    read!(SENT_MESSAGES, LegacyKey::Text, SentMessage);
+    read!(IMPORTED_HISTORY, LegacyKey::Pair, ImportedHistoryRecordV1);
+    read!(
+        HISTORY_TRANSFER_JOURNALS,
+        LegacyKey::Text,
+        HistoryTransferJournalV1
+    );
+    read!(
+        HISTORY_TRANSFER_FRAMES,
+        LegacyKey::TextNumber,
+        kutup_chat_proto::ChatHistoryTransferFrameV1
+    );
+    read!(INBOUND, LegacyKey::Text, InboundEnvelope);
+    read!(MANIFEST_TRUST, LegacyKey::Text, ManifestTrust);
+    read!(
+        MANIFEST_HISTORY,
+        LegacyKey::Triple,
+        AccountManifestHistoryRecordV1
+    );
+    read!(CONTACTS, LegacyKey::Text, ContactRecord);
+    read!(LOCAL_PROFILE, LegacyKey::Text, LocalProfile);
+    read!(PEER_PROFILES, LegacyKey::Text, PeerProfile);
+    for (key, value) in legacy_scan(db, META).await? {
+        let name = key
+            .as_string()
+            .ok_or_else(|| ChatError::Db("unexpected key in the plaintext chat store".into()))?;
+        let encoded = match name.as_str() {
+            LAST_CURSOR | LAST_SENT_SEQ | WRITER_GENERATION => encode(&from_js::<u64>(value)?)?,
+            PENDING_PREKEY_UPLOAD | PREKEY_ROTATION | REPAIR_LIMITS | PENDING_REGISTRATION => {
+                encode(&from_js::<Vec<u8>>(value)?)?
+            }
+            other => {
+                return Err(ChatError::Db(format!(
+                    "unknown entry {other} in the plaintext chat store"
+                )))
+            }
+        };
+        records.push((META, string_key(&name), encoded));
+    }
+
+    let database: &DurableDatabase = wasm_bindgen::JsCast::unchecked_ref(writer);
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(&options, &"durability".into(), &"strict".into())
+        .map_err(|error| ChatError::Db(format!("IndexedDB write options: {error:?}")))?;
+    let names: Array = ALL_STORES
+        .iter()
+        .map(|name| JsValue::from_str(name))
+        .collect();
+    let transaction: idb::Transaction = database
+        .transaction_with_options(&names, "readwrite", &options)
+        .map_err(|error| ChatError::Db(format!("IndexedDB write transaction: {error:?}")))?
+        .into();
+    let stores = ALL_STORES
+        .iter()
+        .map(|name| Ok((*name, transaction.object_store(name).map_err(write_error)?)))
+        .collect::<Result<std::collections::HashMap<_, _>>>()?;
+    let mut clears = Vec::new();
+    for store in stores.values() {
+        clears.push(store.clear().map_err(write_error)?);
+    }
+    for clear in join_all(clears.into_iter().map(std::future::IntoFuture::into_future)).await {
+        clear.map_err(write_error)?;
+    }
+    let mut operations = Vec::with_capacity(records.len() + 2);
+    for (name, key, value) in &records {
+        let hashed = cipher.hashed_key(name, key);
+        let sealed = cipher.seal(name, &hashed, key, value, &mut OsRng)?;
+        operations.push(put_op(
+            &stores[name],
+            Uint8Array::from(sealed.as_slice()).into(),
+            JsValue::from_str(&hashed),
+        ));
+    }
+    operations.push(put_op(
+        &stores[META],
+        Uint8Array::from(wrapped).into(),
+        JsValue::from_str(STORE_KEY),
+    ));
+    operations.push(put_op(
+        &stores[META],
+        JsValue::from_str(SEALED_FORMAT),
+        JsValue::from_str(STORE_FORMAT),
+    ));
+    finish_write(transaction, operations).await
+}
+
+/// A plain (unsealed) `meta` entry: the wrapped store key and the format.
+async fn plain_meta(db: &Rexie, name: &str) -> Result<Option<JsValue>> {
+    let transaction = idb(db.transaction(&[META], TransactionMode::ReadOnly))?;
+    let store = idb(transaction.store(META))?;
+    idb(store.get(JsValue::from_str(name)).await)
+}
+
+/// An object store in a write transaction, with the name its records are
+/// sealed under.
+struct Target {
+    store: idb::ObjectStore,
+    name: &'static str,
 }
 
 #[async_trait(?Send)]
@@ -219,14 +534,12 @@ impl ChatDb for IndexedDbChatDb {
         // Discover candidates in a completed read transaction, then delete each
         // marker and private record together in a separate atomic transaction.
         // A single Engine owns a device DB, so there is no competing re-add.
-        let transaction = idb(self
-            .db
-            .transaction(&[USED_PRE_KEYS], TransactionMode::ReadOnly))?;
-        let store = idb(transaction.store(USED_PRE_KEYS))?;
-        let candidates = idb(store.scan(None, None, None, None).await)?
+        let candidates = self
+            .scan(USED_PRE_KEYS)
+            .await?
             .into_iter()
-            .filter_map(|(key, value)| match from_js::<i64>(value) {
-                Ok(used_at) if used_at <= used_before_ms => key.as_f64().map(|id| id as u32),
+            .filter_map(|(key, value)| match decode::<i64>(&value) {
+                Ok(used_at) if used_at <= used_before_ms => keys::as_number(&key),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -238,14 +551,12 @@ impl ChatDb for IndexedDbChatDb {
         let transaction = self
             .fenced_write_transaction(&[PRE_KEYS, USED_PRE_KEYS])
             .await?;
-        let pre_keys = transaction.object_store(PRE_KEYS).map_err(write_error)?;
-        let used = transaction
-            .object_store(USED_PRE_KEYS)
-            .map_err(write_error)?;
+        let pre_keys = target(&transaction, PRE_KEYS)?;
+        let used = target(&transaction, USED_PRE_KEYS)?;
         let mut operations = Vec::with_capacity(candidates.len() * 2);
         for id in &candidates {
-            operations.push(delete_op(&pre_keys, number_key(*id)));
-            operations.push(delete_op(&used, number_key(*id)));
+            operations.push(self.delete(&pre_keys, number_key(*id)));
+            operations.push(self.delete(&used, number_key(*id)));
         }
         finish_write(transaction, operations).await?;
         Ok(candidates.len() as u64)
@@ -270,7 +581,10 @@ impl ChatDb for IndexedDbChatDb {
             .transaction(&[KYBER_SEEN], TransactionMode::ReadOnly))?;
         let store = idb(transaction.store(KYBER_SEEN))?;
         idb(store
-            .key_exists(string_key(&kyber_seen_key(kyber_id, ec_id, base_key)))
+            .key_exists(self.hashed(
+                KYBER_SEEN,
+                &string_key(&kyber_seen_key(kyber_id, ec_id, base_key)),
+            ))
             .await)
     }
 
@@ -347,6 +661,14 @@ impl ChatDb for IndexedDbChatDb {
         Ok(messages)
     }
 
+    async fn load_message(&self, id: &str) -> Result<Option<InboxMessage>> {
+        self.get(MESSAGES, string_key(id)).await
+    }
+
+    async fn load_index_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get(INDEX, key.to_vec()).await
+    }
+
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
         self.get(SENT_MESSAGES, string_key(send_id)).await
     }
@@ -395,15 +717,13 @@ impl ChatDb for IndexedDbChatDb {
         &self,
         transfer_id: &str,
     ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
-        let transaction = idb(self
-            .db
-            .transaction(&[HISTORY_TRANSFER_FRAMES], TransactionMode::ReadOnly))?;
-        let store = idb(transaction.store(HISTORY_TRANSFER_FRAMES))?;
         let mut frames = Vec::new();
-        for (key, value) in idb(store.scan(None, None, None, None).await)? {
-            let key = Array::from(&key);
-            if key.length() == 2 && key.get(0).as_string().as_deref() == Some(transfer_id) {
-                frames.push(from_js(value)?);
+        for frame in self
+            .all::<kutup_chat_proto::ChatHistoryTransferFrameV1>(HISTORY_TRANSFER_FRAMES)
+            .await?
+        {
+            if frame.transfer_id == transfer_id {
+                frames.push(frame);
             }
         }
         frames.sort_by_key(|frame: &kutup_chat_proto::ChatHistoryTransferFrameV1| frame.index);
@@ -485,20 +805,23 @@ impl ChatDb for IndexedDbChatDb {
         // Read and move on the generation in one strict transaction, so two
         // tabs taking over at once still end on different generations.
         let transaction = self.strict_write_transaction(&[META])?;
-        let meta = transaction.object_store(META).map_err(write_error)?;
+        let meta = target(&transaction, META)?;
         let key = string_key(WRITER_GENERATION);
+        let hashed = self.hashed(META, &key);
         let stored = meta
-            .get(key.clone())
+            .store
+            .get(hashed.clone())
             .map_err(write_error)?
             .await
             .map_err(write_error)?;
-        let next = stored
-            .map(from_js::<u64>)
-            .transpose()?
-            .unwrap_or(0)
+        let current = match stored {
+            Some(value) => decode::<u64>(&self.opened(META, &hashed, &value)?.1)?,
+            None => 0,
+        };
+        let next = current
             .checked_add(1)
             .ok_or_else(|| ChatError::Db("writer generation exhausted".into()))?;
-        let operations = vec![put_op(&meta, to_js(&next)?, key)];
+        let operations = vec![self.put(&meta, key, &encode(&next)?)?];
         finish_write(transaction, operations).await?;
         self.fence.set(Some(next));
         Ok(next)
@@ -582,9 +905,17 @@ impl ChatDb for IndexedDbChatDb {
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.
         let mut writes = PreparedWrites::from_pending(pending)?;
+        // The conversation timelines move with the records they index.
+        let crate::timeline::Changes {
+            writes: mut index_values,
+            conversations: touched,
+        } = crate::timeline::changes(self, pending).await?;
+        for (key, value) in &pending.index_values {
+            index_values.insert(key.clone(), value.clone());
+        }
 
         let transaction = self.fenced_write_transaction(&ALL_STORES).await?;
-        let store = |name: &str| transaction.object_store(name).map_err(write_error);
+        let store = |name: &'static str| target(&transaction, name);
         let local_identity = store(LOCAL_IDENTITY)?;
         let sessions = store(SESSIONS)?;
         let identities = store(IDENTITIES)?;
@@ -610,143 +941,161 @@ impl ChatDb for IndexedDbChatDb {
         let local_profile = store(LOCAL_PROFILE)?;
         let peer_profiles = store(PEER_PROFILES)?;
         let meta = store(META)?;
+        let index = store(INDEX)?;
 
         let mut operations = Vec::new();
-        if let Some(value) = writes.local_identity.take() {
-            operations.push(put_op(&local_identity, value, string_key(SINGLETON)));
+        for (key, value) in &index_values {
+            match value {
+                Some(value) => operations.push(self.put(&index, key.clone(), &encode(value)?)?),
+                None => operations.push(self.delete(&index, key.clone())),
+            }
         }
-        stage_map(&mut operations, &sessions, writes.sessions);
-        stage_puts(&mut operations, &identities, writes.identities);
+        if let Some(value) = writes.local_identity.take() {
+            operations.push(self.put(&local_identity, string_key(SINGLETON), &value)?);
+        }
+        self.stage_map(&mut operations, &sessions, writes.sessions)?;
+        self.stage_puts(&mut operations, &identities, writes.identities)?;
         for (id, value) in writes.pre_keys {
             match value {
                 Some(value) => {
-                    operations.push(put_op(&pre_keys, value, number_key(id)));
-                    operations.push(delete_op(&used_pre_keys, number_key(id)));
+                    operations.push(self.put(&pre_keys, number_key(id), &value)?);
+                    operations.push(self.delete(&used_pre_keys, number_key(id)));
                 }
-                None => operations.push(put_op(
+                None => operations.push(self.put(
                     &used_pre_keys,
-                    to_js(&crate::clock::unix_millis())?,
                     number_key(id),
-                )),
+                    &encode(&crate::clock::unix_millis())?,
+                )?),
             }
         }
-        stage_puts(&mut operations, &signed_pre_keys, writes.signed_pre_keys);
-        stage_puts(&mut operations, &kyber_pre_keys, writes.kyber_pre_keys);
+        self.stage_puts(&mut operations, &signed_pre_keys, writes.signed_pre_keys)?;
+        self.stage_puts(&mut operations, &kyber_pre_keys, writes.kyber_pre_keys)?;
         // Retired keys go; their replay-guard rows (a few bytes each) stay,
         // since they are keyed by the whole triple and cannot be ranged here.
         for id in writes.delete_signed_pre_keys {
-            operations.push(delete_op(&signed_pre_keys, number_key(id)));
+            operations.push(self.delete(&signed_pre_keys, number_key(id)));
         }
         for id in writes.delete_kyber_pre_keys {
-            operations.push(delete_op(&kyber_pre_keys, number_key(id)));
+            operations.push(self.delete(&kyber_pre_keys, number_key(id)));
         }
         for (key, value) in writes.kyber_seen {
-            operations.push(put_op(&kyber_seen, value, string_key(&key)));
+            operations.push(self.put(&kyber_seen, string_key(&key), &value)?);
         }
         for ((address, distribution_id), value) in writes.sender_keys {
-            operations.push(put_op(
+            operations.push(self.put(
                 &sender_keys,
-                value,
                 pair_key(&address, &distribution_id),
-            ));
+                &value,
+            )?);
         }
-        stage_map(&mut operations, &outbox, writes.outbox);
+        self.stage_map(&mut operations, &outbox, writes.outbox)?;
         if let Some(value) = writes.mls_state.take() {
-            operations.push(put_op(&mls_state, value, string_key(SINGLETON)));
+            operations.push(self.put(&mls_state, string_key(SINGLETON), &value)?);
         }
-        stage_map(&mut operations, &mls_outbox, writes.mls_outbox);
-        stage_puts(&mut operations, &mls_messages, writes.mls_messages);
+        self.stage_map(&mut operations, &mls_outbox, writes.mls_outbox)?;
+        self.stage_puts(&mut operations, &mls_messages, writes.mls_messages)?;
         for record_id in &pending.delete_mls_message_ids {
-            operations.push(delete_op(&mls_messages, string_key(record_id)));
+            operations.push(self.delete(&mls_messages, string_key(record_id)));
         }
         for (id, value) in writes.messages {
-            operations.push(put_op(&messages, value, string_key(&id)));
+            operations.push(self.put(&messages, string_key(&id), &value)?);
         }
         for id in message_deletes {
-            operations.push(delete_op(&messages, string_key(&id)));
+            operations.push(self.delete(&messages, string_key(&id)));
         }
         for id in &pending.delete_message_ids {
-            operations.push(delete_op(&messages, string_key(id)));
+            operations.push(self.delete(&messages, string_key(id)));
         }
-        stage_puts(&mut operations, &sent_messages, writes.sent_messages);
+        self.stage_puts(&mut operations, &sent_messages, writes.sent_messages)?;
         for send_id in &pending.delete_sent_message_ids {
-            operations.push(delete_op(&sent_messages, string_key(send_id)));
+            operations.push(self.delete(&sent_messages, string_key(send_id)));
         }
         for ((transfer_id, source_record_id), value) in writes.imported_history {
-            operations.push(put_op(
+            operations.push(self.put(
                 &imported_history,
-                value,
                 pair_key(&transfer_id, &source_record_id),
-            ));
+                &value,
+            )?);
         }
         for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-            operations.push(delete_op(
-                &imported_history,
-                pair_key(transfer_id, source_record_id),
-            ));
+            operations
+                .push(self.delete(&imported_history, pair_key(transfer_id, source_record_id)));
         }
-        stage_map(
+        self.stage_map(
             &mut operations,
             &history_transfer_journals,
             writes.history_transfer_journals,
-        );
+        )?;
         for ((transfer_id, index), value) in writes.history_transfer_frames {
             let key = pair_number_key(&transfer_id, index);
             match value {
-                Some(value) => operations.push(put_op(&history_transfer_frames, value, key)),
-                None => operations.push(delete_op(&history_transfer_frames, key)),
+                Some(value) => operations.push(self.put(&history_transfer_frames, key, &value)?),
+                None => operations.push(self.delete(&history_transfer_frames, key)),
             }
         }
         for (transfer_id, index) in cascaded_transfer_frame_deletes {
-            operations.push(delete_op(
+            operations.push(self.delete(
                 &history_transfer_frames,
                 pair_number_key(&transfer_id, index),
             ));
         }
-        stage_map(&mut operations, &inbound, writes.inbound);
-        stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
+        self.stage_map(&mut operations, &inbound, writes.inbound)?;
+        self.stage_puts(&mut operations, &manifest_trust, writes.manifest_trust)?;
         for ((peer, incarnation_id, version), value) in writes.manifest_history {
-            operations.push(put_op(
+            operations.push(self.put(
                 &manifest_history,
-                value,
                 triple_key(&peer, &incarnation_id, &version.to_string()),
-            ));
+                &value,
+            )?);
         }
-        stage_puts(&mut operations, &contacts, writes.contacts);
+        self.stage_puts(&mut operations, &contacts, writes.contacts)?;
         if let Some(value) = writes.local_profile.take() {
-            operations.push(put_op(&local_profile, value, string_key(SINGLETON)));
+            operations.push(self.put(&local_profile, string_key(SINGLETON), &value)?);
         }
-        stage_puts(&mut operations, &peer_profiles, writes.peer_profiles);
+        self.stage_puts(&mut operations, &peer_profiles, writes.peer_profiles)?;
         if let Some(value) = writes.prekey_rotation {
-            operations.push(put_op(&meta, value, string_key(PREKEY_ROTATION)));
+            operations.push(self.put(&meta, string_key(PREKEY_ROTATION), &value)?);
         }
         if let Some(value) = writes.repair_limits {
-            operations.push(put_op(&meta, value, string_key(REPAIR_LIMITS)));
+            operations.push(self.put(&meta, string_key(REPAIR_LIMITS), &value)?);
         }
         if let Some(value) = writes.prekey_upload {
             match value {
                 Some(value) => {
-                    operations.push(put_op(&meta, value, string_key(PENDING_PREKEY_UPLOAD)))
+                    operations.push(self.put(&meta, string_key(PENDING_PREKEY_UPLOAD), &value)?)
                 }
-                None => operations.push(delete_op(&meta, string_key(PENDING_PREKEY_UPLOAD))),
+                None => operations.push(self.delete(&meta, string_key(PENDING_PREKEY_UPLOAD))),
             }
         }
         if let Some(value) = writes.registration_upload {
             match value {
                 Some(value) => {
-                    operations.push(put_op(&meta, value, string_key(PENDING_REGISTRATION)))
+                    operations.push(self.put(&meta, string_key(PENDING_REGISTRATION), &value)?)
                 }
-                None => operations.push(delete_op(&meta, string_key(PENDING_REGISTRATION))),
+                None => operations.push(self.delete(&meta, string_key(PENDING_REGISTRATION))),
             }
         }
         if let Some(cursor) = writes.last_cursor {
-            operations.push(put_op(&meta, cursor, string_key(LAST_CURSOR)));
+            operations.push(self.put(&meta, string_key(LAST_CURSOR), &cursor)?);
         }
         if let Some(seq) = writes.last_sent_seq {
-            operations.push(put_op(&meta, seq, string_key(LAST_SENT_SEQ)));
+            operations.push(self.put(&meta, string_key(LAST_SENT_SEQ), &seq)?);
         }
 
-        finish_write(transaction, operations).await
+        finish_write(transaction, operations).await?;
+        self.commits.set(self.commits.get() + 1);
+        self.journal
+            .borrow_mut()
+            .record(self.commits.get(), touched);
+        Ok(())
+    }
+
+    fn commit_count(&self) -> u64 {
+        self.commits.get()
+    }
+
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>> {
+        self.journal.borrow().since(since, self.commits.get())
     }
 }
 
@@ -784,34 +1133,6 @@ fn write_error(error: impl std::fmt::Display) -> ChatError {
     ChatError::Db(format!("IndexedDB write: {error}"))
 }
 
-fn stage_puts<'a, K>(
-    operations: &mut Vec<Operation<'a>>,
-    store: &'a idb::ObjectStore,
-    writes: impl IntoIterator<Item = (K, JsValue)>,
-) where
-    K: IntoKey,
-{
-    for (key, value) in writes {
-        operations.push(put_op(store, value, key.into_key()));
-    }
-}
-
-fn stage_map<'a, K>(
-    operations: &mut Vec<Operation<'a>>,
-    store: &'a idb::ObjectStore,
-    writes: impl IntoIterator<Item = (K, Option<JsValue>)>,
-) where
-    K: IntoKey,
-{
-    for (key, value) in writes {
-        let key = key.into_key();
-        match value {
-            Some(value) => operations.push(put_op(store, value, key)),
-            None => operations.push(delete_op(store, key)),
-        }
-    }
-}
-
 async fn finish_write(transaction: idb::Transaction, operations: Vec<Operation<'_>>) -> Result<()> {
     let results = join_all(operations).await;
     if let Some(error) = results.into_iter().find_map(std::result::Result::err) {
@@ -835,60 +1156,60 @@ async fn finish_write(transaction: idb::Transaction, operations: Vec<Operation<'
 }
 
 trait IntoKey {
-    fn into_key(self) -> JsValue;
+    fn into_key(self) -> Vec<u8>;
 }
 
 impl IntoKey for String {
-    fn into_key(self) -> JsValue {
+    fn into_key(self) -> Vec<u8> {
         string_key(&self)
     }
 }
 
 impl IntoKey for u32 {
-    fn into_key(self) -> JsValue {
+    fn into_key(self) -> Vec<u8> {
         number_key(self)
     }
 }
 
 #[derive(Default)]
 struct PreparedWrites {
-    local_identity: Option<JsValue>,
-    sessions: Vec<(String, Option<JsValue>)>,
-    identities: Vec<(String, JsValue)>,
-    pre_keys: Vec<(u32, Option<JsValue>)>,
-    signed_pre_keys: Vec<(u32, JsValue)>,
-    kyber_pre_keys: Vec<(u32, JsValue)>,
-    kyber_seen: Vec<(String, JsValue)>,
-    sender_keys: Vec<((String, String), JsValue)>,
-    outbox: Vec<(String, Option<JsValue>)>,
-    mls_state: Option<JsValue>,
-    mls_outbox: Vec<(String, Option<JsValue>)>,
-    mls_messages: Vec<(String, JsValue)>,
-    messages: Vec<(String, JsValue)>,
-    sent_messages: Vec<(String, JsValue)>,
-    imported_history: Vec<((String, String), JsValue)>,
-    history_transfer_journals: Vec<(String, Option<JsValue>)>,
-    history_transfer_frames: Vec<((String, u32), Option<JsValue>)>,
-    inbound: Vec<(String, Option<JsValue>)>,
-    manifest_trust: Vec<(String, JsValue)>,
-    manifest_history: Vec<((String, String, u64), JsValue)>,
-    contacts: Vec<(String, JsValue)>,
-    local_profile: Option<JsValue>,
-    peer_profiles: Vec<(String, JsValue)>,
-    prekey_upload: Option<Option<JsValue>>,
-    prekey_rotation: Option<JsValue>,
-    repair_limits: Option<JsValue>,
+    local_identity: Option<Vec<u8>>,
+    sessions: Vec<(String, Option<Vec<u8>>)>,
+    identities: Vec<(String, Vec<u8>)>,
+    pre_keys: Vec<(u32, Option<Vec<u8>>)>,
+    signed_pre_keys: Vec<(u32, Vec<u8>)>,
+    kyber_pre_keys: Vec<(u32, Vec<u8>)>,
+    kyber_seen: Vec<(String, Vec<u8>)>,
+    sender_keys: Vec<((String, String), Vec<u8>)>,
+    outbox: Vec<(String, Option<Vec<u8>>)>,
+    mls_state: Option<Vec<u8>>,
+    mls_outbox: Vec<(String, Option<Vec<u8>>)>,
+    mls_messages: Vec<(String, Vec<u8>)>,
+    messages: Vec<(String, Vec<u8>)>,
+    sent_messages: Vec<(String, Vec<u8>)>,
+    imported_history: Vec<((String, String), Vec<u8>)>,
+    history_transfer_journals: Vec<(String, Option<Vec<u8>>)>,
+    history_transfer_frames: Vec<((String, u32), Option<Vec<u8>>)>,
+    inbound: Vec<(String, Option<Vec<u8>>)>,
+    manifest_trust: Vec<(String, Vec<u8>)>,
+    manifest_history: Vec<((String, String, u64), Vec<u8>)>,
+    contacts: Vec<(String, Vec<u8>)>,
+    local_profile: Option<Vec<u8>>,
+    peer_profiles: Vec<(String, Vec<u8>)>,
+    prekey_upload: Option<Option<Vec<u8>>>,
+    prekey_rotation: Option<Vec<u8>>,
+    repair_limits: Option<Vec<u8>>,
     delete_signed_pre_keys: Vec<u32>,
     delete_kyber_pre_keys: Vec<u32>,
-    registration_upload: Option<Option<JsValue>>,
-    last_cursor: Option<JsValue>,
-    last_sent_seq: Option<JsValue>,
+    registration_upload: Option<Option<Vec<u8>>>,
+    last_cursor: Option<Vec<u8>>,
+    last_sent_seq: Option<Vec<u8>>,
 }
 
 impl PreparedWrites {
     fn from_pending(pending: &Pending) -> Result<Self> {
         Ok(Self {
-            local_identity: pending.local_identity.as_ref().map(to_js).transpose()?,
+            local_identity: pending.local_identity.as_ref().map(encode).transpose()?,
             sessions: serialize_optional_map(&pending.sessions)?,
             identities: serialize_map(&pending.identities)?,
             pre_keys: serialize_optional_map(&pending.pre_keys)?,
@@ -898,22 +1219,22 @@ impl PreparedWrites {
                 .kyber_seen
                 .iter()
                 .map(|(kyber_id, ec_id, base_key)| {
-                    Ok((kyber_seen_key(*kyber_id, *ec_id, base_key), to_js(&true)?))
+                    Ok((kyber_seen_key(*kyber_id, *ec_id, base_key), encode(&true)?))
                 })
                 .collect::<Result<_>>()?,
             sender_keys: pending
                 .sender_keys
                 .iter()
-                .map(|(key, value)| Ok((key.clone(), to_js(value)?)))
+                .map(|(key, value)| Ok((key.clone(), encode(value)?)))
                 .collect::<Result<_>>()?,
             outbox: serialize_optional_map(&pending.outbox)?,
-            mls_state: pending.mls_state.as_ref().map(to_js).transpose()?,
+            mls_state: pending.mls_state.as_ref().map(encode).transpose()?,
             mls_outbox: serialize_optional_map(&pending.mls_outbox)?,
             mls_messages: serialize_map(&pending.mls_messages)?,
             messages: pending
                 .messages
                 .iter()
-                .map(|message| Ok((message.id.clone(), to_js(message)?)))
+                .map(|message| Ok((message.id.clone(), encode(message)?)))
                 .collect::<Result<_>>()?,
             sent_messages: serialize_map(&pending.sent_messages)?,
             imported_history: serialize_map(&pending.imported_history)?,
@@ -923,81 +1244,93 @@ impl PreparedWrites {
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
             contacts: serialize_map(&pending.contacts)?,
-            local_profile: pending.local_profile.as_ref().map(to_js).transpose()?,
+            local_profile: pending.local_profile.as_ref().map(encode).transpose()?,
             peer_profiles: serialize_map(&pending.peer_profiles)?,
             prekey_upload: pending
                 .prekey_upload
                 .as_ref()
-                .map(|value| value.as_ref().map(to_js).transpose())
+                .map(|value| value.as_ref().map(encode).transpose())
                 .transpose()?,
-            prekey_rotation: pending.prekey_rotation.as_ref().map(to_js).transpose()?,
-            repair_limits: pending.repair_limits.as_ref().map(to_js).transpose()?,
+            prekey_rotation: pending.prekey_rotation.as_ref().map(encode).transpose()?,
+            repair_limits: pending.repair_limits.as_ref().map(encode).transpose()?,
             delete_signed_pre_keys: pending.delete_signed_pre_keys.iter().copied().collect(),
             delete_kyber_pre_keys: pending.delete_kyber_pre_keys.iter().copied().collect(),
             registration_upload: pending
                 .registration_upload
                 .as_ref()
-                .map(|value| value.as_ref().map(to_js).transpose())
+                .map(|value| value.as_ref().map(encode).transpose())
                 .transpose()?,
-            last_cursor: pending.last_cursor.as_ref().map(to_js).transpose()?,
-            last_sent_seq: pending.last_sent_seq.as_ref().map(to_js).transpose()?,
+            last_cursor: pending.last_cursor.as_ref().map(encode).transpose()?,
+            last_sent_seq: pending.last_sent_seq.as_ref().map(encode).transpose()?,
         })
     }
 }
 
-fn serialize_map<K, V>(values: &std::collections::HashMap<K, V>) -> Result<Vec<(K, JsValue)>>
+fn serialize_map<K, V>(values: &std::collections::HashMap<K, V>) -> Result<Vec<(K, Vec<u8>)>>
 where
     K: Clone + Eq + std::hash::Hash,
     V: Serialize,
 {
     values
         .iter()
-        .map(|(key, value)| Ok((key.clone(), to_js(value)?)))
+        .map(|(key, value)| Ok((key.clone(), encode(value)?)))
         .collect()
 }
 
 fn serialize_optional_map<K, V>(
     values: &std::collections::HashMap<K, Option<V>>,
-) -> Result<Vec<(K, Option<JsValue>)>>
+) -> Result<Vec<(K, Option<Vec<u8>>)>>
 where
     K: Clone + Eq + std::hash::Hash,
     V: Serialize,
 {
     values
         .iter()
-        .map(|(key, value)| Ok((key.clone(), value.as_ref().map(to_js).transpose()?)))
+        .map(|(key, value)| Ok((key.clone(), value.as_ref().map(encode).transpose()?)))
         .collect()
 }
 
-fn string_key(value: &str) -> JsValue {
-    JsValue::from_str(value)
+fn string_key(value: &str) -> Vec<u8> {
+    keys::text(value)
 }
 
-fn number_key(value: u32) -> JsValue {
-    JsValue::from_f64(value as f64)
+fn number_key(value: u32) -> Vec<u8> {
+    keys::number(value)
 }
 
-fn pair_key(left: &str, right: &str) -> JsValue {
-    Array::of2(&string_key(left), &string_key(right)).into()
+fn pair_key(left: &str, right: &str) -> Vec<u8> {
+    keys::pair(left, right)
 }
 
-fn pair_number_key(left: &str, right: u32) -> JsValue {
-    Array::of2(&string_key(left), &number_key(right)).into()
+fn pair_number_key(left: &str, right: u32) -> Vec<u8> {
+    keys::text_number(left, right)
 }
 
-fn triple_key(first: &str, second: &str, third: &str) -> JsValue {
-    Array::of3(&string_key(first), &string_key(second), &string_key(third)).into()
+fn triple_key(first: &str, second: &str, third: &str) -> Vec<u8> {
+    keys::triple(first, second, third)
+}
+
+fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::into_writer(value, &mut out)
+        .map_err(|error| ChatError::Db(format!("chat store encode: {error}")))?;
+    Ok(out)
+}
+
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    ciborium::from_reader(bytes)
+        .map_err(|error| ChatError::Db(format!("chat store decode: {error}")))
+}
+
+fn target(transaction: &idb::Transaction, name: &'static str) -> Result<Target> {
+    Ok(Target {
+        store: transaction.object_store(name).map_err(write_error)?,
+        name,
+    })
 }
 
 fn kyber_seen_key(kyber_id: u32, ec_id: u32, base_key: &[u8]) -> String {
     format!("{kyber_id}:{ec_id}:{}", hex::encode(base_key))
-}
-
-fn to_js<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
-    let serializer = Serializer::new().serialize_large_number_types_as_bigints(true);
-    value
-        .serialize(&serializer)
-        .map_err(|error| ChatError::Db(format!("IndexedDB encode: {error}")))
 }
 
 fn from_js<T: DeserializeOwned>(value: JsValue) -> Result<T> {
@@ -1021,7 +1354,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn atomically_round_trips_every_durable_domain() {
         let name = format!("kutup-chat-test-{}", js_sys::Date::now());
-        let db = IndexedDbChatDb::open(&name).await.unwrap();
+        let db = IndexedDbChatDb::open(&name, &[3; 32]).await.unwrap();
         let mut pending = Pending::default();
         pending.local_identity = Some(LocalIdentity {
             identity_key_pair: vec![1, 2, 3],

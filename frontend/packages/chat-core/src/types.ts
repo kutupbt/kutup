@@ -296,6 +296,15 @@ export type ConversationId =
   | { kind: 'direct'; address: AccountAddress }
   | { kind: 'group'; groupId: string }
 
+/**
+ * A position in one tab's change journal (`ChatService.changesSince`):
+ * its store commits, and how many times another tab wrote since it opened.
+ */
+export interface ChangeMark {
+  commits: number
+  epoch: number
+}
+
 export interface ChatHistoryEntry {
   id: string
   conversation: ConversationId
@@ -1835,6 +1844,18 @@ export interface WasmChatClientHandle {
   unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
+  /** Writes this browser's store has committed in this session. */
+  storeCommits?(): number
+  /** The conversations changed since a `storeCommits` mark (null: unknown). */
+  changedConversations?(since: number): string[] | null
+  /** Per-conversation summaries from the core's timelines. */
+  conversationSummaries?(readThrough: Record<string, number>, recent: number, keys?: string[]): Promise<unknown>
+  /** The key of every conversation with a timeline. */
+  conversationKeys?(): Promise<string[]>
+  /** One newest-first page of a conversation. */
+  conversationHistory?(key: string, before: string | undefined, limit: number): Promise<unknown>
+  /** This account's own controls in Note to Self. */
+  accountControls?(): Promise<ChatHistoryEntry[]>
   /** Fence this tab's writes behind the store's writer generation. */
   claimWriter?(takeOver: boolean): Promise<number>
   /** The server's mailbox retention (0: for ever); replaced prekeys are kept that long plus a margin. */
@@ -1978,6 +1999,10 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
   accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
   /** Seal the next profile revision (or the first) as the account app. */
   accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string): unknown
+  /** Seal small browser-side values for an account scope, one purpose each. */
+  sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
+  /** Open what `sealLocalData` sealed; a value that does not open is `null`. */
+  openLocalData(masterKey: Uint8Array, scope: string, purposes: string[], sealed: Uint8Array[]): (Uint8Array | null)[]
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
     open(

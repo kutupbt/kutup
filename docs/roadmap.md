@@ -554,17 +554,32 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   for the collaboration hub, for all three editors), and meetings, whose
   signalling (LiveKit) has no transport but WebSockets. Worth building only
   if people are seen behind such gateways.
-- **Client-side search and listing index** ([research](research/15-client-side-search-index.md)).
-  - Next (Phase 1): an encrypted metadata catalog for the Office home, one
-    record per document under a random key wrapped by the account key,
-    kept current from a server change feed (an account change log with a
-    cursor, or per-folder revisions as a first step) and decrypted into
-    worker memory once per session; one tab syncs (Web Lock). Name search
-    uses a Turkish-aware fold (İ, I, ı, i → i). Needs the server change feed
-    first: today a folder can only be listed whole.
-  - Later (Phase 2): full-text search for Chat and notes with SQLite FTS5 in
-    the Rust core (SQLCipher natively, `sqlite-wasm-rs` on OPFS on the web)
-    and the same fold tokenizer; open questions in the research note.
+- **Browser storage and search** ([decision](research/16-browser-storage-architecture.md),
+  [earlier research](research/15-client-side-search-index.md)). On the web,
+  Proton's model: IndexedDB holding encrypted records under a key wrapped by
+  the account master key; no SQLite in the browser. Native keeps SQLCipher.
+  - Done (Phase 1): the chat store encrypted at rest (record keys hashed,
+    values sealed, existing stores converted on first open); the backup
+    mirror's records, drafts and read positions sealed too. Left as they
+    are, on purpose: the hand-off list a meeting page leaves for the
+    signed-in app (the page has no account key; the app moves each stay into
+    the account's encrypted list and deletes it), and active live shares in
+    `sessionStorage`, which ends with the tab.
+  - Done (Phase 2): history is read once per change and not at all when
+    nothing was written; a per-conversation timeline index in the core,
+    written with each commit, gives the list, unread counts and the open
+    conversation without reading the whole history (older pages load as the
+    view scrolls up, and are let go again back at the newest messages); the
+    browser skips laying out and painting rows off screen; the attachment
+    ledger and the backup's collection step read only the conversations the
+    change journal names. Search still reads the whole history.
+  - Then (Phase 3): a Rust search engine over encrypted index shards with
+    Turkish folding (İ, I, ı, i → i), replacing today's linear scan.
+  - Later (Phase 4): the Office home catalog and name search, one record per
+    document in the same encrypted store in its own origin, kept current
+    from a server change feed (an account change log with a cursor, or
+    per-folder revisions as a first step); today a folder can only be listed
+    whole.
 - **Office home: what is left.** `office.<domain>` lists the notes, office
   documents and whiteboards an account can open and starts new ones in My
   files; they are Drive files and open in Drive's editors. Still open:

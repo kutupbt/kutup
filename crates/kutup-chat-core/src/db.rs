@@ -29,6 +29,9 @@ use kutup_chat_proto::{
 pub mod indexed_db;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+// Used by the browser store (IndexedDB) and the WASM bindings.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+pub(crate) mod store_cipher;
 
 /// The local device's long-term chat identity. Persisted as a single row and
 /// cached in the store for the hot `get_identity_key_pair` path.
@@ -645,6 +648,10 @@ pub struct Pending {
     /// last reset, when a message was last sent again): replaced whole, so
     /// the once-an-hour limits outlast a reload.
     pub(crate) repair_limits: Option<Vec<u8>>,
+    /// Derived index records (the conversation timelines, `timeline.rs`):
+    /// key → `Some(value)` (upsert) or `None` (delete), committed with the
+    /// records they index.
+    pub(crate) index_values: HashMap<Vec<u8>, Option<Vec<u8>>>,
     /// Retired signed prekeys whose last message could have arrived: deleted.
     pub(crate) delete_signed_pre_keys: HashSet<u32>,
     /// Kyber prekeys no longer needed (used one-time keys past their grace,
@@ -696,6 +703,7 @@ impl Pending {
             && self.prekey_upload.is_none()
             && self.prekey_rotation.is_none()
             && self.repair_limits.is_none()
+            && self.index_values.is_empty()
             && self.delete_signed_pre_keys.is_empty()
             && self.delete_kyber_pre_keys.is_empty()
             && self.registration_upload.is_none()
@@ -780,6 +788,12 @@ pub trait ChatDb {
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 
+    /// One persisted inbound message.
+    async fn load_message(&self, id: &str) -> Result<Option<InboxMessage>>;
+
+    /// One derived index record (`Pending::index_values`).
+    async fn load_index_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+
     /// One durable outbound-history record.
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>>;
     /// All outbound history, oldest first.
@@ -859,6 +873,15 @@ pub trait ChatDb {
     /// commits are refused if it ever resumes. Otherwise this adopts the
     /// current generation. Returns the generation now held. A store with one
     /// owner (native SQLite) has nothing to fence.
+    /// How many units of work this connection has committed. A caller that
+    /// reads it before and after an operation learns whether anything was
+    /// written, without reading the store.
+    fn commit_count(&self) -> u64;
+
+    /// The conversations whose timelines commits after `since` touched, or
+    /// `None` when that is no longer known (reload everything).
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>>;
+
     async fn claim_writer(&self, take_over: bool) -> Result<u64> {
         let _ = take_over;
         Ok(0)

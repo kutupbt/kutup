@@ -218,6 +218,10 @@ CREATE TABLE IF NOT EXISTS repair_limits (
     id    INTEGER PRIMARY KEY CHECK (id = 1),
     state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS index_values (
+    key   BLOB PRIMARY KEY,
+    value BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
@@ -260,6 +264,8 @@ CREATE TABLE IF NOT EXISTS meta (
 /// A device store backed by a single SQLite database.
 pub struct SqliteChatDb {
     conn: RefCell<Connection>,
+    commits: std::cell::Cell<u64>,
+    journal: std::cell::RefCell<crate::timeline::Journal>,
 }
 
 impl SqliteChatDb {
@@ -316,6 +322,8 @@ impl SqliteChatDb {
         ensure_schema_upgrades(&conn)?;
         Ok(Self {
             conn: RefCell::new(conn),
+            commits: std::cell::Cell::new(0),
+            journal: std::cell::RefCell::new(crate::timeline::Journal::default()),
         })
     }
 }
@@ -531,6 +539,29 @@ impl ChatDb for SqliteChatDb {
             out.push(db(row)?);
         }
         Ok(out)
+    }
+
+    async fn load_message(&self, id: &str) -> Result<Option<InboxMessage>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT id, peer, sender_device_id, cursor, content, received_at \
+                 FROM messages WHERE id = ?1",
+                [id],
+                message_row,
+            )
+            .optional())
+    }
+
+    async fn load_index_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM index_values WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional())
     }
 
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
@@ -826,6 +857,14 @@ impl ChatDb for SqliteChatDb {
     }
 
     async fn apply(&self, pending: &Pending) -> Result<()> {
+        // The conversation timelines move with the records they index.
+        let crate::timeline::Changes {
+            writes: mut index_values,
+            conversations: touched,
+        } = crate::timeline::changes(self, pending).await?;
+        for (key, value) in &pending.index_values {
+            index_values.insert(key.clone(), value.clone());
+        }
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
@@ -1324,6 +1363,16 @@ impl ChatDb for SqliteChatDb {
                 [state],
             ))?;
         }
+        for (key, value) in &index_values {
+            match value {
+                Some(value) => db(tx.execute(
+                    "INSERT INTO index_values (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![key, value],
+                ))?,
+                None => db(tx.execute("DELETE FROM index_values WHERE key = ?1", [key]))?,
+            };
+        }
         for id in &pending.delete_signed_pre_keys {
             db(tx.execute("DELETE FROM signed_pre_keys WHERE id = ?1", [id]))?;
         }
@@ -1367,7 +1416,20 @@ impl ChatDb for SqliteChatDb {
             ))?;
         }
 
-        db(tx.commit())
+        db(tx.commit())?;
+        self.commits.set(self.commits.get() + 1);
+        self.journal
+            .borrow_mut()
+            .record(self.commits.get(), touched);
+        Ok(())
+    }
+
+    fn commit_count(&self) -> u64 {
+        self.commits.get()
+    }
+
+    fn changed_conversations(&self, since: u64) -> Option<Vec<String>> {
+        self.journal.borrow().since(since, self.commits.get())
     }
 }
 

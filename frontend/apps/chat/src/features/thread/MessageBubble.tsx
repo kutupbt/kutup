@@ -20,6 +20,7 @@ import { formatClock } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import type { MessageView } from '../../state/views'
 import { LinkPreviewCard } from '../linkPreview/LinkPreviewCard'
+import { TIMELINE_ROW } from './MessageScroller'
 import { MessageText } from './MessageText'
 
 export interface BubbleActions {
@@ -106,9 +107,12 @@ export function MessageBubble({
       data-message-id={view.id}
       className={cn(
         'group flex items-end gap-2 px-4',
+        // The highlight ring reaches past the row, which would cut it off.
+        !highlighted && TIMELINE_ROW,
         outgoing ? 'flex-row-reverse' : 'flex-row',
         joinedAbove ? 'mt-px' : 'mt-1.5',
-        view.reactions.length > 0 && !deleted && 'mb-3',
+        // Room for the reactions hanging below the bubble.
+        view.reactions.length > 0 && !deleted && 'pb-4',
       )}
     >
       {!outgoing && inGroup ? (
