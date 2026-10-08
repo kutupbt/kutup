@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { conversationKey } from '@kutup/chat-core/identity'
 import { isVisibleChatMessage } from '@kutup/chat-core/disappearing'
-import { searchChatHistory } from '@kutup/chat-core/search'
+import { foldSearchText, searchChatHistory } from '@kutup/chat-core/search'
 import { useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { conversationTitle, personName } from '../../lib/names'
 import { formatShortTime } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { conversationList, foldMutations, messageIdOf } from '../../state/views'
-import { useFullHistory } from '../../state/fullHistory'
+import { useSearchCandidates } from '../../state/searchCandidates'
 import { conversationPath } from './paths'
 
 /** Conversations whose name matches, then messages that do (newest first). */
@@ -22,24 +22,30 @@ export function SearchResults({ query }: { query: string }) {
   const self = chat.self!
   const { snapshot } = chat
   const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
-  const history = useFullHistory()
+  const candidates = useSearchCandidates(query)
 
   const all = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
   const byKey = useMemo(() => new Map(all.map((c) => [c.key, c])), [all])
   const conversations = useMemo(() => {
-    const needle = query.toLocaleLowerCase()
+    // Folded as messages are: "istanbul" finds "İstanbul Ekibi".
+    const needle = foldSearchText(query.trim())
+    if (!needle) return []
     return all.filter((item) => {
       const title = conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo)
-      return title.toLocaleLowerCase().includes(needle) || (item.address ?? '').includes(needle)
+      return foldSearchText(title).includes(needle) || foldSearchText(item.address ?? '').includes(needle)
     })
   }, [query, all, self.address, t])
 
+  // The index proposes; edits, deletions and disappearing deadlines decide.
   const messages = useMemo(() => {
-    const visible = history.filter((m) => isVisibleChatMessage(m, now))
-    return searchChatHistory(visible, query, foldMutations(history, self.address)).reverse()
-  }, [query, history, self.address, now])
+    if (!candidates) return []
+    const visible = candidates.filter((m) => isVisibleChatMessage(m, now))
+    return searchChatHistory(visible, query, foldMutations(candidates, self.address)).reverse()
+  }, [query, candidates, self.address, now])
 
   if (conversations.length === 0 && messages.length === 0) {
+    // Nothing to say before the index has answered once.
+    if (!candidates) return null
     return (
       <div className="flex flex-col items-center gap-3 px-8 pt-24 text-center text-sm text-muted-foreground">
         <SearchX className="size-8" aria-hidden />

@@ -334,7 +334,17 @@ pub(crate) struct Changes {
     pub conversations: HashSet<String>,
 }
 
+/// Index writes for `pending`: the timelines' and the search index's
+/// (`search.rs`), both derived from the same records.
 pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes> {
+    let mut changes = timeline_changes(db, pending).await?;
+    changes
+        .writes
+        .extend(crate::search::changes(db, pending).await?);
+    Ok(changes)
+}
+
+async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes> {
     let mut added: Vec<Indexed> = Vec::new();
     let mut removed: Vec<Indexed> = Vec::new();
     for message in &pending.messages {
@@ -425,6 +435,11 @@ pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Change
 /// Index the whole store when it has no current directory: on first open
 /// after this was added, and after [`TIMELINE_VERSION`] moves on.
 pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
+    ensure_timeline_built(db).await?;
+    crate::search::ensure_built(db).await
+}
+
+async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
     let existing = load_directory(db).await?;
     if existing
         .as_ref()

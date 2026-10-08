@@ -615,6 +615,8 @@ pub struct WasmChatClient {
     engine: Engine,
     authority: AccountAuthority,
     profile_wrapping_key: [u8; 32],
+    /// Decoded search shards between queries (`search.rs`).
+    search_cache: std::cell::RefCell<crate::search::ShardCache>,
 }
 
 impl Drop for WasmChatClient {
@@ -631,18 +633,35 @@ impl WasmChatClient {
     /// History entries for timeline references (newest first, as given),
     /// built as the full history builds them; with `newest`, a group's
     /// messages still being sent are added at the top.
-    async fn timeline_entries(
+    /// History entries for search postings, in the postings' order; a
+    /// posting whose record is gone is left out.
+    async fn search_entries(
+        &self,
+        directory: &crate::timeline::Directory,
+        postings: &[crate::search::Posting],
+    ) -> Result<Vec<HistoryEntry>> {
+        let mut starts: std::collections::HashMap<&str, crate::session::DisappearingExpiryStarts> =
+            std::collections::HashMap::new();
+        let mut entries = Vec::with_capacity(postings.len());
+        for posting in postings {
+            let key = posting.conversation.as_str();
+            if !starts.contains_key(key) {
+                starts.insert(key, self.expiry_starts(directory, key).await?);
+            }
+            entries.extend(self.load_entry(&posting.entry(), &starts[key]).await?);
+        }
+        Ok(entries)
+    }
+
+    /// Deadlines of incoming disappearing messages start when they were
+    /// first seen, recorded by expiry starts indexed under the conversation.
+    async fn expiry_starts(
         &self,
         directory: &crate::timeline::Directory,
         key: &str,
-        refs: &[crate::timeline::EntryRef],
-        newest: bool,
-    ) -> Result<Vec<HistoryEntry>> {
+    ) -> Result<crate::session::DisappearingExpiryStarts> {
         use crate::timeline::{Source, EXPIRY_START};
         let db = self.engine.session().db().as_ref();
-        // Deadlines of incoming disappearing messages start when they were
-        // first seen, recorded by expiry starts indexed under the
-        // conversation.
         let mut start_sent = Vec::new();
         let mut start_imported = Vec::new();
         for start in crate::timeline::flagged(db, directory, key, EXPIRY_START).await? {
@@ -656,43 +675,64 @@ impl WasmChatClient {
                 Source::Inbox | Source::Mls => {}
             }
         }
-        let starts = crate::session::collect_disappearing_expiry_starts(
+        crate::session::collect_disappearing_expiry_starts(
             &start_sent,
             &start_imported,
             self.engine.session().user(),
-        )?;
+        )
+    }
+
+    /// The history entry for one timeline reference, if its record is still
+    /// there (an expiry start is none).
+    async fn load_entry(
+        &self,
+        entry: &crate::timeline::EntryRef,
+        starts: &crate::session::DisappearingExpiryStarts,
+    ) -> Result<Option<HistoryEntry>> {
+        use crate::timeline::{Source, EXPIRY_START};
+        if entry.flags & EXPIRY_START != 0 {
+            return Ok(None);
+        }
+        let db = self.engine.session().db().as_ref();
+        let built = match entry.source {
+            Source::Inbox => match db.load_message(&entry.id).await? {
+                Some(message) => Some(HistoryEntry::incoming(message)?),
+                None => None,
+            },
+            Source::Sent => match db.load_sent_message(&entry.id).await? {
+                Some(message) => Some(HistoryEntry::outgoing(message)?),
+                None => None,
+            },
+            Source::Mls => match db.load_mls_message(&entry.id).await? {
+                Some(message) => Some(HistoryEntry::mls(message)?),
+                None => None,
+            },
+            Source::Imported => match entry.id.split_once('\u{0}') {
+                Some((transfer, record)) => match db.load_imported_history(transfer, record).await?
+                {
+                    Some(message) => Some(HistoryEntry::imported(message)?),
+                    None => None,
+                },
+                None => None,
+            },
+        };
+        Ok(built.map(|mut built| {
+            built.apply_disappearing_deadline(starts);
+            built
+        }))
+    }
+
+    async fn timeline_entries(
+        &self,
+        directory: &crate::timeline::Directory,
+        key: &str,
+        refs: &[crate::timeline::EntryRef],
+        newest: bool,
+    ) -> Result<Vec<HistoryEntry>> {
+        let starts = self.expiry_starts(directory, key).await?;
         let mut entries = Vec::with_capacity(refs.len());
         for entry in refs {
-            if entry.flags & EXPIRY_START != 0 {
-                continue;
-            }
-            let built = match entry.source {
-                Source::Inbox => match db.load_message(&entry.id).await? {
-                    Some(message) => Some(HistoryEntry::incoming(message)?),
-                    None => None,
-                },
-                Source::Sent => match db.load_sent_message(&entry.id).await? {
-                    Some(message) => Some(HistoryEntry::outgoing(message)?),
-                    None => None,
-                },
-                Source::Mls => match db.load_mls_message(&entry.id).await? {
-                    Some(message) => Some(HistoryEntry::mls(message)?),
-                    None => None,
-                },
-                Source::Imported => match entry.id.split_once('\u{0}') {
-                    Some((transfer, record)) => {
-                        match db.load_imported_history(transfer, record).await? {
-                            Some(message) => Some(HistoryEntry::imported(message)?),
-                            None => None,
-                        }
-                    }
-                    None => None,
-                },
-            };
-            if let Some(mut built) = built {
-                built.apply_disappearing_deadline(&starts);
-                entries.push(built);
-            }
+            entries.extend(self.load_entry(entry, &starts).await?);
         }
         if newest && key.starts_with("group:") {
             let delivered: std::collections::HashSet<String> =
@@ -730,6 +770,15 @@ struct ConversationSummaryView {
     recent: Vec<HistoryEntry>,
     /// The newest disappearing-timer change, when it is older than `recent`.
     timer: Option<HistoryEntry>,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SearchView {
+    /// Newest first.
+    entries: Vec<HistoryEntry>,
+    /// What edits or deletes them, and what an edit hit acts on.
+    related: Vec<HistoryEntry>,
 }
 
 #[derive(Serialize)]
@@ -784,6 +833,7 @@ impl WasmChatClient {
             engine,
             authority,
             profile_wrapping_key,
+            search_cache: Default::default(),
         })
     }
 
@@ -3223,6 +3273,46 @@ impl WasmChatClient {
         }
         summaries.sort_by(|left, right| right.latest_ms.cmp(&left.latest_ms));
         to_output(&summaries)
+    }
+
+    /// Search the history (`search.rs`): the entries whose words begin with
+    /// every word of `query` (folded: İ/I/ı/i alike, accents removed),
+    /// newest first, at most `limit`; with them the entries that edit or
+    /// delete them and the messages an edit hit acts on, so the caller can
+    /// show each as it stands. Entries are built as in the full history,
+    /// disappearing deadlines included.
+    #[wasm_bindgen(js_name = searchHistory)]
+    pub async fn search_history(
+        &self,
+        query: String,
+        limit: u32,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let db = self.engine.session().db().as_ref();
+        // Taken out for the query, so overlapping calls never share it.
+        let mut cache = self.search_cache.take();
+        let found = async {
+            let hits = crate::search::query(db, &mut cache, &query, limit as usize).await?;
+            let related = crate::search::related(db, &mut cache, &hits).await?;
+            Ok::<_, ChatError>((hits, related))
+        }
+        .await;
+        self.search_cache.replace(cache);
+        let (hits, related) = found.map_err(chat_error)?;
+        let Some(directory) = crate::timeline::load_directory(db)
+            .await
+            .map_err(chat_error)?
+        else {
+            return to_output(&SearchView::default());
+        };
+        let entries = self
+            .search_entries(&directory, &hits)
+            .await
+            .map_err(chat_error)?;
+        let related = self
+            .search_entries(&directory, &related)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SearchView { entries, related })
     }
 
     /// The key of every conversation with a timeline, for work that reads

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatHistoryEntry } from './types'
-import { searchChatHistory, type ChatSearchMutationState } from './search'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { foldSearchText, searchChatHistory, searchWords, type ChatSearchMutationState } from './search'
+
+const vectors = JSON.parse(readFileSync(resolve(__dirname, '../../../../crates/kutup-chat-core/tests/vectors/search_fold.json'), 'utf8')) as {
+  cases: { input: string; folded: string; words: string[] }[]
+}
 
 function entry(
   id: string,
@@ -124,5 +130,26 @@ describe('private local Chat search', () => {
 
     expect(searchChatHistory(history, 'match', noMutations)).toHaveLength(100)
     expect(searchChatHistory(history, 'match', noMutations, 5)).toHaveLength(5)
+  })
+
+  it('folds exactly as the core index does (shared vectors)', () => {
+    for (const { input, folded, words } of vectors.cases) {
+      expect(foldSearchText(input), input).toBe(folded)
+      expect(searchWords(input), input).toEqual(words)
+    }
+  })
+
+  it('matches Turkish and accented words alike, at the start of a word only', () => {
+    const history = [
+      entry('city', 1, { version: 1, kind: 'text', sentAt: 't', seq: '1', body: {}, text: "İstanbul'da buluşalım" }),
+      entry('call', 2, { version: 1, kind: 'text', sentAt: 't', seq: '2', body: {}, text: 'Çağrı geldi, KİTAPLAR hazır' }),
+    ]
+    const ids = (query: string) => searchChatHistory(history, query, noMutations).map(result => result.message.id)
+    expect(ids('istanbul')).toEqual(['city'])
+    expect(ids('ISTANBUL')).toEqual(['city'])
+    expect(ids('ıstanbul')).toEqual(['city'])
+    expect(ids('bulusalim')).toEqual(['city'])
+    expect(ids('cagri kitap')).toEqual(['call'])
+    expect(ids('tap')).toEqual([])
   })
 })
