@@ -5,10 +5,11 @@ import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@
 import { readMedia } from '@kutup/files/media'
 import { newFileBlobStreamEncryptorV1 } from '@kutup/crypto/fileBlob'
 import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
-import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
+import type { PendingUpload } from '@kutup/files/upload/pendingUploads'
+import { resumeUpload, streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import { uploadFolder, type FolderEntry } from '@kutup/files/upload/uploadFolder'
 import api, { freshAccessToken } from '@kutup/session/client'
-import { updateSession } from '@kutup/session/store'
+import { getSession, updateSession } from '@kutup/session/store'
 import { filesKey } from '@kutup/drive-core/files'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
@@ -74,6 +75,7 @@ export async function uploadOne(
   signal?: AbortSignal,
   progress?: (s: number, t: number) => void,
   media?: MediaMetadataV1 | null,
+  waiting?: (waiting: boolean) => void,
 ): Promise<UploadedFile | null> {
   if (!folder.key) throw new Error('folder is not open')
   const details = media === undefined ? await readMedia(file, signal) : (media ?? undefined)
@@ -82,13 +84,17 @@ export async function uploadOne(
     await uploadRemote(folder, location.shareId, file, details, signal ?? new AbortController().signal, progress ?? (() => {}))
     return null
   }
+  const owner = getSession()?.userId
   const uploaded = await streamUpload({
     file,
     collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
     accessToken: freshAccessToken,
     onProgress: progress,
+    onWaiting: waiting,
     signal,
     media: details,
+    // A reload or a crash leaves it to go on with (the upload panel).
+    resumable: owner ? { owner } : undefined,
   })
   thumbnailAfterUpload(uploaded, file)
   return uploaded
@@ -151,13 +157,13 @@ export function useUploadActions() {
           name: file.name,
           folderName: displayName(folder),
           total: file.size,
-          run: async (signal, progress) => {
+          run: async (signal, progress, waiting) => {
             try {
-              await uploadOne(folder, file, signal, progress)
+              await uploadOne(folder, file, signal, progress, undefined, waiting)
             } catch (error) {
               // Its owner removed someone meanwhile: once more, under the new key.
               if (!isFolderKeyChanged(error)) throw error
-              await uploadOne(await reloadFolder(folder), file, signal, progress)
+              await uploadOne(await reloadFolder(folder), file, signal, progress, undefined, waiting)
             }
           },
         })),
@@ -181,8 +187,10 @@ export function useUploadActions() {
             folderName: displayName(folder),
             total: entries.length,
             unit: 'files',
-            run: async (signal, progress) => {
+            run: async (signal, progress, waiting) => {
               await uploadFolder({
+                onWaiting: waiting,
+                resumable: { owner: me.userId },
                 entries,
                 parentCollection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: key },
                 masterKey: me.masterKey,
@@ -207,5 +215,36 @@ export function useUploadActions() {
     [queryClient],
   )
 
-  return { uploadFiles, uploadDirectory, settled, refreshFolder }
+  /** Go on with an upload a reload or a crash stopped (the upload panel). */
+  const resumeOne = useCallback(
+    (upload: PendingUpload, file: File, folder: Folder) => {
+      uploads.add(
+        [
+          {
+            name: file.name,
+            folderName: displayName(folder),
+            total: file.size,
+            run: async (signal, progress, waiting) => {
+              if (!folder.key) throw new Error('folder is not open')
+              const uploaded = await resumeUpload({
+                upload,
+                file,
+                collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
+                accessToken: freshAccessToken,
+                onProgress: progress,
+                onWaiting: waiting,
+                signal,
+              })
+              thumbnailAfterUpload(uploaded, file)
+            },
+          },
+        ],
+        settled,
+        classifyUploadError,
+      )
+    },
+    [displayName, settled],
+  )
+
+  return { uploadFiles, uploadDirectory, resumeOne, settled, refreshFolder }
 }

@@ -751,6 +751,9 @@ importers:
       '@kutup/drive-core':
         specifier: workspace:*
         version: link:../drive-core
+      '@kutup/files':
+        specifier: workspace:*
+        version: link:../files
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../i18n

@@ -12,11 +12,24 @@ import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadE
 import { uploads } from '@kutup/drive-ui/uploadStore'
 import { looksLive, mediaKindOf, pairLivePhotos, readMedia } from '@kutup/files/media'
 import { thumbnailsOfImage, thumbnailsOfVideo } from '@kutup/files/thumbnails'
-import { streamUpload } from '@kutup/files/upload/streamUpload'
+import type { PendingUpload } from '@kutup/files/upload/pendingUploads'
+import { resumeUpload, streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import api, { freshAccessToken } from '@kutup/session/client'
-import { updateSession } from '@kutup/session/store'
+import { getSession, updateSession } from '@kutup/session/store'
 import { duplicateKey, duplicateKeys, type Photo } from '../library/library'
 import { ensureUploadFolder, useSavePreferences, type PhotosPreferences } from '../library/preferences'
+
+/** Its thumbnails, from the plaintext still in hand, in the background. */
+function thumbnailsAfterUpload(uploaded: UploadedFile, file: File) {
+  enqueueThumbnail(uploaded.fileId, async () => {
+    const made = mediaKindOf(file.name, file.type) === 'video' ? await thumbnailsOfVideo(file) : await thumbnailsOfImage(file)
+    return storeThumbnails(
+      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
+      made,
+      'original',
+    )
+  })
+}
 
 /** A still in the library now: its file id and details (for its live video). */
 interface Still {
@@ -91,6 +104,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       progress: (sent: number, total: number) => void,
       still: StillOutcome | undefined,
       done: (still: Still | null) => void,
+      waiting?: (waiting: boolean) => void,
     ): Promise<'skipped' | undefined> => {
       if (!folder.key) throw new Error('folder is not open')
       let media = await readMedia(file, signal)
@@ -103,14 +117,18 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       const paired = still?.value
       if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
+      const owner = getSession()?.userId
       try {
         uploaded = await streamUpload({
           file,
           collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
           accessToken: freshAccessToken,
           onProgress: progress,
+          onWaiting: waiting,
           signal,
           media,
+          // A reload or a crash leaves it to go on with (the upload panel).
+          resumable: owner ? { owner } : undefined,
         })
       } catch (error) {
         done(null)
@@ -118,15 +136,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       }
       if (key) added.current.set(key, uploaded.fileId)
       done({ id: uploaded.fileId, media })
-      // Its thumbnails, from the plaintext still in hand, in the background.
-      enqueueThumbnail(uploaded.fileId, async () => {
-        const made = mediaKindOf(file.name, file.type) === 'video' ? await thumbnailsOfVideo(file) : await thumbnailsOfImage(file)
-        return storeThumbnails(
-          { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
-          made,
-          'original',
-        )
-      })
+      thumbnailsAfterUpload(uploaded, file)
       return undefined
     },
     [],
@@ -162,9 +172,13 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
             name: file.name,
             folderName,
             total: file.size,
-            run: async (signal: AbortSignal, progress: (sent: number, total: number) => void) => {
+            run: async (
+              signal: AbortSignal,
+              progress: (sent: number, total: number) => void,
+              waiting: (waiting: boolean) => void,
+            ) => {
               try {
-                return await uploadOne(folder, file, signal, progress, still, done)
+                return await uploadOne(folder, file, signal, progress, still, done, waiting)
               } catch (error) {
                 // Its owner re-keyed it meanwhile: once more, under the new key.
                 if (!isFolderKeyChanged(error)) {
@@ -178,7 +192,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
                   throw error
                 }
                 folder = fresh
-                return uploadOne(fresh, file, signal, progress, still, done).catch((again: unknown) => {
+                return uploadOne(fresh, file, signal, progress, still, done, waiting).catch((again: unknown) => {
                   done(null)
                   throw again
                 })
@@ -191,5 +205,51 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       )
     },
     [t, uploadFolder, uploadOne, queryClient, settled],
+  )
+}
+
+/**
+ * Go on with an upload a reload or a crash stopped (the upload panel): the
+ * same file chosen again goes on from where the server stopped, then gets
+ * its thumbnails as any upload does.
+ */
+export function useResumePhotos() {
+  const queryClient = useQueryClient()
+  const { t } = useTranslation()
+  const settled = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['files'] })
+    void api
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
+      .catch(() => {})
+  }, [queryClient])
+  return useCallback(
+    (upload: PendingUpload, file: File, folder: Folder) => {
+      uploads.add(
+        [
+          {
+            name: file.name,
+            folderName: folder.isRoot ? t('uploads.myFiles') : (folder.name ?? ''),
+            total: file.size,
+            run: async (signal, progress, waiting) => {
+              if (!folder.key) throw new Error('folder is not open')
+              const uploaded = await resumeUpload({
+                upload,
+                file,
+                collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
+                accessToken: freshAccessToken,
+                onProgress: progress,
+                onWaiting: waiting,
+                signal,
+              })
+              thumbnailsAfterUpload(uploaded, file)
+            },
+          },
+        ],
+        settled,
+        classifyUploadError,
+      )
+    },
+    [settled, t],
   )
 }

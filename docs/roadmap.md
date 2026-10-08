@@ -740,31 +740,6 @@ Still open:
   one-row shape as the file dialog's, and a clear in-progress state on a
   row while its change or a key rotation runs.
 
-### Drive · large uploads from the browser
-
-The web client streams an upload: it reads 5 MB, encrypts it as one
-secretstream chunk and sends it as one tus request, so memory stays flat at
-any size, and the server accepts up to 1 TiB within the user's quota. Two
-gaps make large uploads (several GB, hours on a slow line) fragile:
-- **No resume across a page load.** Closing or reloading the tab, or a
-  browser crash, loses the upload and it starts again from zero:
-  tus-js-client's cross-session resume is turned off
-  (`storeFingerprintForResuming: false` in
-  `frontend/packages/files/src/upload/streamUpload.ts`). Resuming needs the
-  encryption state at the server's offset; the secretstream is sequential,
-  so the simplest safe way is to remember the upload (file name, size, last
-  modified, tus URL) and, on picking the same file again, re-encrypt it from
-  the start while skipping the bytes the server already holds. That costs
-  CPU, not network, and stores no key material.
-- **Short network drops only.** Each request is retried after 0, 1, 3, 5
-  and 10 seconds; an outage longer than about 20 seconds fails the whole
-  upload. It should keep retrying with growing gaps while the browser is
-  offline and continue from the server's offset when it comes back.
-
-With both, a browser test that uploads a multi-GB file, interrupts it
-(offline, reload) and checks it completes with flat memory; today spec 25
-covers 12 MB.
-
 ### Drive · office documents and whiteboards across servers
 
 Notes and place lists are edited together live across servers

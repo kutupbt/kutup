@@ -13,9 +13,15 @@ export interface UploadJob {
   /** What `sent`/`total` count: bytes (a file) or files (a folder). */
   unit?: 'bytes' | 'files'
   status: UploadStatus
+  /** The connection is gone; the upload waits and goes on where it stopped. */
+  waiting?: boolean
   failure?: import('./uploadError').UploadFailure
   /** Resolves `skipped` when there was nothing to upload. */
-  run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<void | 'skipped'>
+  run: (
+    signal: AbortSignal,
+    progress: (sent: number, total: number) => void,
+    waiting: (waiting: boolean) => void,
+  ) => Promise<void | 'skipped'>
   controller: AbortController
 }
 
@@ -41,11 +47,15 @@ async function pump(onSettled: () => void, classify: (error: unknown) => UploadJ
       if (!job) break
       patch(job.id, { status: 'uploading' })
       try {
-        const outcome = await job.run(job.controller.signal, (sent, total) => patch(job.id, { sent, total }))
-        patch(job.id, outcome === 'skipped' ? { status: 'skipped' } : { status: 'done', sent: job.total })
+        const outcome = await job.run(
+          job.controller.signal,
+          (sent, total) => patch(job.id, { sent, total }),
+          (waiting) => patch(job.id, { waiting }),
+        )
+        patch(job.id, outcome === 'skipped' ? { status: 'skipped', waiting: false } : { status: 'done', sent: job.total, waiting: false })
       } catch (error) {
         const aborted = error instanceof DOMException && error.name === 'AbortError'
-        patch(job.id, aborted ? { status: 'cancelled' } : { status: 'failed', failure: classify(error) })
+        patch(job.id, aborted ? { status: 'cancelled', waiting: false } : { status: 'failed', waiting: false, failure: classify(error) })
       }
       onSettled()
     }

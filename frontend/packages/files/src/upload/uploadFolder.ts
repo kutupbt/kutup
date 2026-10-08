@@ -47,6 +47,10 @@ export interface UploadFolderOptions {
   onProgress?: (filesDone: number, filesTotal: number, currentName: string) => void
   /** Each file once it is stored, with the plaintext it came from. */
   onFileUploaded?: (uploaded: UploadedFile, file: File) => void
+  /** True while the connection is gone and the current file waits to go on. */
+  onWaiting?: (waiting: boolean) => void
+  /** Each file can go on after a reload (`streamUpload`'s `resumable`). */
+  resumable?: { owner: string }
   signal?: AbortSignal
 }
 
@@ -122,6 +126,8 @@ export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
         collection: target,
         accessToken: opts.accessToken,
         signal: opts.signal,
+        onWaiting: opts.onWaiting,
+        resumable: opts.resumable,
         // A photo's or video's details, sealed with its name (docs/plans/photos.md).
         media: await readMedia(entry.file, opts.signal),
       })
