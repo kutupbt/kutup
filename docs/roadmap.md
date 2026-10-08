@@ -719,6 +719,18 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · resumable uploads into folders on other servers
+
+Uploads from the browser go on after a lost connection or a reload
+(architecture.md, "Storage layer"), but only into folders on the account's
+own server. A folder on another server takes the older multipart path
+through this server (`uploadRemote` in
+`frontend/apps/drive/src/features/uploads/useUploadActions.ts`): one
+request, with neither the waiting nor the resuming. Making it resumable
+needs tus (or a chunked equivalent) on the federated upload route, so each
+part is acknowledged by the folder's server and an upload can go on from
+its offset there.
+
 ### Drive · share dialogs: what is left
 
 Done (October 2026): each person in the file and folder share dialogs has a

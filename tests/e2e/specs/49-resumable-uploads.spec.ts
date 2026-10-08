@@ -9,10 +9,10 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
-import { expect, test, type Page } from '@playwright/test'
-import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
-import { item, itemAction } from '../fixtures/drive'
+import { mkdir, readFile, stat } from 'node:fs/promises'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { createFolder, item, itemAction, openItem } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*ResumableUploadPassword'
 const MB = 1024 * 1024
@@ -154,5 +154,148 @@ test('a multi-GB upload rides out a long loss of the connection and a reload', a
   testInfo.annotations.push({ type: 'heap MB', description: heaps.map((h) => h.toFixed(0)).join(', ') })
   for (const heap of heaps) expect(heap).toBeLessThan(300)
 
+  await context.close()
+})
+
+/** PATCHes slowed down so a test can act in the middle of an upload. */
+async function slowUploads(context: BrowserContext) {
+  const state = { slow: true }
+  await context.route('**/api/uploads/**', async (route) => {
+    if (state.slow && route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 1500))
+    await route.continue()
+  })
+  return state
+}
+
+/** Started by `start`, slowed, then cut short by a reload: offered in the panel. */
+async function interruptedIn(page: Page, name: string, start: () => Promise<void>) {
+  await start()
+  await expect.poll(() => percent(page, name), { timeout: 120_000 }).toBeGreaterThanOrEqual(25)
+  await page.reload()
+  await expect(page.getByRole('region', { name: 'Interrupted uploads' }).getByText(name, { exact: true })).toBeVisible({ timeout: 60_000 })
+}
+
+test('Photos: an upload interrupted by a reload goes on', async ({ browser }, testInfo) => {
+  test.slow()
+  const account = newAccount('photoresume', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, account)
+  const page = await context.newPage()
+  await page.goto(appUrl('photos'))
+  const upload = page.getByRole('button', { name: 'Upload', exact: true }).first()
+  await expect(upload).toBeVisible({ timeout: 120_000 })
+
+  const name = `clip-${Date.now()}.webm`
+  const path = testInfo.outputPath(name)
+  await writeFile(path, 40 * MB)
+  const slow = await slowUploads(context)
+  await interruptedIn(page, name, async () => {
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), upload.click()])
+    await chooser.setFiles(path)
+  })
+  slow.slow = false
+  await resumeFromPanel(page, name, path)
+  await expect(page.getByText('Uploads complete')).toBeVisible({ timeout: 120_000 })
+  await expect(page.getByRole('region', { name: 'Interrupted uploads' })).toHaveCount(0)
+  await context.close()
+})
+
+test('discarding an interrupted upload frees it on the server, and another file is refused', async ({ browser }, testInfo) => {
+  test.slow()
+  const account = newAccount('discard', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, account)
+  const page = await openDrive(context)
+  const name = `discard-${Date.now()}.bin`
+  const path = testInfo.outputPath(name)
+  await writeFile(path, 40 * MB)
+  const slow = await slowUploads(context)
+  await interruptedIn(page, name, () => startUpload(page, path))
+  slow.slow = false
+
+  // Another file under the same name is not the one it started with.
+  const other = testInfo.outputPath(`other/${name}`)
+  await mkdir(testInfo.outputPath('other'), { recursive: true })
+  await writeFile(other, 40 * MB + 1)
+  await resumeFromPanel(page, name, other)
+  await expect(page.getByText('That is not the same file', { exact: false })).toBeVisible({ timeout: 60_000 })
+  const panel = page.getByRole('region', { name: 'Interrupted uploads' })
+  await expect(panel.getByText(name, { exact: true })).toBeVisible({ timeout: 60_000 })
+
+  // Let go: the server's part goes too, and it is not offered again.
+  const deleted = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/api\/uploads\//.test(r.url()))
+  await panel.getByRole('button', { name: `Discard ${name}` }).click()
+  expect((await deleted).status()).toBe(204)
+  await expect(panel).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'New' }).first()).toBeVisible({ timeout: 120_000 })
+  await page.waitForTimeout(3_000)
+  await expect(page.getByRole('region', { name: 'Interrupted uploads' })).toHaveCount(0)
+  await expect(item(page, name)).toHaveCount(0)
+  await context.close()
+})
+
+test('an upload running in one tab is not offered in another until that tab is gone', async ({ browser }, testInfo) => {
+  test.slow()
+  const account = newAccount('twotabs', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, account)
+  const first = await openDrive(context)
+  const name = `tabs-${Date.now()}.bin`
+  const path = testInfo.outputPath(name)
+  await writeFile(path, 40 * MB)
+  await slowUploads(context)
+  await startUpload(first, path)
+  await expect.poll(() => percent(first, name), { timeout: 120_000 }).toBeGreaterThanOrEqual(15)
+
+  const second = await openDrive(context)
+  await second.waitForTimeout(3_000)
+  await expect(second.getByRole('region', { name: 'Interrupted uploads' })).toHaveCount(0)
+
+  await first.close()
+  await second.reload()
+  await expect(second.getByRole('region', { name: 'Interrupted uploads' }).getByText(name, { exact: true })).toBeVisible({ timeout: 60_000 })
+  await context.close()
+})
+
+test('an upload into a folder that moved to a new key is offered only to discard', async ({ browser }, testInfo) => {
+  test.slow()
+  const alice = newAccount('rekeyalice', PASSWORD)
+  const bob = newAccount('rekeybob', PASSWORD)
+  const context = await browser.newContext()
+  await registerAccount(context, alice)
+  await registerAccount(await browser.newContext(), bob)
+  const page = await openDrive(context)
+  const folder = `rekey-${Date.now()}`
+  await createFolder(page, folder)
+  await openItem(page, folder)
+  await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(folder, { timeout: 30_000 })
+
+  const name = `rekey-${Date.now()}.bin`
+  const path = testInfo.outputPath(name)
+  await writeFile(path, 40 * MB)
+  const slow = await slowUploads(context)
+  await interruptedIn(page, name, () => startUpload(page, path))
+  slow.slow = false
+
+  // Shared, then the person removed: the folder moves to a new key.
+  await page.getByRole('link', { name: 'My files', exact: true }).first().click()
+  await itemAction(page, folder, 'Share')
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(dialog).toBeHidden({ timeout: 30_000 })
+  await itemAction(page, folder, 'Share')
+  await page.getByRole('dialog').getByRole('button', { name: /^What .+ can do$/ }).click()
+  await page.getByRole('menuitem', { name: /^Remove/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove', exact: true }).click()
+  await expect(page.getByText('Access removed')).toBeVisible({ timeout: 60_000 })
+  await page.keyboard.press('Escape')
+
+  await page.reload()
+  const panel = page.getByRole('region', { name: 'Interrupted uploads' })
+  await expect(panel.getByText('An upload into a folder that moved to a new key')).toBeVisible({ timeout: 60_000 })
+  await expect(panel.getByRole('button', { name: /^Resume/ })).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: /^Discard/ })).toBeVisible()
   await context.close()
 })

@@ -33,6 +33,15 @@ test('theme and language chosen in one app follow the account into the others', 
   await expect(office.locator('html')).toHaveClass(/\bdark\b/, { timeout: 120_000 })
   await expect(office.locator('html')).toHaveAttribute('lang', 'tr')
 
+  // And every other app opened here for the first time.
+  for (const app of ['photos', 'maps', 'chat'] as const) {
+    const page = await context.newPage()
+    await page.goto(appUrl(app))
+    await expect(page.locator('html'), app).toHaveClass(/\bdark\b/, { timeout: 120_000 })
+    await expect(page.locator('html'), app).toHaveAttribute('lang', 'tr')
+    await page.close()
+  }
+
   // Back to light from Office; Drive, holding dark itself, follows the account.
   await office.getByRole('button', { name: 'Hesap menüsü' }).click()
   put = saved(office)

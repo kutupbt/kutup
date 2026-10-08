@@ -47,6 +47,10 @@ export function InterruptedUploads({ setup, onCount }: { setup: ResumeSetup; onC
       const [pending, running] = await Promise.all([pendingUploads.list(setup.owner), runningUploads()])
       const ids = new Set(pending.map((upload) => upload.fileId))
       for (const id of resumedHere.current) if (!ids.has(id)) resumedHere.current.delete(id)
+      // With nothing left in the queue, one handed to it here either went on
+      // to the end (and is gone) or failed (another file was chosen, the
+      // server refused): offer it again.
+      if (!busyQueue.current) resumedHere.current.clear()
       setStopped(pending.filter((upload) => !running.has(upload.fileId) && !resumedHere.current.has(upload.fileId)))
     } catch {
       setStopped([])
@@ -55,9 +59,24 @@ export function InterruptedUploads({ setup, onCount }: { setup: ResumeSetup; onC
 
   // Again whenever the queue moves: a resumed upload runs, then is done.
   const queueState = jobs.map((job) => `${job.id}:${job.status}`).join(',')
+  const busyQueue = useRef(false)
+  busyQueue.current = jobs.some((job) => job.status === 'queued' || job.status === 'uploading')
   useEffect(() => {
     void refresh()
   }, [refresh, queueState])
+  // An upload another tab ran stops when that tab closes or crashes: look
+  // again now and then, and when this tab comes back into view.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    const timer = setInterval(() => void refresh(), 15_000)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [refresh])
 
   const index = folders.data
   useEffect(() => {
