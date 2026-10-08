@@ -78,7 +78,7 @@ export function TrashPage() {
 
   if (trash.isPending) return <LoadingPanel label={t('trash.loading')} />
   return (
-    <PageBody>
+    <PageBody className="px-4 py-6 md:px-8 md:py-8">
       <PageHeader title={t('trash.title')} description={t('trash.description')} />
       {trash.isError ? (
         <Alert variant="error" title={t('trash.failed')}>
