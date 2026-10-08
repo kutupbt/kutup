@@ -125,7 +125,9 @@ engine lock Kutup already has.
    visibility start all depend on rows being in the document.
 5. **Search (Phase 3, done).** A Rust inverted index from Turkish-folded words
    (İ/I/ı/i → i, accents removed) to history entries (`search.rs`), sharded by
-   a word's first three characters into sealed records beside the chunks,
+   a word's first three characters and the entry's 30-day period (a write
+   rewrites only the current period's shards, however long the history or
+   common the word) into sealed records beside the chunks,
    listed in a directory and updated in the same write; built once on open;
    word-start queries, every word required; at most 20 decoded shards kept
    between queries, dropped on any commit. Each entry is also indexed under

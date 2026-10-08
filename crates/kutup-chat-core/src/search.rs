@@ -10,9 +10,12 @@
 //! finds "çağrı". A query word matches every indexed word it begins
 //! ("kitap" finds "kitaplar").
 //!
-//! Words are grouped into shards by their first [`SHARD_CHARS`] characters,
-//! each one sealed record; a directory lists the shards, so a shorter
-//! query word finds every shard it can match. A query reads only the shards
+//! Words are grouped into shards by their first [`SHARD_CHARS`] characters
+//! and the entry's 30-day period ([`BUCKET_MS`]), each one sealed record; a
+//! directory lists the shards, so a shorter query word finds every shard it
+//! can match. Splitting by period keeps the cost of a write bounded: a new
+//! message rewrites only its words' shards for the current period, however
+//! long the history and however common the word. A query reads only the shards
 //! it needs, and at most [`CACHED_SHARDS`] decoded shards are kept between
 //! queries ([`ShardCache`]), dropped as soon as the store changes.
 //!
@@ -42,6 +45,10 @@ use crate::timeline::{self, EntryRef, Indexed, Source, ROUTED};
 pub(crate) const SEARCH_VERSION: u32 = 1;
 /// Characters of a word that name its shard.
 pub(crate) const SHARD_CHARS: usize = 3;
+/// The period a shard covers (30 days).
+pub(crate) const BUCKET_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// Between a shard's prefix and its period in its name; never in a term.
+const NAME_SEPARATOR: char = '\u{1f}';
 /// Decoded shards kept between queries.
 pub(crate) const CACHED_SHARDS: usize = 20;
 /// Longer words are cut to this many characters (a query word is too).
@@ -129,8 +136,22 @@ struct Directory {
     shards: BTreeMap<String, u32>,
 }
 
-fn shard_name(term: &str) -> String {
+fn prefix(term: &str) -> String {
     term.chars().take(SHARD_CHARS).collect()
+}
+
+/// The shard holding `term` for an entry at `ts`.
+fn shard_name(term: &str, ts: i64) -> String {
+    format!(
+        "{}{NAME_SEPARATOR}{}",
+        prefix(term),
+        ts.div_euclid(BUCKET_MS)
+    )
+}
+
+/// The prefix part of a shard's name.
+fn name_prefix(name: &str) -> &str {
+    name.split(NAME_SEPARATOR).next().unwrap_or(name)
 }
 
 fn shard_key(name: &str) -> Vec<u8> {
@@ -261,7 +282,7 @@ impl<'a> Writer<'a> {
     async fn add(&mut self, document: &Document) -> Result<()> {
         for term in &document.terms {
             let postings = self
-                .shard(&shard_name(term))
+                .shard(&shard_name(term, document.posting.ts))
                 .await?
                 .entry(term.clone())
                 .or_default();
@@ -274,7 +295,7 @@ impl<'a> Writer<'a> {
 
     async fn remove(&mut self, document: &Document) -> Result<()> {
         for term in &document.terms {
-            let shard = self.shard(&shard_name(term)).await?;
+            let shard = self.shard(&shard_name(term, document.posting.ts)).await?;
             if let Some(postings) = shard.get_mut(term) {
                 postings.retain(|posting| posting.identity() != document.posting.identity());
                 if postings.is_empty() {
@@ -421,7 +442,7 @@ pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
     for document in &documents {
         for term in &document.terms {
             let postings = shards
-                .entry(shard_name(term))
+                .entry(shard_name(term, document.posting.ts))
                 .or_default()
                 .entry(term.clone())
                 .or_default();
@@ -507,21 +528,22 @@ pub(crate) async fn query(
     }
     let mut matched: Option<HashMap<(Source, String), Posting>> = None;
     for word in &query {
-        let names: Vec<&String> = if word.chars().count() >= SHARD_CHARS {
-            let name = shard_name(word);
-            directory
-                .shards
-                .get_key_value(&name)
-                .map(|(name, _)| name)
-                .into_iter()
-                .collect()
-        } else {
-            directory
-                .shards
-                .keys()
-                .filter(|name| name.starts_with(word.as_str()))
-                .collect()
-        };
+        // A word of at least SHARD_CHARS characters lives under its own
+        // prefix; a shorter one under every prefix it begins. Every period.
+        let whole = word.chars().count() >= SHARD_CHARS;
+        let wanted = prefix(word);
+        let names: Vec<&String> = directory
+            .shards
+            .keys()
+            .filter(|name| {
+                let have = name_prefix(name);
+                if whole {
+                    have == wanted
+                } else {
+                    have.starts_with(word.as_str())
+                }
+            })
+            .collect();
         let mut found: HashMap<(Source, String), Posting> = HashMap::new();
         for name in names {
             let shard = cache.shard(db, name).await?;
@@ -570,11 +592,21 @@ pub(crate) async fn related(
     }
     let known: HashSet<(Source, &str)> = hits.iter().map(Posting::identity).collect();
     let mut found: HashMap<(Source, String), Posting> = HashMap::new();
+    let Some(directory) = load_directory(db).await? else {
+        return Ok(Vec::new());
+    };
     for term in &terms {
-        let shard = cache.shard(db, &shard_name(term)).await?;
-        for posting in shard.get(term).into_iter().flatten() {
-            if !known.contains(&posting.identity()) {
-                found.insert((posting.source, posting.id.clone()), posting.clone());
+        let wanted = prefix(term);
+        for name in directory
+            .shards
+            .keys()
+            .filter(|name| name_prefix(name) == wanted)
+        {
+            let shard = cache.shard(db, name).await?;
+            for posting in shard.get(term).into_iter().flatten() {
+                if !known.contains(&posting.identity()) {
+                    found.insert((posting.source, posting.id.clone()), posting.clone());
+                }
             }
         }
     }
@@ -616,14 +648,22 @@ mod tests {
     use kutup_chat_proto::content::kind;
 
     fn text(id: &str, body: &str) -> Vec<u8> {
-        serde_json::to_vec(&ChatContent::text_with_id(id, "2026-10-08T10:00:00Z", 1, body)).unwrap()
+        serde_json::to_vec(&ChatContent::text_with_id(
+            id,
+            "2026-10-08T10:00:00Z",
+            1,
+            body,
+        ))
+        .unwrap()
     }
 
     fn mutation(id: &str, target: &str, replacement: Option<&str>) -> Vec<u8> {
         let mut content = ChatContent::text_with_id(id, "2026-10-08T10:00:00Z", 1, "");
         content.kind = kind::MESSAGE_MUTATION.to_string();
         content.body = match replacement {
-            Some(text) => serde_json::json!({"targetMessageId": target, "operation": "edit", "replacementText": text}),
+            Some(text) => {
+                serde_json::json!({"targetMessageId": target, "operation": "edit", "replacementText": text})
+            }
             None => serde_json::json!({"targetMessageId": target, "operation": "delete"}),
         };
         serde_json::to_vec(&content).unwrap()
@@ -682,14 +722,32 @@ mod tests {
         assert_eq!(directory.version, SEARCH_VERSION);
         let mut out = Snapshot::new();
         for (name, count) in &directory.shards {
-            let shard: Shard = decode(&block_on(db.load_index_value(&shard_key(name))).unwrap().unwrap()).unwrap();
+            let shard: Shard = decode(
+                &block_on(db.load_index_value(&shard_key(name)))
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
             assert_eq!(*count as usize, shard.values().map(Vec::len).sum::<usize>());
             for (term, postings) in shard {
-                assert_eq!(shard_name(&term), *name);
                 assert!(!postings.is_empty());
+                for posting in &postings {
+                    assert_eq!(
+                        shard_name(&term, posting.ts),
+                        *name,
+                        "in its period's shard"
+                    );
+                }
                 let set: BTreeSet<_> = postings.iter().map(|p| (p.source, p.id.clone())).collect();
                 assert_eq!(set.len(), postings.len(), "one posting per entry");
-                out.insert(term, set);
+                let all = out.entry(term).or_default();
+                let before = all.len();
+                all.extend(set.iter().cloned());
+                assert_eq!(
+                    all.len(),
+                    before + set.len(),
+                    "an entry is in one shard per term"
+                );
             }
         }
         out
@@ -732,19 +790,44 @@ mod tests {
         block_on(crate::timeline::ensure_built(&db)).unwrap();
         assert!(indexed(&db).is_empty());
 
-        let words_pool = ["kitap", "Kitaplar", "İstanbul", "çağrı", "rapor", "toplantı", "yarın", "akşam"];
+        let words_pool = [
+            "kitap",
+            "Kitaplar",
+            "İstanbul",
+            "çağrı",
+            "rapor",
+            "toplantı",
+            "yarın",
+            "akşam",
+        ];
         let mut pending = Pending::default();
         for i in 0..300i64 {
-            let body = format!("{} {} {i}", words_pool[i as usize % 8], words_pool[(i as usize * 3) % 8]);
-            let peer = if i % 2 == 0 { "alice@a.test" } else { "bob@a.test" };
-            pending
-                .messages
-                .push(inbox(&format!("in-{i}"), peer, 1_000 + i, text(&format!("m-in-{i}"), &body)));
+            let body = format!(
+                "{} {} {i}",
+                words_pool[i as usize % 8],
+                words_pool[(i as usize * 3) % 8]
+            );
+            let peer = if i % 2 == 0 {
+                "alice@a.test"
+            } else {
+                "bob@a.test"
+            };
+            pending.messages.push(inbox(
+                &format!("in-{i}"),
+                peer,
+                1_000 + i,
+                text(&format!("m-in-{i}"), &body),
+            ));
         }
         for i in 0..20i64 {
-            pending
-                .mls_messages
-                .insert(format!("g-{i}"), group(&format!("g-{i}"), 2_000 + i, text(&format!("m-g-{i}"), "grup toplantısı")));
+            pending.mls_messages.insert(
+                format!("g-{i}"),
+                group(
+                    &format!("g-{i}"),
+                    2_000 + i,
+                    text(&format!("m-g-{i}"), "grup toplantısı"),
+                ),
+            );
         }
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
@@ -752,16 +835,32 @@ mod tests {
         // A sent message, then written again (delivered), an edit and a
         // deletion: still one posting each, as a rebuild has it.
         let mut pending = Pending::default();
-        pending
-            .sent_messages
-            .insert("out-1".into(), sent("out-1", "alice@a.test", 3_000, text("m-out-1", "Rapor hazır")));
+        pending.sent_messages.insert(
+            "out-1".into(),
+            sent(
+                "out-1",
+                "alice@a.test",
+                3_000,
+                text("m-out-1", "Rapor hazır"),
+            ),
+        );
         pending.sent_messages.insert(
             "edit-1".into(),
-            sent("edit-1", "alice@a.test", 3_001, mutation("m-edit-1", "m-out-1", Some("Rapor yarın hazır"))),
+            sent(
+                "edit-1",
+                "alice@a.test",
+                3_001,
+                mutation("m-edit-1", "m-out-1", Some("Rapor yarın hazır")),
+            ),
         );
         block_on(db.apply(&pending)).unwrap();
         let mut again = Pending::default();
-        let mut delivered = sent("out-1", "alice@a.test", 3_000, text("m-out-1", "Rapor hazır"));
+        let mut delivered = sent(
+            "out-1",
+            "alice@a.test",
+            3_000,
+            text("m-out-1", "Rapor hazır"),
+        );
         delivered.delivered = true;
         again.sent_messages.insert("out-1".into(), delivered);
         block_on(db.apply(&again)).unwrap();
@@ -769,13 +868,17 @@ mod tests {
 
         // Deletions of each kind, and a forgotten contact.
         let mut pending = Pending::default();
-        pending.delete_message_ids.extend(["in-0".to_string(), "in-2".to_string()]);
+        pending
+            .delete_message_ids
+            .extend(["in-0".to_string(), "in-2".to_string()]);
         pending.delete_mls_message_ids.insert("g-3".into());
         pending.delete_sent_message_ids.insert("edit-1".into());
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         let mut pending = Pending::default();
-        pending.delete_messages_for_peers.insert("bob@a.test".into());
+        pending
+            .delete_messages_for_peers
+            .insert("bob@a.test".into());
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         assert!(!indexed(&db).values().flatten().any(|(_, id)| id == "in-1"));
@@ -785,14 +888,23 @@ mod tests {
     fn built_once_on_open_from_what_is_already_stored() {
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut pending = Pending::default();
-        pending
-            .messages
-            .push(inbox("in-1", "alice@a.test", 1, text("m-1", "Merhaba dünya")));
+        pending.messages.push(inbox(
+            "in-1",
+            "alice@a.test",
+            1,
+            text("m-1", "Merhaba dünya"),
+        ));
         block_on(db.apply(&pending)).unwrap();
-        assert!(block_on(load_directory(&db)).unwrap().is_none(), "nothing indexed before open");
+        assert!(
+            block_on(load_directory(&db)).unwrap().is_none(),
+            "nothing indexed before open"
+        );
         block_on(crate::timeline::ensure_built(&db)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
-        assert_eq!(search(&db, &mut ShardCache::default(), "dunya"), vec!["in-1"]);
+        assert_eq!(
+            search(&db, &mut ShardCache::default(), "dunya"),
+            vec!["in-1"]
+        );
     }
 
     #[test]
@@ -808,23 +920,41 @@ mod tests {
             ("e", 5, "green apple"),
             ("f", 6, "ab abc abd"),
         ] {
-            pending
-                .messages
-                .push(inbox(id, "alice@a.test", ts, text(&format!("m-{id}"), body)));
+            pending.messages.push(inbox(
+                id,
+                "alice@a.test",
+                ts,
+                text(&format!("m-{id}"), body),
+            ));
         }
         block_on(db.apply(&pending)).unwrap();
         let mut cache = ShardCache::default();
         for query_text in ["istanbul", "ISTANBUL", "ıstanbul", "İSTAN"] {
-            assert_eq!(search(&db, &mut cache, query_text), vec!["a"], "{query_text}");
+            assert_eq!(
+                search(&db, &mut cache, query_text),
+                vec!["a"],
+                "{query_text}"
+            );
         }
         assert_eq!(search(&db, &mut cache, "cagri"), vec!["b"]);
         assert_eq!(search(&db, &mut cache, "kitap"), vec!["c"]);
-        assert!(search(&db, &mut cache, "tap").is_empty(), "the middle of a word does not match");
-        assert_eq!(search(&db, &mut cache, "apple"), vec!["e", "d"], "newest first");
+        assert!(
+            search(&db, &mut cache, "tap").is_empty(),
+            "the middle of a word does not match"
+        );
+        assert_eq!(
+            search(&db, &mut cache, "apple"),
+            vec!["e", "d"],
+            "newest first"
+        );
         assert_eq!(search(&db, &mut cache, "app red"), vec!["d"], "every word");
         assert!(search(&db, &mut cache, "apple blue").is_empty());
         // "a" begins akşam, apple and ab (not "da" of İstanbul'da).
-        assert_eq!(search(&db, &mut cache, "a"), vec!["f", "e", "d", "b"], "one letter reaches every shard it can");
+        assert_eq!(
+            search(&db, &mut cache, "a"),
+            vec!["f", "e", "d", "b"],
+            "one letter reaches every shard it can"
+        );
         assert!(search(&db, &mut cache, "   ").is_empty());
         let limited = block_on(query(&db, &mut cache, "apple", 1)).unwrap();
         assert_eq!(limited.len(), 1);
@@ -844,34 +974,118 @@ mod tests {
         let db = SqliteChatDb::open_in_memory().unwrap();
         block_on(crate::timeline::ensure_built(&db)).unwrap();
         let mut pending = Pending::default();
-        pending
-            .messages
-            .push(inbox("one", "alice@a.test", 1, text("11111111-1111-4111-8111-111111111111", "eski metin")));
-        pending
-            .messages
-            .push(inbox("two", "alice@a.test", 2, text("22222222-2222-4222-8222-222222222222", "silinecek metin")));
-        pending
-            .messages
-            .push(inbox("edit", "alice@a.test", 3, mutation("33333333-3333-4333-8333-333333333333", "11111111-1111-4111-8111-111111111111", Some("yeni metin"))));
-        pending
-            .messages
-            .push(inbox("delete", "alice@a.test", 4, mutation("44444444-4444-4444-8444-444444444444", "22222222-2222-4222-8222-222222222222", None)));
+        pending.messages.push(inbox(
+            "one",
+            "alice@a.test",
+            1,
+            text("11111111-1111-4111-8111-111111111111", "eski metin"),
+        ));
+        pending.messages.push(inbox(
+            "two",
+            "alice@a.test",
+            2,
+            text("22222222-2222-4222-8222-222222222222", "silinecek metin"),
+        ));
+        pending.messages.push(inbox(
+            "edit",
+            "alice@a.test",
+            3,
+            mutation(
+                "33333333-3333-4333-8333-333333333333",
+                "11111111-1111-4111-8111-111111111111",
+                Some("yeni metin"),
+            ),
+        ));
+        pending.messages.push(inbox(
+            "delete",
+            "alice@a.test",
+            4,
+            mutation(
+                "44444444-4444-4444-8444-444444444444",
+                "22222222-2222-4222-8222-222222222222",
+                None,
+            ),
+        ));
         block_on(db.apply(&pending)).unwrap();
         let mut cache = ShardCache::default();
-        let ids = |postings: Vec<Posting>| -> BTreeSet<String> { postings.into_iter().map(|p| p.id).collect() };
+        let ids = |postings: Vec<Posting>| -> BTreeSet<String> {
+            postings.into_iter().map(|p| p.id).collect()
+        };
 
         // The edit's new text finds the edit; the message it edits comes along.
         let hits = block_on(query(&db, &mut cache, "yeni", 100)).unwrap();
         assert_eq!(ids(hits.clone()), BTreeSet::from(["edit".to_string()]));
-        assert_eq!(ids(block_on(related(&db, &mut cache, &hits)).unwrap()), BTreeSet::from(["one".to_string()]));
+        assert_eq!(
+            ids(block_on(related(&db, &mut cache, &hits)).unwrap()),
+            BTreeSet::from(["one".to_string()])
+        );
 
         // The original text finds the message; its edit comes along.
         let hits = block_on(query(&db, &mut cache, "eski", 100)).unwrap();
         assert_eq!(ids(hits.clone()), BTreeSet::from(["one".to_string()]));
-        assert_eq!(ids(block_on(related(&db, &mut cache, &hits)).unwrap()), BTreeSet::from(["edit".to_string()]));
+        assert_eq!(
+            ids(block_on(related(&db, &mut cache, &hits)).unwrap()),
+            BTreeSet::from(["edit".to_string()])
+        );
 
         // A deleted message's deletion comes along.
         let hits = block_on(query(&db, &mut cache, "silinecek", 100)).unwrap();
-        assert_eq!(ids(block_on(related(&db, &mut cache, &hits)).unwrap()), BTreeSet::from(["delete".to_string()]));
+        assert_eq!(
+            ids(block_on(related(&db, &mut cache, &hits)).unwrap()),
+            BTreeSet::from(["delete".to_string()])
+        );
+    }
+
+    #[test]
+    fn shards_split_by_period_so_a_write_touches_only_its_own() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(crate::timeline::ensure_built(&db)).unwrap();
+        let mut pending = Pending::default();
+        for period in 0..4i64 {
+            pending.messages.push(inbox(
+                &format!("old-{period}"),
+                "alice@a.test",
+                period * BUCKET_MS + 5,
+                text(&format!("m-old-{period}"), "bir toplantı"),
+            ));
+        }
+        block_on(db.apply(&pending)).unwrap();
+        assert_eq!(indexed(&db), expected(&db));
+        let mut cache = ShardCache::default();
+        assert_eq!(
+            search(&db, &mut cache, "toplanti"),
+            vec!["old-3", "old-2", "old-1", "old-0"],
+            "every period is read"
+        );
+
+        // A new message in the latest period rewrites that period's shards
+        // and the directory, nothing older.
+        let mut pending = Pending::default();
+        pending.messages.push(inbox(
+            "new",
+            "alice@a.test",
+            3 * BUCKET_MS + 9,
+            text("m-new", "bir toplantı daha"),
+        ));
+        let writes = block_on(changes(&db, &pending)).unwrap();
+        let period = format!("{NAME_SEPARATOR}3");
+        for key in writes.keys() {
+            if key.as_slice() == DIRECTORY_KEY {
+                continue;
+            }
+            let name = String::from_utf8(
+                key.strip_prefix(b"search/shard\0".as_slice())
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(
+                name.ends_with(&period),
+                "only the latest period's shards: {name:?}"
+            );
+        }
+        block_on(db.apply(&pending)).unwrap();
+        assert_eq!(indexed(&db), expected(&db));
+        assert_eq!(search(&db, &mut cache, "toplanti daha"), vec!["new"]);
     }
 }
