@@ -14,6 +14,7 @@ import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import { useEffectiveMap } from '@kutup/map/config'
 import { toGpx, toKml } from '@kutup/map/exchange'
 import { addPlace, encodeListJson, isListName, LIST_EXTENSION, LIST_MIME, listTitle, removePlace, updatePlace, type Place } from '@kutup/map/list'
+import { appUrl } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -113,13 +114,34 @@ function OpenList({ cid, shareId, fid }: { cid: string | null; shareId: string |
   )
 }
 
-function BackToMaps() {
+/**
+ * Where the back button goes: the list's folder in Drive when the list was
+ * opened from there (`?from=drive`), otherwise this app's lists. The folder
+ * comes from this page's own route, so the parameter cannot send anyone
+ * elsewhere.
+ */
+function useBack(): { drive: string | null; label: string } {
   const { t } = useTranslation()
+  const { search } = useLocation()
+  const { cid, shareId } = useParams()
+  if (new URLSearchParams(search).get('from') !== 'drive') return { drive: null, label: t('list.backToLists') }
+  const folder = cid ? `/folders/${cid}` : shareId ? `/remote/${shareId}` : '/shared'
+  return { drive: appUrl('drive', folder), label: t('list.backToDrive') }
+}
+
+function BackToMaps() {
+  const back = useBack()
   return (
     <Button variant="ghost" size="sm" asChild className="-ml-2">
-      <Link to="/">
-        <ArrowLeft /> {t('list.backToLists')}
-      </Link>
+      {back.drive ? (
+        <a href={back.drive}>
+          <ArrowLeft /> {back.label}
+        </a>
+      ) : (
+        <Link to="/">
+          <ArrowLeft /> {back.label}
+        </Link>
+      )}
     </Button>
   )
 }
@@ -150,6 +172,7 @@ function Workspace({
   editsWait: boolean
 }) {
   const { t } = useTranslation()
+  const back = useBack()
   const navigate = useNavigate()
   const location = useLocation()
   const session = useRequiredSession()
@@ -285,9 +308,15 @@ function Workspace({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
         <Button variant="ghost" size="icon" asChild>
-          <Link to="/" aria-label={t('list.backToLists')}>
-            <ArrowLeft />
-          </Link>
+          {back.drive ? (
+            <a href={back.drive} aria-label={back.label}>
+              <ArrowLeft />
+            </a>
+          ) : (
+            <Link to="/" aria-label={back.label}>
+              <ArrowLeft />
+            </Link>
+          )}
         </Button>
         <span className="size-3 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden />
         {mayRename ? (

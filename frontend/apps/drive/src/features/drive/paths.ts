@@ -17,11 +17,17 @@ export function filePath(folder: Pick<Folder, 'id' | 'source'>, fileId: string):
   return `/file/${folder.id}/${fileId}`
 }
 
-/** Where a place list opens: in the Maps app (docs/plans/maps.md, step 4). */
+/**
+ * Where a place list opens: in the Maps app (docs/plans/maps.md, step 4),
+ * marked as opened from Drive so that its back button returns to the folder.
+ */
 export function mapsListUrl(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'>, fileId: string): string {
-  if (folder.source === 'file') return appUrl('maps', `/shared/${fileId}`)
-  if (folder.source === 'remote' && folder.remoteShareId) return appUrl('maps', `/remote/${folder.remoteShareId}/${fileId}`)
-  return appUrl('maps', `/lists/${folder.id}/${fileId}`)
+  const path = folder.source === 'file'
+    ? `/shared/${fileId}`
+    : folder.source === 'remote' && folder.remoteShareId
+      ? `/remote/${folder.remoteShareId}/${fileId}`
+      : `/lists/${folder.id}/${fileId}`
+  return appUrl('maps', `${path}?from=drive`)
 }
 
 /** Open a file: here in its editor or viewer, or a place list in Maps. */

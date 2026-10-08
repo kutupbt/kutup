@@ -24,9 +24,13 @@ export interface DocumentEntry {
   href: string
 }
 
-/** Drive's editor page for a file (apps/drive: features/drive/paths.ts). */
+/**
+ * Drive's editor page for a file (apps/drive: features/drive/paths.ts),
+ * marked as opened from Office so that its back button returns here.
+ */
 export function editorUrl(folder: Pick<Folder, 'id' | 'source'>, fileId: string): string {
-  return appUrl('drive', folder.source === 'file' ? `/shared/file/${fileId}` : `/file/${folder.id}/${fileId}`)
+  const path = folder.source === 'file' ? `/shared/file/${fileId}` : `/file/${folder.id}/${fileId}`
+  return appUrl('drive', `${path}?from=office`)
 }
 
 export function useDocuments() {

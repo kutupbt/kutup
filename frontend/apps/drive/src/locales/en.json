@@ -555,6 +555,7 @@
     "liveBlockedUnsent": "Your latest changes have not reached the server. They are kept in this tab and sent if the connection comes back; do not close it. Or download the file as it was last saved.",
     "failedTitle": "This file can't be opened",
     "backToDrive": "Back to Drive",
+    "backToOffice": "Back to Office",
     "backTo": "Back to {{folder}}",
     "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
     "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",

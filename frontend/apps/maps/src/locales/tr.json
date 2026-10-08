@@ -59,6 +59,7 @@
     "opening": "Harita açılıyor…",
     "failedTitle": "Bu harita açılamıyor",
     "backToLists": "Haritalarınıza dönün",
+    "backToDrive": "Depo'ya dön",
     "failure": {
       "notFound": "Çöp kutusuna taşınmış ya da artık erişiminiz olmayabilir.",
       "undecryptable": "Anahtarları hesabınızla çözülemedi. Sahibinden yeniden paylaşmasını isteyin.",
