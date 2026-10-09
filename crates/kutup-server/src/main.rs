@@ -518,6 +518,16 @@ fn build_router(state: AppState) -> Router {
             get(crate::federation::public_identity_document)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
+        // Web Key Directory (direct method) for name@<server name>.
+        .route(
+            "/.well-known/openpgpkey/hu/:hash",
+            get(handlers::mail_keys::wkd_key)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/.well-known/openpgpkey/policy",
+            get(handlers::mail_keys::wkd_policy),
+        )
         .route(
             "/api/federation/policies/:feature",
             get(crate::federation::get_local_feature_policy),
@@ -573,6 +583,14 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route("/api/user/storage", get(handlers::storage::usage))
         .route(
+            "/api/mail/addresses",
+            get(handlers::mail_keys::list_addresses),
+        )
+        .route(
+            "/api/mail/addresses/:id/keys",
+            post(handlers::mail_keys::add_key),
+        )
+        .route(
             "/api/user/storage/versions",
             get(handlers::storage::version_ages),
         )
@@ -586,6 +604,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/users/by-email/:email",
             get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/mail/keys",
+            get(handlers::mail_keys::lookup_keys)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         // --- Collections (authenticated). ---
         .route(
