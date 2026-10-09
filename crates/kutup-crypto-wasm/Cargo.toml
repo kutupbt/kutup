@@ -10,7 +10,7 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-kutup-crypto = { path = "../kutup-crypto" }
+kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
 kutup-chat-proto = { path = "../kutup-chat-proto" }
 base64.workspace = true
 serde.workspace = true
