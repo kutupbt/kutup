@@ -31,6 +31,10 @@ export interface StorageUsage {
     historyBytes: number
     historyMediaBytes: number
   }
+  contacts: {
+    bytes: number
+    count: number
+  }
 }
 
 export function useStorageUsage(enabled = true) {
@@ -50,7 +54,7 @@ export function storageLevel(usage: Pick<StorageUsage, 'quotaBytes' | 'usedBytes
   return ratio >= 1 ? 'danger' : ratio >= 0.8 ? 'warning' : 'ok'
 }
 
-export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'reserved'
+export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'contacts' | 'reserved'
 
 export interface UsageCategory {
   id: UsageCategoryId
@@ -68,6 +72,7 @@ const COLOR: Record<Exclude<UsageCategoryId, FileKind>, string> = {
   previews: 'var(--usage-previews)',
   chatMedia: 'var(--usage-chat)',
   chatHistory: 'var(--usage-chat-history)',
+  contacts: 'var(--usage-contacts)',
   reserved: 'var(--usage-reserved)',
 }
 
@@ -108,6 +113,7 @@ export function usageCategories(usage: StorageUsage, kinds?: KindTotals | null):
     { id: 'previews', bytes: drive.thumbnailsBytes + drive.assetsBytes, color: COLOR.previews },
     { id: 'chatMedia', bytes: chat.mediaBytes, color: COLOR.chatMedia },
     { id: 'chatHistory', bytes: chat.historyBytes + chat.historyMediaBytes, color: COLOR.chatHistory },
+    { id: 'contacts', bytes: usage.contacts.bytes, count: usage.contacts.count, color: COLOR.contacts },
     { id: 'reserved', bytes: usage.reservedBytes, color: COLOR.reserved },
   )
   return categories.filter((c) => c.bytes > 0).sort((a, b) => b.bytes - a.bytes)

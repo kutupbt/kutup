@@ -129,7 +129,8 @@
       "previews": "Thumbnails and previews",
       "chatMedia": "Chat attachments",
       "chatHistory": "Chat history backup",
-      "reserved": "Uploads in progress"
+      "reserved": "Uploads in progress",
+      "contacts": "Contacts"
     }
   },
   "uploads": {

@@ -123,6 +123,7 @@
   --usage-previews: #0891b2;
   --usage-chat: #059669;
   --usage-chat-history: #65a30d;
+  --usage-contacts: #db2777;
   --usage-reserved: #cbd5e1;
 }
 
@@ -188,6 +189,7 @@
   --usage-previews: #67e8f9;
   --usage-chat: #34d399;
   --usage-chat-history: #bef264;
+  --usage-contacts: #f9a8d4;
   --usage-reserved: #475569;
 }
 
@@ -258,6 +260,7 @@
   --color-usage-previews: var(--usage-previews);
   --color-usage-chat: var(--usage-chat);
   --color-usage-chat-history: var(--usage-chat-history);
+  --color-usage-contacts: var(--usage-contacts);
   --color-usage-reserved: var(--usage-reserved);
   --color-kind-video: var(--kind-video);
   --color-kind-audio: var(--kind-audio);

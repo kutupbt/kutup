@@ -25,6 +25,15 @@ pub struct StorageUsageResponse {
     pub reserved_bytes: i64,
     pub drive: DriveUsage,
     pub chat: ChatUsage,
+    pub contacts: ContactsUsage,
+}
+
+/// The address book: each contact's summary and sealed card.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsUsage {
+    pub bytes: i64,
+    pub count: i64,
 }
 
 /// Drive, which Photos, Office and Maps store their files in.
@@ -98,6 +107,13 @@ pub async fn usage(
     .fetch_one(&state.pool)
     .await?;
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default()).await?;
+    let (contacts_bytes, contacts_count): (i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(octet_length(summary) + octet_length(card)), 0)::bigint, COUNT(*)
+           FROM contacts WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let (quota, used, files, files_count, trash, trash_count, versions, thumbnails, assets) = (
         row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
     );
@@ -118,6 +134,10 @@ pub async fn usage(
             media_bytes: row.9,
             history_bytes: row.10,
             history_media_bytes: row.11,
+        },
+        contacts: ContactsUsage {
+            bytes: contacts_bytes,
+            count: contacts_count,
         },
     }))
 }
