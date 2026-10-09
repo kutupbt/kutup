@@ -172,3 +172,48 @@ export function largeFiles(files: OwnFile[], limit = 100): OwnFile[] {
     .sort((a, b) => b.file.size - a.file.size)
     .slice(0, limit)
 }
+
+/** `GET /api/user/storage/versions`: the caller's deletable versions by age. */
+export interface VersionAge {
+  ageDays: number
+  keepForever: boolean
+  bytes: number
+  count: number
+}
+
+export const versionAgesKey = ['storage', 'versions'] as const
+
+export function useVersionAges(enabled = true) {
+  return useQuery({
+    queryKey: versionAgesKey,
+    enabled,
+    queryFn: async () => (await api.get<VersionAge[]>('/user/storage/versions')).data,
+  })
+}
+
+/** What deleting versions at least `days` old would free. */
+export function versionsOlderThan(ages: VersionAge[], days: number, includeKeptForever: boolean) {
+  let bytes = 0
+  let count = 0
+  for (const age of ages) {
+    if (age.ageDays < days || (age.keepForever && !includeKeptForever)) continue
+    bytes += age.bytes
+    count += age.count
+  }
+  return { bytes, count }
+}
+
+/** Deletes the caller's versions at least `days` old, batch by batch. */
+export async function pruneVersions(days: number, includeKeptForever: boolean) {
+  let deletedCount = 0
+  let freedBytes = 0
+  for (;;) {
+    const { data } = await api.post<{ deletedCount: number; freedBytes: number; more: boolean }>(
+      '/user/storage/versions/prune',
+      { olderThanDays: days, includeKeptForever },
+    )
+    deletedCount += data.deletedCount
+    freedBytes += data.freedBytes
+    if (!data.more || data.deletedCount === 0) return { deletedCount, freedBytes }
+  }
+}

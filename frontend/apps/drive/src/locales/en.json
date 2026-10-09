@@ -519,7 +519,16 @@
       "keep": "Keep forever",
       "unkeep": "Stop keeping",
       "restore": "Restore",
-      "updateFailed": "Couldn't update this version"
+      "updateFailed": "Couldn't update this version",
+      "delete": "Delete",
+      "deleteTitle": "Delete this version?",
+      "deleteDescription": "{{version}} will be deleted from the version history, freeing {{size}}.",
+      "deleteWarning": "This cannot be undone. The other versions stay.",
+      "deleteKept": "This version is marked Keep forever. Deleting it cannot be undone.",
+      "deleteSubmit": "Delete permanently",
+      "deleted": "Version deleted",
+      "deleteFailed": "Couldn't delete this version",
+      "current": "Current"
     },
     "restore": {
       "title": "Restore this version?",

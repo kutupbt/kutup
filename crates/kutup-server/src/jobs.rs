@@ -403,6 +403,31 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     removed
 }
 
+/// Deletes one version on request (the owner's or author's, or a bulk clean-up
+/// of their own): row and charge first, then the stored object, as retention
+/// does. `false` when the row was already gone.
+pub(crate) async fn remove_version(
+    pool: &PgPool,
+    storage: &StorageService,
+    version_id: Uuid,
+    path: &str,
+    s3_version: &str,
+) -> anyhow::Result<bool> {
+    if !release_version(pool, version_id).await? {
+        return Ok(false);
+    }
+    let deleted = if s3_version.is_empty() {
+        storage.delete(path).await
+    } else {
+        storage.delete_object_version(path, s3_version).await
+    };
+    if let Err(e) = deleted {
+        // An orphan for the storage sweep, never a row without its bytes.
+        tracing::warn!("version delete: delete {path} failed: {e}");
+    }
+    Ok(true)
+}
+
 /// Removes one version row and releases its charge, in one transaction.
 /// `false` when the row was already gone.
 async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool> {

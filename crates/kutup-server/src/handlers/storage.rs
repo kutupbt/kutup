@@ -5,10 +5,10 @@
 
 use axum::extract::State;
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -119,5 +119,137 @@ pub async fn usage(
             history_bytes: row.10,
             history_media_bytes: row.11,
         },
+    }))
+}
+
+/// The caller's deletable earlier versions (every version they saved but each
+/// file's newest), by whole days of age and whether they are kept forever.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionAge {
+    pub age_days: i32,
+    pub keep_forever: bool,
+    pub bytes: i64,
+    pub count: i64,
+}
+
+/// `GET /api/user/storage/versions` — what "Delete versions older than…"
+/// would free, so the browser can show it for any age before asking.
+#[utoipa::path(
+    get,
+    path = "/api/user/storage/versions",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Deletable versions by age", body = [VersionAge]))
+)]
+pub async fn version_ages(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<VersionAge>>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let rows: Vec<(i32, bool, i64, i64)> = sqlx::query_as(&format!(
+        "SELECT FLOOR(EXTRACT(EPOCH FROM now() - v.created_at) / 86400)::int AS age,
+                v.keep_forever, SUM(v.size_bytes)::bigint, COUNT(*)::bigint
+           FROM file_versions v
+          WHERE v.author_user_id = $1 AND v.id <> ({newest})
+          GROUP BY 1, 2
+          ORDER BY 1, 2",
+        newest = crate::handlers::file_versions::NEWEST_VERSION
+    ))
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(age_days, keep_forever, bytes, count)| VersionAge {
+                age_days,
+                keep_forever,
+                bytes,
+                count,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneVersionsRequest {
+    /// Versions at least this many whole days old go, matching
+    /// `VersionAge::age_days`; 0 is every earlier version.
+    pub older_than_days: i32,
+    /// Also versions marked "keep forever".
+    #[serde(default)]
+    pub include_kept_forever: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneVersionsResponse {
+    pub deleted_count: i64,
+    pub freed_bytes: i64,
+    /// More are left: call again to continue.
+    pub more: bool,
+}
+
+/// At most this many versions go per request, so one call stays short.
+const PRUNE_BATCH: i64 = 500;
+
+/// `POST /api/user/storage/versions/prune` — deletes for good the earlier
+/// versions the caller saved more than `olderThanDays` ago, never a file's
+/// newest, and kept-forever ones only when asked. In batches: repeat while
+/// `more`.
+#[utoipa::path(
+    post,
+    path = "/api/user/storage/versions/prune",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = PruneVersionsRequest,
+    responses((status = 200, description = "What was deleted", body = PruneVersionsResponse))
+)]
+pub async fn prune_versions(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<PruneVersionsRequest>,
+) -> AppResult<Json<PruneVersionsResponse>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    if !(0..=36_500).contains(&req.older_than_days) {
+        return Err(AppError::bad_request(
+            "olderThanDays must be between 0 and 36500",
+        ));
+    }
+    let rows: Vec<(uuid::Uuid, String, String, i64)> = sqlx::query_as(&format!(
+        "SELECT v.id, v.storage_path, v.s3_version_id, v.size_bytes
+           FROM file_versions v
+          WHERE v.author_user_id = $1
+            AND v.created_at <= now() - make_interval(days => $2)
+            AND ($3 OR NOT v.keep_forever)
+            AND v.id <> ({newest})
+          ORDER BY v.created_at
+          LIMIT $4",
+        newest = crate::handlers::file_versions::NEWEST_VERSION
+    ))
+    .bind(user_id)
+    .bind(req.older_than_days)
+    .bind(req.include_kept_forever)
+    .bind(PRUNE_BATCH + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let more = rows.len() as i64 > PRUNE_BATCH;
+    let (mut deleted_count, mut freed_bytes) = (0, 0);
+    for (id, path, s3_version, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+        match crate::jobs::remove_version(&state.pool, &state.storage, id, &path, &s3_version).await
+        {
+            Ok(true) => {
+                deleted_count += 1;
+                freed_bytes += size;
+            }
+            Ok(false) => {}
+            Err(_) => return Err(AppError::internal("could not delete versions")),
+        }
+    }
+    Ok(Json(PruneVersionsResponse {
+        deleted_count,
+        freed_bytes,
+        more,
     }))
 }

@@ -519,7 +519,16 @@
       "keep": "Süresiz sakla",
       "unkeep": "Saklamayı bırak",
       "restore": "Geri yükle",
-      "updateFailed": "Bu sürüm güncellenemedi"
+      "updateFailed": "Bu sürüm güncellenemedi",
+      "delete": "Sil",
+      "deleteTitle": "Bu sürüm silinsin mi?",
+      "deleteDescription": "{{version}} sürüm geçmişinden silinecek ve {{size}} yer açılacak.",
+      "deleteWarning": "Bu işlem geri alınamaz. Diğer sürümler kalır.",
+      "deleteKept": "Bu sürüm Süresiz sakla olarak işaretli. Silmek geri alınamaz.",
+      "deleteSubmit": "Kalıcı olarak sil",
+      "deleted": "Sürüm silindi",
+      "deleteFailed": "Bu sürüm silinemedi",
+      "current": "Güncel"
     },
     "restore": {
       "title": "Bu sürüm geri yüklensin mi?",

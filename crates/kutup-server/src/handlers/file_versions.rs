@@ -257,6 +257,72 @@ pub async fn patch(
     Ok(Json(to_version_row(t)).into_response())
 }
 
+/// A file's newest version, which stays: for documents and notes it is the
+/// file's current content (version_retention keeps it for the same reason).
+pub(crate) const NEWEST_VERSION: &str =
+    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
+
+/// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
+/// for good and frees its storage. The file's owner or the version's author
+/// may; the newest version cannot go.
+#[utoipa::path(
+    delete,
+    path = "/api/files/{fileId}/versions/{vid}",
+    tag = "versions",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("vid" = String, Path, description = "Version id"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 403, description = "Neither the file's owner nor the version's author"),
+        (status = 404, description = "No such version"),
+        (status = 409, description = "The newest version is the file's current content"),
+    )
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((file_id, vid)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
+    type Row = (String, String, Uuid, Uuid, bool);
+    let row: Option<Row> = sqlx::query_as(&format!(
+        "SELECT v.storage_path, v.s3_version_id, v.author_user_id, c.owner_user_id,
+                v.id = ({NEWEST_VERSION})
+           FROM file_versions v
+           JOIN files f ON f.id = v.file_id
+           JOIN collections c ON c.id = f.collection_id
+          WHERE v.id = $1 AND v.file_id = $2"
+    ))
+    .bind(vid)
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((path, s3_version, author, owner, newest)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    if user_id != author && user_id != owner {
+        if can_access_file(&state.pool, user_id, fid).await {
+            return Err(AppError::forbidden(
+                "only the file's owner or whoever saved this version can delete it",
+            ));
+        }
+        return Err(AppError::not_found("not found"));
+    }
+    if newest {
+        return Err(AppError::conflict(
+            "the newest version is the file's current content and cannot be deleted",
+        ));
+    }
+    crate::jobs::remove_version(&state.pool, &state.storage, vid, &path, &s3_version)
+        .await
+        .map_err(|_| AppError::internal("could not delete the version"))?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 

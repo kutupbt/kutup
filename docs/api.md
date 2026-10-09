@@ -430,6 +430,31 @@ Drive, Photos, Office, Maps and Chat all count against it.
 
 ---
 
+### GET /api/user/storage/versions
+
+The caller's deletable earlier versions (every version they saved except each
+file's newest), grouped by whole days of age and whether they are kept
+forever, so a client can show what deleting by age would free.
+
+**Auth:** Bearer JWT
+
+**Response:** `[{ "ageDays": 0, "keepForever": false, "bytes": 1300, "count": 2 }, …]`
+
+### POST /api/user/storage/versions/prune
+
+Delete for good the caller's earlier versions at least `olderThanDays` whole
+days old (`0`: every earlier version). Each file's newest version always
+stays; kept-forever versions go only with `includeKeptForever`. Charges are
+released with each row. At most 500 versions per request: repeat while
+`more` is true.
+
+**Auth:** Bearer JWT
+
+**Body:** `{ "olderThanDays": 30, "includeKeptForever": false }` (`olderThanDays`
+0–36500, else `400`)
+
+**Response:** `{ "deletedCount": 12, "freedBytes": 4800000, "more": false }`
+
 ### GET /api/user/storage
 
 Return what fills the caller's storage pool, by app and by kind of stored
@@ -3037,6 +3062,14 @@ is no snapshot-specific legacy decoder.
 is at most 200 characters. **Auth:** write access (it changes what retention
 keeps). **Response:** updated version row.
 
+### DELETE /api/files/:fileId/versions/:vid
+Delete one earlier version for good: the row and its charge go together, then
+the stored object, and the author's storage is freed. **Auth:** the file's
+owner or the version's author (`403` for anyone else who can see the file,
+`404` otherwise). The file's newest version is its current content and cannot
+be deleted (`409`), whether or not it is kept forever; a kept-forever earlier
+version can be. **Response:** `204`.
+
 ### POST /api/files/:fileId/versions
 Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
 `file` — a complete typed Drive file blob, validated against the exact file,
@@ -3058,4 +3091,6 @@ floor to that position so the next frame continues after it. **Auth:** write acc
 
 Versions are kept by the file owner's `versionRetentionDays` (see
 `PATCH /api/user/me`): the last day whole, the last week one per hour, then
-one per day; the newest version and `keepForever` ones always.
+one per day; the newest version and `keepForever` ones always. Earlier
+versions can also be deleted by hand (`DELETE` above) or in bulk by age
+(`POST /api/user/storage/versions/prune`).

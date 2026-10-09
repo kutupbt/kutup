@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { largeFiles, storageLevel, usageCategories, type OwnFile, type StorageUsage } from './storage'
+import { largeFiles, storageLevel, usageCategories, versionsOlderThan, type OwnFile, type StorageUsage } from './storage'
 
 const usage: StorageUsage = {
   quotaBytes: 1000,
@@ -41,5 +41,18 @@ describe('largeFiles', () => {
     const file = (id: string, size: number) => ({ folder: {}, file: { id, size } }) as unknown as OwnFile
     const result = largeFiles([file('a', 10_485_759), file('b', 20_000_000), file('c', 10_485_760)])
     expect(result.map((f) => f.file.id)).toEqual(['b', 'c'])
+  })
+})
+
+describe('versionsOlderThan', () => {
+  it('counts versions at least that old, and kept-forever ones only when asked', () => {
+    const ages = [
+      { ageDays: 3, keepForever: false, bytes: 10, count: 1 },
+      { ageDays: 30, keepForever: false, bytes: 20, count: 2 },
+      { ageDays: 90, keepForever: true, bytes: 40, count: 1 },
+    ]
+    expect(versionsOlderThan(ages, 30, false)).toEqual({ bytes: 20, count: 2 })
+    expect(versionsOlderThan(ages, 30, true)).toEqual({ bytes: 60, count: 3 })
+    expect(versionsOlderThan(ages, 1, false)).toEqual({ bytes: 30, count: 3 })
   })
 })
