@@ -555,10 +555,11 @@ authority.
 
 The chat core keeps a search index beside its per-conversation timelines
 (`kutup-chat-core/src/search.rs`, `docs/research/16-browser-storage-architecture.md`):
-an inverted index from words to entries, sharded by a word's first three
-characters and the entry's 30-day period (so a write rewrites only the
-current period's shards) into records sealed under the store key like every
-other record,
+an inverted index from words to entries in SQLite FTS5's layout: per 30-day
+period, each entry stored once under a small number, and per word the
+numbers holding it as compact differences, in shards by a word's first three
+characters (so a write rewrites only the current period's records), all
+sealed under the store key like every other record,
 and written in the same transaction as the messages it indexes. A store from
 before the index is indexed once on open. Words are folded before indexing and
 querying: İ, I, ı and i are alike, accents are removed (canonical
