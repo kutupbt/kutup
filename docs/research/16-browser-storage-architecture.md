@@ -137,18 +137,37 @@ engine lock Kutup already has.
    hit, and matches restored backup history (in memory) the same way. The
    browser and native clients fold identically (shared vectors). Matching is
    by word start, not substring, as in Signal and Proton.
-   Measured (October 2026, `search::tests::scale`, native release build on
-   the 8-core development VM, SQLite backend): 50,000 messages over two years,
-   eight words each from a 2,000-word vocabulary plus common words. Written
-   as they arrive in batches of 100: 4.3 s in all, the slowest batch 14 ms;
-   one new message with its index 1.9 ms; the whole history indexed on open
-   in 0.57 s. 3,200 shards, 37.4 MB (about 750 bytes of index per message:
-   each posting repeats the conversation and message ids per word; a later
-   compaction could share them per shard); median shard 7.7 KB, largest
-   200 KB. Queries: a very common word 9 ms, a two-letter prefix 24 ms, a
-   rarer word 1.5 ms. In the browser each shard read adds an IndexedDB read
-   and unsealing, so short prefixes, which read the most shards, are the
-   slowest; not yet measured there.
+   Compact layout (October 2026, after the first version): SQLite FTS5's,
+   as in Signal Desktop, on sealed records. In each period an entry gets a
+   small number and is stored once in a document chunk (256 per record:
+   conversation as a position in the directory's list, record, time,
+   message id, target); a shard maps each word to the ascending numbers
+   holding it as LEB128 differences, a byte or two per occurrence. Queries
+   read periods newest first and stop once they have enough hits; decoded
+   records are kept within 4 MB, dropped on any commit. The first version
+   repeated each entry's full identity under every one of its words.
+
+   Measured with one workload (`search::bench`: 50,000 messages over two
+   years, eight words each), natively (`search::tests::scale`, release,
+   SQLite backend) and in headless Chromium on encrypted IndexedDB
+   (`scripts/bench-search-index.sh`), before and after compaction:
+
+   | | Browser before | Browser after | Native before | Native after |
+   |---|---|---|---|---|
+   | Index size | 37.4 MB | 3.5 MB | 37.4 MB | 3.5 MB |
+   | 50,000 written in batches of 100 | 105 s | 69 s | 4.2 s | 2.3 s |
+   | One new message with its index | 12 ms | 6.6 ms | 2.1 ms | 1.3 ms |
+   | Whole history indexed on open | 3.0 s | 1.8 s | 0.56 s | 0.31 s |
+   | "bir" (very common) | 65 ms | 9.5 ms | 12.6 ms | 2.0 ms |
+   | "bi" (two letters) | 197 ms | 4.9 ms | 27 ms | 1.3 ms |
+   | a rarer word (128 hits) | 15 ms | 60 ms (2.7 warm) | 3.5 ms | 7.9 ms |
+   | two words | 60 ms | 33 ms | 10.7 ms | 3.9 ms |
+
+   Query times are cold (a fresh cache) and include fetching what edits or
+   deletes the hits. A word with fewer hits than the limit reads every
+   period, and each hit now needs its document chunk: slower than before
+   on a cold cache, 2.7 ms once cached (as while typing). Larger chunks
+   (1,024) made it slower still, decoding outweighing the reads saved.
 6. **Tabs.** The existing engine lock (one holder, take-over after 30 s of
    silence) and the writer generation checked in every write.
 7. **Sign-out keeps the encrypted store**, so the same browser stays the same

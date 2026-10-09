@@ -36,6 +36,9 @@ wasm = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
 ]
+# Measures the search index in a browser (`benchSearchIndex`,
+# scripts/bench-search-index.sh). Never part of the app's build.
+bench = ["wasm"]
 
 [dependencies]
 # The wire contract (path dep across the workspace boundary).

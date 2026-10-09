@@ -4816,3 +4816,28 @@ fn now_rfc3339() -> String {
         .as_string()
         .unwrap_or_default()
 }
+
+/// Measures the search index in this browser (`search::bench`): a fresh
+/// encrypted store `name`, `count` messages written, rebuilt and queried.
+/// Built only with the `bench` feature (scripts/bench-search-index.sh).
+#[cfg(feature = "bench")]
+#[wasm_bindgen(js_name = benchSearchIndex)]
+pub async fn bench_search_index(name: String, count: u32) -> std::result::Result<JsValue, JsValue> {
+    fn performance_now() -> f64 {
+        let performance = js_sys::Reflect::get(&js_sys::global(), &"performance".into())
+            .expect("a browser has performance");
+        let now = js_sys::Reflect::get(&performance, &"now".into()).expect("performance.now");
+        js_sys::Function::from(now)
+            .call0(&performance)
+            .ok()
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0)
+    }
+    let db = crate::IndexedDbChatDb::open(&name, &[7u8; 32])
+        .await
+        .map_err(chat_error)?;
+    let report = crate::search::bench::run(&db, count as usize, performance_now)
+        .await
+        .map_err(chat_error)?;
+    to_output(&report)
+}
