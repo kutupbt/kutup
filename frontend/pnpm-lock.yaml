@@ -157,6 +157,9 @@ importers:
       '@kutup/chat-core':
         specifier: workspace:*
         version: link:../../packages/chat-core
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../../packages/contacts-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -363,6 +366,9 @@ importers:
       '@kutup/collab':
         specifier: workspace:*
         version: link:../../packages/collab
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../../packages/contacts-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -639,6 +645,9 @@ importers:
 
   apps/photos:
     dependencies:
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../../packages/contacts-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -774,6 +783,9 @@ importers:
       '@kutup/session':
         specifier: workspace:*
         version: link:../session
+      '@kutup/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@tanstack/react-query':
         specifier: ^5
         version: 5.103.2(react@18.3.1)
@@ -783,6 +795,12 @@ importers:
       ical.js:
         specifier: 2.2.1
         version: 2.2.1
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.8(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
     devDependencies:
       '@types/react':
         specifier: ^18.3.3
@@ -840,6 +858,9 @@ importers:
 
   packages/drive-ui:
     dependencies:
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../contacts-core
       '@kutup/drive-core':
         specifier: workspace:*
         version: link:../drive-core

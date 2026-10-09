@@ -5,13 +5,17 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
+    "./ui/*": "./src/ui/*.tsx",
     "./*": "./src/*.ts"
   },
   "dependencies": {
     "@kutup/crypto": "workspace:*",
     "@kutup/session": "workspace:*",
     "axios": "^1.18.0",
-    "ical.js": "2.2.1"
+    "ical.js": "2.2.1",
+    "@kutup/ui": "workspace:*",
+    "react-i18next": "^17.0.4",
+    "sonner": "^2.0.7"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",

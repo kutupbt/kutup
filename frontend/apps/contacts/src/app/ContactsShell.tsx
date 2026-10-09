@@ -1,7 +1,7 @@
 import { BookUser, FileType, HardDrive, Images, Map as MapIcon, MessagesSquare, Plus, UserRound, Users } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useSearchParams } from 'react-router-dom'
 import { useContactGroups, useContacts } from '@kutup/contacts-core/api'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { appUrl } from '@kutup/session/apps'
@@ -14,7 +14,7 @@ import { Button } from '@kutup/ui/components/button'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { GroupDialog } from '../features/GroupDialog'
 import { ContactEditorDialog } from '../features/ContactEditor'
-import { useEditor } from '../features/editorState'
+import { openEditor, useEditor } from '../features/editorState'
 
 function Count({ value }: { value: number }) {
   return <span className="text-xs tabular-nums text-chrome-muted">{value}</span>
@@ -29,6 +29,22 @@ export function ContactsShell() {
   const groups = useContactGroups()
   const editor = useEditor()
   const [newGroup, setNewGroup] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const adding = params.get('add')
+
+  // "Add to contacts" from another app: start a contact with that address.
+  useEffect(() => {
+    if (!adding) return
+    openEditor({ kind: 'new', email: adding })
+    setParams(
+      (now) => {
+        const next = new URLSearchParams(now)
+        next.delete('add')
+        return next
+      },
+      { replace: true },
+    )
+  }, [adding, setParams])
   return (
     <AppShell
       appName={t('apps.contacts')}

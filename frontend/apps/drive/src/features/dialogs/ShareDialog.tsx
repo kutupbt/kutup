@@ -7,6 +7,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
+import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
+import { offerAddToContacts } from '@kutup/contacts-core/addToContacts'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -70,6 +72,7 @@ export function ShareDialog({
           void queryClient.invalidateQueries({ queryKey: accessKey(folder.id) })
           if (result.kind === 'federated') onInvite(result.inviteUrl, result.account)
           else toast.success(t('dialogs.share.shared', { account: result.account }))
+          void offerAddToContacts(result.account, { message: t('contactSuggest.offer', { address: result.account }), action: t('contactSuggest.add') })
         },
       },
     )
@@ -91,8 +94,7 @@ export function ShareDialog({
         <form className="space-y-4" onSubmit={submit}>
           <Field label={t('dialogs.share.recipient')} description={t('dialogs.share.recipientHint')} required>
             {(field) => (
-              <Input {...field} value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus
-                autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
+              <ContactSuggestInput {...field} value={recipient} onValueChange={setRecipient} autoFocus placeholder="alice@example.org" />
             )}
           </Field>
           <div className="space-y-3">

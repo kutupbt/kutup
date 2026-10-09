@@ -4,7 +4,7 @@ import type { Contact } from '@kutup/contacts-core/model'
 // Which contact the editor dialog shows, shared by the sidebar's "New
 // contact", the person page's "Edit" and the list.
 
-export type EditorTarget = { kind: 'new'; groupId?: string } | { kind: 'edit'; contact: Contact }
+export type EditorTarget = { kind: 'new'; groupId?: string; email?: string } | { kind: 'edit'; contact: Contact }
 
 let target: EditorTarget | null = null
 const listeners = new Set<() => void>()
@@ -22,5 +22,14 @@ export function useEditor() {
     },
     () => target,
   )
-  return { target: current, open: (next: EditorTarget) => set(next), close: () => set(null) }
+  return { target: current, open: openEditor, close: closeEditor }
+}
+
+/** Stable, so effects can depend on them without re-running. */
+export function openEditor(next: EditorTarget) {
+  set(next)
+}
+
+export function closeEditor() {
+  set(null)
 }

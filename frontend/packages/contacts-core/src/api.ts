@@ -202,19 +202,4 @@ export function useDeleteGroup() {
   })
 }
 
-export interface ContactEmailMatch {
-  contactId: string
-  name: string
-  address: string
-  label: string | null
-}
-
-/** Addresses matching `q` (name or address), for recipient and share pickers. */
-export function useContactEmailSearch(q: string, enabled = true) {
-  return useQuery({
-    queryKey: ['contacts', 'emails', q],
-    enabled,
-    staleTime: 30_000,
-    queryFn: async () => (await api.get<ContactEmailMatch[]>('/contacts/emails', { params: { q, limit: 20 } })).data,
-  })
-}
+export { useContactEmailSearch, type ContactEmailMatch } from './search'

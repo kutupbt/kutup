@@ -185,5 +185,10 @@
       "keepBoth": "İkisini de tut",
       "skip": "Atla"
     }
+  },
+  "contactSuggest": {
+    "label": "Kişilerinizden öneriler",
+    "offer": "{{address}} kişilerinizde değil.",
+    "add": "Kişilere ekle"
   }
 }

@@ -19,7 +19,8 @@
     "lucide-react": "^1.8.0",
     "react-i18next": "^17.0.4",
     "sonner": "^2.0.7",
-    "@kutup/files": "workspace:*"
+    "@kutup/files": "workspace:*",
+    "@kutup/contacts-core": "workspace:*"
   },
   "peerDependencies": {
     "react": "^18.3.1"

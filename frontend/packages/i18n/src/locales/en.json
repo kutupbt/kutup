@@ -185,5 +185,10 @@
       "keepBoth": "Keep both",
       "skip": "Skip"
     }
+  },
+  "contactSuggest": {
+    "label": "Suggestions from your contacts",
+    "offer": "{{address}} is not in your contacts.",
+    "add": "Add to contacts"
   }
 }

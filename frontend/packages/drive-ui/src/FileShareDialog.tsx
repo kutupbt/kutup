@@ -9,6 +9,7 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Field } from '@kutup/ui/components/field'
+import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
@@ -89,8 +90,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
           <Field label={t('fileShare.recipient')} description={t('fileShare.recipientHint')} required>
             {(field) => (
               <div className="flex gap-2">
-                <Input {...field} className="min-w-0 flex-1" value={recipient} onChange={(e) => setRecipient(e.target.value)} autoFocus
-                  autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="alice@example.org" />
+                <ContactSuggestInput {...field} className="min-w-0 flex-1" value={recipient} onValueChange={setRecipient} autoFocus placeholder="alice@example.org" />
                 <Select value={canEdit ? 'edit' : 'view'} onValueChange={(value) => setCanEdit(value === 'edit')}>
                   <SelectTrigger className="w-auto shrink-0" aria-label={t('fileShare.roleLabel')} data-testid="file-share-role">
                     <SelectValue />

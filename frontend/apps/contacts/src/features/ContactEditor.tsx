@@ -92,7 +92,7 @@ export function ContactEditorDialog() {
     setError(null)
     save.reset()
     if (target.kind === 'edit') setDraft(structuredClone(target.contact.draft))
-    else setDraft({ ...emptyDraft(), emails: [{ address: '' }], groups: target.groupId ? [target.groupId] : [] })
+    else setDraft({ ...emptyDraft(), emails: [{ address: target.email ?? '' }], groups: target.groupId ? [target.groupId] : [] })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset once per opening
   }, [target])
 
