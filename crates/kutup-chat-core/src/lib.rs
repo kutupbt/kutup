@@ -29,6 +29,9 @@ mod padding;
 mod prekey_rotation;
 mod profile;
 mod sealed_sender;
+// The query side is called from the browser bindings (and tests) only.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+pub(crate) mod search;
 mod session;
 mod store;
 pub(crate) mod timeline;
