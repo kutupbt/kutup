@@ -54,6 +54,16 @@ export {
 export { generateKey } from './symmetric'
 export { fromBase64, toBase64 } from './base64'
 export { deriveAccountIdentityKeys } from './identity'
+export {
+  DEFAULT_MAIL_KEY_FLAGS,
+  MAIL_KEY_FLAGS,
+  armorMailPublicKey,
+  generateMailAddressKey,
+  inspectMailAddressPublicKey,
+  signMailKeyList,
+  verifyMailKeyList,
+} from './mailKey'
+export type { GeneratedMailAddressKey, MailKeyEntry, MailKeyListInput, SignedMailKeyList } from './mailKey'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,

@@ -26,7 +26,8 @@
     "devicesSessions": "Devices & sessions",
     "maps": "Maps",
     "adminMaps": "Maps",
-    "storage": "Storage"
+    "storage": "Storage",
+    "keys": "Encryption keys"
   },
   "auth": {
     "fields": {
@@ -346,6 +347,27 @@
         "deleteAllVersionsDescription_other": "{{count}} earlier versions ({{size}}) will be deleted from your files' version history."
       },
       "kindsNote": "File types come from the names this browser decrypts; the server sees only sizes. Each copy you keep counts, in Chat too."
+    },
+    "keys": {
+      "title": "Encryption keys",
+      "description": "Your email address and the keys that protect mail to and from it. Your account signs them, so people who have verified you in Chat or Drive can trust them too.",
+      "addressHint": "Kutup users find these keys through your account; anyone else through Web Key Directory.",
+      "noAddress": "Your account has no email address yet: it comes with your username.",
+      "creating": "Creating your key…",
+      "none": "No key yet. It is created the next time you sign in.",
+      "createFailed": "Your key could not be created. It will be tried again the next time you sign in.",
+      "signedByAccount": "Signed by your account (key list {{sequence}})",
+      "notSigned": "This key list is not signed by your account. Do not trust these keys and contact your administrator.",
+      "algorithm": "Curve25519 (Ed25519 and X25519)",
+      "primary": "Primary",
+      "obsolete": "Decrypt only",
+      "compromised": "Compromised",
+      "fingerprint": "Fingerprint",
+      "created": "Created {{when}}",
+      "usage": "Encrypts, decrypts and signs",
+      "usageDecryptOnly": "Kept to decrypt older mail",
+      "download": "Download public key",
+      "downloadFailed": "The public key could not be downloaded."
     }
   },
   "admin": {

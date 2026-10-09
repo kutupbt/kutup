@@ -1,10 +1,11 @@
-import { Activity, ChartPie, CircleUser, FileType, Globe, HardDrive, Images, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, ChartPie, CircleUser, KeyRound, FileType, Globe, HardDrive, Images, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
 import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
+import { useEnsureMailKeys } from '../features/keys/mailKeys'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -22,6 +23,8 @@ export function AccountShell() {
   const navigate = useNavigate()
   const session = useRequiredSession()
   useAccountUiPreferences()
+  // Every address gets its encryption key right after sign-in.
+  useEnsureMailKeys()
 
   return (
     <AppShell
@@ -47,6 +50,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
           <SidebarNavLink to="/settings/storage" icon={<ChartPie />} label={t('nav.storage')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
+          <SidebarNavLink to="/settings/keys" icon={<KeyRound />} label={t('nav.keys')} />
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
           <SidebarNavLink to="/settings/maps" icon={<Map />} label={t('nav.maps')} />
           {session.isAdmin ? (

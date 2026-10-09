@@ -1,6 +1,6 @@
 # Mail address keys (Phase A)
 
-**Status:** planned 2026-10-09. Phase A of
+**Status:** done 2026-10-09 (A1–A3). Phase A of
 [`../research/17-mail-calendar-contacts.md`](../research/17-mail-calendar-contacts.md).
 Branch `feat/mail-address-keys`.
 
@@ -137,11 +137,11 @@ manifest, signed with Ed25519 by the account authority:
 
 ## Client
 
-- **Sign-up** generates the address key with the other keys and sends
-  public key, envelope and the first signed key list in the registration
-  bundle.
-- **Existing accounts** are upgraded once, on the next sign-in in any app:
-  if the account has an address without a primary key, the client generates
+- **New and existing accounts alike** get the key right after sign-in:
+  every sign-in and sign-up happens in the Account app, whose shell checks
+  the addresses once per session. (Putting it in the registration bundle
+  would have missed admin-created accounts, which set up their keys at first
+  sign-in.) If an address has no primary key, the client generates
   one, seals it, signs the first key list and uploads them. The upgrade is
   idempotent and safe in two tabs at once (the server accepts the first
   list for a sequence; the loser reloads and finds the key present).

@@ -60,6 +60,12 @@ flowchart TD
     FK -->|encrypts| BLOB
 ```
 
+Mail address keys are random OpenPGP keys (rPGP), one or more per email
+address, each sealed in an `AccountEnvelopeV1` under the master key. Each
+address publishes a signed key list (`MailKeyListV1`) signed by the account
+authority, so the pin a contact holds for the account covers its mail keys
+([`plans/mail-address-keys.md`](plans/mail-address-keys.md)).
+
 The canonical implementation is `kutup-crypto` (`dryoc` plus RustCrypto). The
 browser consumes it through WASM; CLI and native clients call the same Rust
 implementation. A primitive-only browser adapter is allowed solely under the
