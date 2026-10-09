@@ -929,6 +929,18 @@ export class ChatBackupCoordinator {
       }
     }
 
+    // A record is numbered once per cycle: a device that queued two changes
+    // with one number for it would make the backup fail to restore. Two
+    // entries can share an id (one message held as two records, as around a
+    // group recovery); the later one stands, as the conversation shows it.
+    const keeper = new Map<string, ChatHistoryEntry>()
+    for (const entries of fresh.values()) {
+      for (const entry of entries) keeper.set(recordIds.get(entry)!, entry)
+    }
+    for (const [key, entries] of fresh) {
+      fresh.set(key, entries.filter(entry => keeper.get(recordIds.get(entry)!) === entry))
+    }
+
     const mutations: BackupDisplayRecord[] = []
     const replacements: StoredRecord[] = []
     // Removed content (a deletion, an expiry) should leave the base soon; a
