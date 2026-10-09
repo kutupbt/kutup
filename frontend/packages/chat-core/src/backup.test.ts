@@ -925,6 +925,32 @@ describe('ChatBackupCoordinator collection by conversation', () => {
     expect(await step(['group:a', 'group:b', 'group:c'])).toEqual([])
   })
 
+  it('handles a record once per cycle when two entries share its id, so the backup restores', async () => {
+    // One logical message held as two records (as can happen around a group
+    // recovery) shows as two entries with the same id.
+    for (const byConversation of [false, true]) {
+      const world = await pair()
+      const first = message(1, 'a', 'first copy')
+      const second = { ...message(1, 'a', 'second copy'), timestampMs: first.timestampMs + 1 }
+      world.set([first, second])
+      const { coordinator, transport } = await world.start(`duplicate-${byConversation}`, byConversation)
+      await coordinator.settled()
+      const queued = world.records(transport, 0)
+      expect(queued.map(record => record.recordId)).toEqual([...new Set(queued.map(record => record.recordId))])
+
+      // The record changes again: numbered once more, still restorable.
+      world.set([first, { ...second, content: { ...second.content, text: 'second copy, edited', body: { text: 'second copy, edited' } } }])
+      world.commit(['group:a'])
+      await coordinator.flushNow()
+
+      const restoredDatabase = `backup-duplicate-restored-${byConversation}:${crypto.randomUUID()}`
+      databaseNames.push(restoredDatabase)
+      const restored = await open(transport, restoredDatabase, async () => [])
+      const history = await restored.restoredHistoryAsync()
+      expect(history.map(entry => entry.content.text)).toEqual(['second copy, edited'])
+    }
+  })
+
   it('serves the restored history from memory, and says when it changed', async () => {
     const world = await pair()
     world.set([message(1, 'a', 'hello')])
