@@ -224,15 +224,16 @@ ciphertext retention defaults to 30 days.
 ## Storage quota and deletion
 
 Chat has no quota of its own. It uses the account's one storage pool, shared
-with Drive, Photos, Office and Maps. The default is 10 GiB and administrators
-can change it for an individual account. Chat's part of the pool includes:
+with Drive, Photos, Office and Maps. New accounts get the administrator's
+default (10 GiB until changed), and administrators can change it for an
+individual account. Chat's part of the pool includes:
 
 - message-history segments and the committed base;
 - ordinary retained delivery media; and
 - protected history media.
 
-`ChatBackupCapabilitiesV1.default_storage_quota_bytes` reports the pool
-default. At the boundary a segment append may go up to 1 MiB past the quota so
+`ChatBackupCapabilitiesV1.default_storage_quota_bytes` reports the
+administrator's default for new accounts. At the boundary a segment append may go up to 1 MiB past the quota so
 deletion tombstones still fit. Base staging may use the bytes it will reclaim
 from the segments and base it replaces, so required compaction still runs. Storage-full never silently evicts older
 history. Pending message work remains in the local outbox; media-full can leave

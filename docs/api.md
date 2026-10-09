@@ -2729,9 +2729,16 @@ Return current global server settings.
 **Response:**
 ```json
 {
-  "registrationEnabled": true
+  "registrationEnabled": true,
+  "defaultStorageQuotaBytes": 10737418240,
+  "chatMailboxRetentionDays": 30,
+  "chatMediaDeliveryRetentionDays": 45
 }
 ```
+
+`defaultStorageQuotaBytes` is the storage quota new accounts get (registered,
+created by an administrator, or the bootstrap administrator); 10 GiB until an
+administrator sets another. Existing accounts keep their own quota.
 
 ---
 
@@ -2741,12 +2748,15 @@ Update global server settings.
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:**
+**Request body:** any of the fields, at least one.
 ```json
 {
-  "registrationEnabled": false
+  "registrationEnabled": false,
+  "defaultStorageQuotaBytes": 21474836480
 }
 ```
+
+`defaultStorageQuotaBytes` must be positive (`400` otherwise).
 
 **Response:** Same shape as `GET /api/admin/settings`.
 

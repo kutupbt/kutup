@@ -181,7 +181,7 @@ pub async fn create_user(
     }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
-        req.storage_quota_bytes = crate::storage_pool::DEFAULT_QUOTA_BYTES;
+        req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     }
     if req.storage_quota_bytes <= 0 {
         return Err(AppError::bad_request("storage quota must be positive"));
@@ -693,8 +693,10 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         state.config.chat_media_delivery_retention_days,
     )
     .await?;
+    let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     Ok(Json(json!({
         "registrationEnabled": registration_enabled,
+        "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
     }))
@@ -705,6 +707,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
     registration_enabled: Option<bool>,
+    default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
 }
@@ -724,10 +727,19 @@ pub async fn update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_enabled.is_none()
+        && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
+    }
+    if req
+        .default_storage_quota_bytes
+        .is_some_and(|quota| quota <= 0)
+    {
+        return Err(AppError::bad_request(
+            "default storage quota must be positive",
+        ));
     }
     for value in [
         req.chat_mailbox_retention_days,
@@ -752,6 +764,10 @@ pub async fn update_settings(
         .map_err(|_| AppError::internal("internal error"))?;
     }
     for (key, value) in [
+        (
+            crate::storage_pool::DEFAULT_QUOTA_SETTING,
+            req.default_storage_quota_bytes,
+        ),
         (
             crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
             req.chat_mailbox_retention_days,
@@ -780,6 +796,7 @@ pub async fn update_settings(
         None,
         json!({
             "registrationEnabled": req.registration_enabled,
+            "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
         }),

@@ -17,6 +17,23 @@ use uuid::Uuid;
 /// `users.storage_quota_bytes` column default (migration 001).
 pub const DEFAULT_QUOTA_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 
+/// The `site_settings` key an administrator sets the quota new accounts get
+/// with. Existing accounts keep theirs.
+pub const DEFAULT_QUOTA_SETTING: &str = "default_storage_quota_bytes";
+
+/// The quota a new account gets: the administrator's setting, else 10 GiB.
+pub async fn default_quota<'e, E: PgExecutor<'e>>(executor: E) -> sqlx::Result<i64> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key = $1")
+            .bind(DEFAULT_QUOTA_SETTING)
+            .fetch_optional(executor)
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_QUOTA_BYTES),
+    )
+}
+
 /// The reservation a check leaves out because it belongs to the very write
 /// being checked (a tus upload being finalised, a federated hand-over being
 /// committed), so it is not counted twice.

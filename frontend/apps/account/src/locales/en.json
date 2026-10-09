@@ -482,7 +482,9 @@
       "wholeDays": "Enter whole days.",
       "retentionRange": "Between 0 and 3650 days.",
       "saved": "Settings saved",
-      "saveFailed": "The settings could not be saved."
+      "saveFailed": "The settings could not be saved.",
+      "defaultQuota": "Default storage quota (GiB)",
+      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page."
     },
     "federation": {
       "title": "Federation",

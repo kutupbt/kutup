@@ -295,7 +295,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         .is_some();
     // Chat has no storage of its own: its backup and media count against the
     // account's one pool (crate::storage_pool), whose default this advertises.
-    let account_default_quota_bytes = crate::storage_pool::DEFAULT_QUOTA_BYTES as u64;
+    let account_default_quota_bytes = crate::storage_pool::default_quota(&state.pool).await? as u64;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -416,6 +416,7 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
+    let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, master_key_envelope, recovery_key_envelope,
@@ -424,8 +425,8 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)"#,
+            login_key_hash, recovery_key_verifier, storage_quota_bytes
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
     )
     .bind(&req.email)
     .bind(&req.username)
@@ -444,6 +445,7 @@ pub async fn register(
     .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
     .bind(&hash)
     .bind(&recovery_verifier)
+    .bind(storage_quota_bytes)
     .execute(&state.pool)
     .await;
 

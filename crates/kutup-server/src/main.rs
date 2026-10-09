@@ -463,6 +463,9 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         }
     };
 
+    let storage_quota_bytes = crate::storage_pool::default_quota(pool)
+        .await
+        .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, login_key_hash,
@@ -472,12 +475,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            is_admin, is_first_login
-        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true)"#,
+            is_admin, is_first_login, storage_quota_bytes
+        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true,$4)"#,
     )
     .bind(email)
     .bind(username)
     .bind(&hash)
+    .bind(storage_quota_bytes)
     .execute(pool)
     .await;
     match res {

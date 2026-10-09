@@ -124,11 +124,10 @@ The desktop Admin Overview's System card is hidden today because the backend doe
 
 ### Admin · Required-2FA + Drive-default-quota + trash-retention settings
 
-`/admin/settings` now exposes registration and mailbox/temporary-media
-retention in desktop-width and mobile-width web layouts. Server-driven
-required 2FA, an admin-set default storage quota (today the 10 GiB column
-default), and runtime trash retention remain unimplemented; their cards stay
-hidden.
+`/admin/settings` now exposes registration, the default storage quota for
+new accounts (10 GiB until changed) and mailbox/temporary-media retention in
+desktop-width and mobile-width web layouts. Server-driven required 2FA and
+runtime trash retention remain unimplemented; their cards stay hidden.
 
 | What's needed | Where |
 |---|---|

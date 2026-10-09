@@ -61,6 +61,8 @@ pub struct SettingsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsResponse {
     pub registration_enabled: bool,
+    /// The storage quota new accounts get. Existing accounts keep theirs.
+    pub default_storage_quota_bytes: i64,
     /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
@@ -455,6 +457,7 @@ pub struct UpdateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
     pub registration_enabled: Option<bool>,
+    pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
 }

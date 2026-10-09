@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Copy, RefreshCw } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
@@ -16,8 +16,8 @@ import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
-import { useCreateUser } from './api'
-import { generateTempPassword, gibToBytes } from './helpers'
+import { useAdminSettings, useCreateUser } from './api'
+import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 
 /** Mirrors the server's username rule. */
 const USERNAME = /^[a-z0-9_-]{3,32}$/
@@ -44,6 +44,12 @@ export function NewUserPage() {
     resolver: zodResolver(schema),
     defaultValues: { email: '', username: '', tempPassword: generateTempPassword(), storageQuotaGib: 10 },
   })
+
+  // The server's default for new accounts, once it is known.
+  const settings = useAdminSettings()
+  useEffect(() => {
+    if (settings.data) setValue('storageQuotaGib', bytesToGib(settings.data.defaultStorageQuotaBytes))
+  }, [settings.data, setValue])
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(

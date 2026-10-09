@@ -482,7 +482,9 @@
       "wholeDays": "Tam gün girin.",
       "retentionRange": "0 ile 3650 gün arasında.",
       "saved": "Ayarlar kaydedildi",
-      "saveFailed": "Ayarlar kaydedilemedi."
+      "saveFailed": "Ayarlar kaydedilemedi.",
+      "defaultQuota": "Varsayılan depolama kotası (GiB)",
+      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin."
     },
     "federation": {
       "title": "Federasyon",

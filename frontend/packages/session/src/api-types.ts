@@ -145,6 +145,8 @@ export interface AdminStats {
 
 export interface AdminSettings {
   registrationEnabled: boolean
+  /** The storage quota new accounts get; existing accounts keep theirs. */
+  defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number
   chatMediaDeliveryRetentionDays: number
 }

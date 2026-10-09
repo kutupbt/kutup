@@ -15,6 +15,7 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useAdminSettings, useUpdateAdminSettings } from './api'
+import { bytesToGib, gibToBytes } from './helpers'
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
@@ -27,6 +28,7 @@ export function ServerSettingsPage() {
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
   const schema = z.object({
     registrationEnabled: z.boolean(),
+    quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
   })
@@ -37,6 +39,7 @@ export function ServerSettingsPage() {
     if (!settings.data) return
     reset({
       registrationEnabled: settings.data.registrationEnabled,
+      quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
     })
@@ -51,6 +54,7 @@ export function ServerSettingsPage() {
     update.mutate(
       {
         registrationEnabled: v.registrationEnabled,
+        defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
       },
@@ -77,6 +81,11 @@ export function ServerSettingsPage() {
                   <Label htmlFor="registration">{t('admin.settings.registration')}</Label>
                   <p className="text-sm text-muted-foreground">{t('admin.settings.registrationHint')}</p>
                 </div>
+              </div>
+              <div className="mt-5 max-w-xs">
+                <Field label={t('admin.settings.defaultQuota')} error={errors.quotaGib?.message} description={t('admin.settings.defaultQuotaHint')} required>
+                  {(field) => <Input {...field} {...register('quotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
+                </Field>
               </div>
             </CardContent>
           </Card>
