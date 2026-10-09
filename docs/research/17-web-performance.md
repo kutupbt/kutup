@@ -323,6 +323,20 @@ Done:
 
 Start-up JS per app, before → after: office 1,873 → 687 KB, drive 2,268 → 1,085 KB, chat 3,024 → 1,298 KB, photos 3,116 → 919 KB, maps 3,080 → 1,865 KB.
 
+Tried and set aside (measured):
+- **An encrypted local catalog of opened file records** (Phase 4 of
+  document 16 without a change feed): 300 files in one folder loaded no
+  faster with it, at normal speed or with the CPU slowed 4× (Drive about
+  1.4 s of main-thread time either way). Opening a file record is not the
+  cost at that size; rendering the rows is. It would also have kept
+  decrypted file keys on disk. Not shipped; worth revisiting only with a
+  change feed, for folders of thousands of files, after the render costs
+  below.
+- **Render costs found instead:** every Drive row made four `Intl`
+  formatters (about 1,200 per render of 300 rows, ~25 ms of formatting at
+  normal speed, ~100 ms on a slow phone); they are now made once per locale
+  and options.
+
 Still open:
 - **OnlyOffice release build** in the fork (minified `sdk-all.js`, built web-apps).
 - **Cross-folder listing and change feed**, the encrypted local catalog, a crypto worker, and a shared static origin or CDN (Tier 3).
