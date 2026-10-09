@@ -14,8 +14,6 @@ export interface Me {
   totpEnabled: boolean
   storageQuotaBytes: number
   storageUsedBytes: number
-  chatStorageQuotaBytes: number
-  chatStorageUsedBytes: number
   isAdmin: boolean
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
@@ -157,5 +155,37 @@ export function useRevokeDevice() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: devicesKey })
     },
+  })
+}
+
+// --- storage ------------------------------------------------------------
+
+export const storageKey = ['storage'] as const
+
+/** `GET /api/user/storage`: the account's one pool and what fills it, as the server stores it. */
+export interface StorageUsage {
+  quotaBytes: number
+  usedBytes: number
+  reservedBytes: number
+  drive: {
+    filesBytes: number
+    filesCount: number
+    trashBytes: number
+    trashCount: number
+    versionsBytes: number
+    thumbnailsBytes: number
+    assetsBytes: number
+  }
+  chat: {
+    mediaBytes: number
+    historyBytes: number
+    historyMediaBytes: number
+  }
+}
+
+export function useStorageUsage() {
+  return useQuery({
+    queryKey: storageKey,
+    queryFn: async () => (await api.get<StorageUsage>('/user/storage')).data,
   })
 }

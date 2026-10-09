@@ -25,7 +25,8 @@
     "profile": "Profile",
     "devicesSessions": "Devices & sessions",
     "maps": "Maps",
-    "adminMaps": "Maps"
+    "adminMaps": "Maps",
+    "storage": "Storage"
   },
   "auth": {
     "fields": {
@@ -147,8 +148,7 @@
       "description": "Who you are on this server, and how much space you use.",
       "profile": "Profile",
       "noUsername": "Not set",
-      "driveStorage": "Drive storage",
-      "chatStorage": "Chat storage",
+      "storage": "Storage",
       "usage": "{{used}} of {{total}}",
       "colour": "Presence colour",
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
@@ -271,6 +271,55 @@
       "offForYou": "Maps are off for you.",
       "saved": "Map settings saved",
       "saveFailed": "The map settings could not be saved."
+    },
+    "storage": {
+      "title": "Storage",
+      "description": "One pool for everything you keep on this server: Drive, Photos, Office, Maps and Chat.",
+      "ofQuota": "of {{total}} used",
+      "reserved": "Uploads in progress",
+      "free": "Free",
+      "full": "Your storage is full. Delete files, messages or attachments, empty the trash, or ask your administrator for more.",
+      "apps": {
+        "drive": "Drive",
+        "chat": "Chat"
+      },
+      "driveHint": "Files in Drive, Photos, Office and Maps. Files you add to someone else's folder count here too.",
+      "chatHint": "Every copy you keep counts: an attachment kept for delivery and again in your history backup counts twice.",
+      "drive": {
+        "files_one": "{{count}} file",
+        "files_other": "{{count}} files",
+        "trash_one": "Trash ({{count}} file)",
+        "trash_other": "Trash ({{count}} files)",
+        "versions": "Earlier versions",
+        "thumbnails": "Thumbnails and previews",
+        "assets": "Images inside documents and whiteboards"
+      },
+      "chat": {
+        "media": "Attachments kept for delivery",
+        "history": "Message history backup",
+        "historyMedia": "Attachments in history backup"
+      },
+      "byKind": "Files by type",
+      "byKindHint": "Files you added that are not in the trash, by type. Only this browser can tell, from the names it decrypts.",
+      "byKindPartial": "Some folders could not be read, so this may be incomplete.",
+      "noFiles": "No files yet.",
+      "kindCount_one": "{{kind}} · {{count}} file",
+      "kindCount_other": "{{kind}} · {{count}} files",
+      "kinds": {
+        "note": "Notes",
+        "document": "Documents",
+        "spreadsheet": "Spreadsheets",
+        "presentation": "Presentations",
+        "whiteboard": "Whiteboards",
+        "map": "Maps",
+        "pdf": "PDFs",
+        "image": "Images",
+        "video": "Videos",
+        "audio": "Audio",
+        "code": "Code",
+        "archive": "Archives",
+        "other": "Other files"
+      }
     }
   },
   "admin": {
@@ -286,8 +335,8 @@
       "folders": "Folders"
     },
     "quota": {
-      "drive": "Drive quota (GiB)",
-      "chat": "Chat quota (GiB)",
+      "storage": "Storage quota (GiB)",
+      "storageHint": "One pool for Drive, Photos, Office, Maps and Chat.",
       "positive": "Enter a size above zero."
     },
     "users": {
@@ -308,8 +357,7 @@
       "columns": {
         "user": "User",
         "status": "Status",
-        "drive": "Drive",
-        "chat": "Chat",
+        "storage": "Storage",
         "twoFactor": "2FA"
       }
     },
@@ -350,9 +398,9 @@
       "promoteDescription": "{{email}} will be able to manage every account and the server's settings.",
       "demoteTitle": "Remove administrator rights?",
       "demoteDescription": "{{email}} keeps their account but loses administration access.",
-      "quotas": "Storage quotas",
-      "quotasHint": "Uploads beyond a quota are refused; nothing already stored is removed.",
-      "quotasSaved": "Quotas saved",
+      "quotas": "Storage quota",
+      "quotasHint": "Uploads beyond the quota are refused; nothing already stored is removed.",
+      "quotasSaved": "Quota saved",
       "saveFailed": "The change could not be saved.",
       "recovery": "Account recovery",
       "recoveryHint": "For people locked out. Kutup cannot reset a password without destroying data it cannot read.",
@@ -423,8 +471,6 @@
       "registrationHint": "Anyone who can reach this server can create an account. Off: only administrators create accounts.",
       "chat": "Chat",
       "chatHint": "Encrypted message and media delivery on this server.",
-      "chatQuota": "Default Chat quota (GiB)",
-      "chatQuotaHint": "For new accounts.",
       "mailboxDays": "Undelivered messages (days)",
       "mailboxDaysHint": "How long an offline device's messages wait. 0 keeps them until delivered.",
       "mediaDays": "Undelivered media (days)",

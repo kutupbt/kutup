@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Copy, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
@@ -16,8 +16,8 @@ import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
-import { useAdminSettings, useCreateUser } from './api'
-import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
+import { useCreateUser } from './api'
+import { generateTempPassword, gibToBytes } from './helpers'
 
 /** Mirrors the server's username rule. */
 const USERNAME = /^[a-z0-9_-]{3,32}$/
@@ -25,7 +25,6 @@ const USERNAME = /^[a-z0-9_-]{3,32}$/
 export function NewUserPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const settings = useAdminSettings()
   const create = useCreateUser()
   const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null)
 
@@ -33,8 +32,7 @@ export function NewUserPage() {
     email: z.string().trim().min(1, t('auth.validation.emailRequired')).includes('@', { message: t('auth.validation.emailInvalid') }),
     username: z.string().trim().regex(USERNAME, t('auth.validation.username')),
     tempPassword: z.string().min(1, t('admin.newUser.tempPasswordRequired')),
-    driveQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
-    chatQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
+    storageQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
   })
   const {
     register,
@@ -44,13 +42,8 @@ export function NewUserPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', username: '', tempPassword: generateTempPassword(), driveQuotaGib: 10, chatQuotaGib: 2 },
+    defaultValues: { email: '', username: '', tempPassword: generateTempPassword(), storageQuotaGib: 10 },
   })
-
-  // The server's current default for Chat storage, once it is known.
-  useEffect(() => {
-    if (settings.data) setValue('chatQuotaGib', bytesToGib(settings.data.defaultChatStorageQuotaBytes))
-  }, [settings.data, setValue])
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(
@@ -58,8 +51,7 @@ export function NewUserPage() {
         email: values.email.trim(),
         username: values.username.trim(),
         tempPassword: values.tempPassword,
-        storageQuotaBytes: gibToBytes(values.driveQuotaGib),
-        chatStorageQuotaBytes: gibToBytes(values.chatQuotaGib),
+        storageQuotaBytes: gibToBytes(values.storageQuotaGib),
       },
       { onSuccess: () => setCreated({ email: values.email.trim(), tempPassword: values.tempPassword }) },
     )
@@ -142,11 +134,8 @@ export function NewUserPage() {
               )}
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={t('admin.quota.drive')} error={errors.driveQuotaGib?.message} required>
-                {(field) => <Input {...field} {...register('driveQuotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
-              </Field>
-              <Field label={t('admin.quota.chat')} error={errors.chatQuotaGib?.message} required>
-                {(field) => <Input {...field} {...register('chatQuotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
+              <Field label={t('admin.quota.storage')} error={errors.storageQuotaGib?.message} description={t('admin.quota.storageHint')} required>
+                {(field) => <Input {...field} {...register('storageQuotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
               </Field>
             </div>
             <div className="flex justify-end gap-2 pt-2">

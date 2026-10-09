@@ -162,11 +162,11 @@
       "latestProtected": "Latest protected: {{time}}",
       "waiting": "Waiting for the first server acknowledgement",
       "pending": "{{count}} message changes ({{bytes}}) are still stored only on this device.",
-      "full": "Chat storage is full. Delete messages or media, or ask your server admin to increase the quota. New local changes are not protected until storage is available and the server acknowledges them.",
+      "full": "Your storage is full. Delete messages, media or files, or ask your server admin for more. New local changes are not protected until storage is available and the server acknowledges them.",
       "attention": "Chat history protection needs attention. Kutup will keep retrying; local changes are not protected until the server acknowledges them.",
-      "storageTitle": "Chat storage",
-      "storageDescription": "Chat history and media use a dedicated server-administered quota; Drive is separate. Delivery copies expire after {{days}} days, while protected history copies remain.",
-      "storageDescriptionUnlimited": "Chat history and media use a dedicated server-administered quota; Drive is separate. Delivery-copy expiry is disabled, while protected history copies remain independently retained.",
+      "storageTitle": "Storage",
+      "storageDescription": "Chat shares your account's storage with Drive, Photos, Office and Maps. Every copy you keep counts. Delivery copies expire after {{days}} days, while protected history copies remain.",
+      "storageDescriptionUnlimited": "Chat shares your account's storage with Drive, Photos, Office and Maps. Every copy you keep counts. Delivery-copy expiry is disabled, while protected history copies remain independently retained.",
       "loading": "Loading encrypted accounting…",
       "used": "{{bytes}} used",
       "messageHistory": "Message history",
@@ -180,7 +180,9 @@
         "needsAttention": "Backup needs attention",
         "starting": "Starting"
       },
-      "stateLabel": "Status"
+      "stateLabel": "Status",
+      "otherApps": "Drive and other apps",
+      "storageDetails": "Storage details"
     },
     "contact": {
       "title": "Your chat address",

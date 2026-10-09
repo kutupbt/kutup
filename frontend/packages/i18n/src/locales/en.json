@@ -97,7 +97,8 @@
   },
   "storage": {
     "label": "Storage used",
-    "usage": "{{used}} of {{total}} used"
+    "usage": "{{used}} of {{total}} used",
+    "details": "Storage details"
   },
   "uploads": {
     "title": "Uploads",

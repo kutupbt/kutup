@@ -15,7 +15,6 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useAdminSettings, useUpdateAdminSettings } from './api'
-import { bytesToGib, gibToBytes } from './helpers'
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
@@ -28,7 +27,6 @@ export function ServerSettingsPage() {
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
   const schema = z.object({
     registrationEnabled: z.boolean(),
-    chatQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
   })
@@ -39,7 +37,6 @@ export function ServerSettingsPage() {
     if (!settings.data) return
     reset({
       registrationEnabled: settings.data.registrationEnabled,
-      chatQuotaGib: bytesToGib(settings.data.defaultChatStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
     })
@@ -54,7 +51,6 @@ export function ServerSettingsPage() {
     update.mutate(
       {
         registrationEnabled: v.registrationEnabled,
-        defaultChatStorageQuotaBytes: gibToBytes(v.chatQuotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
       },
@@ -87,10 +83,7 @@ export function ServerSettingsPage() {
         </Section>
         <Section title={t('admin.settings.chat')} description={t('admin.settings.chatHint')}>
           <Card>
-            <CardContent className="grid gap-4 p-5 sm:grid-cols-3">
-              <Field label={t('admin.settings.chatQuota')} error={errors.chatQuotaGib?.message} description={t('admin.settings.chatQuotaHint')} required>
-                {(field) => <Input {...field} {...register('chatQuotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
-              </Field>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               <Field label={t('admin.settings.mailboxDays')} error={errors.mailboxDays?.message} description={t('admin.settings.mailboxDaysHint')} required>
                 {(field) => <Input {...field} {...register('mailboxDays')} type="number" min={0} max={MAX_RETENTION_DAYS} step={1} inputMode="numeric" />}
               </Field>

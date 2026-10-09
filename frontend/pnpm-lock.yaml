@@ -84,6 +84,12 @@ importers:
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../../packages/drive-core
+      '@kutup/drive-ui':
+        specifier: workspace:*
+        version: link:../../packages/drive-ui
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n

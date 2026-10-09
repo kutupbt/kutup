@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Card, CardContent } from '@kutup/ui/components/card'
@@ -25,22 +26,14 @@ export function AccountSettingsPage() {
             <Fact label={t('auth.fields.username')}>
               {session.username ? <Mono>{session.username}</Mono> : t('settings.account.noUsername')}
             </Fact>
-            <Fact label={t('settings.account.driveStorage')}>
+            <Fact label={t('settings.account.storage')}>
               {me.data ? (
-                t('settings.account.usage', {
-                  used: formatBytes(me.data.storageUsedBytes, i18n.language),
-                  total: formatBytes(me.data.storageQuotaBytes, i18n.language),
-                })
-              ) : (
-                <Skeleton className="h-4 w-32" />
-              )}
-            </Fact>
-            <Fact label={t('settings.account.chatStorage')}>
-              {me.data ? (
-                t('settings.account.usage', {
-                  used: formatBytes(me.data.chatStorageUsedBytes, i18n.language),
-                  total: formatBytes(me.data.chatStorageQuotaBytes, i18n.language),
-                })
+                <Link to="/settings/storage" className="hover:text-foreground hover:underline">
+                  {t('settings.account.usage', {
+                    used: formatBytes(me.data.storageUsedBytes, i18n.language),
+                    total: formatBytes(me.data.storageQuotaBytes, i18n.language),
+                  })}
+                </Link>
               ) : (
                 <Skeleton className="h-4 w-32" />
               )}

@@ -77,8 +77,6 @@ struct UserRow {
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
-    chat_storage_quota_bytes: i64,
-    chat_storage_used_bytes: i64,
     is_admin: bool,
     is_active: bool,
     #[serde(rename = "totpEnabled")]
@@ -107,8 +105,6 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         String,
         i64,
         i64,
-        i64,
-        i64,
         bool,
         bool,
         bool,
@@ -117,7 +113,6 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
-                  chat_storage_quota_bytes, chat_storage_used_bytes,
                   is_admin, is_active, totp_enabled, is_first_login, created_at
            FROM users ORDER BY created_at DESC"#,
     )
@@ -128,20 +123,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(
-                id,
-                email,
-                username,
-                quota,
-                used,
-                chat_quota,
-                chat_used,
-                is_admin,
-                is_active,
-                totp,
-                first,
-                created,
-            )| {
+            |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
                 let is_protected = is_break_glass(&state, &email);
                 UserRow {
                     id,
@@ -149,8 +131,6 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
                     username,
                     storage_quota_bytes: quota,
                     storage_used_bytes: used,
-                    chat_storage_quota_bytes: chat_quota,
-                    chat_storage_used_bytes: chat_used,
                     is_admin,
                     is_active,
                     totp_enabled: totp,
@@ -171,7 +151,6 @@ pub struct CreateUserRequest {
     username: String,
     temp_password: String,
     storage_quota_bytes: i64,
-    chat_storage_quota_bytes: Option<i64>,
 }
 
 /// `POST /api/admin/users` — mirrors `CreateUser`. Creates a first-login account with a
@@ -201,18 +180,11 @@ pub async fn create_user(
         ));
     }
     if req.storage_quota_bytes == 0 {
-        req.storage_quota_bytes = 10 * 1024 * 1024 * 1024; // 10 GB default
+        // The account's one storage pool, for every app (crate::storage_pool).
+        req.storage_quota_bytes = crate::storage_pool::DEFAULT_QUOTA_BYTES;
     }
-    let default_chat_quota: i64 = sqlx::query_scalar(
-        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|_| AppError::internal("internal error"))?
-    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
-    let chat_storage_quota_bytes = req.chat_storage_quota_bytes.unwrap_or(default_chat_quota);
-    if req.storage_quota_bytes <= 0 || chat_storage_quota_bytes <= 0 {
-        return Err(AppError::bad_request("storage quotas must be positive"));
+    if req.storage_quota_bytes <= 0 {
+        return Err(AppError::bad_request("storage quota must be positive"));
     }
 
     let hash =
@@ -227,15 +199,14 @@ pub async fn create_user(
                account_incarnation_id, drive_signing_public_key,
                account_protection_suite, account_protection_salt,
                argon_memory_kib, argon_iterations, argon_parallelism,
-               is_admin, is_first_login, storage_quota_bytes, chat_storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4,$5)
+               is_admin, is_first_login, storage_quota_bytes
+           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4)
            RETURNING id"#,
     )
     .bind(&req.email)
     .bind(&req.username)
     .bind(&hash)
     .bind(req.storage_quota_bytes)
-    .bind(chat_storage_quota_bytes)
     .fetch_one(&state.pool)
     .await;
     let new_id = match res {
@@ -251,7 +222,6 @@ pub async fn create_user(
             "email": req.email,
             "username": req.username,
             "storageQuotaBytes": req.storage_quota_bytes,
-            "chatStorageQuotaBytes": chat_storage_quota_bytes,
         }),
     )
     .await;
@@ -266,7 +236,6 @@ pub async fn create_user(
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateUserRequest {
     storage_quota_bytes: Option<i64>,
-    chat_storage_quota_bytes: Option<i64>,
     is_active: Option<bool>,
     is_admin: Option<bool>,
 }
@@ -332,17 +301,6 @@ pub async fn update_user(
             .await
             .map_err(|_| AppError::internal("internal error"))?;
     }
-    if let Some(q) = req.chat_storage_quota_bytes {
-        if q <= 0 {
-            return Err(AppError::bad_request("Chat storage quota must be positive"));
-        }
-        sqlx::query("UPDATE users SET chat_storage_quota_bytes = $1 WHERE id = $2")
-            .bind(q)
-            .bind(target)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| AppError::internal("internal error"))?;
-    }
     if let Some(a) = req.is_active {
         sqlx::query("UPDATE users SET is_active = $1 WHERE id = $2")
             .bind(a)
@@ -367,9 +325,6 @@ pub async fn update_user(
     let mut changes = serde_json::Map::new();
     if let Some(q) = req.storage_quota_bytes {
         changes.insert("storageQuotaBytes".into(), json!(q));
-    }
-    if let Some(q) = req.chat_storage_quota_bytes {
-        changes.insert("chatStorageQuotaBytes".into(), json!(q));
     }
     if let Some(a) = req.is_active {
         changes.insert("isActive".into(), json!(a));
@@ -697,10 +652,8 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
         total_files: scalar("SELECT COUNT(*) FROM files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
-        total_storage_used: scalar(
-            "SELECT COALESCE(SUM(storage_used_bytes + chat_storage_used_bytes),0)::bigint FROM users",
-        )
-        .await,
+        total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0)::bigint FROM users")
+            .await,
         total_collections: scalar("SELECT COUNT(*) FROM collections").await,
         storage_total_bytes,
         storage_backend_used_bytes,
@@ -718,7 +671,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT key, value FROM site_settings WHERE key IN ('registration_enabled', 'default_chat_storage_quota_bytes')",
+        "SELECT key, value FROM site_settings WHERE key IN ('registration_enabled')",
     )
     .fetch_all(&state.pool)
     .await
@@ -728,11 +681,6 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         .find(|(key, _)| key == "registration_enabled")
         .map(|(_, value)| value != "false")
         .unwrap_or(true);
-    let default_chat_storage_quota_bytes = rows
-        .iter()
-        .find(|(key, _)| key == "default_chat_storage_quota_bytes")
-        .and_then(|(_, value)| value.parse::<i64>().ok())
-        .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -747,7 +695,6 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     .await?;
     Ok(Json(json!({
         "registrationEnabled": registration_enabled,
-        "defaultChatStorageQuotaBytes": default_chat_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
     }))
@@ -758,7 +705,6 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
     registration_enabled: Option<bool>,
-    default_chat_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
 }
@@ -778,19 +724,10 @@ pub async fn update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_enabled.is_none()
-        && req.default_chat_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
-    }
-    if req
-        .default_chat_storage_quota_bytes
-        .is_some_and(|quota| quota <= 0)
-    {
-        return Err(AppError::bad_request(
-            "default Chat storage quota must be positive",
-        ));
     }
     for value in [
         req.chat_mailbox_retention_days,
@@ -810,16 +747,6 @@ pub async fn update_settings(
              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         )
         .bind(if enabled { "true" } else { "false" })
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| AppError::internal("internal error"))?;
-    }
-    if let Some(quota) = req.default_chat_storage_quota_bytes {
-        sqlx::query(
-            "INSERT INTO site_settings (key, value) VALUES ('default_chat_storage_quota_bytes', $1) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        )
-        .bind(quota.to_string())
         .execute(&mut *transaction)
         .await
         .map_err(|_| AppError::internal("internal error"))?;
@@ -853,7 +780,6 @@ pub async fn update_settings(
         None,
         json!({
             "registrationEnabled": req.registration_enabled,
-            "defaultChatStorageQuotaBytes": req.default_chat_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
         }),
@@ -1928,7 +1854,6 @@ pub async fn wipe_user(
                argon_iterations = 0, argon_parallelism = 0,
                recovery_key_verifier = '',
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
-               chat_storage_used_bytes = 0,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )

@@ -105,8 +105,7 @@ export function UsersPage() {
                 <TableRow>
                   <TableHead>{t('admin.users.columns.user')}</TableHead>
                   <TableHead>{t('admin.users.columns.status')}</TableHead>
-                  <TableHead>{t('admin.users.columns.drive')}</TableHead>
-                  <TableHead>{t('admin.users.columns.chat')}</TableHead>
+                  <TableHead>{t('admin.users.columns.storage')}</TableHead>
                   <TableHead>{t('admin.users.columns.twoFactor')}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -134,9 +133,6 @@ export function UsersPage() {
                     <TableCell><UserStatus user={u} /></TableCell>
                     <TableCell className="whitespace-nowrap text-sm">
                       {formatBytes(u.storageUsedBytes, lang)} / {formatBytes(u.storageQuotaBytes, lang)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-sm">
-                      {formatBytes(u.chatStorageUsedBytes, lang)} / {formatBytes(u.chatStorageQuotaBytes, lang)}
                     </TableCell>
                     <TableCell className="text-sm">{u.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</TableCell>
                   </TableRow>

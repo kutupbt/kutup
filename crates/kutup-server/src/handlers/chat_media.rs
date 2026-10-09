@@ -312,30 +312,13 @@ pub async fn create_upload(
     if existing {
         return tus_text(StatusCode::CONFLICT, "attachment id already exists");
     }
-    let user_row: Result<(i64, i64), _> = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes, chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *transaction)
-    .await;
-    let (quota, used) = match user_row {
-        Ok(value) => value,
+    // The sender's one storage pool, shared with Drive (crate::storage_pool).
+    let pool = match crate::storage_pool::lock(&mut transaction, user_id, Default::default()).await
+    {
+        Ok(pool) => pool,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read user"),
     };
-    let reserved: i64 = sqlx::query_scalar(
-        "SELECT (SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
-                (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-                   FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .unwrap_or(i64::MAX);
-    if used
-        .checked_add(reserved)
-        .and_then(|value| value.checked_add(total_bytes))
-        .is_none_or(|value| value > quota)
-    {
+    if !pool.fits(total_bytes, 0) {
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "storage quota exceeded");
     }
 
@@ -627,14 +610,12 @@ pub async fn patch_upload(
     .ok()
     .flatten();
     if storage_reference_id.is_none()
-        || sqlx::query(
-            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-        )
-        .bind(total)
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await
-        .is_err()
+        || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+            .bind(total)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await
+            .is_err()
         || sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&mut *transaction)
@@ -866,12 +847,9 @@ pub async fn deliver_local(
     )
     .await?;
 
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
-    )
-    .bind(recipient_user_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    // The recipient's one storage pool, shared with Drive (crate::storage_pool).
+    let pool =
+        crate::storage_pool::lock(&mut transaction, recipient_user_id, Default::default()).await?;
     let existing_reference: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
     )
@@ -882,19 +860,7 @@ pub async fn deliver_local(
     let (reference_id, status) = if let Some(reference_id) = existing_reference {
         (reference_id, ChatMediaDeliveryStatusV1::AlreadyStored)
     } else {
-        let reserved: i64 = sqlx::query_scalar(
-            "SELECT (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
-                    (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-                       FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
-        )
-        .bind(recipient_user_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if used
-            .checked_add(reserved)
-            .and_then(|value| value.checked_add(stored_bytes))
-            .is_none_or(|value| value > quota)
-        {
+        if !pool.fits(stored_bytes, 0) {
             crate::telemetry::chat_media_event("local_delivery", "storage_full");
             return Ok(Json(ChatMediaOfferResponseV1 {
                 operation_id: operation_id.to_string(),
@@ -911,13 +877,11 @@ pub async fn deliver_local(
         .bind(stored_bytes)
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query(
-            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-        )
-        .bind(stored_bytes)
-        .bind(recipient_user_id)
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+            .bind(stored_bytes)
+            .bind(recipient_user_id)
+            .execute(&mut *transaction)
+            .await?;
         (reference_id, ChatMediaDeliveryStatusV1::Stored)
     };
     sqlx::query(
@@ -1035,7 +999,7 @@ pub async fn discard_origin_object(
         return Err(AppError::conflict("Chat media reference changed"));
     }
     sqlx::query(
-        "UPDATE users SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0) WHERE id=$2",
+        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
     )
     .bind(bytes)
     .bind(user_id)
@@ -1134,7 +1098,7 @@ pub async fn clear_reference(
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "UPDATE users SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0) WHERE id=$2",
+        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
     )
     .bind(logical_bytes)
     .bind(user_id)
@@ -1175,12 +1139,11 @@ pub async fn storage_summary(
     user: AuthUser,
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1",
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let (quota, used): (i64, i64) =
+        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
+            .bind(user_id)
+            .fetch_one(&state.pool)
+            .await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
           (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM files WHERE uploader_user_id=$1) +

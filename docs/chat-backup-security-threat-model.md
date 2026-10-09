@@ -41,7 +41,7 @@ up Direct/MLS transport state or provide a portable user export.
 | Crash during append acknowledgement | Durable local outbox and stable operation identity | Work remains pending or acknowledged; an ambiguous response resumes exactly after reload. |
 | Crash during compaction | Staging plus reconciliation plus one manifest CAS transaction | Previous restore point or complete replacement remains valid; no hybrid generation is published. |
 | Staged-object leak | Bounded staging lifetime and cleanup | Uncommitted bases are removed without changing the current restore point or charged steady-state usage. |
-| Quota race or overcommit | Account row locking, exact charged bytes, transactional references | Concurrent append/media/compaction cannot exceed the dedicated Chat quota. |
+| Quota race or overcommit | Account row locking, exact charged bytes, transactional references | Concurrent append/media/compaction cannot exceed the account storage pool. |
 | Full storage destroys recoverability | Durable pending queue plus tombstone/compaction headroom | Existing history is not evicted; deletion can commit and release space; pending work can resume. |
 | Media-full blocks messages | Independent media work state and message append path | Media remains visibly pending while eligible message history continues. |
 | Temporary retention deletes protected media | Separate delivery and history-media references/namespaces | Delivery cleanup never selects a protected history-media object. |
@@ -67,10 +67,10 @@ through the normal signed device directory, Direct session, and MLS flows.
 
 ## Retention, quota, and availability
 
-The dedicated Chat quota is server-authoritative because the server bears the
-storage cost. The server can refuse new storage, withhold or delete ciphertext,
-replay a self-consistent archive to an unpinned fresh device, or prevent
-compaction. Those are availability/freshness failures, not confidentiality
+The account storage pool, which Chat shares with Drive and the other apps, is
+server-authoritative because the server bears the storage cost. The server can
+refuse new storage, withhold or delete ciphertext, replay a self-consistent
+archive to an unpinned fresh device, or prevent compaction. Those are availability/freshness failures, not confidentiality
 breaks. The UI must preserve the last acknowledged timestamp and distinguish
 offline, pending media, storage-full, invalid, and missing states.
 

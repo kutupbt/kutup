@@ -97,7 +97,8 @@
   },
   "storage": {
     "label": "Kullanılan alan",
-    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor"
+    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor",
+    "details": "Depolama ayrıntıları"
   },
   "uploads": {
     "title": "Yüklemeler",

@@ -78,9 +78,9 @@ backup_facts="$(compose exec -T postgres psql \
     (SELECT COUNT(*) FROM chat_backup_media_reconciliations) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_entries) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_pages),
-    COALESCE((SELECT SUM(chat_storage_used_bytes) FROM users), 0);")"
+    COALESCE((SELECT SUM(storage_used_bytes) FROM users), 0);")"
 if [[ "$backup_facts" != "0|0" ]]; then
-  echo "account purge left backup rows or charged Chat bytes: $backup_facts" >&2
+  echo "account purge left backup rows or charged storage bytes: $backup_facts" >&2
   exit 1
 fi
 

@@ -1073,7 +1073,7 @@ fn chat_backup_lifecycle(
             let response = c
                 .put(format!("{base}/api/admin/users/{owner_id}"))
                 .bearer_auth(admin_token)
-                .json(&json!({ "chatStorageQuotaBytes": quota }))
+                .json(&json!({ "storageQuotaBytes": quota }))
                 .send()
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);

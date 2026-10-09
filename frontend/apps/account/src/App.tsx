@@ -20,6 +20,7 @@ import { RecoverPage } from './features/auth/RecoverPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
+import { StoragePage } from './features/settings/StoragePage'
 import { ProfilePage } from './features/settings/ProfilePage'
 import { DevicesSessionsPage } from './features/settings/DevicesSessionsPage'
 import { MapsPage } from './features/settings/MapsPage'
@@ -60,6 +61,7 @@ export function App() {
               <Route index element={<LauncherPage />} />
               <Route path="/settings/profile" element={<ProfilePage />} />
               <Route path="/settings/account" element={<AccountSettingsPage />} />
+              <Route path="/settings/storage" element={<StoragePage />} />
               <Route path="/settings/security" element={<SecurityPage />} />
               <Route path="/settings/sessions" element={<Navigate to="/settings/devices" replace />} />
               <Route path="/settings/devices" element={<DevicesSessionsPage />} />

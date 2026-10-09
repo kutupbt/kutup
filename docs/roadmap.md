@@ -62,7 +62,7 @@ The following are release blockers:
   immutable protocol-routing metadata.
   Every durable display mutation enters a crash-safe encrypted outbox; the
   homeserver stores an opaque signed base-plus-tail restore point and separately
-  encrypted media under an administrator-controlled Chat quota. A recovered
+  encrypted media under the account's one storage pool. A recovered
   browser uses the existing Drive recovery setup and restores from the server;
   device-to-device history transfer is not supported. Missing or invalid backup
   state produces an explicit history-loss warning rather than a silent empty
@@ -124,11 +124,11 @@ The desktop Admin Overview's System card is hidden today because the backend doe
 
 ### Admin · Required-2FA + Drive-default-quota + trash-retention settings
 
-`/admin/settings` now exposes registration, the dedicated default Chat quota,
-and mailbox/temporary-media retention in desktop-width and mobile-width web
-layouts. Server-driven
-required 2FA, a default Drive/general quota, and runtime trash retention remain
-unimplemented; their cards stay hidden.
+`/admin/settings` now exposes registration and mailbox/temporary-media
+retention in desktop-width and mobile-width web layouts. Server-driven
+required 2FA, an admin-set default storage quota (today the 10 GiB column
+default), and runtime trash retention remain unimplemented; their cards stay
+hidden.
 
 | What's needed | Where |
 |---|---|
@@ -226,8 +226,8 @@ The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in
 The shipped web track provides libsignal Direct Chat/Note to Self and OpenMLS
 private groups with encrypted media over the same application edge and
 authenticated federation stack as Drive. Chat objects use the same SeaweedFS
-infrastructure but separate formats, references, keys, and a dedicated quota;
-they are not Drive files. The current UI is part of the main responsive web app,
+infrastructure but separate formats, references, and keys, and count against
+the same account storage pool; they are not Drive files. The current UI is part of the main responsive web app,
 not a required second domain. Voice/video calls remain a later phase.
 
 The full architecture is captured in `docs/research/11-federated-chat.md` (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, risks), the wire-contract fixes in `docs/research/12-chat-improvements-for-clients.md`, and — decisively — the adversarially-verified comparative study `docs/research/13-chat-architecture-comparative-research.md` (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal code). Direction is committed and validated. **Locked decisions:** libsignal-protocol as a pinned wrapped dependency (AGPL-compatible, never reimplement the ratchet); transport-only federation (signed s2s over 443 + `.well-known`, no Matrix-style replicated room state — the DAG is CVE-confirmed as the mistake); PQ (PQXDH + SPQR) always-on with a versioned suite registry, algorithm agility as a protocol mechanism **not** a user downgrade toggle.
@@ -256,7 +256,7 @@ names unambiguous):
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
 | 5 | MLS private groups | **V1 binding implemented, activated and two-server verified.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection use RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519. The native scale gate operates an actual 256-account × 10-device OpenMLS tree (2,560 independent leaves); the same Rust core builds for WASM, while browser lifecycle, adversarial replay/enumeration, restart/federation and destination-metadata gates pass. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
-| 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, platform photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, a dedicated administrator-controlled Chat quota, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Browser camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search uses an index kept only on the device and sealed with the chat store, applies edits/deletes/expiry before showing a hit, and never emits a query or plaintext index to a server. The Chat quota defaults to 2 GiB per account and can be increased by administrators. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
+| 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, platform photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, the account's one administrator-controlled storage pool, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Browser camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search uses an index kept only on the device and sealed with the chat store, applies edits/deletes/expiry before showing a hit, and never emits a query or plaintext index to a server. Chat shares the account storage pool (10 GiB by default) with Drive and the other apps; administrators can change it per account. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
 | 5b | Confidential broadcast | **V1 blocker scheduled after Phase 6, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
@@ -288,17 +288,19 @@ destination homeserver has durably accepted it. Each destination homeserver
 stores one opaque ciphertext copy, reference-counted for all of its local group
 members and devices, so a received attachment remains available if the sender
 or sender's server later goes offline. Its logical bytes are reported as Chat
-media and count against the recipient's dedicated Chat quota.
+media and count against the recipient's account storage pool.
 
-V1 uses an administrator-configured dedicated Chat quota, currently 2 GiB by
-default, separate from the Drive/general quota. The Chat storage view splits
-message history, ordinary delivery media, and protected history media; a future
+V1 charges Chat to the account's one storage pool, shared with Drive, Photos,
+Office and Maps (10 GiB by default, administrator-configured per account). The
+Chat storage view splits Chat's part into message history, ordinary delivery
+media, and protected history media, shows "Drive and other apps", and links to
+the Account app's Settings → Storage page; a future
 Photos product receives its own namespace rather than classifying encrypted
 MIME data. The same view also shows Chat-media usage per conversation (for
 example, `Family group — 842 MiB`) and let the user review or clear that
 conversation's stored media. Clearing a recipient's copy releases its quota
 and affects that account's linked devices, but never deletes another
-participant's copy. The Chat quota is administrator-controlled; there is no
+participant's copy. The storage pool is administrator-controlled; there is no
 user-adjustable media sub-budget in V1.
 
 Per-conversation accounting must not weaken sealed-sender metadata privacy.
@@ -346,8 +348,8 @@ one media-object limit because MIME type remains encrypted; client recording
 and preview code may use smaller type-specific limits.
 
 **Save to Drive** decrypts and re-encrypts the attachment into a visible,
-recipient-owned Drive collection charged to Drive/general storage. Clearing the
-separate Chat copy releases its Chat charge. Names, captions, thumbnails, MIME details, capabilities and keys
+recipient-owned Drive collection; that copy is charged to the same pool
+separately. Clearing the Chat copy releases its Chat charge. Names, captions, thumbnails, MIME details, capabilities and keys
 remain inside the E2EE message; servers handle only bounded opaque ciphertext
 and public size/accounting fields.
 
@@ -478,8 +480,11 @@ albums) is the second reference.
 - **Storage (decided 2026-09-26):** one storage quota per account, shared
   by Drive and Photos, the way one Google One plan covers Google Drive and
   Google Photos; as Drive files, photos use it without anything extra.
-  Storage pages in both apps show the shared total. Chat's separate media quota is
-  unchanged.
+  Storage pages in both apps show the shared total. **Done (2026-10-09):**
+  Chat joined the same pool; there is no separate Chat quota any more
+  (migration `081_one_storage_pool` folded Chat usage into it). The Account
+  app's Settings → Storage page (`GET /api/user/storage`) shows the pool split
+  by app and kind, with files by type worked out in the browser.
 - **Open questions for the plan:** how are live photos, RAW files and
   videos handled (thumbnails and streaming)? How are duplicates found
   without the server learning which files match (a hash kept inside the

@@ -25,7 +25,8 @@
     "profile": "Profil",
     "devicesSessions": "Cihazlar ve oturumlar",
     "maps": "Haritalar",
-    "adminMaps": "Haritalar"
+    "adminMaps": "Haritalar",
+    "storage": "Depolama alanı"
   },
   "auth": {
     "fields": {
@@ -147,8 +148,7 @@
       "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
       "profile": "Profil",
       "noUsername": "Belirlenmedi",
-      "driveStorage": "Depo alanı",
-      "chatStorage": "İleti depolama alanı",
+      "storage": "Depolama alanı",
       "usage": "{{total}} alanın {{used}} kadarı",
       "colour": "Varlık rengi",
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
@@ -271,6 +271,55 @@
       "offForYou": "Haritalar sizin için kapalı.",
       "saved": "Harita ayarları kaydedildi",
       "saveFailed": "Harita ayarları kaydedilemedi."
+    },
+    "storage": {
+      "title": "Depolama alanı",
+      "description": "Bu sunucuda tuttuğunuz her şey için tek alan: Drive, Fotoğraflar, Ofis, Haritalar ve Sohbet.",
+      "ofQuota": "/ {{total}} kullanılıyor",
+      "reserved": "Süren yüklemeler",
+      "free": "Boş",
+      "full": "Depolama alanınız dolu. Dosya, ileti ya da ek silin, çöpü boşaltın veya yöneticinizden daha fazla alan isteyin.",
+      "apps": {
+        "drive": "Drive",
+        "chat": "Sohbet"
+      },
+      "driveHint": "Drive, Fotoğraflar, Ofis ve Haritalar'daki dosyalar. Başkasının klasörüne eklediğiniz dosyalar da burada sayılır.",
+      "chatHint": "Tuttuğunuz her kopya sayılır: hem teslim için hem de geçmiş yedeğinizde tutulan bir ek iki kez sayılır.",
+      "drive": {
+        "files_one": "{{count}} dosya",
+        "files_other": "{{count}} dosya",
+        "trash_one": "Çöp ({{count}} dosya)",
+        "trash_other": "Çöp ({{count}} dosya)",
+        "versions": "Önceki sürümler",
+        "thumbnails": "Küçük resimler ve önizlemeler",
+        "assets": "Belge ve beyaz tahtalardaki görseller"
+      },
+      "chat": {
+        "media": "Teslim için tutulan ekler",
+        "history": "İleti geçmişi yedeği",
+        "historyMedia": "Geçmiş yedeğindeki ekler"
+      },
+      "byKind": "Türe göre dosyalar",
+      "byKindHint": "Eklediğiniz ve çöpte olmayan dosyalar, türlerine göre. Bunu yalnızca bu tarayıcı, çözdüğü adlardan bilebilir.",
+      "byKindPartial": "Bazı klasörler okunamadı; bu liste eksik olabilir.",
+      "noFiles": "Henüz dosya yok.",
+      "kindCount_one": "{{kind}} · {{count}} dosya",
+      "kindCount_other": "{{kind}} · {{count}} dosya",
+      "kinds": {
+        "note": "Notlar",
+        "document": "Belgeler",
+        "spreadsheet": "Tablolar",
+        "presentation": "Sunumlar",
+        "whiteboard": "Beyaz tahtalar",
+        "map": "Haritalar",
+        "pdf": "PDF'ler",
+        "image": "Görseller",
+        "video": "Videolar",
+        "audio": "Ses",
+        "code": "Kod",
+        "archive": "Arşivler",
+        "other": "Diğer dosyalar"
+      }
     }
   },
   "admin": {
@@ -286,8 +335,8 @@
       "folders": "Klasörler"
     },
     "quota": {
-      "drive": "Depo kotası (GiB)",
-      "chat": "İleti kotası (GiB)",
+      "storage": "Depolama kotası (GiB)",
+      "storageHint": "Drive, Fotoğraflar, Ofis, Haritalar ve Sohbet için tek alan.",
       "positive": "Sıfırdan büyük bir boyut girin."
     },
     "users": {
@@ -308,8 +357,7 @@
       "columns": {
         "user": "Kullanıcı",
         "status": "Durum",
-        "drive": "Depo",
-        "chat": "İleti",
+        "storage": "Depolama",
         "twoFactor": "2FA"
       }
     },
@@ -350,9 +398,9 @@
       "promoteDescription": "{{email}} tüm hesapları ve sunucu ayarlarını yönetebilecek.",
       "demoteTitle": "Yöneticilik kaldırılsın mı?",
       "demoteDescription": "{{email}} hesabını korur ancak yönetim erişimini kaybeder.",
-      "quotas": "Depolama kotaları",
+      "quotas": "Depolama kotası",
       "quotasHint": "Kotayı aşan yüklemeler reddedilir; zaten saklanan hiçbir şey silinmez.",
-      "quotasSaved": "Kotalar kaydedildi",
+      "quotasSaved": "Kota kaydedildi",
       "saveFailed": "Değişiklik kaydedilemedi.",
       "recovery": "Hesap kurtarma",
       "recoveryHint": "Hesabına giremeyenler için. Kutup, okuyamadığı verileri yok etmeden parola sıfırlayamaz.",
@@ -423,8 +471,6 @@
       "registrationHint": "Bu sunucuya erişebilen herkes hesap oluşturabilir. Kapalıyken hesapları yalnızca yöneticiler oluşturur.",
       "chat": "İleti",
       "chatHint": "Bu sunucuda şifreli mesaj ve medya teslimi.",
-      "chatQuota": "Varsayılan sohbet kotası (GiB)",
-      "chatQuotaHint": "Yeni hesaplar için.",
       "mailboxDays": "Teslim edilmemiş mesajlar (gün)",
       "mailboxDaysHint": "Çevrimdışı bir cihazın mesajlarının ne kadar bekleyeceği. 0: teslim edilene kadar tutulur.",
       "mediaDays": "Teslim edilmemiş medya (gün)",

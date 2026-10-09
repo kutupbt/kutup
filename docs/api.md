@@ -425,6 +425,58 @@ Return the current user's profile (public key + storage stats). The encrypted ke
 }
 ```
 
+`storageQuotaBytes` / `storageUsedBytes` are the account's one storage pool.
+Drive, Photos, Office, Maps and Chat all count against it.
+
+---
+
+### GET /api/user/storage
+
+Return what fills the caller's storage pool, by app and by kind of stored
+bytes. All sizes are the ciphertext bytes the server stores and charges. The
+server cannot tell what the files are; the Account app's Settings → Storage
+page works out "Files by type" in the browser from decrypted names.
+
+**Auth:** Bearer JWT
+
+**Response:**
+```json
+{
+  "quotaBytes": 10737418240,
+  "usedBytes": 524288000,
+  "reservedBytes": 0,
+  "drive": {
+    "filesBytes": 400000000,
+    "filesCount": 120,
+    "trashBytes": 20000000,
+    "trashCount": 4,
+    "versionsBytes": 30000000,
+    "thumbnailsBytes": 5000000,
+    "assetsBytes": 1000000
+  },
+  "chat": {
+    "mediaBytes": 50000000,
+    "historyBytes": 10000000,
+    "historyMediaBytes": 8288000
+  }
+}
+```
+
+- `usedBytes` is the account counter every write charges and every limit checks.
+- `reservedBytes` is held for work still in flight: open tus uploads, the
+  unreceived part of open Chat media uploads, and pending federated inbound
+  Chat-media hand-overs. It counts against the quota until the work finishes
+  or is abandoned.
+- `drive.files*` are files the caller uploaded that are not in the trash,
+  wherever they are (pruned originals excluded). `drive.trash*` are the
+  caller's trashed files. `versionsBytes` are file versions the caller saved,
+  `thumbnailsBytes` thumbnails and previews, and `assetsBytes` images that
+  documents and whiteboards embed.
+- `chat.mediaBytes` is delivery media the caller holds a reference to,
+  `historyBytes` the history backup segments and base, and `historyMediaBytes`
+  the backup media copies. Every stored copy counts, so an attachment kept for
+  delivery and in the backup is charged twice.
+
 ---
 
 ### POST /api/user/2fa/setup
@@ -1652,8 +1704,9 @@ validates public bindings and signatures but never receives the root key.
 ### GET /api/chat/backup
 
 Return provisioning state, current signed manifest/cursor, latest
-server-acknowledged protected time, and dedicated Chat quota usage split into
-message history, administrator-retained delivery media, and history media. `deviceHeads` lists, per source device number, the sequence
+server-acknowledged protected time, and Chat's usage of the account storage
+pool split into message history, administrator-retained delivery media, and
+history media. `deviceHeads` lists, per source device number, the sequence
 and digest of the last segment accepted from it: a device continues its
 number's chain from there (`docs/chat-backup.md`).
 
@@ -1675,7 +1728,7 @@ mailbox cursor or establish Direct/MLS protocol state.
 Stage a typed encrypted compacted base using multipart `metadata` and
 `ciphertext` fields. Staging is bounded and expires after 24 hours. Temporary
 overlap with the current archive is allowed only when the post-CAS footprint
-fits the account's administrator-configured Chat quota.
+fits the account storage pool.
 
 ### GET /api/chat/backup/bases/{objectId}
 
@@ -1713,6 +1766,16 @@ There is no Chat-backup DELETE route, ordinary disable action, or
 device-transfer fallback. Account deletion and administrator loss-recovery wipe
 invoke internal lifecycle cleanup that transactionally removes backup database
 state/quota and deletes its object-storage prefix.
+
+### GET /api/chat/media/storage
+
+The caller's storage pool as the Chat storage screen shows it:
+`{ "totalQuotaBytes", "totalUsedBytes", "driveBytes", "chatMediaBytes" }`.
+`totalQuotaBytes` / `totalUsedBytes` are the account pool. `driveBytes` sums
+the caller's files, assets, thumbnails and versions; `chatMediaBytes` sums the
+caller's Chat delivery media references. Per-conversation totals are computed
+on the client from the encrypted attachment ledger. `GET /api/user/storage`
+gives the full breakdown.
 
 ### PUT /api/chat/keys?deviceId=N
 
@@ -2580,7 +2643,7 @@ Return aggregate server statistics.
 }
 ```
 
-`totalStorageUsedBytes` is the DB sum of per-account usage. `storageTotalBytes` and `storageBackendUsedBytes` are the storage backend's real total capacity and on-disk usage, probed live from the SeaweedFS master (`SEAWEEDFS_MASTER_URL`); `storageTotalBytes` falls back to the `STORAGE_TOTAL_BYTES` env var, and both are `0` when no probe or env var is configured.
+`totalStorageUsedBytes` is the DB sum of per-account usage (`storage_used_bytes`, one pool for Drive and Chat). `storageTotalBytes` and `storageBackendUsedBytes` are the storage backend's real total capacity and on-disk usage, probed live from the SeaweedFS master (`SEAWEEDFS_MASTER_URL`); `storageTotalBytes` falls back to the `STORAGE_TOTAL_BYTES` env var, and both are `0` when no probe or env var is configured.
 
 ---
 

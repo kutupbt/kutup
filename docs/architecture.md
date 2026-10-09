@@ -452,10 +452,16 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
 - **Uploads from the browser survive a lost connection and a reload.** The web client encrypts a file 5 MiB at a time as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`), so memory stays at about two chunks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the two envelopes the upload already made, and the public prefix: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The encryptor is rebuilt from the stored prefix (libsodium sets a stream up the same way for pushing as for pulling), and what the server already holds is re-encrypted and dropped, not sent; nothing in the format changes. An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read. Its keyed name and content hashes ("Names in a folder" above) tell the server only which items in one folder share a name or content.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
-- Drive/general storage and Chat storage have separate administrator-controlled
-  per-account quotas. The dedicated Chat meter (2 GiB default) covers history,
-  ordinary delivery media, and protected history media; current usage is
-  tracked in PostgreSQL.
+- Each account has one storage pool (`users.storage_quota_bytes` /
+  `storage_used_bytes`, 10 GiB default, administrator-controlled per account).
+  Drive, Photos, Office, Maps and Chat (delivery media, history segments and
+  bases, protected history media) all charge it. Every write locks the user row
+  (`storage_pool::lock`) and checks used + reserved + new bytes against the
+  quota; reserved bytes are open tus uploads, open Chat media uploads, and
+  pending federated inbound Chat-media hand-overs. Each stored copy counts
+  separately. `quota_reconcile_tick` rewrites the counter from the rows.
+  `GET /api/user/storage` returns the breakdown that the Account app's
+  Settings → Storage page shows.
 
 ---
 
@@ -471,8 +477,8 @@ PostgreSQL 16 is used for all persistent metadata:
 - Chat devices and public prekey pools
 - Opaque per-device chat mailboxes and idempotent send records
 - Account-local Chat backup authorization, signed manifests, ordered opaque
-  segments, base/media object references, reconciliation/staging state, and
-  dedicated quota accounting
+  segments, base/media object references, and reconciliation/staging state,
+  charged to the account storage pool
 - Account manifests, complete signed manifest history, and durable peer pins
 - Unified federation local/peer identity history, trust/quarantine evidence,
   replay reservations, and feature-scoped policy

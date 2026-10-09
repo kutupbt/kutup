@@ -1,4 +1,4 @@
-import { Activity, CircleUser, FileType, Globe, HardDrive, Images, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, ChartPie, CircleUser, FileType, Globe, HardDrive, Images, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -45,6 +45,7 @@ export function AccountShell() {
           <SectionLabel>{t('nav.settings')}</SectionLabel>
           <SidebarNavLink to="/settings/profile" icon={<CircleUser />} label={t('nav.profile')} />
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
+          <SidebarNavLink to="/settings/storage" icon={<ChartPie />} label={t('nav.storage')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
           <SidebarNavLink to="/settings/maps" icon={<Map />} label={t('nav.maps')} />
