@@ -19,6 +19,8 @@ import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { DriveSettingsPage } from './features/settings/DriveSettingsPage'
 import { UploadPanel } from '@kutup/drive-ui/UploadPanel'
+import { useRequiredSession } from '@kutup/session/store'
+import { useUploadActions } from './features/uploads/useUploadActions'
 import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { NotFoundPage } from './NotFoundPage'
 
@@ -46,6 +48,13 @@ function FileSharesUpkeep() {
   return null
 }
 
+/** The upload queue, and the uploads a reload or a crash stopped, to go on with. */
+function DriveUploadPanel() {
+  const session = useRequiredSession()
+  const { resumeOne } = useUploadActions()
+  return <UploadPanel resume={{ owner: session.userId, onResume: resumeOne }} />
+}
+
 /** Everything behind the session: the Drive shell and its pages. */
 function SignedIn() {
   return (
@@ -70,7 +79,7 @@ function SignedIn() {
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
-        <UploadPanel />
+        <DriveUploadPanel />
       </CurrentFolderProvider>
     </Boot>
   )

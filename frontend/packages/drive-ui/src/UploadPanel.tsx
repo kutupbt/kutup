@@ -1,10 +1,23 @@
 import { Check, ChevronDown, ChevronUp, CircleAlert, X } from 'lucide-react'
 import { useState } from 'react'
+import { InterruptedUploads, type ResumeSetup } from './InterruptedUploads'
+import { NameConflictDialog } from './NameConflictDialog'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { uploads, useUploads, type UploadJob } from './uploadStore'
+
+function skipLabel(job: UploadJob, t: (key: string) => string): string {
+  switch (job.skipReason) {
+    case 'here':
+      return t('uploads.alreadyHere')
+    case 'chosen':
+      return t('uploads.skippedByChoice')
+    default:
+      return t('uploads.duplicate')
+  }
+}
 
 function JobRow({ job }: { job: UploadJob }) {
   const { t, i18n } = useTranslation()
@@ -14,7 +27,7 @@ function JobRow({ job }: { job: UploadJob }) {
     <li className="space-y-1.5 px-4 py-2.5">
       <div className="flex items-center gap-2 text-sm">
         <span className="min-w-0 flex-1 truncate" title={job.name}>{job.name}</span>
-        {job.status === 'done' || job.status === 'skipped' ? <Check className={cn('size-4', job.status === 'done' ? 'text-status-ok' : 'text-muted-foreground')} aria-label={t(job.status === 'done' ? 'uploads.done' : 'uploads.duplicate')} /> : null}
+        {job.status === 'done' || job.status === 'skipped' ? <Check className={cn('size-4', job.status === 'done' ? 'text-status-ok' : 'text-muted-foreground')} aria-label={job.status === 'done' ? t('uploads.done') : skipLabel(job, t)} /> : null}
         {job.status === 'failed' ? <CircleAlert className="size-4 text-destructive" aria-hidden /> : null}
         {active ? (
           <Button variant="ghost" size="icon" className="size-7" aria-label={t('uploads.cancel', { name: job.name })} onClick={() => uploads.cancel(job.id)}>
@@ -33,7 +46,9 @@ function JobRow({ job }: { job: UploadJob }) {
           : job.status === 'cancelled'
             ? t('uploads.cancelled')
             : job.status === 'skipped'
-              ? t('uploads.duplicate')
+              ? skipLabel(job, t)
+            : job.waiting
+              ? t('uploads.reconnecting')
             : job.status === 'queued'
               ? t('uploads.waiting')
               : job.status === 'done'
@@ -46,17 +61,26 @@ function JobRow({ job }: { job: UploadJob }) {
   )
 }
 
-/** The upload queue, bottom-right, while there is anything to show. */
-export function UploadPanel() {
+/**
+ * The upload queue, bottom-right, while there is anything to show; with
+ * `resume`, also the uploads a reload or a crash stopped, to go on with.
+ */
+export function UploadPanel({ resume }: { resume?: ResumeSetup } = {}) {
   const { t } = useTranslation()
   const jobs = useUploads()
   const [collapsed, setCollapsed] = useState(false)
-  if (jobs.length === 0) return null
+  const [interrupted, setInterrupted] = useState(0)
+  // One tree whatever is shown: the interrupted list keeps its place (and
+  // its state) as the panel appears and goes.
+  const stopped = resume ? <InterruptedUploads setup={resume} onCount={setInterrupted} /> : null
+  const empty = jobs.length === 0 && interrupted === 0
+  if (empty && !stopped) return <NameConflictDialog />
   const active = jobs.filter((j) => j.status === 'queued' || j.status === 'uploading').length
   const failed = jobs.filter((j) => j.status === 'failed').length
 
   return (
     <section
+      hidden={empty}
       aria-label={t('uploads.title')}
       className="fixed bottom-4 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg"
     >
@@ -66,7 +90,9 @@ export function UploadPanel() {
             ? t('uploads.uploading', { count: active })
             : failed > 0
               ? t('uploads.someFailed', { count: failed })
-              : t('uploads.allDone')}
+              : jobs.length === 0
+                ? t('uploads.interruptedTitle')
+                : t('uploads.allDone')}
         </p>
         <Button variant="ghost" size="icon" className="size-7" aria-label={collapsed ? t('uploads.expand') : t('uploads.collapse')} onClick={() => setCollapsed((c) => !c)}>
           {collapsed ? <ChevronUp /> : <ChevronDown />}
@@ -81,7 +107,11 @@ export function UploadPanel() {
           <X />
         </Button>
       </header>
-      {!collapsed ? <ul className="max-h-72 divide-y divide-border overflow-y-auto">{jobs.map((j) => <JobRow key={j.id} job={j} />)}</ul> : null}
+      <div hidden={collapsed} className="max-h-96 overflow-y-auto">
+        {stopped}
+        {jobs.length > 0 ? <ul className="divide-y divide-border">{jobs.map((j) => <JobRow key={j.id} job={j} />)}</ul> : null}
+      </div>
+      <NameConflictDialog />
     </section>
   )
 }

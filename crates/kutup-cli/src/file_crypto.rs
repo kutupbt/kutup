@@ -132,6 +132,7 @@ pub fn rename_request(
     Ok(UpdateFileMetadataRequest {
         metadata_envelope,
         metadata_revision,
+        name_hash: None,
     })
 }
 
@@ -273,6 +274,7 @@ pub fn move_request(
             file.key_generation,
             to_collection_key,
         )?,
+        name_hash: None,
     })
 }
 
@@ -301,6 +303,8 @@ mod tests {
         assert_eq!(created.key_generation, FIRST_GENERATION);
         (
             File {
+                content_hash: None,
+                name_hash: None,
                 id: created.id,
                 collection_id: FOLDER.into(),
                 metadata_envelope: created.metadata_envelope,

@@ -177,6 +177,24 @@ For each file upload:
 
 On download, the client receives the blob and all encrypted fields, then reverses the process locally.
 
+**Names in a folder** (docs/plans/drive-unique-names.md). A name is unique
+among a folder's files and subfolders, and among an account's top-level
+folders, compared without letter case or Unicode composition. The server
+keeps it so without reading a name: every write that names something sends
+the name's HMAC under the place's hash key (HKDF of the folder's first,
+epoch-1 key, which every member reaches through the key chain and which
+no rotation changes; the account master key for the top level), and unique
+indexes plus a per-place advisory lock refuse a second item with the same
+hash (`409 name_taken`, naming what holds it). Each upload also hashes the
+plaintext (SHA-256, read while it encrypts) and records a content hash
+under the same key, so a client about to upload a file with a taken name
+and the same size can tell whether it is the same file: then nothing is
+sent ("Already in this folder"); otherwise the person chooses Replace (the
+file there goes to the trash), Keep both (`name (2)`) or Skip. Items made
+before this, or by a client that sends no hash, are filled in by the
+owner's client when it opens the folder, the later of two duplicates
+renamed `name (2)`.
+
 ---
 
 ## Collection Sharing
@@ -431,7 +449,8 @@ integration remain tracked in [`roadmap.md`](roadmap.md).
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
 
 - The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to the object store; the tus.io path stores each chunk as S3 multipart parts of one equal size (5 MiB, more for uploads past 10,000 parts), keeping what does not fill a part in the upload's row until the next chunk, so neither buffers the whole file in memory and stores that refuse unequal parts (Cloudflare R2) work.
-- Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read.
+- **Uploads from the browser survive a lost connection and a reload.** The web client encrypts a file 5 MiB at a time as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`), so memory stays at about two chunks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the two envelopes the upload already made, and the public prefix: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The encryptor is rebuilt from the stored prefix (libsodium sets a stream up the same way for pushing as for pulling), and what the server already holds is re-encrypted and dropped, not sent; nothing in the format changes. An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
+- Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read. Its keyed name and content hashes ("Names in a folder" above) tell the server only which items in one folder share a name or content.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Drive/general storage and Chat storage have separate administrator-controlled
   per-account quotas. The dedicated Chat meter (2 GiB default) covers history,

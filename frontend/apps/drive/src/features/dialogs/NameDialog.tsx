@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { asNameTaken, canonicalName } from '@kutup/drive-core/names'
 
 /** The server's limit for a name. */
 const MAX_NAME = 255
@@ -34,7 +35,7 @@ export function NameDialog({
   submit: string
   pending: boolean
   error: unknown
-  /** Names already in the folder (case-insensitive clash check). */
+  /** Names already in the folder, in canonical form (`canonicalName`): the server's clash check. */
   taken?: ReadonlySet<string>
   onClose: () => void
   onSubmit: (name: string) => void
@@ -60,7 +61,7 @@ export function NameDialog({
         ? t('dialogs.name.tooLong', { max: MAX_NAME })
         : /[/\\]/.test(name)
           ? t('dialogs.name.slash')
-          : name !== initial && taken?.has(name.toLocaleLowerCase())
+          : canonicalName(name) !== canonicalName(initial) && taken?.has(canonicalName(name))
             ? t('dialogs.name.taken')
             : null
 
@@ -83,7 +84,9 @@ export function NameDialog({
               <Input {...field} ref={input} value={value} onChange={(e) => setValue(e.target.value)} autoFocus autoComplete="off" />
             )}
           </Field>
-          {error ? <Alert variant="error">{apiErrorMessage(error, t('dialogs.name.failed'))}</Alert> : null}
+          {error ? (
+            <Alert variant="error">{asNameTaken(error) ? t('dialogs.name.taken') : apiErrorMessage(error, t('dialogs.name.failed'))}</Alert>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}

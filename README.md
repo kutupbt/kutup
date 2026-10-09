@@ -176,12 +176,14 @@ kutup ls <folder-id>           # contents of a sub-folder
 # (KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD for non-interactive use).
 kutup recover --server https://your.kutup.host --email you@example.com
 
-# Upload a file. The CLI's chunked stream encryption (5 MB blocks via
-# crypto_secretstream) has NO browser-imposed size limit — multi-GB
-# files (ISOs, raw video, datasets) work where the web upload chokes
-# around ~2 GB and crashes the tab. File size is bounded by disk,
-# not RAM. Interrupted uploads RESUME from the last 5 MB chunk when
-# you rerun the same command (--no-resume restarts from zero).
+# Upload a file. Chunked stream encryption (5 MB blocks via
+# crypto_secretstream), so file size is bounded by disk, not RAM.
+# Interrupted uploads RESUME from the last 5 MB chunk when you rerun
+# the same command (--no-resume restarts from zero). Names are unique
+# in a folder: the same file already there is skipped, a different one
+# under its name stops the upload unless --keep-both uploads it as
+# "name (2)". A directory uploaded again goes into the folder already
+# there and sends only what is new.
 kutup upload ./big-dataset.tar.gz <folder-id>
 kutup upload ./local-dir <folder-id> --recursive
 
@@ -232,7 +234,7 @@ kutup --help
 kutup version
 ```
 
-The **>2 GB** path is the standout. Browser File API + Web Crypto streaming work in theory but practically wedge the tab at multi-GB sizes; the CLI streams `crypto_secretstream` (XChaCha20-Poly1305, 5 MB chunks) over a Rust reader, so it handles arbitrarily large files at constant ~5 MB memory.
+Large files go either way: the browser encrypts 5 MB at a time as each part is sent (memory stays at about two parts, and an upload goes on after a lost connection or a reload), and the CLI streams `crypto_secretstream` (XChaCha20-Poly1305, 5 MB chunks) over a Rust reader at constant ~5 MB memory, which suits scripts, servers and very large datasets.
 
 ---
 

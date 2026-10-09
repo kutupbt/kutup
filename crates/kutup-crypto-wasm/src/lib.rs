@@ -1618,6 +1618,53 @@ impl Default for ContentHasherJs {
     }
 }
 
+/// A folder's hash key (`kutup_crypto::drive_names`), from its first (epoch 1) key.
+#[wasm_bindgen(js_name = driveFolderHashKey)]
+pub fn drive_folder_hash_key(
+    first_folder_key_base64: &str,
+    collection_id: &str,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(first_folder_key_base64, "folder key")?;
+    kutup_crypto::drive_names::folder_hash_key(&key, collection_id)
+        .map(|key| STANDARD.encode(key))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The hash key for an account's top-level folders, from its master key.
+#[wasm_bindgen(js_name = driveTopLevelHashKey)]
+pub fn drive_top_level_hash_key(master_key_base64: &str) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(master_key_base64, "master key")?;
+    kutup_crypto::drive_names::top_level_hash_key(&key)
+        .map(|key| STANDARD.encode(key))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The hash a name is kept unique by in its folder (lowercase hex).
+#[wasm_bindgen(js_name = driveNameHash)]
+pub fn drive_name_hash(hash_key_base64: &str, name: &str) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(hash_key_base64, "folder hash key")?;
+    kutup_crypto::drive_names::name_hash(&key, name).map_err(|error| js_error(&error.to_string()))
+}
+
+/// The hash a file's content is recognised by in its folder, from the
+/// SHA-256 of its plaintext (base64, as `ContentHasher` gives it).
+#[wasm_bindgen(js_name = driveContentHash)]
+pub fn drive_content_hash(
+    hash_key_base64: &str,
+    content_sha256_base64: &str,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(hash_key_base64, "folder hash key")?;
+    let digest = decode_canonical_base64(content_sha256_base64, "content digest")?;
+    kutup_crypto::drive_names::content_hash(&key, &digest)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The form two names are compared in (case and composition aside).
+#[wasm_bindgen(js_name = driveCanonicalName)]
+pub fn drive_canonical_name(name: &str) -> String {
+    kutup_crypto::drive_names::canonical_name(name)
+}
+
 /// The Photos library record's key (docs/plans/photos.md), from the master key.
 #[wasm_bindgen(js_name = photosLibraryKey)]
 pub fn photos_library_key(master_key_base64: &str) -> Result<String, JsValue> {

@@ -185,6 +185,10 @@ pub struct CollectionRow {
     pub upload_used_bytes: Option<i64>,
     #[serde(skip_serializing_if = "is_false")]
     pub is_shared: bool,
+    /// The name's hash in its place (docs/plans/drive-unique-names.md);
+    /// absent until filled in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     pub created_at: time::OffsetDateTime,
@@ -206,6 +210,9 @@ pub struct CreateCollectionRequest {
     pub owner_key_envelope: String,
     pub epoch_statement: String,
     pub parent_collection_id: Option<String>,
+    /// The name's hash under the parent's hash key, or at the top level
+    /// the account's top-level one (docs/plans/drive-unique-names.md).
+    pub name_hash: Option<String>,
 }
 
 /// `POST /api/collections` result — mirrors `handlers.CreateCollectionResult`.
@@ -220,6 +227,8 @@ pub struct CreateCollectionResult {
 pub struct UpdateCollectionRequest {
     pub name_envelope: String,
     pub name_revision: i64,
+    /// The new name's hash (docs/plans/drive-unique-names.md).
+    pub name_hash: Option<String>,
 }
 
 /// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
@@ -278,6 +287,12 @@ pub struct FileRow {
     /// Shown to the owner only; false for everyone else.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub shared: bool,
+    /// The name's and content's hashes under the folder's hash key
+    /// (docs/plans/drive-unique-names.md); absent until filled in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// Generation `generation`'s record: the key of `generation − 1` sealed under
@@ -516,6 +531,7 @@ mod tests {
             upload_quota_bytes: None,
             upload_used_bytes: None,
             is_shared: false,
+            name_hash: None,
             created_at: time::macros::datetime!(2026-09-01 10:00 UTC),
             updated_at: time::macros::datetime!(2026-09-23 12:30 UTC),
         };

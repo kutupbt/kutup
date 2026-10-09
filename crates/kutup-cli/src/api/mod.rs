@@ -43,12 +43,44 @@ pub struct ApiError {
     /// The server's `{"error": "…"}` message when parseable, else the raw
     /// body (or the status reason phrase when the body is empty).
     pub message: String,
+    /// A `409 name_taken`: what holds the name in that place
+    /// (docs/plans/drive-unique-names.md).
+    pub name_taken: Option<NameHolder>,
+}
+
+/// What holds a taken name, as the server says (any part may be missing).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NameHolder {
+    /// `file` or `folder`.
+    pub kind: String,
+    pub id: String,
+    /// A file's content hash, when known.
+    pub content_hash: Option<String>,
 }
 
 impl ApiError {
     pub(crate) fn from_parts(status: u16, reason: &str, body: String) -> ApiError {
-        let message = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
+        let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+        let name_taken = parsed
+            .as_ref()
+            .filter(|v| {
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("name_taken")
+            })
+            .map(|v| {
+                let holder = v.get("holder");
+                let text = |key: &str| {
+                    holder
+                        .and_then(|h| h.get(key))
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string)
+                };
+                NameHolder {
+                    kind: text("kind").unwrap_or_default(),
+                    id: text("id").unwrap_or_default(),
+                    content_hash: text("contentHash"),
+                }
+            });
+        let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
                 let trimmed = body.trim().to_string();
@@ -58,7 +90,11 @@ impl ApiError {
                     trimmed
                 }
             });
-        ApiError { status, message }
+        ApiError {
+            status,
+            message,
+            name_taken,
+        }
     }
 }
 
@@ -318,6 +354,43 @@ impl Client {
     ) -> Result<()> {
         let resp = self.put_json(&format!("/files/{file_id}"), req)?;
         check_ok(resp)
+    }
+
+    /// Records what a file's content is recognised by in its folder
+    /// (docs/plans/drive-unique-names.md).
+    pub fn set_content_hash(&self, file_id: &str, content_hash: &str) -> Result<()> {
+        let resp = self.put_json(
+            &format!("/files/{file_id}/content-hash"),
+            &serde_json::json!({ "contentHash": content_hash }),
+        )?;
+        check_ok(resp)
+    }
+
+    /// Gives items of a folder without a name hash theirs; returns the ids
+    /// whose name another item already holds.
+    pub fn fill_name_hashes(
+        &self,
+        collection_id: &str,
+        files: &[(String, String)],
+        folders: &[(String, String)],
+    ) -> Result<Vec<String>> {
+        let items = |list: &[(String, String)]| {
+            list.iter()
+                .map(|(id, hash)| serde_json::json!({ "id": id, "nameHash": hash }))
+                .collect::<Vec<_>>()
+        };
+        let resp = self.post_json(
+            &format!("/collections/{collection_id}/name-hashes"),
+            &serde_json::json!({ "files": items(files), "folders": items(folders) }),
+        )?;
+        let body: serde_json::Value = decode_json(resp)?;
+        Ok(body
+            .get("clashes")
+            .and_then(|c| c.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c.get("id")?.as_str().map(str::to_string))
+            .collect())
     }
 }
 

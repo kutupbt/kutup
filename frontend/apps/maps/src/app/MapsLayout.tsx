@@ -8,6 +8,7 @@ import type { MapFocus } from '@kutup/map/MapView'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { Alert } from '@kutup/ui/components/alert'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
@@ -35,6 +36,7 @@ const EMPTY_DRAFT: PlaceDraft = { name: '', note: '', lat: null, lon: null }
 export function MapsLayout() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  useAccountUiPreferences()
   const effective = useEffectiveMap()
   const config = useMapConfig()
   // Names and pictures of the people lists are shared with.

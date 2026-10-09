@@ -25,6 +25,9 @@ use crate::models::ErrorResponse;
 pub struct AppError {
     pub status: StatusCode,
     pub message: String,
+    /// Machine-readable fields beside `error` in the body (a client error's
+    /// `code` and what it needs to act on it).
+    pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl AppError {
@@ -32,7 +35,16 @@ impl AppError {
         Self {
             status,
             message: message.into(),
+            details: None,
         }
+    }
+
+    /// Adds fields beside `error` in a client error's body.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        if let serde_json::Value::Object(map) = details {
+            self.details = Some(map);
+        }
+        self
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -78,6 +90,10 @@ impl IntoResponse for AppError {
             )
                 .into_response();
         }
+        if let Some(mut details) = self.details {
+            details.insert("error".into(), serde_json::Value::String(self.message));
+            return (self.status, Json(serde_json::Value::Object(details))).into_response();
+        }
         (
             self.status,
             Json(ErrorResponse {
@@ -122,6 +138,19 @@ mod tests {
         let (status, body) = body_string(AppError::bad_request("bad input")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body, r#"{"error":"bad input"}"#);
+    }
+
+    #[tokio::test]
+    async fn client_error_carries_its_details() {
+        let error = AppError::conflict("name taken").with_details(
+            serde_json::json!({ "code": "name_taken", "holder": { "kind": "file" } }),
+        );
+        let (status, body) = body_string(error).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "name taken");
+        assert_eq!(body["code"], "name_taken");
+        assert_eq!(body["holder"]["kind"], "file");
     }
 
     #[tokio::test]

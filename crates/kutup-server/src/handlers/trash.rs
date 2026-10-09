@@ -200,10 +200,30 @@ pub async fn restore(
                 "restore the parent folder first",
             ));
         }
-        sqlx::query("UPDATE files SET deleted_at = NULL, trash_root_id = NULL WHERE id = $1")
-            .bind(root_id)
-            .execute(&mut *tx)
-            .await?;
+        // Its name taken meanwhile: it comes back without its hash, and the
+        // client gives it a name of its own (docs/plans/drive-unique-names.md).
+        let place = crate::drive_names::Place::Folder(coll_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        let name_hash: Option<String> =
+            sqlx::query_scalar("SELECT name_hash FROM files WHERE id = $1")
+                .bind(root_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let keep = match &name_hash {
+            Some(hash) => crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(root_id))
+                .await
+                .is_ok(),
+            None => true,
+        };
+        sqlx::query(
+            "UPDATE files SET deleted_at = NULL, trash_root_id = NULL,
+                              name_hash = CASE WHEN $2 THEN name_hash END
+             WHERE id = $1",
+        )
+        .bind(root_id)
+        .bind(keep)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         return Ok(Json(MessageResponse {
             message: "restored".to_string(),
@@ -224,6 +244,7 @@ pub async fn restore(
     };
 
     // Original parent gone or still trashed → come back at the top level.
+    let mut lands = parent;
     if let Some(parent_id) = parent {
         let parent_live: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM collections WHERE id = $1 AND deleted_at IS NULL",
@@ -236,7 +257,31 @@ pub async fn restore(
                 .bind(root_id)
                 .execute(&mut *tx)
                 .await?;
+            lands = None;
         }
+    }
+    // Its name hash holds where it was (under that place's hash key) and only
+    // while no one else took the name; otherwise it comes back without one,
+    // and the client gives it a name of its own there.
+    let place = crate::drive_names::Place::of(lands, user_id);
+    crate::drive_names::lock_place(&mut tx, place).await?;
+    let name_hash: Option<String> =
+        sqlx::query_scalar("SELECT name_hash FROM collections WHERE id = $1")
+            .bind(root_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let keep = lands == parent
+        && match &name_hash {
+            Some(hash) => crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(root_id))
+                .await
+                .is_ok(),
+            None => true,
+        };
+    if !keep {
+        sqlx::query("UPDATE collections SET name_hash = NULL WHERE id = $1")
+            .bind(root_id)
+            .execute(&mut *tx)
+            .await?;
     }
 
     sqlx::query(

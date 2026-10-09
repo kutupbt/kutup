@@ -5,6 +5,7 @@ import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -13,6 +14,7 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 export function OfficeShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  useAccountUiPreferences()
   return (
     <AppShell
       appName={t('apps.office')}

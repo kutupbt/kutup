@@ -4,6 +4,8 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
 import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { UploadPanel } from '@kutup/drive-ui/UploadPanel'
+import { useRequiredSession } from '@kutup/session/store'
+import { useResumePhotos } from './features/upload/useUploadPhotos'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -44,6 +46,13 @@ function DriveUpkeep() {
   return null
 }
 
+/** The upload queue, and the uploads a reload or a crash stopped, to go on with. */
+function PhotosUploadPanel() {
+  const session = useRequiredSession()
+  const onResume = useResumePhotos()
+  return <UploadPanel resume={{ owner: session.userId, onResume }} />
+}
+
 /** Everything behind the session: the library and its pages. */
 function SignedIn() {
   return (
@@ -66,7 +75,7 @@ function SignedIn() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </LibraryProvider>
-      <UploadPanel />
+      <PhotosUploadPanel />
     </Boot>
   )
 }

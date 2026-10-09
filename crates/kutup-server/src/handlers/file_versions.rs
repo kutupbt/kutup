@@ -449,7 +449,9 @@ pub(crate) async fn store_version(
         .execute(&mut *tx)
         .await?;
     // A new version is an edit: the file (and so its folder) was modified now.
-    sqlx::query("UPDATE files SET updated_at = NOW() WHERE id = $1")
+    // New content: the hash it was recognised by no longer holds; the client
+    // records the new one (docs/plans/drive-unique-names.md).
+    sqlx::query("UPDATE files SET updated_at = NOW(), content_hash = NULL WHERE id = $1")
         .bind(fid)
         .execute(&mut *tx)
         .await?;

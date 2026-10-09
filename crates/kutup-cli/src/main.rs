@@ -13,6 +13,7 @@ mod errors;
 mod file_crypto;
 mod keyring;
 mod mimetype;
+mod names;
 mod output;
 mod session;
 mod syncengine;
@@ -144,6 +145,10 @@ enum Commands {
         /// Discard any interrupted prior attempt and restart from zero.
         #[arg(long)]
         no_resume: bool,
+        /// A different file already holds a name: upload this one beside it
+        /// as `name (2)` instead of stopping. The same file is always skipped.
+        #[arg(long)]
+        keep_both: bool,
     },
     /// Download and decrypt a file.
     Download {
@@ -271,6 +276,7 @@ fn main() {
             collection_id,
             recursive,
             no_resume,
+            keep_both,
         } => commands::upload::run(
             &cli.profile,
             cli.json,
@@ -278,6 +284,7 @@ fn main() {
             collection_id,
             *recursive,
             *no_resume,
+            *keep_both,
         ),
         Commands::Download { file_id, dest } => {
             commands::download::run(&cli.profile, cli.json, file_id, dest.as_deref())
@@ -396,6 +403,7 @@ mod tests {
             let e = anyhow::Error::new(api::ApiError {
                 status,
                 message: "x".into(),
+                name_taken: None,
             })
             .context("outer")
             .context("outermost");

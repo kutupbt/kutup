@@ -44,6 +44,7 @@ struct SharedCollectionDbRow {
     owner_incarnation_id: String,
     owner_signing_public_key: String,
     owner_authority_public_key: String,
+    name_hash: Option<String>,
 }
 
 /// Parses a collection-id path param; an invalid UUID is a 404 (Go's scan-fails → 404).
@@ -120,6 +121,7 @@ pub(crate) async fn collection_rows(
         Option<String>,
         time::OffsetDateTime,
         time::OffsetDateTime,
+        Option<String>,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
@@ -129,7 +131,8 @@ pub(crate) async fn collection_rows(
                            COALESCE((SELECT MAX(f.updated_at) FROM files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
-                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
+                  c.name_hash
            FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
              AND c.kind = $2
            ORDER BY c.created_at ASC"#,
@@ -155,6 +158,7 @@ pub(crate) async fn collection_rows(
                 color,
                 created_at,
                 updated_at,
+                name_hash,
             )| CollectionRow {
                 id: id.to_string(),
                 owner_user_id: owner.to_string(),
@@ -176,6 +180,7 @@ pub(crate) async fn collection_rows(
                 upload_quota_bytes: None,
                 upload_used_bytes: None,
                 is_shared: false,
+                name_hash,
                 created_at,
                 updated_at,
             },
@@ -195,7 +200,8 @@ pub(crate) async fn collection_rows(
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
-                  owner.account_authority_public_key AS owner_authority_public_key
+                  owner.account_authority_public_key AS owner_authority_public_key,
+                  c.name_hash
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
            JOIN users owner ON owner.id = c.owner_user_id
@@ -252,6 +258,7 @@ pub(crate) async fn collection_rows(
             upload_quota_bytes: row.upload_quota_bytes,
             upload_used_bytes,
             is_shared: true,
+            name_hash: row.name_hash.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         });
@@ -336,6 +343,7 @@ pub(crate) async fn create_owned_collection(
         .map_err(|_| AppError::bad_request("invalid collection epoch statement"))?;
     let statement_hash = epoch_statement.statement_hash();
 
+    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
@@ -349,11 +357,19 @@ pub(crate) async fn create_owned_collection(
             return Err(AppError::bad_request("invalid parent collection"));
         }
     }
+    // Folders keep names unique; albums are not in the folder tree.
+    let name_hash = if kind == "folder" { name_hash } else { None };
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::of(parent, user_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
+    }
     sqlx::query(
         r#"INSERT INTO collections
               (id, owner_user_id, name_envelope, owner_key_envelope, key_epoch,
-               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8)"#,
+               name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind,
+               name_hash)
+           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8,$9)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -363,8 +379,10 @@ pub(crate) async fn create_owned_collection(
     .bind(&statement_hash)
     .bind(parent)
     .bind(kind)
+    .bind(&name_hash)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(crate::drive_names::map_unique_violation)?;
     sqlx::query(
         r#"INSERT INTO collection_key_epoch_history
               (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash)
@@ -415,6 +433,7 @@ pub async fn get_collection(
         Option<String>,
         time::OffsetDateTime,
         time::OffsetDateTime,
+        Option<String>,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
@@ -424,7 +443,8 @@ pub async fn get_collection(
                            COALESCE((SELECT MAX(f.updated_at) FROM files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
-                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
+                  c.name_hash
            FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
@@ -445,9 +465,11 @@ pub async fn get_collection(
         color,
         created_at,
         updated_at,
+        name_hash,
     )) = row
     {
         return Ok(Json(CollectionRow {
+            name_hash,
             id: cid.to_string(),
             owner_user_id: owner.to_string(),
             name_envelope: name,
@@ -490,7 +512,8 @@ pub async fn get_collection(
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
-                  owner.account_authority_public_key AS owner_authority_public_key
+                  owner.account_authority_public_key AS owner_authority_public_key,
+                  c.name_hash
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
            JOIN users owner ON owner.id = c.owner_user_id
@@ -511,6 +534,7 @@ pub async fn get_collection(
         .filter(|username| !username.is_empty())
         .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
     Ok(Json(CollectionRow {
+        name_hash: row.name_hash.clone(),
         id: coll_id.to_string(),
         owner_user_id: row.owner_user_id.to_string(),
         name_envelope: row.name_envelope,
@@ -556,18 +580,28 @@ pub async fn update_collection(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
+    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    let current: Option<(i32, i64)> = sqlx::query_as(
-        "SELECT key_epoch, name_revision FROM collections
+    let current: Option<(i32, i64, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT key_epoch, name_revision, parent_collection_id, kind FROM collections
          WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(coll_id)
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((epoch, current_revision)) = current else {
+    let Some((epoch, current_revision, parent, kind)) = current else {
         return Err(AppError::not_found("not found"));
     };
+    // A new name without its hash (an older client) leaves the old hash
+    // wrong: it is cleared, and the name is not kept unique until a client
+    // fills it in again.
+    let name_hash = if kind == "folder" { name_hash } else { None };
+    if let Some(hash) = &name_hash {
+        let place = crate::drive_names::Place::of(parent, user_id);
+        crate::drive_names::lock_place(&mut tx, place).await?;
+        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(coll_id)).await?;
+    }
     if req.name_revision != current_revision.saturating_add(1) {
         return Err(AppError::conflict(
             "collection name revision must advance by exactly one",
@@ -586,7 +620,7 @@ pub async fn update_collection(
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     let res = sqlx::query(
-        r#"UPDATE collections SET name_envelope = $1, name_revision = $2, updated_at = NOW()
+        r#"UPDATE collections SET name_envelope = $1, name_revision = $2, name_hash = $6, updated_at = NOW()
            WHERE id = $3 AND owner_user_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
     )
     .bind(&req.name_envelope)
@@ -594,9 +628,11 @@ pub async fn update_collection(
     .bind(coll_id)
     .bind(user_id)
     .bind(current_revision)
+    .bind(&name_hash)
     .execute(&mut *tx)
     .await;
     match res {
+        Err(error) => Err(crate::drive_names::map_unique_violation(error)),
         Ok(r) if r.rows_affected() > 0 => {
             tx.commit().await?;
             Ok(Json(MessageResponse {

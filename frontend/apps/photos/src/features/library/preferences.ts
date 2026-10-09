@@ -3,6 +3,8 @@ import { createOwnedCollectionV1 } from '@kutup/crypto'
 import { foldersKey, useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
+import { loadFolderFiles } from '@kutup/drive-core/files'
+import { asNameTaken, canonicalName, freeName, inFolder, nameHashIn, namesIn } from '@kutup/drive-core/names'
 import api from '@kutup/session/client'
 
 // Which Drive folders make up the library, and where uploads go
@@ -47,14 +49,28 @@ export async function ensureUploadFolder(
 ): Promise<string> {
   const chosen = preferences.uploadFolderId ? index.byId.get(preferences.uploadFolderId) : undefined
   if (chosen?.key) return chosen.id
+  const wanted = canonicalName(DEFAULT_UPLOAD_FOLDER)
   const existing = index
     .childrenOf(index.root.id)
-    .find((f) => f.source === 'owned' && f.name === DEFAULT_UPLOAD_FOLDER)
+    .find((f) => f.source === 'owned' && f.name !== null && canonicalName(f.name) === wanted)
   let id = existing?.id
   if (!id) {
-    const created = await createOwnedCollectionV1(me.masterKey, me.userId, DEFAULT_UPLOAD_FOLDER, index.root.id)
-    await api.post('/collections', created.payload)
-    id = created.payload.id
+    let name = DEFAULT_UPLOAD_FOLDER
+    for (let attempt = 0; !id; attempt++) {
+      const created = await createOwnedCollectionV1(me.masterKey, me.userId, name, index.root.id)
+      try {
+        await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(index.root), name) })
+        id = created.payload.id
+      } catch (error) {
+        // Names are unique in a folder (docs/plans/drive-unique-names.md):
+        // a "Photos" folder made meanwhile is the one; a file of that name
+        // leaves the next free name.
+        const taken = asNameTaken(error)
+        if (!taken || attempt > 2) throw error
+        if (taken.holder?.kind === 'folder') id = taken.holder.id
+        else name = freeName(name, namesIn(await loadFolderFiles(index.root), index.childrenOf(index.root.id)))
+      }
+    }
   }
   await save({ ...preferences, uploadFolderId: id })
   return id

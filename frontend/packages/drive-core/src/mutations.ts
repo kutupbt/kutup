@@ -12,10 +12,11 @@ import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import { peopleKey } from './people'
-import { foldersKey } from './folders'
+import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
+import { atTopLevel, inFolder, nameHashIn, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
@@ -46,12 +47,22 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
 export function useCreateFolder() {
   return useDriveMutation(async ({ parent, name }: { parent: Folder; name: string }, me) => {
     const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), parent.id)
-    await api.post('/collections', created.payload)
+    await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), name.trim()) })
     return created.payload.id
   })
 }
 
+/**
+ * Where a folder's name lives: in its parent, or at the owner's top level.
+ * Null when the parent is not at hand (it cannot be hashed then).
+ */
+export function folderNamePlace(folder: Folder, parent: Folder | null | undefined, masterKey: Uint8Array): NamePlace | null {
+  if (!folder.parentId) return atTopLevel(masterKey)
+  return parent?.key ? inFolder(parent) : null
+}
+
 export function useRenameFolder() {
+  const queryClient = useQueryClient()
   return useDriveMutation(async ({ folder, name }: { folder: Folder; name: string }, me) => {
     if (!folder.key || !folder.canManage) throw new Error('only the owner can rename a folder')
     // The name envelope binds the owner's id; only owners rename, so it is ours.
@@ -60,7 +71,9 @@ export function useRenameFolder() {
       folder.key,
       name.trim(),
     )
-    await api.put(`/collections/${folder.id}`, next)
+    const parent = folder.parentId ? cachedFolderIndex(queryClient)?.byId.get(folder.parentId) : null
+    const place = folderNamePlace(folder, parent, me.masterKey)
+    await api.put(`/collections/${folder.id}`, { ...next, nameHash: place ? await nameHashIn(place, name.trim()) : null })
   })
 }
 
@@ -74,7 +87,9 @@ export function useRenameFile() {
       file.fileKey,
       fileMetadataOf(file, { name: name.trim() }),
     )
-    await api.put(`/files/${file.id}`, next)
+    // A file shared by itself is renamed without its folder's key: its hash
+    // is cleared, and the owner's client fills it in.
+    await api.put(`/files/${file.id}`, { ...next, nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : null })
   })
 }
 

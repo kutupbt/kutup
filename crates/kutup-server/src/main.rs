@@ -18,6 +18,7 @@ mod db;
 mod drive_federation;
 mod drive_federation_albums;
 mod drive_federation_files;
+mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
 mod error;
@@ -45,6 +46,7 @@ mod storage_check;
 mod storage_probe;
 mod telemetry;
 mod totp;
+mod ui_preferences;
 mod version_retention;
 mod web_push;
 
@@ -611,6 +613,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/drive/people", get(drive_profile_keys::list_people))
         // --- Maps (docs/plans/maps.md). ---
         .route("/api/maps", get(maps::get_config))
+        .route(
+            "/api/account/ui-preferences",
+            get(ui_preferences::get_ui_preferences).put(ui_preferences::put_ui_preferences),
+        )
         .route("/api/maps/preferences", put(maps::put_preferences))
         .route("/api/maps/proxy/:provider/*path", get(maps::proxy))
         // --- Photos (docs/plans/photos.md). ---
@@ -669,6 +675,18 @@ fn build_router(state: AppState) -> Router {
         .route("/api/shared-by-me", get(file_shares::shared_by_me))
         // --- Moving files and folders (docs/plans/drive-move.md). ---
         .route("/api/files/:id/move", post(drive_move::move_file))
+        .route(
+            "/api/files/:id/content-hash",
+            put(handlers::name_hashes::set_content_hash),
+        )
+        .route(
+            "/api/collections/:id/name-hashes",
+            post(handlers::name_hashes::fill_name_hashes),
+        )
+        .route(
+            "/api/drive/top-level-name-hashes",
+            post(handlers::name_hashes::fill_top_level_name_hashes),
+        )
         .route(
             "/api/collections/:id/move",
             post(drive_move::move_collection),

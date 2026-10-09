@@ -1,7 +1,18 @@
 import { useSyncExternalStore } from 'react'
 
-/** `skipped`: nothing to upload (Photos: the library already has it). */
+/** `skipped`: nothing was uploaded (`skipReason` says why). */
 export type UploadStatus = 'queued' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+/**
+ * Why nothing was uploaded: `library`, the Photos library already has it;
+ * `here`, the same file is already in the folder under that name; `chosen`,
+ * its name was taken and the person chose to skip it
+ * (docs/plans/drive-unique-names.md).
+ */
+export type SkipReason = 'library' | 'here' | 'chosen'
+
+/** What a job's `run` resolves: uploaded, or skipped and why (`skipped` is `library`). */
+export type UploadOutcome = void | 'skipped' | { skipped: SkipReason }
 
 export interface UploadJob {
   id: string
@@ -13,9 +24,16 @@ export interface UploadJob {
   /** What `sent`/`total` count: bytes (a file) or files (a folder). */
   unit?: 'bytes' | 'files'
   status: UploadStatus
+  /** The connection is gone; the upload waits and goes on where it stopped. */
+  waiting?: boolean
   failure?: import('./uploadError').UploadFailure
-  /** Resolves `skipped` when there was nothing to upload. */
-  run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<void | 'skipped'>
+  skipReason?: SkipReason
+  /** Resolves skipped (with why) when nothing was uploaded. */
+  run: (
+    signal: AbortSignal,
+    progress: (sent: number, total: number) => void,
+    waiting: (waiting: boolean) => void,
+  ) => Promise<UploadOutcome>
   controller: AbortController
 }
 
@@ -41,11 +59,16 @@ async function pump(onSettled: () => void, classify: (error: unknown) => UploadJ
       if (!job) break
       patch(job.id, { status: 'uploading' })
       try {
-        const outcome = await job.run(job.controller.signal, (sent, total) => patch(job.id, { sent, total }))
-        patch(job.id, outcome === 'skipped' ? { status: 'skipped' } : { status: 'done', sent: job.total })
+        const outcome = await job.run(
+          job.controller.signal,
+          (sent, total) => patch(job.id, { sent, total }),
+          (waiting) => patch(job.id, { waiting }),
+        )
+        const skipReason = outcome === 'skipped' ? 'library' : outcome ? outcome.skipped : null
+        patch(job.id, skipReason ? { status: 'skipped', skipReason, waiting: false } : { status: 'done', sent: job.total, waiting: false })
       } catch (error) {
         const aborted = error instanceof DOMException && error.name === 'AbortError'
-        patch(job.id, aborted ? { status: 'cancelled' } : { status: 'failed', failure: classify(error) })
+        patch(job.id, aborted ? { status: 'cancelled', waiting: false } : { status: 'failed', waiting: false, failure: classify(error) })
       }
       onSettled()
     }

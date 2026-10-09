@@ -9,6 +9,7 @@ import {
   HEADER_BYTES as SECRETSTREAM_HEADER_BYTES,
   PLAIN_CHUNK,
   newStreamEncryptor,
+  resumeStreamEncryptor,
   type StreamEncryptor,
 } from './streamEncryptor'
 import { newStreamDecryptor, type StreamDecryptor } from './streamDecryptor'
@@ -67,6 +68,33 @@ export async function newFileBlobStreamEncryptorV1(
   prefix.set(objectHeader, 0)
   prefix.set(encryptor.header, DRIVE_FILE_BLOB_HEADER_BYTES)
   return { prefix, push: encryptor.push }
+}
+
+/**
+ * The encryptor an upload started with, from the prefix it sent (the Drive
+ * header and the secretstream header, neither secret): pushing the same
+ * plaintext again yields the same bytes, so an interrupted upload continues
+ * where the server stopped. The header must be this file's, at this
+ * generation, under `fileKey` (Rust checks the binding).
+ */
+export async function resumeFileBlobStreamEncryptorV1(
+  fileKey: Uint8Array,
+  context: FileBlobContextV1,
+  prefix: Uint8Array,
+): Promise<FileBlobStreamEncryptorV1> {
+  if (prefix.length !== DRIVE_FILE_BLOB_PREFIX_BYTES) {
+    throw new Error(`Drive file-blob prefix must be ${DRIVE_FILE_BLOB_PREFIX_BYTES} bytes`)
+  }
+  const objectHeader = prefix.slice(0, DRIVE_FILE_BLOB_HEADER_BYTES)
+  const module = await getCryptoWasm()
+  const streamKey = fromBase64(module.openDriveFileBlobHeader(
+    toBase64(objectHeader),
+    toBase64(fileKey),
+    context.fileId,
+    context.generation,
+  ))
+  const encryptor = await resumeStreamEncryptor(streamKey, prefix.slice(DRIVE_FILE_BLOB_HEADER_BYTES), objectHeader)
+  return { prefix: prefix.slice(), push: encryptor.push }
 }
 
 export async function openFileBlobStreamV1(

@@ -1,6 +1,8 @@
 import { isAxiosError } from 'axios'
 import { wrapFileKeyForV1 } from '@kutup/crypto/fileRecord'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
+import { atTopLevel, asNameTaken, canonicalName, inFolder, nameHashIn } from '@kutup/drive-core/names'
 import { isWithin, namesIn } from './copy'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
@@ -50,8 +52,15 @@ export class MoveConflictError extends Error {
   }
 }
 
+/** A move the server refused because the name is taken in the destination. */
+export class MoveNameTakenError extends Error {
+  constructor() {
+    super('an item with this name is already there')
+  }
+}
+
 function conflictReason(error: unknown): string | null {
-  if (!isAxiosError(error) || error.response?.status !== 409) return null
+  if (!isAxiosError(error) || error.response?.status !== 409 || asNameTaken(error)) return null
   const data = error.response.data as { error?: string; message?: string } | string | undefined
   return typeof data === 'string' ? data : (data?.error ?? data?.message ?? 'conflict')
 }
@@ -67,13 +76,18 @@ export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Pro
   if (!file.fileKey) throw new Error('file is not open')
   const fileKeyEnvelope = await wrapFileKeyForV1(file, file.fileKey, to.id, to.keyEpoch, to.key)
   try {
+    // The name's hash belongs to the folder: the destination's. Its content
+    // hash does too, and the plaintext's digest is not kept, so it is
+    // dropped (docs/plans/drive-unique-names.md).
     await api.post(`/files/${file.id}/move`, {
       fromCollectionId: from.id,
       toCollectionId: to.id,
       toKeyEpoch: to.keyEpoch,
       fileKeyEnvelope,
+      ...(file.name ? { nameHash: await nameHashIn(inFolder(to), file.name) } : {}),
     })
   } catch (error) {
+    if (asNameTaken(error)) throw new MoveNameTakenError()
     const reason = conflictReason(error)
     if (reason) throw new MoveConflictError(reason)
     throw error
@@ -82,16 +96,26 @@ export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Pro
 
 /** Put a folder under `parent`, or at the top level (null). Owner only. */
 export async function moveFolder(folder: Folder, parent: Folder | null): Promise<void> {
-  await api.post(`/collections/${folder.id}/move`, { parentCollectionId: parent?.id ?? null })
+  const masterKey = getSession()?.masterKey
+  const place = parent ? inFolder(parent) : masterKey ? atTopLevel(masterKey) : null
+  try {
+    await api.post(`/collections/${folder.id}/move`, {
+      parentCollectionId: parent?.id ?? null,
+      ...(folder.name && place ? { nameHash: await nameHashIn(place, folder.name) } : {}),
+    })
+  } catch (error) {
+    if (asNameTaken(error)) throw new MoveNameTakenError()
+    throw error
+  }
 }
 
-/** The names in `dest` that `sources` would clash with (case-insensitive). */
+/** The names in `dest` that `sources` would clash with (case and composition aside, as the server compares). */
 export async function clashes(index: FolderIndex, sources: MoveSource[], dest: Folder): Promise<Set<MoveSource>> {
-  const taken = new Set((await namesIn(index, dest)).map((n) => n.toLocaleLowerCase()))
+  const taken = new Set((await namesIn(index, dest)).map(canonicalName))
   return new Set(
     sources.filter((s) => {
       const name = s.file ? s.file.name : s.folder.name
-      return name !== null && taken.has(name.toLocaleLowerCase())
+      return name !== null && taken.has(canonicalName(name))
     }),
   )
 }

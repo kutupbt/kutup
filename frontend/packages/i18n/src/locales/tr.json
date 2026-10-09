@@ -120,10 +120,35 @@
       "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
       "forbidden": "Buraya dosya ekleyemezsiniz.",
       "network": "Bağlantı koptu.",
-      "other": "Yükleme başarısız oldu."
+      "other": "Yükleme başarısız oldu.",
+      "notSameFile": "Bu aynı dosya değil. Yüklemenin başladığı dosyayı seçin.",
+      "folderKeyChanged": "Bu yükleme başladığından beri klasör yeni bir anahtara geçti. Dosyayı yeniden yükleyin.",
+      "expired": "Sunucuda bu yükleme artık yok (bir günden uzun bekledi). Dosyayı yeniden yükleyin."
     },
     "progressFiles_one": "{{sent}} / {{count}} dosya",
     "progressFiles_other": "{{sent}} / {{count}} dosya",
-    "duplicate": "Kitaplığınızda zaten var"
+    "duplicate": "Kitaplığınızda zaten var",
+    "reconnecting": "Bağlantı bekleniyor; kaldığı yerden devam edecek.",
+    "interruptedTitle": "Yarıda kalan yüklemeler",
+    "interruptedHint": "Kaldığı yerden devam etmek için aynı dosyayı yeniden seçin.",
+    "resume": "Devam et",
+    "resumeNamed": "{{name}} yüklemesine devam et",
+    "discard": "Bırak",
+    "discardNamed": "{{name}} yüklemesini bırak",
+    "unreadable": "Yeni bir anahtara geçmiş bir klasöre yükleme",
+    "myFiles": "Dosyalarım",
+    "alreadyHere": "Bu klasörde zaten var",
+    "skippedByChoice": "Atlandı",
+    "conflict": {
+      "title": "“{{name}}” burada zaten var",
+      "fileThere": "{{folder}} içinde bu adda bir dosya zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
+      "folderThere": "{{folder}} içinde bu adda bir klasör zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
+      "replaceHint": "Değiştir: oradaki dosya çöp kutusuna taşınır, oradan geri yükleyebilirsiniz.",
+      "keepBothHint": "İkisini de tut: bu dosya “{{name}}” adıyla yüklenir.",
+      "applyToAll": "Bu yüklemedeki diğer ad çakışmalarında da aynısını yap",
+      "replace": "Değiştir",
+      "keepBoth": "İkisini de tut",
+      "skip": "Atla"
+    }
   }
 }

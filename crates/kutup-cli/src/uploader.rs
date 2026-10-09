@@ -9,13 +9,17 @@
 //! sit on chunk boundaries because the CLI ships one chunk per PATCH and the
 //! server advances by whole PATCH bodies.
 
+use std::cell::RefCell;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use indicatif::ProgressBar;
+use sha2::{Digest, Sha256};
 
 use crate::api::{ApiError, Client, FileMetadata};
 use crate::file_crypto;
@@ -35,6 +39,26 @@ pub enum Progress {
     Quiet,
 }
 
+/// How an upload's name is kept unique in its folder
+/// (docs/plans/drive-unique-names.md).
+#[derive(Clone, Copy)]
+pub enum Naming {
+    /// The name's hash goes with the upload: the server refuses a taken
+    /// name before anything is sent.
+    Claim([u8; 32]),
+    /// No name hash now: the file replaces one that holds the name, and the
+    /// caller claims it once that one is gone. Its content hash is recorded.
+    After([u8; 32]),
+}
+
+impl Naming {
+    fn hash_key(self) -> [u8; 32] {
+        match self {
+            Naming::Claim(key) | Naming::After(key) => key,
+        }
+    }
+}
+
 /// Exact collection context and execution policy for one upload.
 pub struct UploadRequest<'a> {
     pub collection_id: &'a str,
@@ -42,6 +66,10 @@ pub struct UploadRequest<'a> {
     pub collection_key: &'a [u8],
     pub resume: bool,
     pub progress: Progress,
+    /// The folder's hash key and how the name is claimed.
+    pub naming: Naming,
+    /// The name to upload under, when not the local file's own.
+    pub name: Option<&'a str>,
 }
 
 /// A finished upload: the server file id + the file key (the whiteboard
@@ -51,6 +79,50 @@ pub struct Uploaded {
     pub file_key: [u8; 32],
     /// The file key's generation (a new file's first).
     pub key_generation: u32,
+    /// The name it was uploaded under.
+    pub name: String,
+}
+
+/// The plaintext as encryption reads it, hashed on the way: every upload
+/// (a resumed one too) reads the file from its start, in order.
+struct HashingReader {
+    inner: File,
+    digest: Rc<RefCell<Sha256>>,
+}
+
+impl Read for HashingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.digest.borrow_mut().update(&buf[..n]);
+        Ok(n)
+    }
+}
+
+fn hashing(file: File) -> (HashingReader, Rc<RefCell<Sha256>>) {
+    let digest = Rc::new(RefCell::new(Sha256::new()));
+    (
+        HashingReader {
+            inner: file,
+            digest: Rc::clone(&digest),
+        },
+        digest,
+    )
+}
+
+/// Records the finished file's content hash; best effort (without it, the
+/// same file uploaded again is not recognised as already there).
+fn record_content_hash(
+    client: &Client,
+    file_id: &str,
+    naming: Naming,
+    digest: Rc<RefCell<Sha256>>,
+) {
+    let sha: [u8; 32] = digest.borrow().clone().finalize().into();
+    let recorded = crate::names::content_hash(&naming.hash_key(), &sha)
+        .and_then(|hash| client.set_content_hash(file_id, &hash));
+    if let Err(e) = recorded {
+        eprintln!("warning: could not record the content hash of {file_id}: {e:#}");
+    }
 }
 
 pub(crate) fn now_unix() -> i64 {
@@ -85,7 +157,12 @@ pub fn upload_streaming(
         collection_key,
         resume,
         progress,
+        naming,
+        name,
     } = request;
+    let name = name
+        .map(str::to_string)
+        .unwrap_or_else(|| file_name(&local_path.to_string_lossy()));
     let canonical = std::fs::canonicalize(local_path).unwrap_or_else(|_| local_path.to_path_buf());
     let resume_key = format!("{collection_id}\n{}", canonical.display());
 
@@ -108,6 +185,8 @@ pub fn upload_streaming(
                 collection_id,
                 collection_key,
                 &progress,
+                naming,
+                &name,
             )? {
                 return Ok(done);
             }
@@ -120,7 +199,6 @@ pub fn upload_streaming(
     }
 
     // Fresh upload.
-    let name = file_name(&local_path.to_string_lossy());
     let meta = FileMetadata {
         name: name.clone(),
         mime_type: guess_mime(local_path),
@@ -138,13 +216,18 @@ pub fn upload_streaming(
             collection_id,
             &record.metadata_envelope,
             &record.file_key_envelope,
+            match naming {
+                Naming::Claim(key) => Some(crate::names::name_hash(&key, &name)?),
+                Naming::After(_) => None,
+            }
+            .as_deref(),
         )
         .context("tus create")?;
     if file_id_hint != record.id {
         bail!("tus create returned a different file id");
     }
 
-    let file = File::open(local_path)?;
+    let (file, digest) = hashing(File::open(local_path)?);
     let blob_context = DriveFileBlobContextV1::new(&record.id, record.key_generation)?;
     let up = StreamUploader::new(file, &record.file_key, plain_size, blob_context)?;
 
@@ -171,10 +254,12 @@ pub fn upload_streaming(
     let _ = store.delete_resume(&resume_key);
 
     let file_id = pick_file_id(patched_id, &rec)?;
+    record_content_hash(client, &file_id, naming, digest);
     Ok(Uploaded {
         file_id,
         file_key: record.file_key,
         key_generation: record.key_generation,
+        name,
     })
 }
 
@@ -192,6 +277,8 @@ fn try_resume(
     collection_id: &str,
     collection_key: &[u8],
     progress: &Progress,
+    naming: Naming,
+    name: &str,
 ) -> Result<Option<Uploaded>> {
     match client.tus_head(&rec.upload_id)? {
         None => {
@@ -207,6 +294,7 @@ fn try_resume(
                             file_id: rec.file_id.clone(),
                             file_key,
                             key_generation: file_crypto::FIRST_GENERATION,
+                            name: name.to_string(),
                         }));
                     }
                 }
@@ -245,7 +333,7 @@ fn try_resume(
                 }
             };
 
-            let file = File::open(local_path)?;
+            let (file, digest) = hashing(File::open(local_path)?);
             let blob_context =
                 DriveFileBlobContextV1::new(&rec.file_id, file_crypto::FIRST_GENERATION)?;
             let up = match StreamUploader::resume(
@@ -264,12 +352,11 @@ fn try_resume(
                 }
             };
 
-            let name = file_name(&local_path.to_string_lossy());
             eprintln!(
                 "Resuming upload of {name} at {}%",
                 offset * 100 / rec.cipher_total.max(1)
             );
-            let bar = make_bar(progress, rec.plain_size, &name);
+            let bar = make_bar(progress, rec.plain_size, name);
             bar.set_position(up.plain_read() as u64);
 
             let mut rec = rec.clone();
@@ -277,10 +364,12 @@ fn try_resume(
             let _ = store.delete_resume(resume_key);
 
             let file_id = pick_file_id(patched_id, &rec)?;
+            record_content_hash(client, &file_id, naming, digest);
             Ok(Some(Uploaded {
                 file_id,
                 file_key,
                 key_generation: file_crypto::FIRST_GENERATION,
+                name: name.to_string(),
             }))
         }
     }
@@ -294,7 +383,7 @@ fn run_patches(
     store: &Store,
     resume_key: &str,
     rec: &mut ResumeState,
-    mut up: StreamUploader<File>,
+    mut up: StreamUploader<HashingReader>,
     mut offset: i64,
     bar: &ProgressBar,
 ) -> Result<String> {
@@ -400,20 +489,24 @@ fn maybe_abort(patches_done: u32) {
 }
 
 /// Creates a sub-collection under `parent_id` (used by `upload -r` and the
-/// sync engine). Returns `(collection_id, collection_key)`.
+/// sync engine), its name kept unique under the parent's hash key. Returns
+/// `(collection_id, collection_key)`; a taken name is the server's
+/// `name_taken` (`ApiError::name_taken`).
 pub fn create_sub_collection(
     client: &Client,
     name: &str,
     parent_id: &str,
+    parent_hash_key: &[u8; 32],
     owner_user_id: &str,
     master_key: &[u8],
 ) -> Result<(String, [u8; 32])> {
-    let (request, collection_key) = crate::collection_crypto::create_owned(
+    let (mut request, collection_key) = crate::collection_crypto::create_owned(
         name,
         Some(parent_id.to_string()),
         owner_user_id,
         master_key,
     )?;
+    request.name_hash = Some(crate::names::name_hash(parent_hash_key, name)?);
     let resp = client.create_collection(&request)?;
     Ok((resp.id, collection_key))
 }

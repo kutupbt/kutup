@@ -88,3 +88,32 @@ export async function newStreamEncryptor(
     },
   }
 }
+
+/**
+ * The stream `header` began, from its start again: libsodium sets a stream's
+ * state up the same way for pushing as for pulling (`init_pull` derives the
+ * key and nonce from the header exactly as `init_push` did), so pushing the
+ * same chunks in the same order reproduces its ciphertext byte for byte.
+ * This lets an interrupted upload go on: what the server already holds is
+ * re-encrypted, not stored. It changes nothing in the format.
+ */
+export async function resumeStreamEncryptor(
+  key: Uint8Array,
+  header: Uint8Array,
+  associatedData?: Uint8Array,
+): Promise<StreamEncryptor> {
+  if (header.length !== HEADER_BYTES) throw new Error(`secretstream header must be ${HEADER_BYTES} bytes`)
+  const sodium = await getSodium()
+  const state = sodium.crypto_secretstream_xchacha20poly1305_init_pull(header, key)
+  return {
+    header: header.slice(),
+    push(plain, isLast) {
+      const tag = isLast
+        ? sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
+        : sodium.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
+      return sodium.crypto_secretstream_xchacha20poly1305_push(
+        state, plain, associatedData ?? null, tag,
+      )
+    },
+  }
+}

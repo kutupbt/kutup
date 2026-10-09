@@ -157,23 +157,6 @@ packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
-### Web · theme and language follow the account
-
-Each app keeps its own theme (`next-themes`, `localStorage` key
-`kutup-theme`) and language (`LANGUAGE_STORAGE_KEY`, see
-`frontend/packages/i18n/src/index.ts`). The apps are separate origins, so
-choosing Dark or Turkish on `account.<domain>` leaves Drive, Chat, Office,
-Photos and Maps as they were until the same choice is made in each (left at
-"System", they all follow the OS and match). Planned, as Proton does:
-- both stored as account preferences on the server (not secret, so not
-  end-to-end encrypted), changed from any app's theme or language control;
-- each app keeps its local copy for the first paint (no flash of the wrong
-  theme) and takes the account's value when it loads and when the tab
-  comes back into focus, so a change reaches every app and every device;
-- public pages (shared links, public albums) keep the local choice.
-A cookie on the shared parent domain was set aside: it syncs one browser
-only, and self-hosters may serve the apps from unrelated domains.
-
 ### Responsive web · mobile selection mode
 
 Per the design + user direction: long-press / "Select" button on mobile turns the page into Google-Drive-style full-screen takeover with checkboxes, top "Cancel · N selected · Select all" bar, bottom action bar (Share / Move / Delete / More).
@@ -737,6 +720,39 @@ upload progress, drag/drop, contextual empty states, and right-side details
 inspector. Future work here is performance measurement for very large folders
 and optional filtering/view modes backed by real behavior.
 
+### Drive · resumable uploads into folders on other servers
+
+Uploads from the browser go on after a lost connection or a reload
+(architecture.md, "Storage layer"), but only into folders on the account's
+own server. A folder on another server takes the older multipart path
+through this server (`uploadRemote` in
+`frontend/apps/drive/src/features/uploads/useUploadActions.ts`): one
+request, with neither the waiting nor the resuming. Making it resumable
+needs tus (or a chunked equivalent) on the federated upload route, so each
+part is acknowledged by the folder's server and an upload can go on from
+its offset there.
+
+### Drive · resuming a whole folder upload
+
+Done (October 2026) by names unique in a folder
+(docs/plans/drive-unique-names.md): a folder dropped again goes into the
+folder already there, files already there with the same content are not
+sent, and the file a reload interrupted is offered to go on (browser specs
+49 and 50). What is still not remembered across a reload is the folder
+upload as one job: the person drops the folder again to finish it.
+
+### Drive · names unique in a folder: what is left
+
+Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
+`unique_names_live`, `scripts/verify-cli.sh`. Still open:
+- Content hashes for files in folders on other servers: their listings and
+  uploads carry no content hash yet, so a clash there always asks.
+- A moved file loses its content hash (it is keyed to the folder it left,
+  and the plaintext's SHA-256 is not kept): it is asked about, not skipped,
+  until uploaded again.
+- The CLI has no Replace for a taken name (it skips the same file, and
+  `--keep-both` keeps both).
+
 ### Drive · share dialogs: what is left
 
 Done (October 2026): each person in the file and folder share dialogs has a
@@ -757,31 +773,6 @@ Still open:
   grouped apart from the people, the folder dialog's add form in the same
   one-row shape as the file dialog's, and a clear in-progress state on a
   row while its change or a key rotation runs.
-
-### Drive · large uploads from the browser
-
-The web client streams an upload: it reads 5 MB, encrypts it as one
-secretstream chunk and sends it as one tus request, so memory stays flat at
-any size, and the server accepts up to 1 TiB within the user's quota. Two
-gaps make large uploads (several GB, hours on a slow line) fragile:
-- **No resume across a page load.** Closing or reloading the tab, or a
-  browser crash, loses the upload and it starts again from zero:
-  tus-js-client's cross-session resume is turned off
-  (`storeFingerprintForResuming: false` in
-  `frontend/packages/files/src/upload/streamUpload.ts`). Resuming needs the
-  encryption state at the server's offset; the secretstream is sequential,
-  so the simplest safe way is to remember the upload (file name, size, last
-  modified, tus URL) and, on picking the same file again, re-encrypt it from
-  the start while skipping the bytes the server already holds. That costs
-  CPU, not network, and stores no key material.
-- **Short network drops only.** Each request is retried after 0, 1, 3, 5
-  and 10 seconds; an outage longer than about 20 seconds fails the whole
-  upload. It should keep retrying with growing gaps while the browser is
-  offline and continue from the server's offset when it comes back.
-
-With both, a browser test that uploads a multi-GB file, interrupts it
-(offline, reload) and checks it completes with flat memory; today spec 25
-covers 12 MB.
 
 ### Drive · office documents and whiteboards across servers
 

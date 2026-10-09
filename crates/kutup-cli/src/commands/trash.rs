@@ -69,6 +69,7 @@ struct TrashEntry {
 fn folder_name(f: &TrashFolder, master_key: &[u8], session: &Session) -> String {
     let inner = || -> Result<String> {
         let collection = crate::api::Collection {
+            name_hash: None,
             id: f.id.clone(),
             owner_user_id: f.owner_user_id.clone(),
             name_envelope: f.name_envelope.clone(),
@@ -106,6 +107,7 @@ fn file_meta(
 ) -> (String, Option<i64>) {
     let inner = || -> Result<FileMetadata> {
         let collection = crate::api::Collection {
+            name_hash: None,
             id: f.collection_id.clone(),
             owner_user_id: f.collection_owner_user_id.clone(),
             name_envelope: String::new(),
@@ -130,6 +132,8 @@ fn file_meta(
         };
         let col_key = crate::collection_crypto::open_key(&collection, master_key, session)?;
         let file = crate::api::File {
+            content_hash: None,
+            name_hash: None,
             id: f.id.clone(),
             collection_id: f.collection_id.clone(),
             metadata_envelope: f.metadata_envelope.clone(),

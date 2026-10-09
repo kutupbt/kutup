@@ -23,7 +23,6 @@ use kutup_federation_proto::{
 };
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
@@ -208,6 +207,9 @@ struct ParsedUpload {
     file_id: Uuid,
     metadata_envelope: String,
     file_key_envelope: String,
+    /// The name's hash under the folder's hash key, from a client that sends
+    /// one (docs/plans/drive-unique-names.md).
+    name_hash: Option<String>,
     file: NamedTempFile,
     size: i64,
     digest: String,
@@ -1739,6 +1741,19 @@ pub async fn upload_file(
             );
         }
 
+        // Names are unique in the folder for peers too; checked before any
+        // byte is stored, and held until commit.
+        if let Some(hash) = &parsed.name_hash {
+            let place = crate::drive_names::Place::Folder(share.collection_id);
+            crate::drive_names::lock_place(&mut tx, place).await?;
+            if let Err(error) =
+                crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await
+            {
+                tx.rollback().await?;
+                return signed_app_error(federation, &authenticated, error);
+            }
+        }
+
         let file_id = parsed.file_id;
         let storage_path = format!("fed/{}/{}/{}", share.id, share.collection_id, file_id);
         let object = ByteStream::from_path(parsed.file.path())
@@ -1757,8 +1772,8 @@ pub async fn upload_file(
                 (id, collection_id, uploader_user_id, metadata_envelope,
                  file_key_envelope, key_epoch, key_generation, metadata_revision,
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
-                 original_key_generation)
-             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1)",
+                 original_key_generation, name_hash)
+             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -1771,8 +1786,10 @@ pub async fn upload_file(
             .bind(parsed.size)
             .bind(&parsed.digest)
             .bind(share.id)
+            .bind(&parsed.name_hash)
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(crate::drive_names::map_unique_violation)?;
             sqlx::query(
                 "UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2",
             )
@@ -1962,6 +1979,7 @@ where
     let mut file_id = None;
     let mut metadata_envelope = None;
     let mut file_key_envelope = None;
+    let mut name_hash = None;
     let mut uploaded_file = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -1986,6 +2004,12 @@ where
                     return Err(AppError::bad_request("duplicate fileKeyEnvelope"));
                 }
                 file_key_envelope = Some(limited_field_text(field).await?);
+            }
+            Some("nameHash") => {
+                if name_hash.is_some() {
+                    return Err(AppError::bad_request("duplicate nameHash"));
+                }
+                name_hash = Some(limited_field_text(field).await?);
             }
             Some("file") => {
                 if uploaded_file.is_some() {
@@ -2025,6 +2049,7 @@ where
         file_id: canonical_uuid(&file_id)?,
         metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
+        name_hash: crate::drive_names::parse_name_hash(name_hash.as_deref())?,
         file,
         size,
         digest,
@@ -2336,11 +2361,14 @@ pub(crate) fn signed_app_error(
     } else {
         error.message
     };
+    // A client error's details (what holds a taken name) go back with it.
+    let mut body = error.details.unwrap_or_default();
+    body.insert("error".into(), serde_json::Value::String(message));
     signed_json(
         federation,
         authenticated,
         error.status,
-        &json!({ "error": message }),
+        &serde_json::Value::Object(body),
     )
 }
 

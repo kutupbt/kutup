@@ -27,16 +27,21 @@ impl Client {
         collection_id: &str,
         metadata_envelope: &str,
         file_key_envelope: &str,
+        name_hash: Option<&str>,
     ) -> Result<(String, String)> {
         // Upload-Metadata values are base64 per the tus spec (the metadata
         // strings are themselves already base64 — double-encoded, matching Go).
-        let upload_meta = [
+        let mut upload_meta = vec![
             format!("fileId {}", b64(file_id.as_bytes())),
             format!("collectionId {}", b64(collection_id.as_bytes())),
             format!("metadataEnvelope {}", b64(metadata_envelope.as_bytes())),
             format!("fileKeyEnvelope {}", b64(file_key_envelope.as_bytes())),
-        ]
-        .join(",");
+        ];
+        // The name's hash, kept unique in the folder (docs/plans/drive-unique-names.md).
+        if let Some(hash) = name_hash {
+            upload_meta.push(format!("nameHash {}", b64(hash.as_bytes())));
+        }
+        let upload_meta = upload_meta.join(",");
 
         let resp = self
             .upload_request(Method::POST, "/uploads/")

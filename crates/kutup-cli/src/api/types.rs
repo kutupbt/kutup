@@ -208,6 +208,9 @@ pub struct Collection {
     pub can_delete: bool,
     #[serde(default)]
     pub upload_quota_bytes: Option<i64>,
+    /// Its name's hash in its place, once known.
+    #[serde(default)]
+    pub name_hash: Option<String>,
     /// Decrypted client-side; never serialized.
     #[serde(skip)]
     pub name: String,
@@ -222,6 +225,9 @@ pub struct CreateCollectionRequest {
     pub epoch_statement: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_collection_id: Option<String>,
+    /// The name's hash in its place (docs/plans/drive-unique-names.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +241,8 @@ pub struct CreateCollectionResponse {
 pub struct RenameCollectionRequest {
     pub name_envelope: String,
     pub name_revision: u64,
+    /// The new name's hash in the folder's place; none clears it.
+    pub name_hash: Option<String>,
 }
 
 // --- Files ---
@@ -268,6 +276,12 @@ pub struct File {
     /// `key_generation`, in order); absent for most files.
     #[serde(default)]
     pub key_history: Vec<FileKeyHistoryEntry>,
+    /// Its name's and content's hashes in its folder, once known
+    /// (docs/plans/drive-unique-names.md).
+    #[serde(default)]
+    pub name_hash: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 /// `POST /files/{id}/rekey`.
@@ -295,6 +309,9 @@ pub struct MoveFileRequest {
     pub to_key_epoch: u32,
     /// The file's current key sealed under the destination's key.
     pub file_key_envelope: String,
+    /// Its name's hash in the destination (docs/plans/drive-unique-names.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
 }
 
 /// `POST /collections/{id}/move`; `None` moves the folder to the top level.
@@ -302,6 +319,9 @@ pub struct MoveFileRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MoveCollectionRequest {
     pub parent_collection_id: Option<String>,
+    /// Its name's hash in the new place (docs/plans/drive-unique-names.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
 }
 
 /// One generation of a file's key history: the key of `generation − 1`
@@ -322,6 +342,9 @@ pub use kutup_crypto::file_metadata::FileMetadataV1 as FileMetadata;
 pub struct UpdateFileMetadataRequest {
     pub metadata_envelope: String,
     pub metadata_revision: u64,
+    /// The new name's hash in the file's folder; absent keeps the stored one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

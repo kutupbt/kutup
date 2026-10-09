@@ -34,6 +34,11 @@ export function mergeMessages(base: Messages, extra: Messages): Messages {
 }
 
 export function initI18n(app: { en: Messages; tr: Messages }) {
+  // The page's language follows the app's, for screen readers and spelling;
+  // listened to before init, which already announces the detected one.
+  i18n.on('languageChanged', (lng) => {
+    document.documentElement.lang = lng
+  })
   void i18n
     .use(LanguageDetector)
     .use(initReactI18next)
@@ -51,9 +56,8 @@ export function initI18n(app: { en: Messages; tr: Messages }) {
         caches: ['localStorage'],
       },
     })
-  i18n.on('languageChanged', (lng) => {
-    document.documentElement.lang = lng
-  })
+  // In case init finished without announcing it (resources given inline).
+  document.documentElement.lang = i18n.resolvedLanguage ?? i18n.language ?? 'en'
   return i18n
 }
 

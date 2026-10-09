@@ -223,6 +223,8 @@ struct RemoteDir {
     key: Vec<u8>,
     /// Older keys too, for files stored before the folder rotated.
     keys: crate::keyring::Keyring,
+    /// Its names' hash key (docs/plans/drive-unique-names.md).
+    hash_key: [u8; 32],
 }
 
 struct RemoteEntry {
@@ -270,6 +272,7 @@ pub fn sync(
             collection_id: collection_id.to_string(),
             key_epoch: root_col.key_epoch,
             key: root_key,
+            hash_key: crate::names::folder_hash_key(&root_keys, collection_id)?,
             keys: root_keys,
         },
     );
@@ -301,6 +304,10 @@ pub fn sync(
                     .push(format!("duplicate remote folder name {sub_rel} — skipped"));
                 continue;
             }
+            let Ok(hash_key) = crate::names::folder_hash_key(&keys, &sub.id) else {
+                result.errors.push(format!("folder hash key {}", sub.id));
+                continue;
+            };
             stack.push((sub_rel.clone(), sub.id.clone()));
             remote_dirs.insert(
                 sub_rel,
@@ -309,6 +316,7 @@ pub fn sync(
                     key_epoch: sub.key_epoch,
                     key,
                     keys,
+                    hash_key,
                 },
             );
         }
@@ -436,6 +444,7 @@ pub fn sync(
                         client,
                         leaf,
                         &parent.collection_id,
+                        &parent.hash_key,
                         &sess.user_id,
                         &master_key,
                     ) {
@@ -450,6 +459,9 @@ pub fn sync(
                             remote_dirs.insert(
                                 rel,
                                 RemoteDir {
+                                    hash_key: kutup_crypto::drive_names::folder_hash_key(
+                                        &key, &id,
+                                    )?,
                                     collection_id: id,
                                     key_epoch: 1,
                                     key: key.to_vec(),
@@ -596,6 +608,13 @@ fn execute_file_action(
                 .get(parent_rel)
                 .context("remote parent folder missing")?;
             let abs = root.join(rel);
+            // Names are unique in a folder (docs/plans/drive-unique-names.md):
+            // a new file claims its name as it goes; an update goes up
+            // without one, and takes the name once the old file has gone.
+            let update = match action {
+                FileAction::PushUpdate { old_file_id } => Some(old_file_id),
+                _ => None,
+            };
             let up = uploader::upload_streaming(
                 client,
                 store,
@@ -606,14 +625,37 @@ fn execute_file_action(
                     collection_key: &dir.key,
                     resume: true,
                     progress: Progress::Quiet,
+                    naming: if update.is_some() {
+                        uploader::Naming::After(dir.hash_key)
+                    } else {
+                        uploader::Naming::Claim(dir.hash_key)
+                    },
+                    name: None,
                 },
             )?;
             // Upload-first, then retire the superseded id (soft → trash).
-            if let FileAction::PushUpdate { old_file_id } = action {
-                if let Err(e) = client.delete_file(old_file_id) {
-                    result
+            if let Some(old_file_id) = update {
+                match client.delete_file(old_file_id) {
+                    Ok(()) => {
+                        let claimed =
+                            crate::names::name_hash(&dir.hash_key, &up.name).and_then(|hash| {
+                                client.fill_name_hashes(
+                                    &dir.collection_id,
+                                    &[(up.file_id.clone(), hash)],
+                                    &[],
+                                )
+                            });
+                        match claimed {
+                            Ok(clashes) if clashes.is_empty() => {}
+                            Ok(_) => result
+                                .errors
+                                .push(format!("{rel}: its name was taken meanwhile")),
+                            Err(e) => result.errors.push(format!("{rel}: claim name: {e:#}")),
+                        }
+                    }
+                    Err(e) => result
                         .errors
-                        .push(format!("{rel}: retire old version: {e}"));
+                        .push(format!("{rel}: retire old version: {e}")),
                 }
             }
             let stat = stat_local(&abs)?;

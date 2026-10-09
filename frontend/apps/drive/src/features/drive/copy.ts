@@ -11,6 +11,7 @@ import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
 import { contentPath, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { canonicalName, inFolder, nameHashIn } from '@kutup/drive-core/names'
 
 // Copying, end to end encrypted: the server never holds a readable file, so
 // a copy is the browser reading the file (decrypting as it streams) and
@@ -19,16 +20,52 @@ import { contentPath, fileLocation, type DriveFile, type Folder } from '@kutup/d
 
 /**
  * `name`, or the first free `name (1)`, `name (2)`… — the number goes before
- * the extension (`report (1).pdf`). Case-insensitive, like the server.
+ * the extension (`report (1).pdf`). Case and composition aside, as the
+ * server compares (docs/plans/drive-unique-names.md).
  */
 export function copyName(name: string, taken: Iterable<string>): string {
-  const names = new Set([...taken].map((n) => n.toLocaleLowerCase()))
-  if (!names.has(name.toLocaleLowerCase())) return name
+  const names = new Set([...taken].map(canonicalName))
+  if (!names.has(canonicalName(name))) return name
   const dot = name.lastIndexOf('.')
   const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
   for (let n = 1; ; n++) {
     const candidate = `${base} (${n})${ext}`
-    if (!names.has(candidate.toLocaleLowerCase())) return candidate
+    if (!names.has(canonicalName(candidate))) return candidate
+  }
+}
+
+/**
+ * A folder this account just made under `parent`, as listings give it, so
+ * what goes into it next can be sealed for it before the lists reload.
+ */
+export function createdFolder(
+  me: DriveIdentity,
+  parent: Folder,
+  created: Awaited<ReturnType<typeof createOwnedCollectionV1>>,
+  name: string,
+): Folder {
+  return {
+    ...parent,
+    source: 'owned',
+    remoteShareId: undefined,
+    id: created.payload.id,
+    parentId: parent.id,
+    name,
+    key: created.collectionKey,
+    keyEpoch: 1,
+    ownerUserId: me.userId,
+    ownerAuthorityPublicKey: me.authorityPublicKey,
+    epochStatementHash: created.epochStatementHash,
+    nameRevision: 1,
+    color: null,
+    ownerAccount: null,
+    canUpload: true,
+    canDelete: true,
+    canManage: true,
+    isRoot: false,
+    nameHash: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   }
 }
 
@@ -106,27 +143,8 @@ export async function copyFolder(
 ): Promise<void> {
   signal.throwIfAborted()
   const created = await createOwnedCollectionV1(me.masterKey, me.userId, name, destParent.id)
-  await api.post('/collections', created.payload)
-  const copy: Folder = {
-    ...destParent,
-    source: 'owned',
-    remoteShareId: undefined,
-    id: created.payload.id,
-    parentId: destParent.id,
-    name,
-    key: created.collectionKey,
-    keyEpoch: 1,
-    ownerUserId: me.userId,
-    ownerAuthorityPublicKey: me.authorityPublicKey,
-    epochStatementHash: created.epochStatementHash,
-    nameRevision: 1,
-    color: null,
-    ownerAccount: null,
-    canUpload: true,
-    canDelete: true,
-    canManage: true,
-    isRoot: false,
-  }
+  await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(destParent), name) })
+  const copy = createdFolder(me, destParent, created, name)
   const files = (await loadFolderFiles(source)).filter((f) => f.fileKey && f.name)
   const taken: string[] = []
   for (const file of files) {

@@ -493,6 +493,29 @@ Look up another local user's registered Drive identity (used when sharing a coll
 }
 ```
 
+
+### GET /api/account/ui-preferences · PUT /api/account/ui-preferences
+
+The account's theme and language, the same in every web app and on every
+device. Not secret, so stored as they are (not end-to-end encrypted).
+
+**Auth:** Bearer JWT
+
+**Body (PUT) and response:**
+```json
+{ "theme": "light" | "dark" | "system" | null, "language": "en" | "tr" | null }
+```
+
+A null value means the account has not chosen; each app then keeps its own
+(the system theme, the browser's language). `PUT` replaces both values; an
+unknown value or an extra field is a `400`.
+
+Each signed-in app keeps a local copy for its first paint, takes the
+account's values when it opens and when its tab comes back into view, and
+saves a change made in its theme or language control
+(`useAccountUiPreferences`, `frontend/packages/session/src/uiPreferences.ts`).
+The first app to load for an account that never chose saves its own choice.
+Public pages (shared links, public albums) keep only the local choice.
 ---
 
 ## Collections
@@ -563,9 +586,14 @@ Create a new collection.
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
   "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "epochStatement": "<CollectionEpochStatementV1 base64>",
-  "parentCollectionId": null
+  "parentCollectionId": null,
+  "nameHash": "<64 lowercase hex>"
 }
 ```
+
+`nameHash` (optional, see "Names in a folder") keeps the name unique among
+the parent's files and subfolders, or among the owner's top-level folders;
+a taken name is `409 name_taken`.
 
 The name envelope is bound to `(collection ID, owner user ID, epoch 1,
 revision 1)`. The owner-key envelope binds the same identifiers with the
@@ -617,9 +645,14 @@ Rename a collection (client re-encrypts the name with the collection key).
 ```json
 {
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
-  "nameRevision": 2
+  "nameRevision": 2,
+  "nameHash": "<64 lowercase hex>"
 }
 ```
+
+`nameHash` is the new name's hash in the folder's place; a name another
+item there holds is `409 name_taken`. Without it the stored hash is cleared
+(the owner's client fills it in).
 
 The revision must be exactly one greater than the stored revision and the
 envelope must authenticate that exact revision, current epoch, collection and
@@ -978,6 +1011,8 @@ Upload an encrypted file to a collection. Multipart form.
 | `collectionId` | string (UUID) | Target collection |
 | `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record under the file key, bound to the file (object = parent = file), key generation 1 and revision 1 |
 | `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
+| `nameHash` | string (optional) | The name's hash in the folder ("Names in a folder"); checked before anything is stored |
+| `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
@@ -1051,9 +1086,15 @@ return `409` or `400` without changing the row.
 ```json
 {
   "metadataEnvelope": "<DriveEnvelopeV1 base64>",
-  "metadataRevision": 2
+  "metadataRevision": 2,
+  "nameHash": "<64 lowercase hex>"
 }
 ```
+
+`nameHash` is the new name's hash in the file's folder; a name another item
+there holds is `409 name_taken`. Absent, the stored hash stays (the metadata
+changed, not the name); `null` clears it (a rename by someone without the
+folder's key — the file shared by itself; the owner's client fills it in).
 
 ---
 
@@ -1091,6 +1132,61 @@ Move a file to the trash (soft delete). The file disappears from every normal en
 **Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
 
 **Response:** `204 No Content`.
+
+---
+
+## Names in a folder
+
+docs/plans/drive-unique-names.md. A name is unique among a folder's files
+and subfolders together, and among an owner's top-level folders (albums
+aside), compared without letter case or Unicode composition. The server
+never reads a name: clients send its hash, `HMAC-SHA256(hash key, "name" ‖
+0 ‖ canonical name)` (`kutup_crypto::drive_names`), under the folder's hash
+key (from its first key) or, at the top level, the account's. A file's
+content hash, `HMAC-SHA256(hash key, "content" ‖ 0 ‖ SHA-256 of the
+plaintext)`, lets a client tell that the file it is about to upload is
+already there.
+
+- Hashes are 64 lowercase hex digits; anything else is `400`. Listings
+  return `nameHash` (files and folders) and `contentHash` (files) when
+  known.
+- Every write that names something or puts it somewhere takes `nameHash`:
+  `POST /api/collections`, `PUT /api/collections/:id`,
+  `POST /api/collections/:id/move`, `POST /api/files/upload`, tus
+  `POST /api/uploads` (`nameHash` in `Upload-Metadata`; checked again when
+  the upload finishes), `PUT /api/files/:id`, `POST /api/files/:id/move`
+  (with `contentHash` under the destination's key, if known; otherwise the
+  content hash is dropped), and uploads from another server
+  (`nameHash` multipart field). An item written without one has no hash
+  until it is filled in, and is not kept unique meanwhile.
+- A taken name is `409` with what holds it:
+
+  ```json
+  { "error": "an item with this name is already here", "code": "name_taken",
+    "holder": { "kind": "file", "id": "<uuid>", "contentHash": "<hex or null>" } }
+  ```
+- A file or folder restored from the trash after its name was taken comes
+  back without its hash; the owner's client names it `name (2)`.
+- A new version (`POST /api/files/:id/versions`) clears the content hash.
+
+### PUT /api/files/:id/content-hash
+
+`{ "contentHash": "<hex>" }` — what the file's content is recognised by in
+its folder, recorded once an upload has read the whole file. Whoever can
+write the folder (or edit the file shared by itself). `204`.
+
+### POST /api/collections/:id/name-hashes
+
+`{ "files": [{ "id", "nameHash" }], "folders": [{ "id", "nameHash" }] }` (at
+most 1000) — the hashes of the folder's items that have none yet, in the
+order given. Items already hashed, elsewhere or in the trash are left
+alone; one whose name another item holds is not stored and comes back in
+`{ "clashes": [{ "id", "holderKind", "holderId" }] }`, to be renamed.
+Whoever can write the folder.
+
+### POST /api/drive/top-level-name-hashes
+
+The same for the account's own top-level folders (`files` must be empty).
 
 ---
 
@@ -1253,8 +1349,10 @@ owner's.
 ### POST /api/files/:id/move
 
 Move a file to another folder of the same owner (docs/plans/drive-move.md).
-**Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope }`
-— the file's current key sealed under the destination's key at its current
+**Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope,
+nameHash?, contentHash? }` — the name's (and, if known, the content's) hash
+in the destination ("Names in a folder"; a taken name is `409 name_taken`),
+and the file's current key sealed under the destination's key at its current
 epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
 content, metadata, versions, thumbnails and assets are bound to the file, not
 the folder. **Response:** `{ collectionId, keyEpoch }`. **Auth:** write access
@@ -1268,7 +1366,8 @@ the file are closed.
 ### POST /api/collections/:id/move
 
 Put a folder under another of the owner's folders, or at the top level.
-**Body:** `{ parentCollectionId: string | null }`. A folder's key is sealed to
+**Body:** `{ parentCollectionId: string | null, nameHash? }` — its name's hash
+in the new place (`409 name_taken` when held). A folder's key is sealed to
 its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
 **Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
 under a folder the caller does not own.
@@ -1333,7 +1432,7 @@ owner's trash on its own, its owner may still read them
 
 ### POST /api/trash/:id/restore
 
-Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
+Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead). An item whose name another took meanwhile comes back without its name hash (see "Names in a folder"); so does a folder that lands at the top level.
 
 **Auth:** Bearer JWT (owner only)
 

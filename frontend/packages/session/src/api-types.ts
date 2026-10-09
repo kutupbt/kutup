@@ -21,6 +21,8 @@ export interface CollectionRow {
   uploadQuotaBytes: number | null
   uploadUsedBytes: number
   isShared: boolean
+  /** Its name's hash in its place (docs/plans/drive-unique-names.md); absent until filled in. */
+  nameHash?: string
 }
 
 /**
@@ -58,6 +60,9 @@ export interface FileRow {
   keyHistory?: FileKeyHistoryEntry[]
   /** Shared with someone by itself; only its owner is told. */
   shared?: boolean
+  /** Its name's and content's hashes in its folder (docs/plans/drive-unique-names.md); absent until known. */
+  nameHash?: string
+  contentHash?: string
 }
 
 export interface UserRow {

@@ -8,6 +8,7 @@ import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKind } from '@kutup/drive-core/kinds'
 import { kindTileSvg } from '@kutup/drive-ui/kindTile'
 import { appUrl } from '@kutup/session/apps'
+import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { QuotaExceededError } from '@kutup/session/errors'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
@@ -120,6 +121,8 @@ function useLiveEditingBlocked(): LiveEditing {
 
 export function FileEditorPage({ shared = false }: { shared?: boolean }) {
   const { cid = '', fid = '' } = useParams()
+  // Outside Drive's shell, with its own theme switch.
+  useAccountUiPreferences()
   return <OpenFile key={`${shared ? 'shared' : cid}/${fid}`} cid={shared ? null : cid} fid={fid} />
 }
 

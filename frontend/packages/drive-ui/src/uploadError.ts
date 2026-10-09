@@ -1,6 +1,15 @@
 import { isAxiosError } from 'axios'
+import { FolderKeyChanged, NotTheSameFile, UploadNoLongerOnServer } from '@kutup/files/upload/streamUpload'
 
-export type UploadFailure = 'quota' | 'shareQuota' | 'forbidden' | 'network' | 'other'
+export type UploadFailure =
+  | 'quota'
+  | 'shareQuota'
+  | 'forbidden'
+  | 'network'
+  | 'notSameFile'
+  | 'folderKeyChanged'
+  | 'expired'
+  | 'other'
 
 interface TusLikeError {
   originalResponse?: { getStatus(): number; getBody(): string } | null
@@ -26,6 +35,10 @@ export function isFolderKeyChanged(error: unknown): boolean {
  * axios. The server says which quota a 413 hit.
  */
 export function classifyUploadError(error: unknown): UploadFailure {
+  // Resuming an interrupted upload.
+  if (error instanceof NotTheSameFile) return 'notSameFile'
+  if (error instanceof FolderKeyChanged) return 'folderKeyChanged'
+  if (error instanceof UploadNoLongerOnServer) return 'expired'
   let status: number | undefined
   let body = ''
   const tus = (error as TusLikeError | null)?.originalResponse

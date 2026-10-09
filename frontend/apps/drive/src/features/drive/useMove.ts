@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import { foldersKey, type FolderIndex } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
-import { clashes, moveFile, moveFolder, moveRefusal, MoveConflictError, type MoveSource } from './move'
+import { clashes, moveFile, moveFolder, moveRefusal, MoveConflictError, MoveNameTakenError, type MoveSource } from './move'
 
 /**
  * Move files and folders into `dest`, then say what happened with an undo
@@ -58,7 +58,9 @@ export function useMove() {
           else await moveFolder(source.folder, dest)
           moved.push(source)
         } catch (error) {
-          if (error instanceof MoveConflictError) changed += 1
+          // Taken meanwhile (or by an item not listed yet): stays, as above.
+          if (error instanceof MoveNameTakenError) taken.add(source)
+          else if (error instanceof MoveConflictError) changed += 1
           else failed += 1
         }
       }
