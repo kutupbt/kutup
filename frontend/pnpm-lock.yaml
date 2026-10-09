@@ -219,6 +219,67 @@ importers:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
 
+  apps/contacts:
+    dependencies:
+      '@kutup/contacts-core':
+        specifier: workspace:*
+        version: link:../../packages/contacts-core
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../../packages/drive-core
+      '@kutup/drive-ui':
+        specifier: workspace:*
+        version: link:../../packages/drive-ui
+      '@kutup/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      '@kutup/session':
+        specifier: workspace:*
+        version: link:../../packages/session
+      '@kutup/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5
+        version: 5.103.2(react@18.3.1)
+      axios:
+        specifier: ^1.18.0
+        version: 1.18.0
+      i18next:
+        specifier: ^26.0.6
+        version: 26.4.2(typescript@5.9.3)
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.47.0(react@18.3.1)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      react-i18next:
+        specifier: ^17.0.4
+        version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      react-router-dom:
+        specifier: ^7.1.1
+        version: 7.18.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.8(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+    devDependencies:
+      '@kutup/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
+
   apps/drive:
     dependencies:
       '@codemirror/autocomplete':
@@ -704,6 +765,31 @@ importers:
       vite:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
+
+  packages/contacts-core:
+    dependencies:
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@kutup/session':
+        specifier: workspace:*
+        version: link:../session
+      '@tanstack/react-query':
+        specifier: ^5
+        version: 5.103.2(react@18.3.1)
+      axios:
+        specifier: ^1.18.0
+        version: 1.18.0
+      ical.js:
+        specifier: 2.2.1
+        version: 2.2.1
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.3
+        version: 18.3.28
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
 
   packages/crypto:
     dependencies:
@@ -3911,6 +3997,9 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  ical.js@2.2.1:
+    resolution: {integrity: sha512-yK/UlPbEs316igb/tjRgbFA8ZV75rCsBJp/hWOatpyaPNlgw0dGDmU+FoicOcwX4xXkeXOkYiOmCqNPFpNPkQg==}
 
   iconv-lite@0.6.3:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
@@ -8376,6 +8465,8 @@ snapshots:
   i18next@26.4.2(typescript@5.9.3):
     optionalDependencies:
       typescript: 5.9.3
+
+  ical.js@2.2.1: {}
 
   iconv-lite@0.6.3:
     dependencies:

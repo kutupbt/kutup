@@ -34,7 +34,8 @@
     "drive": "Depo",
     "maps": "Haritalar",
     "office": "Ofis",
-    "photos": "Galeri"
+    "photos": "Galeri",
+    "contacts": "Kişiler"
   },
   "theme": {
     "dark": "Koyu tema",

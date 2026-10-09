@@ -1,6 +1,6 @@
 # Contacts (Phase B)
 
-**Status:** planned 2026-10-09. Phase B of
+**Status:** B1–B3 done 2026-10-09; B4 (pickers in Chat, Drive and Photos) next. Phase B of
 [`../research/17-mail-calendar-contacts.md`](../research/17-mail-calendar-contacts.md),
 after [`mail-address-keys.md`](mail-address-keys.md).
 

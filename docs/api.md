@@ -483,10 +483,12 @@ page works out "Files by type" in the browser from decrypted names.
     "mediaBytes": 50000000,
     "historyBytes": 10000000,
     "historyMediaBytes": 8288000
-  }
+  },
+  "contacts": { "bytes": 52000, "count": 40 }
 }
 ```
 
+- `contacts` is the address book: each contact's summary and sealed card.
 - `usedBytes` is the account counter every write charges and every limit checks.
 - `reservedBytes` is held for work still in flight: open tus uploads, the
   unreceived part of open Chat media uploads, and pending federated inbound
@@ -988,6 +990,63 @@ Web Key Directory, direct method, outside `/api`: the binary public keys of
 `application/octet-stream`. `hash` is the z-base-32 SHA-1 of the lowercased
 local part and must match `l`; anything else is `404`. No authentication;
 rate-limited. `GET /.well-known/openpgpkey/policy` returns an empty policy.
+
+---
+
+## Contacts
+
+The account's address book (`docs/plans/contacts.md`), Proton's split. Each
+contact is a **summary** (canonical JSON: `uid`, `name`, `emails[{address,
+label?}]`, `groups[]`, `pinnedKeys[]`) signed by the account authority, and a
+**card** (the full vCard 4.0) sealed under a contacts key only the account
+holds. The server verifies every summary against the account's authority key,
+indexes its emails (autocomplete) and groups, and charges summary and card to
+the storage pool (`413` when full).
+
+### GET /api/contacts?offset=&limit=
+
+The caller's contacts by name, at most 1000 per page.
+**Response:** `{ "contacts": [{ "id", "summary", "signature", "card", "revision", "createdAt", "updatedAt" }], "total": 12 }`.
+Clients verify `summary` with `signature` against their own authority before
+using a contact.
+
+### POST /api/contacts
+
+**Body:** `{ "summary": "canonical JSON", "signature": "base64", "card": "base64" }`.
+**Response 201:** the contact. `400` for a summary that is not canonical, not
+signed by this account, or names a group that does not exist; `409` when the
+UID is already in the address book.
+
+### PUT /api/contacts/:id
+
+**Body:** the same plus `revision` (the one the edit started from). The UID
+cannot change. **Response:** the contact with the next revision; `409` when it
+changed elsewhere.
+
+### DELETE /api/contacts/:id · POST /api/contacts/delete
+
+Delete one, or `{ "ids": [...] }` (up to 500). Storage is released.
+**Response:** `204`.
+
+### POST /api/contacts/import
+
+`{ "contacts": [ ...like POST... ] }`, 1 to 500, all or nothing.
+**Response:** `{ "imported": 2 }`.
+
+### GET /api/contacts/emails?q=&limit=
+
+Addresses whose address, or any word of the contact's name, starts with `q`;
+recently used first. For recipient, share and invitee pickers.
+**Response:** `[{ "contactId", "name", "address", "label" }]`.
+
+### Groups
+
+`GET /api/contacts/groups` → `[{ "id", "name", "color", "members" }]`;
+`POST /api/contacts/groups` `{ "name", "color": "#rrggbb" }` → `201`;
+`PUT /api/contacts/groups/:id` (rename, recolour) → `204`;
+`DELETE /api/contacts/groups/:id` → `204` (members stay; their summaries are
+re-signed without it on their next edit, and readers ignore unknown ids).
+Membership is the summary's `groups`, so it is signed.
 
 ---
 

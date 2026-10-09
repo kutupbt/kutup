@@ -64,6 +64,8 @@ export {
   verifyMailKeyList,
 } from './mailKey'
 export type { GeneratedMailAddressKey, MailKeyEntry, MailKeyListInput, SignedMailKeyList } from './mailKey'
+export { openContactCard, sealContactCard, signContactSummary, verifyContactSummary } from './contactCard'
+export type { ContactSummary } from './contactCard'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,

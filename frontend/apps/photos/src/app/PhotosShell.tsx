@@ -1,4 +1,4 @@
-import { Archive, BookImage, EyeOff, FileType, HardDrive, Heart, Images, Map as MapIcon, MapPinned, MessagesSquare, Settings, Trash2, UserRound } from 'lucide-react'
+import { Archive, BookImage, BookUser, EyeOff, FileType, HardDrive, Heart, Images, Map as MapIcon, MapPinned, MessagesSquare, Settings, Trash2, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -27,6 +27,7 @@ export function PhotosShell({ primaryAction }: { primaryAction?: ReactNode }) {
             { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
             { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
+            { id: 'contacts', name: t('apps.contacts'), href: appUrl('contacts'), icon: <BookUser /> },
             { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },
             { id: 'maps', name: t('apps.maps'), href: appUrl('maps'), icon: <MapIcon /> },
             { id: 'account', name: t('apps.account'), href: appUrl('account'), icon: <UserRound /> },

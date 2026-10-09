@@ -34,7 +34,8 @@
     "drive": "Drive",
     "maps": "Maps",
     "office": "Office",
-    "photos": "Photos"
+    "photos": "Photos",
+    "contacts": "Contacts"
   },
   "theme": {
     "dark": "Dark theme",

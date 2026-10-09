@@ -16,7 +16,7 @@ if [ -n "${KUTUP_ACME_DOMAINS:-}" ]; then
   domains=$(printf '%s' "$KUTUP_ACME_DOMAINS" | tr ',' ' ')
 elif [ -n "${KUTUP_BASE_DOMAIN:-}" ]; then
   domains=""
-  for app in account drive chat photos maps office editor; do
+  for app in account drive chat photos maps office contacts editor; do
     domains="$domains $app.$KUTUP_BASE_DOMAIN"
   done
 else

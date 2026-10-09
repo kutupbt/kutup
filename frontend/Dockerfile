@@ -1,4 +1,4 @@
-# The Kutup web apps (account, drive, chat, maps, photos, office) and the
+# The Kutup web apps (account, drive, chat, maps, photos, office, contacts) and the
 # OnlyOffice editor sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
@@ -55,7 +55,7 @@ RUN o=apps/editor/public/onlyoffice \
     && grep -Fx '2025.6.0' $o/templates/.version
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat maps photos office editor; do cp -r apps/$app/dist /out/$app; done
+    && for app in account drive chat maps photos office contacts editor; do cp -r apps/$app/dist /out/$app; done
 
 FROM nginx:1.29-alpine
 COPY --from=builder /out /usr/share/nginx/html

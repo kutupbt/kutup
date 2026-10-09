@@ -141,7 +141,8 @@
     "office": "Notlarınız, belgeleriniz, tablolarınız, sunularınız ve beyaz tahtalarınız tek yerde.",
     "chat": "Kutup sunucuları arasında özel sohbetler ve gruplar.",
     "maps": "Paylaşılan ve birlikte düzenlenen, uçtan uca şifreli yer listeleri.",
-    "photos": "Fotoğraflarınız ve videolarınız, ne zaman ve nerede çekildiklerine göre, uçtan uca şifreli."
+    "photos": "Fotoğraflarınız ve videolarınız, ne zaman ve nerede çekildiklerine göre, uçtan uca şifreli.",
+    "contacts": "Yazıştığınız, sohbet ettiğiniz ve paylaştığınız herkes, tek bir şifreli adres defterinde."
   },
   "settings": {
     "account": {

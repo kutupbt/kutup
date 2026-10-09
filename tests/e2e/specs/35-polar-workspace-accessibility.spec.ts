@@ -42,6 +42,7 @@ const WORKSPACES: Array<{ app: App; path: string; ready: (page: Page) => ReturnT
   { app: 'photos', path: '/', ready: (page) => page.getByRole('main').getByRole('heading').first() },
   { app: 'maps', path: '/', ready: (page) => page.getByRole('heading', { name: 'Your maps', exact: true }) },
   { app: 'office', path: '/', ready: (page) => page.getByRole('heading', { name: 'Start something new', exact: true }) },
+  { app: 'contacts', path: '/', ready: (page) => page.getByRole('region', { name: 'Contacts' }) },
 ]
 
 test.describe('Responsive and accessibility gate', () => {

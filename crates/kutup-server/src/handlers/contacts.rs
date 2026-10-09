@@ -368,7 +368,7 @@ pub async fn update(
     )?;
     let mut tx = state.pool.begin().await?;
     let current: Option<(String, i64, i64)> = sqlx::query_as(
-        "SELECT uid, revision, octet_length(summary) + octet_length(card) FROM contacts
+        "SELECT uid, revision, (octet_length(summary) + octet_length(card))::bigint FROM contacts
           WHERE id = $1 AND user_id = $2 FOR UPDATE",
     )
     .bind(id)
@@ -406,7 +406,7 @@ async fn delete_ids(state: &AppState, user_id: Uuid, ids: &[Uuid]) -> AppResult<
     let mut tx = state.pool.begin().await?;
     let freed: Option<i64> = sqlx::query_scalar(
         "WITH gone AS (DELETE FROM contacts WHERE user_id = $1 AND id = ANY($2)
-                       RETURNING octet_length(summary) + octet_length(card) AS bytes)
+                       RETURNING (octet_length(summary) + octet_length(card))::bigint AS bytes)
          SELECT SUM(bytes)::bigint FROM gone",
     )
     .bind(user_id)

@@ -7,10 +7,10 @@ import { expect, type BrowserContext, type Locator, type Page } from '@playwrigh
  * `https://{app}.localhost:38443` for the single-server stack or
  * `http://{app}.a.test:39081` for the first federation server.
  */
-export type App = 'account' | 'drive' | 'chat' | 'photos' | 'maps' | 'office' | 'editor'
+export type App = 'account' | 'drive' | 'chat' | 'photos' | 'maps' | 'office' | 'contacts' | 'editor'
 export type Server = 'primary' | 'secondary'
 
-export const APPS: readonly App[] = ['account', 'drive', 'chat', 'photos', 'maps', 'office', 'editor']
+export const APPS: readonly App[] = ['account', 'drive', 'chat', 'photos', 'maps', 'office', 'contacts', 'editor']
 
 export const PRIMARY_ORIGIN_TEMPLATE = process.env.E2E_APP_ORIGIN ?? 'https://{app}.localhost:38443'
 export const SECONDARY_ORIGIN_TEMPLATE = process.env.E2E_SECONDARY_APP_ORIGIN
