@@ -112,6 +112,10 @@ Without SMTP, kutup can't:
 | Frontend: re-enable the "Send welcome email" toggle in `AdminCreateUserDialog` (currently dropped) | `frontend/src/components/admin/AdminCreateUserDialog.tsx` |
 | Documentation: `docs/email.md` setup guide | new |
 
+Kutup Mail's Stalwart (phase C1 of
+[`research/17-mail-calendar-contacts.md`](research/17-mail-calendar-contacts.md))
+can carry these system emails too, once it runs.
+
 ### Admin · System status endpoint
 
 The desktop Admin Overview's System card is hidden today because the backend doesn't expose uptime, TLS expiry, or the public URL. Useful for self-hosters at a glance.
@@ -430,6 +434,30 @@ Two more apps join Drive and Chat, each built the same way (product owner,
 
 Each gets a plan in `docs/plans/` before any code. Upstream checkouts for
 reference are in `kutup-references/` (`ente`, `comaps`).
+
+### Mail, Calendar and Contacts (like Proton)
+
+Designed in [`research/17-mail-calendar-contacts.md`](research/17-mail-calendar-contacts.md)
+(decided 2026-10-09): Proton's split of readable and encrypted fields, one
+account and one address (`name@kutup.dev` for Mail, Chat and Drive), one
+address book shared by every app, Stalwart beside Kutup with encryption on
+arrival, and direct sending. Phases, each with its own plan before code:
+
+- **A. Address keys:** OpenPGP (rPGP in `kutup-crypto`), one key per address
+  in a master-key envelope, bound to the signed account manifest, published
+  by WKD.
+- **B. Contacts:** the unified encrypted address book and app, used by Chat,
+  Drive sharing, Mail and Calendar.
+- **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,
+  encrypt on arrival, DNS), C2 the app, C3 PGP to outside users and the MX
+  switch from Cloudflare.
+- **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
+  reminders. Replaces Chat meetings' `.ics` download.
+- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.
+
+Blocking sending as of 2026-10-09: Hetzner blocks outbound port 25 until a
+limit request is granted, and the IPv6 address `2a01:4f9:c014:4d29::1` has
+no PTR yet.
 
 ### Photos (like Ente Photos)
 
