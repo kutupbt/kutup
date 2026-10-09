@@ -112,6 +112,10 @@ Without SMTP, kutup can't:
 | Frontend: re-enable the "Send welcome email" toggle in `AdminCreateUserDialog` (currently dropped) | `frontend/src/components/admin/AdminCreateUserDialog.tsx` |
 | Documentation: `docs/email.md` setup guide | new |
 
+Kutup Mail's Stalwart (phase C1 of
+[`research/17-mail-calendar-contacts.md`](research/17-mail-calendar-contacts.md))
+can carry these system emails too, once it runs.
+
 ### Admin · System status endpoint
 
 The desktop Admin Overview's System card is hidden today because the backend doesn't expose uptime, TLS expiry, or the public URL. Useful for self-hosters at a glance.
@@ -430,6 +434,32 @@ Two more apps join Drive and Chat, each built the same way (product owner,
 
 Each gets a plan in `docs/plans/` before any code. Upstream checkouts for
 reference are in `kutup-references/` (`ente`, `comaps`).
+
+### Mail, Calendar and Contacts (like Proton)
+
+Designed in [`research/17-mail-calendar-contacts.md`](research/17-mail-calendar-contacts.md)
+(decided 2026-10-09): Proton's split of readable and encrypted fields, one
+account and one address (`name@kutup.dev` for Mail, Chat and Drive), one
+address book shared by every app, Stalwart beside Kutup with encryption on
+arrival, and direct sending. Phases, each with its own plan before code:
+
+- **A. Address keys** (done): OpenPGP (rPGP in `kutup-crypto`), one key per
+  address in a master-key envelope, in a signed key list bound to the account
+  authority, published by WKD; created after sign-in and shown in Account →
+  Settings → Encryption keys
+  ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)). Key import,
+  rotation and marking keys obsolete or compromised come with Mail (C3).
+- **B. Contacts:** the unified encrypted address book and app, used by Chat,
+  Drive sharing, Mail and Calendar.
+- **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,
+  encrypt on arrival, DNS), C2 the app, C3 PGP to outside users and the MX
+  switch from Cloudflare.
+- **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
+  reminders. Replaces Chat meetings' `.ics` download.
+- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.
+
+Sending is over IPv4 only (`95.217.238.230`, PTR `mail.kutup.dev`);
+outbound port 25 is open on the host (checked 2026-10-09).
 
 ### Photos (like Ente Photos)
 
