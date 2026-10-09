@@ -212,8 +212,8 @@ than evicting files or history.
 Users see their pool under **Account → Settings → Storage**: a ring of what
 fills it, largest first (file types, trash, earlier versions, previews, Chat
 attachments and history, uploads in progress), and **Free up space**, which
-empties the trash, lists large files to move to trash and points to Chat's
-media clearing. The Drive, Photos and Office storage meters open a summary
+empties the trash, lists large files to move to trash, deletes earlier file
+versions older than a chosen age and points to Chat's media clearing. The Drive, Photos and Office storage meters open a summary
 that links there, as does Chat's storage screen. Only an administrator changes
 a quota.
 

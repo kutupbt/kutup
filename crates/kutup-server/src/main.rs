@@ -572,6 +572,14 @@ fn build_router(state: AppState) -> Router {
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route("/api/user/storage", get(handlers::storage::usage))
+        .route(
+            "/api/user/storage/versions",
+            get(handlers::storage::version_ages),
+        )
+        .route(
+            "/api/user/storage/versions/prune",
+            post(handlers::storage::prune_versions),
+        )
         .route("/api/user/2fa/setup", post(auth::setup_totp))
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
@@ -1078,7 +1086,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/files/:fileId/versions/:vid",
-            patch(file_versions::patch),
+            patch(file_versions::patch).delete(file_versions::delete),
         )
         .route(
             "/api/files/:fileId/assets/:assetId",

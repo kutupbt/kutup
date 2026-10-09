@@ -58,13 +58,16 @@ export default function VersionHistoryPanel({ fileId, onRestore, readOnly = fals
 
   return (
     <div className="flex flex-col divide-y divide-border">
-      {versions.map((v) => (
+      {versions.map((v, index) => (
         <VersionRow
           key={v.id}
           fileId={fileId}
           base={base}
           v={v}
+          // Newest first: the newest is the file's current content and stays.
+          newest={index === 0}
           onChange={(updated) => setVersions((arr) => arr.map((x) => (x.id === v.id ? updated : x)))}
+          onDeleted={() => setVersions((arr) => arr.filter((x) => x.id !== v.id))}
           onRestore={readOnly ? undefined : onRestore}
           readOnly={readOnly}
         />

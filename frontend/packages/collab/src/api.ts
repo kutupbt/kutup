@@ -80,6 +80,11 @@ export async function patchVersion(
   return r.data
 }
 
+/** Deletes an earlier version for good (never a file's newest). */
+export async function deleteVersion(fileId: string, vid: string, base = localBase(fileId)): Promise<void> {
+  await api.delete(`${base}/versions/${vid}`)
+}
+
 /**
  * Claim the first-seeder slot for a fresh collab file. Server runs an
  * atomic UPDATE; exactly one caller for a given file ever gets

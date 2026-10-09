@@ -486,11 +486,13 @@ albums) is the second reference.
   ring, largest category first (file kinds worked out in the browser from
   decrypted names, then trash, earlier versions, previews, Chat attachments,
   Chat history, uploads in progress). "Free up space" empties the trash,
-  lists large files (10 MB and up) to move to trash, and points to Chat's
-  per-conversation clearing. The sidebar meter in Drive, Photos and Office
-  opens a summary pop-up linking to it. **Open:** earlier versions can only
-  expire on their own (there is no endpoint to delete them), and duplicate
-  photos are not suggested yet.
+  lists large files (10 MB and up) to move to trash, deletes earlier versions
+  older than a chosen age (a slider, kept-forever ones only when included),
+  and points to Chat's per-conversation clearing. Drive's version history
+  deletes a single earlier version, as Proton's does; each file's newest
+  version always stays. The sidebar meter in Drive, Photos and Office opens a
+  summary pop-up linking to it. **Open:** duplicate photos are not suggested
+  yet.
 - **Open questions for the plan:** how are live photos, RAW files and
   videos handled (thumbnails and streaming)? How are duplicates found
   without the server learning which files match (a hash kept inside the

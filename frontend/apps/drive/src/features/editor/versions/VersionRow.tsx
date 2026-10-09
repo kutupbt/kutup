@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Pin, PinOff, Pencil, RotateCcw, Loader2 } from 'lucide-react'
-import { patchVersion, type VersionRow as VR } from '@kutup/collab/api'
+import { Pin, PinOff, Pencil, RotateCcw, Loader2, Trash2 } from 'lucide-react'
+import { deleteVersion, patchVersion, type VersionRow as VR } from '@kutup/collab/api'
 import { Button } from '@kutup/ui/components/button'
+import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Input } from '@kutup/ui/components/input'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
@@ -12,6 +13,9 @@ interface Props {
   fileId: string
   v: VR
   onChange: (updated: VR) => void
+  /** The file's newest version: its current content, which cannot be deleted. */
+  newest?: boolean
+  onDeleted?: () => void
   onRestore?: (versionId: string) => void
   /** View-only access: the history is shown, not changed. */
   readOnly?: boolean
@@ -19,11 +23,31 @@ interface Props {
   base?: string
 }
 
-export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = false, base }: Props) {
+export default function VersionRow({ fileId, v, onChange, newest = false, onDeleted, onRestore, readOnly = false, base }: Props) {
   const { t, i18n } = useTranslation()
   const [naming, setNaming] = useState(false)
   const [name, setName] = useState(v.label ?? '')
   const [busy, setBusy] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<unknown>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // Deleting is for files on this server; the server checks owner or author.
+  const canDelete = !newest && !base && onDeleted !== undefined
+
+  async function remove() {
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteVersion(fileId, v.id)
+      setConfirmingDelete(false)
+      toast.success(t('editor.versions.deleted'))
+      onDeleted?.()
+    } catch (error) {
+      setDeleteError(error)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   function formatTimestamp(iso: string): string {
     const d = new Date(iso)
@@ -84,6 +108,11 @@ export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = 
             <span className="truncate text-sm font-medium">
               {v.label || formatTimestamp(v.createdAt)}
             </span>
+            {newest && (
+              <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {t('editor.versions.current')}
+              </span>
+            )}
             {v.keepForever && (
               <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
                 <Pin className="size-2.5" aria-hidden /> {t('editor.versions.kept')}
@@ -158,8 +187,38 @@ export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = 
                   <RotateCcw className="size-3" aria-hidden /> {t('editor.versions.restore')}
                 </Button>
               )}
+              {canDelete && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setConfirmingDelete(true)}
+                  className="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="size-3" aria-hidden /> {t('editor.versions.delete')}
+                </Button>
+              )}
             </div>
           )}
+          <ConfirmDestructive
+            open={confirmingDelete}
+            onOpenChange={(open) => {
+              setConfirmingDelete(open)
+              if (!open) setDeleteError(null)
+            }}
+            title={t('editor.versions.deleteTitle')}
+            description={t('editor.versions.deleteDescription', {
+              version: v.label ? `${v.label} (${formatTimestamp(v.createdAt)})` : formatTimestamp(v.createdAt),
+              size: formatBytes(v.sizeBytes, i18n.language),
+            })}
+            warning={v.keepForever ? t('editor.versions.deleteKept') : t('editor.versions.deleteWarning')}
+            submit={t('editor.versions.deleteSubmit')}
+            pending={deleting}
+            error={deleteError}
+            errorFallback={t('editor.versions.deleteFailed')}
+            onConfirm={() => void remove()}
+          />
         </div>
       </div>
     </div>
