@@ -443,9 +443,12 @@ account and one address (`name@kutup.dev` for Mail, Chat and Drive), one
 address book shared by every app, Stalwart beside Kutup with encryption on
 arrival, and direct sending. Phases, each with its own plan before code:
 
-- **A. Address keys:** OpenPGP (rPGP in `kutup-crypto`), one key per address
-  in a master-key envelope, in a signed key list bound to the account
-  authority, published by WKD.
+- **A. Address keys** (done): OpenPGP (rPGP in `kutup-crypto`), one key per
+  address in a master-key envelope, in a signed key list bound to the account
+  authority, published by WKD; created after sign-in and shown in Account →
+  Settings → Encryption keys
+  ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)). Key import,
+  rotation and marking keys obsolete or compromised come with Mail (C3).
 - **B. Contacts:** the unified encrypted address book and app, used by Chat,
   Drive sharing, Mail and Calendar.
 - **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,
