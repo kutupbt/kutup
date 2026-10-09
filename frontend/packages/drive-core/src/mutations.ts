@@ -34,6 +34,8 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
         queryClient.invalidateQueries({ queryKey: ['files'] }),
         // Moving to trash (or anything that empties a folder) changes the trash.
         queryClient.invalidateQueries({ queryKey: trashKey }),
+        // What fills the pool (storage.storageKey).
+        queryClient.invalidateQueries({ queryKey: ['storage'] }),
         // Files shared with this account by themselves (fileShares.sharedFilesKey).
         queryClient.invalidateQueries({ queryKey: ['shared-files'] }),
         queryClient.invalidateQueries({ queryKey: ['folder-access'] }),

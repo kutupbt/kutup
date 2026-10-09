@@ -100,15 +100,15 @@ sign-in:
   state, typing, disappearing messages, expiry tombstones, and private local
   search are supported.
 - Photos, files, camera capture, bounded voice notes, encrypted previews,
-  manual lazy download, and in-app viewing use a dedicated Chat storage quota
-  rather than the Drive quota.
+  manual lazy download, and in-app viewing count against the account's one
+  storage pool, shared with Drive and the other apps.
 
 Every durable display-history mutation enters an IndexedDB-backed encrypted
 backup outbox. After account recovery, a genuinely empty browser automatically
 verifies and restores the latest server-acknowledged base plus event tail, then
 creates fresh Direct/MLS protocol state for new messages. Eligible protected
-media restores lazily. This account-local backup is always on, has a dedicated
-administrator-controlled quota (2 GiB by default), and does not restore device
+media restores lazily. This account-local backup is always on, counts against
+the same storage pool (10 GiB by default), and does not restore device
 keys, ratchets, MLS epochs, mailbox cursors, receipts, or pending sends.
 Device-to-device history transfer is not supported.
 

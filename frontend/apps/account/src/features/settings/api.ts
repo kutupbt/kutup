@@ -14,8 +14,6 @@ export interface Me {
   totpEnabled: boolean
   storageQuotaBytes: number
   storageUsedBytes: number
-  chatStorageQuotaBytes: number
-  chatStorageUsedBytes: number
   isAdmin: boolean
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */

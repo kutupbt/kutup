@@ -97,7 +97,40 @@
   },
   "storage": {
     "label": "Kullanılan alan",
-    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor"
+    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor",
+    "details": "Ayrıntılar",
+    "title": "Depolama alanı",
+    "ofQuota": "/ {{total}}",
+    "open": "Depolama alanı: {{total}} alanın {{used}} kadarı kullanılıyor. Neyin yer kapladığını göster",
+    "freeUp": "Yer aç",
+    "unavailable": "Depolama ayrıntıları yüklenemedi.",
+    "shared": "Drive, Fotoğraflar, Ofis, Haritalar ve Sohbet tarafından paylaşılır.",
+    "level": {
+      "warning": "Depolama alanınız neredeyse dolu.",
+      "danger": "Depolama alanınız dolu."
+    },
+    "categories": {
+      "note": "Notlar",
+      "document": "Belgeler",
+      "spreadsheet": "Tablolar",
+      "presentation": "Sunumlar",
+      "whiteboard": "Beyaz tahtalar",
+      "map": "Haritalar",
+      "pdf": "PDF'ler",
+      "image": "Görseller",
+      "video": "Videolar",
+      "audio": "Ses",
+      "code": "Kod",
+      "archive": "Arşivler",
+      "other": "Diğer dosyalar",
+      "files": "Dosyalar",
+      "trash": "Çöp",
+      "versions": "Önceki sürümler",
+      "previews": "Küçük resimler ve önizlemeler",
+      "chatMedia": "Sohbet ekleri",
+      "chatHistory": "Sohbet geçmişi yedeği",
+      "reserved": "Süren yüklemeler"
+    }
   },
   "uploads": {
     "title": "Yüklemeler",

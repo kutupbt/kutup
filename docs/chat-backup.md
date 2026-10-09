@@ -221,18 +221,21 @@ administrator's temporary-delivery retention defaults to 45 days and can be
 disabled with zero; it never deletes a protected history-media object. Mailbox
 ciphertext retention defaults to 30 days.
 
-## Dedicated Chat quota and deletion
+## Storage quota and deletion
 
-Chat has a dedicated per-account quota, separate from Drive/general storage.
-The default is 2 GiB and administrators can change the default for new accounts
-or an individual account. The single Chat meter includes:
+Chat has no quota of its own. It uses the account's one storage pool, shared
+with Drive, Photos, Office and Maps. New accounts get the administrator's
+default (10 GiB until changed), and administrators can change it for an
+individual account. Chat's part of the pool includes:
 
 - message-history segments and the committed base;
 - ordinary retained delivery media; and
 - protected history media.
 
-At the boundary the server preserves enough logical headroom for deletion
-tombstones and required compaction. Storage-full never silently evicts older
+`ChatBackupCapabilitiesV1.default_storage_quota_bytes` reports the
+administrator's default for new accounts. At the boundary a segment append may go up to 1 MiB past the quota so
+deletion tombstones still fit. Base staging may use the bytes it will reclaim
+from the segments and base it replaces, so required compaction still runs. Storage-full never silently evicts older
 history. Pending message work remains in the local outbox; media-full can leave
 media pending while message history continues. Lowering a quota below current
 usage remains read-preserving and blocks new charged work. Increasing it lets
@@ -241,8 +244,8 @@ the same pending identities resume.
 Message/media deletion becomes a durable tombstone and a later manifest CAS
 releases the exact superseded bytes. Account deletion or an administrator
 loss-recovery wipe removes every backup row, receipt/staging record, object
-prefix, and charged Chat byte. Revoking one Chat device does not delete the
-account backup.
+prefix, and charged Chat byte from the pool. Revoking one Chat device does not
+delete the account backup.
 
 ## Required gates
 

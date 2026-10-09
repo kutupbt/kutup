@@ -712,26 +712,9 @@ async fn reserve_inbound_offer(
         tx.commit().await?;
         return Ok(InboundReservation::Final(StatusCode::OK, value));
     }
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
-    )
-    .bind(recipient_user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let reserved: i64 = sqlx::query_scalar(
-        "SELECT
-           (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
-           (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-              FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
-    )
-    .bind(recipient_user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if used
-        .checked_add(reserved)
-        .and_then(|value| value.checked_add(transaction.offer.ciphertext_bytes as i64))
-        .is_none_or(|value| value > quota)
-    {
+    // The recipient's one storage pool, shared with Drive (crate::storage_pool).
+    let pool = crate::storage_pool::lock(&mut tx, recipient_user_id, Default::default()).await?;
+    if !pool.fits(transaction.offer.ciphertext_bytes as i64, 0) {
         let response = ChatMediaOfferResponseV1 {
             operation_id: transaction.offer.operation_id.clone(),
             status: ChatMediaDeliveryStatusV1::StorageFull,
@@ -954,7 +937,9 @@ async fn process_reserved_offer_inner(
         .fetch_one(&mut *tx)
         .await?;
         if sequence != last_sequence + 1 {
-            return Err(AppError::conflict("Chat-media reservation sequence changed"));
+            return Err(AppError::conflict(
+                "Chat-media reservation sequence changed",
+            ));
         }
         let stored_object: Option<ExistingObject> = sqlx::query_as(
             "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,
@@ -996,29 +981,17 @@ async fn process_reserved_offer_inner(
             .execute(&mut *tx)
             .await?;
         }
-        let (quota, used): (i64, i64) = sqlx::query_as(
-            "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
+        // Its own pending reservation is the room it is about to use.
+        let pool = crate::storage_pool::lock(
+            &mut tx,
+            recipient_user_id,
+            crate::storage_pool::Leave {
+                inbound: Some((transaction.origin_domain.as_str(), sequence)),
+                ..Default::default()
+            },
         )
-            .bind(recipient_user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        let other_reserved: i64 = sqlx::query_scalar(
-            "SELECT
-               (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
-               (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-                  FROM chat_media_federation_inbound_pending
-                  WHERE recipient_user_id=$1 AND NOT (origin=$2 AND sequence=$3))",
-        )
-        .bind(recipient_user_id)
-        .bind(&transaction.origin_domain)
-        .bind(sequence)
-        .fetch_one(&mut *tx)
         .await?;
-        if used
-            .checked_add(other_reserved)
-            .and_then(|value| value.checked_add(transaction.offer.ciphertext_bytes as i64))
-            .is_none_or(|value| value > quota)
-        {
+        if !pool.fits(transaction.offer.ciphertext_bytes as i64, 0) {
             let response = ChatMediaOfferResponseV1 {
                 operation_id: transaction.offer.operation_id.clone(),
                 status: ChatMediaDeliveryStatusV1::StorageFull,
@@ -1082,7 +1055,7 @@ async fn process_reserved_offer_inner(
             .bind(transaction.offer.ciphertext_bytes as i64)
             .fetch_one(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2")
+            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
                 .bind(transaction.offer.ciphertext_bytes as i64)
                 .bind(recipient_user_id)
                 .execute(&mut *tx)

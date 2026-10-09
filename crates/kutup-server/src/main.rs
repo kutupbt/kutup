@@ -43,6 +43,7 @@ mod site_settings;
 mod ssrf;
 mod storage;
 mod storage_check;
+mod storage_pool;
 mod storage_probe;
 mod telemetry;
 mod totp;
@@ -462,15 +463,9 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         }
     };
 
-    let chat_storage_quota_bytes: i64 = sqlx::query_scalar(
-        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
-
+    let storage_quota_bytes = crate::storage_pool::default_quota(pool)
+        .await
+        .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, login_key_hash,
@@ -480,13 +475,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            is_admin, is_first_login, chat_storage_quota_bytes
+            is_admin, is_first_login, storage_quota_bytes
         ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true,$4)"#,
     )
     .bind(email)
     .bind(username)
     .bind(&hash)
-    .bind(chat_storage_quota_bytes)
+    .bind(storage_quota_bytes)
     .execute(pool)
     .await;
     match res {
@@ -576,6 +571,7 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route("/api/user/storage", get(handlers::storage::usage))
         .route("/api/user/2fa/setup", post(auth::setup_totp))
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))

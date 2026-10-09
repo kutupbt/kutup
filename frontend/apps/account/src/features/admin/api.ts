@@ -49,7 +49,6 @@ export interface CreateUserInput {
   username: string
   tempPassword: string
   storageQuotaBytes: number
-  chatStorageQuotaBytes: number
 }
 
 export function useCreateUser() {
@@ -62,7 +61,6 @@ export type UserPatch = Partial<{
   isActive: boolean
   isAdmin: boolean
   storageQuotaBytes: number
-  chatStorageQuotaBytes: number
 }>
 
 export function useUpdateUser() {

@@ -282,7 +282,7 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "UPDATE users SET chat_storage_used_bytes=GREATEST(0,chat_storage_used_bytes-$1)
+        "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
          WHERE id=$2",
     )
     .bind(released)
@@ -299,12 +299,11 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
 }
 
 async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupStatusV1> {
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1",
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let (quota, used): (i64, i64) =
+        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
+            .bind(user_id)
+            .fetch_one(&state.pool)
+            .await?;
     let delivery_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(logical_bytes),0)::bigint
          FROM chat_media_references WHERE user_id=$1",
@@ -532,22 +531,15 @@ pub async fn append_segment(
         }
     }
 
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes
-         FROM users WHERE id=$1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    // The account's one storage pool, shared with Drive (crate::storage_pool).
+    let pool = crate::storage_pool::lock(&mut transaction, user_id, Default::default()).await?;
     let ciphertext_bytes = i64::from(request.ciphertext_bytes);
-    let operational_limit = quota.saturating_add(OPERATIONAL_MESSAGE_HEADROOM_BYTES);
-    if used
-        .checked_add(ciphertext_bytes)
-        .is_none_or(|value| value > operational_limit)
-    {
+    // A little room past the quota, so the tombstones that delete messages
+    // always fit; it is not room any other write can use.
+    if !pool.fits(ciphertext_bytes, OPERATIONAL_MESSAGE_HEADROOM_BYTES) {
         return Err(AppError::new(
             StatusCode::INSUFFICIENT_STORAGE,
-            "Chat storage full; delete messages or media, or increase storage",
+            "storage full; delete files, messages or media, or get more storage",
         ));
     }
     let cursor = backup
@@ -599,7 +591,7 @@ pub async fn append_segment(
     .bind(user_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2")
+    sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
         .bind(ciphertext_bytes)
         .bind(user_id)
         .execute(&mut *transaction)
@@ -888,13 +880,8 @@ pub async fn stage_base(
         {
             return Err(AppError::conflict("backup base became stale during upload"));
         }
-        let (quota, used): (i64, i64) = sqlx::query_as(
-            "SELECT chat_storage_quota_bytes,chat_storage_used_bytes
-             FROM users WHERE id=$1 FOR UPDATE",
-        )
-        .bind(user_id)
-        .fetch_one(&mut *transaction)
-        .await?;
+        // The account's one storage pool, shared with Drive (crate::storage_pool).
+        let pool = crate::storage_pool::lock(&mut transaction, user_id, Default::default()).await?;
         let charged = i64::try_from(measured_bytes)
             .map_err(|_| AppError::bad_request("backup base is too large"))?;
         // Staging temporarily duplicates the current logical archive. Permit
@@ -917,13 +904,10 @@ pub async fn stage_base(
             } else {
                 0
             };
-        if used
-            .checked_add(charged)
-            .is_none_or(|value| value > quota.saturating_add(reclaimable))
-        {
+        if !pool.fits(charged, reclaimable) {
             return Err(AppError::new(
                 StatusCode::INSUFFICIENT_STORAGE,
-                "Chat storage full; delete messages or media, or increase storage",
+                "storage full; delete files, messages or media, or get more storage",
             ));
         }
         let inserted = sqlx::query(
@@ -951,13 +935,11 @@ pub async fn stage_base(
         .rows_affected()
             == 1;
         if inserted {
-            sqlx::query(
-                "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-            )
-            .bind(charged)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+                .bind(charged)
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
         } else {
             let existing: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
                 "SELECT object_id,covered_cursor,ciphertext_bytes,ciphertext_sha256
@@ -1184,7 +1166,7 @@ pub async fn commit_manifest(
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
-        "UPDATE users SET chat_storage_used_bytes=GREATEST(0,chat_storage_used_bytes-$1)
+        "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
          WHERE id=$2",
     )
     .bind(
@@ -1441,19 +1423,15 @@ pub async fn copy_media(
             // the same deterministic media ID need not have equal ciphertext.
             false
         } else {
-            let (quota, used): (i64, i64) = sqlx::query_as(
-                "SELECT chat_storage_quota_bytes,chat_storage_used_bytes
-                 FROM users WHERE id=$1 FOR UPDATE",
-            )
-            .bind(user_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+            // The account's one storage pool, shared with Drive (crate::storage_pool).
+            let pool =
+                crate::storage_pool::lock(&mut transaction, user_id, Default::default()).await?;
             let charged = i64::try_from(measured_outer_bytes)
                 .map_err(|_| AppError::bad_request("backup media is too large"))?;
-            if used.checked_add(charged).is_none_or(|value| value > quota) {
+            if !pool.fits(charged, 0) {
                 return Err(AppError::new(
                     StatusCode::INSUFFICIENT_STORAGE,
-                    "Chat storage full; delete messages or media, or increase storage",
+                    "storage full; delete files, messages or media, or get more storage",
                 ));
             }
             sqlx::query(
@@ -1468,13 +1446,11 @@ pub async fn copy_media(
             .bind(&path)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query(
-                "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-            )
-            .bind(charged)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+                .bind(charged)
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
             true
         };
         if let Some(existing_media_id) = sqlx::query_scalar::<_, Vec<u8>>(
@@ -1737,19 +1713,15 @@ pub async fn upload_media(
             }
             false
         } else {
-            let (quota, used): (i64, i64) = sqlx::query_as(
-                "SELECT chat_storage_quota_bytes,chat_storage_used_bytes
-                 FROM users WHERE id=$1 FOR UPDATE",
-            )
-            .bind(user_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+            // The account's one storage pool, shared with Drive (crate::storage_pool).
+            let pool =
+                crate::storage_pool::lock(&mut transaction, user_id, Default::default()).await?;
             let charged = i64::try_from(measured_bytes)
                 .map_err(|_| AppError::bad_request("backup media is too large"))?;
-            if used.checked_add(charged).is_none_or(|value| value > quota) {
+            if !pool.fits(charged, 0) {
                 return Err(AppError::new(
                     StatusCode::INSUFFICIENT_STORAGE,
-                    "Chat storage full; delete messages or media, or increase storage",
+                    "storage full; delete files, messages or media, or get more storage",
                 ));
             }
             sqlx::query(
@@ -1764,13 +1736,11 @@ pub async fn upload_media(
             .bind(&path)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query(
-                "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-            )
-            .bind(charged)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+                .bind(charged)
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
             true
         };
         insert_media_reference(&mut transaction, user_id, media_id, reference_id).await?;

@@ -200,16 +200,22 @@ Mailbox retention covers unread Direct and MLS delivery ciphertext. Media retent
 covers only temporary delivery copies and never deletes protected history-media
 copies.
 
-Chat uses a dedicated quota, separate from Drive/general storage. It defaults
-to 2 GiB for new accounts and covers message-history ciphertext, ordinary
-delivery media, and protected history media. Change the default or an
-individual account under **Admin → Settings → Chat storage**; persisted admin
-settings take precedence without a restart. Lowering a quota below current use
-preserves reads and blocks new charged work rather than evicting history.
+Each account has one storage pool. Drive, Photos, Office, Maps and Chat
+(message-history ciphertext, ordinary delivery media, and protected history
+media) all count against it. New accounts get the **Default storage quota
+(GiB)** set under **Admin → Server settings** (10 GiB until changed); existing
+accounts keep theirs. Change an individual account's **Storage quota (GiB)**
+under **Admin → Users**. Lowering
+a quota below current use preserves reads and blocks new charged work rather
+than evicting files or history.
 
-The ordinary account UI reports storage as a read-only progress meter with
-used and total values. It is not a quota-management control: only an authorized
-administrator changes Drive or Chat quota policy from Admin settings.
+Users see their pool under **Account → Settings → Storage**: a ring of what
+fills it, largest first (file types, trash, earlier versions, previews, Chat
+attachments and history, uploads in progress), and **Free up space**, which
+empties the trash, lists large files to move to trash and points to Chat's
+media clearing. The Drive, Photos and Office storage meters open a summary
+that links there, as does Chat's storage screen. Only an administrator changes
+a quota.
 
 ### OpenTelemetry
 
@@ -489,8 +495,8 @@ replace Direct/MLS sessions, or migrate protected history.
 `CHAT_MEDIA_MAX_PLAINTEXT_BYTES` is the per-attachment plaintext-class ceiling.
 It defaults to the V1 hard cap of 2 GiB; an operator may lower it, but cannot
 raise it without a future typed media-suite/protocol revision. This is an
-individual-object admission limit. All Chat media is charged to the dedicated
-Chat quota; it never consumes the Drive/general quota.
+individual-object admission limit. Chat media is charged to the account's one
+storage pool, shared with Drive and the other apps.
 
 First contact shows a gray shield. Users who require independent identity
 authentication meet face to face and scan the conversation safety QR; an exact
@@ -859,7 +865,7 @@ uses the map settings above.
 - **Firewall:** Only expose ports 80 and 443. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
-- **Quotas:** Set both Drive/general and dedicated Chat defaults in the admin dashboard to prevent abuse.
+- **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.
 
 ---

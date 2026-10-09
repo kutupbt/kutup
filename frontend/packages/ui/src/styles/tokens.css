@@ -113,6 +113,17 @@
   --kind-code: #475569;
   --kind-archive: #a16207;
   --kind-other: #64748b;
+
+  /*
+   * Storage usage (the Account storage page and the sidebar summary): what
+   * is not a file kind gets its own colour beside the --kind-* ones.
+   */
+  --usage-trash: #78716c;
+  --usage-versions: #7c3aed;
+  --usage-previews: #0891b2;
+  --usage-chat: #059669;
+  --usage-chat-history: #65a30d;
+  --usage-reserved: #cbd5e1;
 }
 
 .dark {
@@ -171,6 +182,13 @@
   --kind-code: #cbd5e1;
   --kind-archive: #fbbf24;
   --kind-other: #94a3b8;
+
+  --usage-trash: #a8a29e;
+  --usage-versions: #a78bfa;
+  --usage-previews: #67e8f9;
+  --usage-chat: #34d399;
+  --usage-chat-history: #bef264;
+  --usage-reserved: #475569;
 }
 
 @theme inline {
@@ -235,6 +253,12 @@
   --color-kind-map: var(--kind-map);
   --color-kind-pdf: var(--kind-pdf);
   --color-kind-image: var(--kind-image);
+  --color-usage-trash: var(--usage-trash);
+  --color-usage-versions: var(--usage-versions);
+  --color-usage-previews: var(--usage-previews);
+  --color-usage-chat: var(--usage-chat);
+  --color-usage-chat-history: var(--usage-chat-history);
+  --color-usage-reserved: var(--usage-reserved);
   --color-kind-video: var(--kind-video);
   --color-kind-audio: var(--kind-audio);
   --color-kind-code: var(--kind-code);

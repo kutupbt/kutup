@@ -71,8 +71,6 @@ export interface UserRow {
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
-  chatStorageQuotaBytes: number
-  chatStorageUsedBytes: number
   isAdmin: boolean
   isActive: boolean
   totpEnabled: boolean
@@ -147,7 +145,8 @@ export interface AdminStats {
 
 export interface AdminSettings {
   registrationEnabled: boolean
-  defaultChatStorageQuotaBytes: number
+  /** The storage quota new accounts get; existing accounts keep theirs. */
+  defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number
   chatMediaDeliveryRetentionDays: number
 }

@@ -25,7 +25,8 @@
     "profile": "Profil",
     "devicesSessions": "Cihazlar ve oturumlar",
     "maps": "Haritalar",
-    "adminMaps": "Haritalar"
+    "adminMaps": "Haritalar",
+    "storage": "Depolama alanı"
   },
   "auth": {
     "fields": {
@@ -147,8 +148,7 @@
       "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
       "profile": "Profil",
       "noUsername": "Belirlenmedi",
-      "driveStorage": "Depo alanı",
-      "chatStorage": "İleti depolama alanı",
+      "storage": "Depolama alanı",
       "usage": "{{total}} alanın {{used}} kadarı",
       "colour": "Varlık rengi",
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
@@ -271,6 +271,59 @@
       "offForYou": "Haritalar sizin için kapalı.",
       "saved": "Harita ayarları kaydedildi",
       "saveFailed": "Harita ayarları kaydedilemedi."
+    },
+    "storage": {
+      "title": "Depolama alanı",
+      "description": "Bu sunucuda tuttuğunuz her şey için tek alan: Drive, Fotoğraflar, Ofis, Haritalar ve Sohbet.",
+      "ofQuota": "/ {{total}} kullanılıyor",
+      "free": "Boş",
+      "breakdown": "Depolama alanınızı ne dolduruyor",
+      "counting": "Dosyalarınız türe göre sayılıyor…",
+      "fileCount_one": "{{count}} dosya",
+      "fileCount_other": "{{count}} dosya",
+      "byKindPartial": "Bazı klasörler okunamadı; bu liste eksik olabilir.",
+      "level": {
+        "warning": "Depolama alanınız neredeyse dolu",
+        "warningHint": "Yüklemeler, kayıtlar ve sohbet yedekleri çalışmaya devam etsin diye yer açın.",
+        "danger": "Depolama alanınız dolu",
+        "dangerHint": "Yer açana ya da yöneticiniz size daha fazla alan verene kadar yüklemeler, kayıtlar ve sohbet yedekleri reddedilir."
+      },
+      "cleanup": {
+        "open": "Yer aç",
+        "title": "Yer aç",
+        "description": "Neleri kaldırabileceğiniz ve her birinin ne kadar yer açacağı. Sormadan hiçbir şey silinmez.",
+        "trash": "Çöp",
+        "trashHint_one": "Silinmeyi bekleyen {{count}} dosya. Çöp boşaltılana kadar sayılmaya devam eder.",
+        "trashHint_other": "Silinmeyi bekleyen {{count}} dosya. Çöp boşaltılana kadar sayılmaya devam ederler.",
+        "trashEmpty": "Çöp boş.",
+        "emptyTrash": "Çöpü boşalt",
+        "emptyTrashTitle": "Çöp boşaltılsın mı?",
+        "emptyTrashDescription_one": "{{count}} dosya ({{size}}) kalıcı olarak silinecek.",
+        "emptyTrashDescription_other": "{{count}} dosya ({{size}}) kalıcı olarak silinecek.",
+        "cannotUndo": "Bu işlem geri alınamaz.",
+        "trashEmptied": "Çöp boşaltıldı",
+        "large": "Büyük dosyalar",
+        "largeHint": "{{size}} ve üzeri dosyalarınız, en büyükten başlayarak.",
+        "noLarge": "Büyük dosyanız yok.",
+        "moveToTrash": "Çöpe taşı",
+        "moveSelected_one": "{{count}} dosyayı çöpe taşı ({{size}})",
+        "moveSelected_other": "{{count}} dosyayı çöpe taşı ({{size}})",
+        "moved_one": "{{count}} dosya çöpe taşındı",
+        "moved_other": "{{count}} dosya çöpe taşındı",
+        "trashStillCounts": "Çöpteki dosyalar siz çöpü boşaltana kadar sayılmaya devam eder.",
+        "select": "{{name}} dosyasını seç",
+        "myFiles": "Dosyalarım",
+        "unnamedFolder": "Klasör",
+        "versions": "Önceki sürümler",
+        "versionsHint_one": "{{count}} gün saklanır, sonra kendiliğinden silinir.",
+        "versionsHint_other": "{{count}} gün saklanır, sonra kendiliğinden silinir.",
+        "versionsHintUnknown": "Bir süre sonra kendiliğinden silinir.",
+        "chat": "Sohbet ekleri",
+        "chatHint": "Saklanan ekleri Sohbet'te konuşma bazında temizleyin; mesajlar kalır.",
+        "openChat": "Sohbet depolamasını aç",
+        "failed": "Bu işlem olmadı. Yeniden deneyin."
+      },
+      "kindsNote": "Dosya türleri bu tarayıcının çözdüğü adlardan gelir; sunucu yalnızca boyutları görür. Sohbet dahil, tuttuğunuz her kopya sayılır."
     }
   },
   "admin": {
@@ -286,8 +339,8 @@
       "folders": "Klasörler"
     },
     "quota": {
-      "drive": "Depo kotası (GiB)",
-      "chat": "İleti kotası (GiB)",
+      "storage": "Depolama kotası (GiB)",
+      "storageHint": "Drive, Fotoğraflar, Ofis, Haritalar ve Sohbet için tek alan.",
       "positive": "Sıfırdan büyük bir boyut girin."
     },
     "users": {
@@ -308,8 +361,7 @@
       "columns": {
         "user": "Kullanıcı",
         "status": "Durum",
-        "drive": "Depo",
-        "chat": "İleti",
+        "storage": "Depolama",
         "twoFactor": "2FA"
       }
     },
@@ -350,9 +402,9 @@
       "promoteDescription": "{{email}} tüm hesapları ve sunucu ayarlarını yönetebilecek.",
       "demoteTitle": "Yöneticilik kaldırılsın mı?",
       "demoteDescription": "{{email}} hesabını korur ancak yönetim erişimini kaybeder.",
-      "quotas": "Depolama kotaları",
+      "quotas": "Depolama kotası",
       "quotasHint": "Kotayı aşan yüklemeler reddedilir; zaten saklanan hiçbir şey silinmez.",
-      "quotasSaved": "Kotalar kaydedildi",
+      "quotasSaved": "Kota kaydedildi",
       "saveFailed": "Değişiklik kaydedilemedi.",
       "recovery": "Hesap kurtarma",
       "recoveryHint": "Hesabına giremeyenler için. Kutup, okuyamadığı verileri yok etmeden parola sıfırlayamaz.",
@@ -423,8 +475,6 @@
       "registrationHint": "Bu sunucuya erişebilen herkes hesap oluşturabilir. Kapalıyken hesapları yalnızca yöneticiler oluşturur.",
       "chat": "İleti",
       "chatHint": "Bu sunucuda şifreli mesaj ve medya teslimi.",
-      "chatQuota": "Varsayılan sohbet kotası (GiB)",
-      "chatQuotaHint": "Yeni hesaplar için.",
       "mailboxDays": "Teslim edilmemiş mesajlar (gün)",
       "mailboxDaysHint": "Çevrimdışı bir cihazın mesajlarının ne kadar bekleyeceği. 0: teslim edilene kadar tutulur.",
       "mediaDays": "Teslim edilmemiş medya (gün)",
@@ -432,7 +482,9 @@
       "wholeDays": "Tam gün girin.",
       "retentionRange": "0 ile 3650 gün arasında.",
       "saved": "Ayarlar kaydedildi",
-      "saveFailed": "Ayarlar kaydedilemedi."
+      "saveFailed": "Ayarlar kaydedilemedi.",
+      "defaultQuota": "Varsayılan depolama kotası (GiB)",
+      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin."
     },
     "federation": {
       "title": "Federasyon",

@@ -97,7 +97,40 @@
   },
   "storage": {
     "label": "Storage used",
-    "usage": "{{used}} of {{total}} used"
+    "usage": "{{used}} of {{total}} used",
+    "details": "Details",
+    "title": "Storage",
+    "ofQuota": "of {{total}}",
+    "open": "Storage: {{used}} of {{total}} used. Show what fills it",
+    "freeUp": "Free up space",
+    "unavailable": "Storage details could not be loaded.",
+    "shared": "Shared by Drive, Photos, Office, Maps and Chat.",
+    "level": {
+      "warning": "Your storage is almost full.",
+      "danger": "Your storage is full."
+    },
+    "categories": {
+      "note": "Notes",
+      "document": "Documents",
+      "spreadsheet": "Spreadsheets",
+      "presentation": "Presentations",
+      "whiteboard": "Whiteboards",
+      "map": "Maps",
+      "pdf": "PDFs",
+      "image": "Images",
+      "video": "Videos",
+      "audio": "Audio",
+      "code": "Code",
+      "archive": "Archives",
+      "other": "Other files",
+      "files": "Files",
+      "trash": "Trash",
+      "versions": "Earlier versions",
+      "previews": "Thumbnails and previews",
+      "chatMedia": "Chat attachments",
+      "chatHistory": "Chat history backup",
+      "reserved": "Uploads in progress"
+    }
   },
   "uploads": {
     "title": "Uploads",

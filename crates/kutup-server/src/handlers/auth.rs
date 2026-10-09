@@ -293,14 +293,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     let mls_groups = crate::chat_mls::policy::advertised_policy(&state)
         .await?
         .is_some();
-    let chat_storage_default_quota_bytes: u64 = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .and_then(|value| value.parse::<u64>().ok())
-    .filter(|value| *value > 0)
-    .unwrap_or(state.config.chat_storage_default_quota_bytes);
+    // Chat has no storage of its own: its backup and media count against the
+    // account's one pool (crate::storage_pool), whose default this advertises.
+    let account_default_quota_bytes = crate::storage_pool::default_quota(&state.pool).await? as u64;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -340,7 +335,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         ),
         backup: Some(
             kutup_chat_proto::ChatBackupCapabilitiesV1::v1(
-                chat_storage_default_quota_bytes,
+                account_default_quota_bytes,
                 chat_media_delivery_retention_days,
             )
             .map_err(AppError::internal)?,
@@ -421,13 +416,7 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
-    let chat_storage_quota_bytes: i64 = sqlx::query_scalar(
-        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
-
+    let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, master_key_envelope, recovery_key_envelope,
@@ -436,7 +425,7 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier, chat_storage_quota_bytes
+            login_key_hash, recovery_key_verifier, storage_quota_bytes
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
     )
     .bind(&req.email)
@@ -456,7 +445,7 @@ pub async fn register(
     .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
     .bind(&hash)
     .bind(&recovery_verifier)
-    .bind(chat_storage_quota_bytes)
+    .bind(storage_quota_bytes)
     .execute(&state.pool)
     .await;
 
@@ -959,8 +948,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
         i64,
         i64,
-        i64,
-        i64,
         bool,
         String,
         i32,
@@ -968,7 +955,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  chat_storage_quota_bytes, chat_storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days
            FROM users WHERE id = $1"#,
     )
@@ -984,8 +970,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         totp_enabled,
         quota,
         used,
-        chat_quota,
-        chat_used,
         is_admin,
         color,
         version_retention_days,
@@ -1001,8 +985,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         totp_enabled,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
-        chat_storage_quota_bytes: chat_quota,
-        chat_storage_used_bytes: chat_used,
         is_admin,
         color,
         version_retention_days,

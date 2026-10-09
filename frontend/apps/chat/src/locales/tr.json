@@ -162,11 +162,11 @@
       "latestProtected": "Son koruma: {{time}}",
       "waiting": "İlk sunucu onayı bekleniyor",
       "pending": "{{count}} mesaj değişikliği ({{bytes}}) hâlâ yalnızca bu cihazda saklanıyor.",
-      "full": "İleti depolama alanı dolu. Mesaj veya medya silin ya da sunucu yöneticinizden kotayı artırmasını isteyin. Depolama alanı açılıp sunucu onaylayana kadar yeni yerel değişiklikler korunmaz.",
+      "full": "Depolama alanınız dolu. Mesaj, medya ya da dosya silin veya sunucu yöneticinizden daha fazla alan isteyin. Depolama alanı açılıp sunucu onaylayana kadar yeni yerel değişiklikler korunmaz.",
       "attention": "İleti geçmişi koruması ilgilenmenizi gerektiriyor. Kutup yeniden denemeye devam edecek; sunucu onaylayana kadar yerel değişiklikler korunmaz.",
-      "storageTitle": "İleti depolama alanı",
-      "storageDescription": "İleti geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Depo ayrıdır. Teslimat kopyaları {{days}} gün sonra silinir, korunan geçmiş kopyaları kalır.",
-      "storageDescriptionUnlimited": "İleti geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Depo ayrıdır. Teslimat kopyalarının süresi dolmaz; korunan geçmiş kopyaları bağımsız olarak saklanır.",
+      "storageTitle": "Depolama alanı",
+      "storageDescription": "Sohbet, hesabınızın depolama alanını Drive, Fotoğraflar, Ofis ve Haritalar ile paylaşır. Tuttuğunuz her kopya sayılır. Teslimat kopyaları {{days}} gün sonra silinir, korunan geçmiş kopyaları kalır.",
+      "storageDescriptionUnlimited": "Sohbet, hesabınızın depolama alanını Drive, Fotoğraflar, Ofis ve Haritalar ile paylaşır. Tuttuğunuz her kopya sayılır. Teslimat kopyalarının süresi dolmaz; korunan geçmiş kopyaları bağımsız olarak saklanır.",
       "loading": "Şifreli kullanım bilgileri yükleniyor…",
       "used": "{{bytes}} kullanılıyor",
       "messageHistory": "Mesaj geçmişi",
@@ -180,7 +180,9 @@
         "needsAttention": "Yedekleme için işlem gerekiyor",
         "starting": "Başlatılıyor"
       },
-      "stateLabel": "Durum"
+      "stateLabel": "Durum",
+      "otherApps": "Drive ve diğer uygulamalar",
+      "storageDetails": "Depolama ayrıntıları"
     },
     "contact": {
       "title": "İleti adresiniz",

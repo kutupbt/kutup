@@ -484,8 +484,8 @@ pub async fn migrate_legacy_versions(pool: &PgPool, storage: &StorageService) ->
     moved
 }
 
-/// Rewrites the independent Drive/general and Chat usage counters from their
-/// authoritative logical references for any drifted user.
+/// Rewrites the account's one storage counter (crate::storage_pool) from
+/// the rows it stands for — Drive and Chat together — for any drifted user.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // First find who drifted (a plain read), then correct each one under
     // their row lock with the sums taken afresh: every charge and release
@@ -493,7 +493,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
         "SELECT u.id FROM users u, LATERAL ({}) e
-         WHERE u.storage_used_bytes <> e.drive_bytes OR u.chat_storage_used_bytes <> e.chat_bytes",
+         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes",
         reconcile_sums("u.id")
     ))
     .fetch_all(pool)
@@ -507,7 +507,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     };
     let mut corrected = 0;
     for uid in drifted {
-        let fixed: anyhow::Result<Option<(i64, i64)>> = async {
+        let fixed: anyhow::Result<Option<(i64, i64, i64)>> = async {
             let mut tx = pool.begin().await?;
             sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
                 .bind(uid)
@@ -517,25 +517,25 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
                 .bind(uid)
                 .fetch_one(&mut *tx)
                 .await?;
-            let row: Option<(i64, i64)> = sqlx::query_as(
-                "UPDATE users SET storage_used_bytes = $2, chat_storage_used_bytes = $3
-                 WHERE id = $1 AND (storage_used_bytes <> $2 OR chat_storage_used_bytes <> $3)
-                 RETURNING storage_used_bytes, chat_storage_used_bytes",
+            let total = drive.saturating_add(chat);
+            let row: Option<i64> = sqlx::query_scalar(
+                "UPDATE users SET storage_used_bytes = $2
+                 WHERE id = $1 AND storage_used_bytes <> $2
+                 RETURNING storage_used_bytes",
             )
             .bind(uid)
-            .bind(drive)
-            .bind(chat)
+            .bind(total)
             .fetch_optional(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok(row)
+            Ok(row.map(|used| (used, drive, chat)))
         }
         .await;
         match fixed {
-            Ok(Some((drive_used, chat_used))) => {
+            Ok(Some((used, drive, chat))) => {
                 corrected += 1;
                 tracing::info!(
-                    "quota reconcile: user={uid} drive_bytes={drive_used} chat_bytes={chat_used} (drift corrected)"
+                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}; drift corrected)"
                 );
             }
             Ok(None) => {}
@@ -550,7 +550,8 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 
 /// What the user `user` (an SQL expression) is charged for, summed from the
 /// rows, as `drive_bytes` (files less pruned originals, assets, thumbnails,
-/// versions) and `chat_bytes`.
+/// versions) and `chat_bytes` (media references and the history backup);
+/// their sum is the account's storage counter.
 fn reconcile_sums(user: &str) -> String {
     format!(
         r#"SELECT
@@ -634,6 +635,28 @@ pub async fn uploads_sweep_once(
             reaped += 1;
         }
     }
+    // A hand-over from another server whose lease ran out a day ago will not
+    // be committed (the origin retries within minutes, and a late retry
+    // reserves again): its reservation would otherwise hold that room in
+    // the recipient's storage pool for good.
+    match sqlx::query(
+        "DELETE FROM chat_media_federation_inbound_pending \
+         WHERE lease_until < NOW() - $1 * interval '1 second'",
+    )
+    .bind(UPLOADS_STALE_AFTER_SECS)
+    .execute(pool)
+    .await
+    {
+        Ok(done) if done.rows_affected() > 0 => {
+            tracing::info!(
+                count = done.rows_affected(),
+                "released stale Chat-media hand-overs"
+            );
+            reaped += done.rows_affected() as usize;
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(error = %error, "Chat-media hand-over sweep failed"),
+    }
     if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat-media orphan sweep failed");
     }
@@ -691,7 +714,7 @@ async fn sweep_expired_chat_backup_staging(
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "UPDATE users SET chat_storage_used_bytes=GREATEST(0,chat_storage_used_bytes-$1)
+            "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
              WHERE id=$2",
         )
         .bind(bytes)
@@ -740,7 +763,7 @@ pub async fn sweep_chat_delivery_media_before(
             .await?;
         sqlx::query(
             "UPDATE users
-             SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0)
+             SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0)
              WHERE id=$2",
         )
         .bind(bytes)
@@ -1351,7 +1374,7 @@ mod tests {
                 .await
                 .expect("live Chat user fixture");
         let original_used: i64 =
-            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1453,14 +1476,12 @@ mod tests {
         let fixture_bytes =
             i64::try_from(expired_bytes.len() + boundary_bytes.len() + protected_bytes.len())
                 .unwrap();
-        sqlx::query(
-            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
-        )
-        .bind(fixture_bytes)
-        .bind(user_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
+            .bind(fixture_bytes)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // The boundary is strict: delivery references created exactly at the cutoff survive.
         sweep_chat_delivery_media_before(&pool, &storage, cutoff)
@@ -1484,7 +1505,7 @@ mod tests {
             .await
             .unwrap();
         let used_after_expiry: i64 =
-            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1513,16 +1534,14 @@ mod tests {
         assert_eq!(protected_rows, 1);
 
         // Reconciliation derives the exact total from both delivery and protected ledgers.
-        sqlx::query(
-            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+123 WHERE id=$1",
-        )
-        .bind(user_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+123 WHERE id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(quota_reconcile_tick(&pool).await >= 1);
         let reconciled: i64 =
-            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1545,7 +1564,7 @@ mod tests {
             .await
             .unwrap();
         storage.delete(&protected_path).await.unwrap();
-        sqlx::query("UPDATE users SET chat_storage_used_bytes=$1 WHERE id=$2")
+        sqlx::query("UPDATE users SET storage_used_bytes=$1 WHERE id=$2")
             .bind(original_used)
             .bind(user_id)
             .execute(&pool)

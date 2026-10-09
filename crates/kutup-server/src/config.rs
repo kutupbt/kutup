@@ -46,9 +46,6 @@ pub struct Config {
     /// Days an ordinary Chat-media delivery copy remains available. `0`
     /// disables expiry. Protected history-media copies are independent.
     pub chat_media_delivery_retention_days: i64,
-    /// Default per-account quota for all durable Chat history and media.
-    /// The authenticated admin setting may replace this runtime fallback.
-    pub chat_storage_default_quota_bytes: u64,
     /// Stable canonical DNS suffix used by every local Chat account. This is
     /// required even when inter-server federation is disabled.
     pub chat_server_name: String,
@@ -226,13 +223,6 @@ impl Config {
         {
             panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
         }
-        let chat_storage_default_quota_bytes = get_env_i64(
-            "CHAT_STORAGE_DEFAULT_QUOTA_BYTES",
-            kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES as i64,
-        );
-        if chat_storage_default_quota_bytes <= 0 {
-            panic!("CHAT_STORAGE_DEFAULT_QUOTA_BYTES must be positive");
-        }
         let chat_mailbox_retention_days = get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30);
         crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
             .unwrap_or_else(|error| panic!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
@@ -284,7 +274,6 @@ impl Config {
             chat_max_active_devices: chat_max_active_devices as u32,
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
-            chat_storage_default_quota_bytes: chat_storage_default_quota_bytes as u64,
             chat_server_name,
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),

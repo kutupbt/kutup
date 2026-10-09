@@ -19,6 +19,7 @@ pub mod folder_access;
 pub mod name_hashes;
 pub mod sessions;
 pub mod shares;
+pub mod storage;
 pub mod trash;
 pub mod tus;
 

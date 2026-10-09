@@ -140,6 +140,8 @@ function useTrashMutation<T>(fn: (input: T) => Promise<void>) {
         queryClient.invalidateQueries({ queryKey: trashKey }),
         queryClient.invalidateQueries({ queryKey: foldersKey }),
         queryClient.invalidateQueries({ queryKey: ['files'] }),
+        // What fills the pool (storage.storageKey).
+        queryClient.invalidateQueries({ queryKey: ['storage'] }),
       ])
       // Purging frees quota.
       const { data } = await api.get<{ storageUsedBytes: number }>('/user/me')

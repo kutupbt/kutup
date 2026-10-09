@@ -15,7 +15,6 @@ use uuid::Uuid;
 use crate::ConversationId;
 
 pub const CHAT_BACKUP_PROTOCOL_VERSION: u16 = 1;
-pub const DEFAULT_CHAT_STORAGE_QUOTA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const CHAT_DELIVERY_MEDIA_RETENTION_DAYS: u32 = 45;
 pub const MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES: u32 = 256 * 1024 + 1024;
 pub const MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES: u64 = 128 * 1024 * 1024 + 1024;
@@ -776,8 +775,7 @@ mod tests {
 
     #[test]
     fn capabilities_advertise_the_admin_media_retention_exactly() {
-        let capabilities =
-            ChatBackupCapabilitiesV1::v1(DEFAULT_CHAT_STORAGE_QUOTA_BYTES, 0).unwrap();
+        let capabilities = ChatBackupCapabilitiesV1::v1(10 * 1024 * 1024 * 1024, 0).unwrap();
         assert_eq!(capabilities.delivery_media_retention_days, 0);
         assert!(capabilities.always_enabled);
         assert!(ChatBackupCapabilitiesV1::v1(0, 45).is_err());

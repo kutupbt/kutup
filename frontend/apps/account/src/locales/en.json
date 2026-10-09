@@ -25,7 +25,8 @@
     "profile": "Profile",
     "devicesSessions": "Devices & sessions",
     "maps": "Maps",
-    "adminMaps": "Maps"
+    "adminMaps": "Maps",
+    "storage": "Storage"
   },
   "auth": {
     "fields": {
@@ -147,8 +148,7 @@
       "description": "Who you are on this server, and how much space you use.",
       "profile": "Profile",
       "noUsername": "Not set",
-      "driveStorage": "Drive storage",
-      "chatStorage": "Chat storage",
+      "storage": "Storage",
       "usage": "{{used}} of {{total}}",
       "colour": "Presence colour",
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
@@ -271,6 +271,59 @@
       "offForYou": "Maps are off for you.",
       "saved": "Map settings saved",
       "saveFailed": "The map settings could not be saved."
+    },
+    "storage": {
+      "title": "Storage",
+      "description": "One pool for everything you keep on this server: Drive, Photos, Office, Maps and Chat.",
+      "ofQuota": "of {{total}} used",
+      "free": "Free",
+      "breakdown": "What fills your storage",
+      "counting": "Counting your files by type…",
+      "fileCount_one": "{{count}} file",
+      "fileCount_other": "{{count}} files",
+      "byKindPartial": "Some folders could not be read, so this may be incomplete.",
+      "level": {
+        "warning": "Your storage is almost full",
+        "warningHint": "Free up space so uploads, saves and Chat backups keep working.",
+        "danger": "Your storage is full",
+        "dangerHint": "Uploads, saves and Chat backups are refused until you free up space or your administrator gives you more."
+      },
+      "cleanup": {
+        "open": "Free up space",
+        "title": "Free up space",
+        "description": "What you could remove, and how much each would free. Nothing is deleted without asking.",
+        "trash": "Trash",
+        "trashHint_one": "{{count}} file waiting to be deleted. It still counts until the trash is emptied.",
+        "trashHint_other": "{{count}} files waiting to be deleted. They still count until the trash is emptied.",
+        "trashEmpty": "The trash is empty.",
+        "emptyTrash": "Empty trash",
+        "emptyTrashTitle": "Empty the trash?",
+        "emptyTrashDescription_one": "{{count}} file ({{size}}) will be deleted for good.",
+        "emptyTrashDescription_other": "{{count}} files ({{size}}) will be deleted for good.",
+        "cannotUndo": "This cannot be undone.",
+        "trashEmptied": "Trash emptied",
+        "large": "Large files",
+        "largeHint": "Your files of {{size}} or more, largest first.",
+        "noLarge": "You have no large files.",
+        "moveToTrash": "Move to trash",
+        "moveSelected_one": "Move {{count}} file to trash ({{size}})",
+        "moveSelected_other": "Move {{count}} files to trash ({{size}})",
+        "moved_one": "{{count}} file moved to trash",
+        "moved_other": "{{count}} files moved to trash",
+        "trashStillCounts": "Files in the trash still count until you empty it.",
+        "select": "Select {{name}}",
+        "myFiles": "My files",
+        "unnamedFolder": "Folder",
+        "versions": "Earlier versions",
+        "versionsHint_one": "Kept for {{count}} day, then removed on their own.",
+        "versionsHint_other": "Kept for {{count}} days, then removed on their own.",
+        "versionsHintUnknown": "Removed on their own after a while.",
+        "chat": "Chat attachments",
+        "chatHint": "Clear stored attachments per conversation in Chat; the messages stay.",
+        "openChat": "Open Chat storage",
+        "failed": "That did not work. Try again."
+      },
+      "kindsNote": "File types come from the names this browser decrypts; the server sees only sizes. Each copy you keep counts, in Chat too."
     }
   },
   "admin": {
@@ -286,8 +339,8 @@
       "folders": "Folders"
     },
     "quota": {
-      "drive": "Drive quota (GiB)",
-      "chat": "Chat quota (GiB)",
+      "storage": "Storage quota (GiB)",
+      "storageHint": "One pool for Drive, Photos, Office, Maps and Chat.",
       "positive": "Enter a size above zero."
     },
     "users": {
@@ -308,8 +361,7 @@
       "columns": {
         "user": "User",
         "status": "Status",
-        "drive": "Drive",
-        "chat": "Chat",
+        "storage": "Storage",
         "twoFactor": "2FA"
       }
     },
@@ -350,9 +402,9 @@
       "promoteDescription": "{{email}} will be able to manage every account and the server's settings.",
       "demoteTitle": "Remove administrator rights?",
       "demoteDescription": "{{email}} keeps their account but loses administration access.",
-      "quotas": "Storage quotas",
-      "quotasHint": "Uploads beyond a quota are refused; nothing already stored is removed.",
-      "quotasSaved": "Quotas saved",
+      "quotas": "Storage quota",
+      "quotasHint": "Uploads beyond the quota are refused; nothing already stored is removed.",
+      "quotasSaved": "Quota saved",
       "saveFailed": "The change could not be saved.",
       "recovery": "Account recovery",
       "recoveryHint": "For people locked out. Kutup cannot reset a password without destroying data it cannot read.",
@@ -423,8 +475,6 @@
       "registrationHint": "Anyone who can reach this server can create an account. Off: only administrators create accounts.",
       "chat": "Chat",
       "chatHint": "Encrypted message and media delivery on this server.",
-      "chatQuota": "Default Chat quota (GiB)",
-      "chatQuotaHint": "For new accounts.",
       "mailboxDays": "Undelivered messages (days)",
       "mailboxDaysHint": "How long an offline device's messages wait. 0 keeps them until delivered.",
       "mediaDays": "Undelivered media (days)",
@@ -432,7 +482,9 @@
       "wholeDays": "Enter whole days.",
       "retentionRange": "Between 0 and 3650 days.",
       "saved": "Settings saved",
-      "saveFailed": "The settings could not be saved."
+      "saveFailed": "The settings could not be saved.",
+      "defaultQuota": "Default storage quota (GiB)",
+      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page."
     },
     "federation": {
       "title": "Federation",

@@ -48,8 +48,8 @@ for service in "${services[@]}"; do
     UNION ALL SELECT 'base_count=' || COUNT(*) FROM chat_backup_bases
     UNION ALL SELECT 'media_object_count=' || COUNT(*) FROM chat_backup_media_objects
     UNION ALL SELECT 'media_reference_count=' || COUNT(*) FROM chat_backup_media_references
-    UNION ALL SELECT 'chat_bytes_used=' || COALESCE(SUM(chat_storage_used_bytes), 0) FROM users
-    UNION ALL SELECT 'chat_bytes_quota=' || COALESCE(SUM(chat_storage_quota_bytes), 0) FROM users;
+    UNION ALL SELECT 'storage_bytes_used=' || COALESCE(SUM(storage_used_bytes), 0) FROM users
+    UNION ALL SELECT 'storage_bytes_quota=' || COALESCE(SUM(storage_quota_bytes), 0) FROM users;
   " >"$output_dir/$service-database-counts.txt" 2>/dev/null ||
     printf '%s\n' 'database_counts_unavailable=1' >"$output_dir/$service-database-counts.txt"
 done

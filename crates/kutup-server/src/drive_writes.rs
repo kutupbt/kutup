@@ -59,31 +59,26 @@ pub async fn is_file_share_editor(pool: &PgPool, user_id: Uuid, file_id: Uuid) -
     .unwrap_or(false)
 }
 
-/// Locks the user's row, which serialises every Drive charge to them, and
-/// returns how many more bytes they may store: quota − used − what their
-/// open tus uploads have reserved. A tus upload reserves its whole declared
-/// length until it is finalised (its received bytes are not charged yet
-/// either). `except_upload` leaves out the upload being finalised.
+/// Locks the user's row, which serialises every charge to their storage
+/// pool (Drive and Chat alike, [`crate::storage_pool`]), and returns how
+/// many more bytes they may store: quota − used − everything reserved by
+/// writes in flight. A tus upload reserves its whole declared length until
+/// it is finalised. `except_upload` leaves out the upload being finalised.
 pub async fn lock_headroom(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     except_upload: Option<Uuid>,
 ) -> sqlx::Result<i64> {
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
+    let pool = crate::storage_pool::lock(
+        tx,
+        user_id,
+        crate::storage_pool::Leave {
+            upload: except_upload,
+            ..Default::default()
+        },
     )
-    .bind(user_id)
-    .fetch_one(&mut **tx)
     .await?;
-    let reserved: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_bytes), 0)::bigint FROM uploads
-         WHERE user_id = $1 AND id IS DISTINCT FROM $2",
-    )
-    .bind(user_id)
-    .bind(except_upload)
-    .fetch_one(&mut **tx)
-    .await?;
-    Ok(quota.saturating_sub(used).saturating_sub(reserved))
+    Ok(pool.headroom())
 }
 
 /// How many more bytes a share recipient may add to a folder under the

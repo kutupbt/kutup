@@ -138,4 +138,32 @@ test.describe.serial('administration', () => {
     await expect(page.getByRole('heading', { name: 'Server settings' })).toBeVisible()
     await expect(page.getByText('Open registration').first()).toBeVisible()
   })
+
+  test('the default storage quota is what new accounts get', async ({ browser }) => {
+    test.slow()
+    const quota = page.getByRole('spinbutton', { name: 'Default storage quota (GiB)' })
+    const save = async (gib: string) => {
+      await page.goto(appUrl('account', '/admin/settings'))
+      // The form fills in once the settings load.
+      await expect(quota).not.toHaveValue('', { timeout: 15_000 })
+      await quota.fill(gib)
+      await page.getByRole('button', { name: 'Save' }).click()
+      await expect(page.getByText('Settings saved').first()).toBeVisible({ timeout: 15_000 })
+    }
+    await save('3')
+    try {
+      // The New user form starts from it…
+      await page.goto(appUrl('account', '/admin/users/new'))
+      await expect(page.getByRole('spinbutton', { name: 'Storage quota (GiB)' })).toHaveValue('3', { timeout: 15_000 })
+      // …and so does an account someone registers.
+      const context = await browser.newContext()
+      await registerAccount(context, newAccount('e2equota', 'Deneme123*DefaultQuotaPassword'))
+      const account = await context.newPage()
+      await account.goto(appUrl('account', '/settings/account'))
+      await expect(account.getByRole('main').getByRole('link', { name: / of 3 GB$/ })).toBeVisible({ timeout: 60_000 })
+      await context.close()
+    } finally {
+      await save('10')
+    }
+  })
 })

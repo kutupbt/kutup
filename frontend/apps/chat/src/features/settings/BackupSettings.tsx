@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { ChatMediaStorageView } from '@kutup/chat-core/service'
+import { appUrl } from '@kutup/session/apps'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { cn } from '@kutup/ui/lib/cn'
@@ -63,8 +64,9 @@ export function BackupSettings() {
 }
 
 /**
- * The chat's storage quota (separate from Drive's), what uses it, and the
- * media stored per conversation, which can be cleared (the messages stay).
+ * The account's one storage pool, which Chat shares with Drive and the other
+ * apps: how full it is, what Chat uses of it, and the media stored per
+ * conversation, which can be cleared (the messages stay).
  */
 export function StorageSettings() {
   const { t, i18n } = useTranslation()
@@ -88,6 +90,10 @@ export function StorageSettings() {
   const usage = snapshot.backup?.storage
   const used = usage?.usedBytes ?? storage?.totalUsedBytes ?? 0
   const quota = usage?.quotaBytes ?? storage?.totalQuotaBytes ?? 0
+  const messageBytes = usage?.messageBytes ?? 0
+  const deliveryBytes = usage?.deliveryMediaBytes ?? storage?.chatMediaBytes ?? 0
+  const historyBytes = usage?.historyMediaBytes ?? 0
+  const otherApps = Math.max(0, used - messageBytes - deliveryBytes - historyBytes)
   const retention = capabilities?.backup?.deliveryMediaRetentionDays
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
   const labelOf = (reference: string) => {
@@ -117,11 +123,12 @@ export function StorageSettings() {
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={quota} aria-valuenow={used}>
               <div className="h-full bg-primary" style={{ width: `${quota > 0 ? Math.min(100, (used * 100) / quota) : 0}%` }} />
             </div>
-            <dl className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+            <dl className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
               {[
-                ['messageHistory', usage?.messageBytes ?? 0],
-                ['deliveryMedia', usage?.deliveryMediaBytes ?? storage.chatMediaBytes],
-                ['historyMedia', usage?.historyMediaBytes ?? 0],
+                ['messageHistory', messageBytes],
+                ['deliveryMedia', deliveryBytes],
+                ['historyMedia', historyBytes],
+                ['otherApps', otherApps],
               ].map(([key, value]) => (
                 <div key={key as string} className="rounded-md bg-muted/60 p-2">
                   <dt className="text-xs text-muted-foreground">{t(`chat.backup.${key as string}`)}</dt>
@@ -129,6 +136,13 @@ export function StorageSettings() {
                 </div>
               ))}
             </dl>
+            <a
+              href={appUrl('account', '/settings/storage')}
+              className="mt-3 inline-block text-sm text-primary hover:underline"
+              data-testid="chat-storage-details"
+            >
+              {t('chat.backup.storageDetails')}
+            </a>
           </div>
           <ul className="space-y-2">
             {storage.byConversation.map((item) => {

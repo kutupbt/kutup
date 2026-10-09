@@ -26,9 +26,9 @@ transport.
   follows an origin URL supplied by message content.
 - V1 device download is manual. Message requests do not cause destination blob
   allocation before explicit acceptance.
-- A dedicated administrator-configured Chat quota covers ordinary Chat media,
-  protected history media, and message-history ciphertext. It is separate from
-  Drive/general storage and defaults to 2 GiB per account.
+- Chat media, protected history media, and message-history ciphertext count
+  against the account's one storage pool. Drive, Photos, Office and Maps use
+  the same pool. Its administrator-configured default is 10 GiB per account.
 - The V1 attachment limit is 2 GiB of plaintext-class content plus the exact
   bounded framing overhead. A server may advertise a lower local limit but not
   a larger V1 limit.
@@ -124,7 +124,7 @@ treated as evidence for the full object.
 1. The client generates an attachment UUID and key, encrypts the immutable
    snapshot, and calculates its exact length and digest while streaming.
 2. Authenticated tus creation reserves the exact ciphertext bytes against the
-   sender's dedicated Chat quota and writes only under a random temporary key.
+   sender's account storage pool and writes only under a random temporary key.
 3. Finalization validates the public object header and framing bounds, then the
    server independently streams the completed object through SHA-256. The final
    tus response returns that digest; the client compares it to its streaming
@@ -179,7 +179,7 @@ authenticated recipient error and cannot be used for anonymous enumeration.
 
 One physical object may be reference-counted for multiple local recipients,
 but every recipient is charged the complete logical ciphertext length against
-their own Chat quota. Physical deduplication never changes user quota,
+their own account storage pool. Physical deduplication never changes user quota,
 authorization or deletion semantics.
 
 Quota reservation and reference creation occur in one database transaction.
@@ -187,9 +187,14 @@ The server must not increment quota without a durable reference or create a
 reference without quota. Lowering a quota preserves existing objects and blocks
 new reservations; it never silently evicts media.
 
-When Chat quota is unavailable, the message descriptor may remain in E2EE
-history while the attachment is visibly unavailable. The destination does not
-partially store it. Sender and recipient receive stable `storage_full` state,
+Every write locks the account row and checks used plus reserved plus new bytes
+against the quota. Reserved bytes are open Drive tus uploads, the unreceived
+part of open Chat media uploads, and pending federated inbound hand-overs. The
+uploads sweep deletes a stale inbound hand-over and releases its reservation.
+
+When the recipient's storage pool is full, the message descriptor may remain
+in E2EE history while the attachment is visibly unavailable. The destination
+does not partially store it. Sender and recipient receive stable `storage_full` state,
 and retry requires available quota plus an unexpired origin object.
 
 Normal accepted media remains until the recipient clears it, its disappearing
@@ -199,8 +204,9 @@ reference and releases their quota. Other recipients and saved Drive copies are
 unchanged.
 
 `Save to Drive` decrypts and re-encrypts into a recipient-owned visible Drive
-collection, which is charged to Drive/general storage. If the recipient then
-clears the Chat copy, its separate Chat reference and charge are released. The
+collection. The Drive file is a second copy and is charged to the same pool
+separately. If the recipient then clears the Chat copy, its Chat reference and
+charge are released. The
 operation never adopts
 server ciphertext by changing metadata because Drive headers bind a different
 file, collection and epoch.
@@ -272,10 +278,10 @@ cross-restart rollback pinning is unavailable on that device.
   taps **Download** or **View**.
 - The recipient server may already hold the durable encrypted copy. Device
   caching is local storage and is not charged again as server quota.
-- The Chat storage screen shows its dedicated quota split into message history,
-  delivery media, and protected history media, plus client-computed
-  per-conversation totals and review/clear actions. Drive/general usage remains
-  a separate quota.
+- The Chat storage screen shows the account pool split into message history,
+  delivery media, protected history media, and "Drive and other apps", plus
+  client-computed per-conversation totals and review/clear actions. It links to
+  the Account app's Settings → Storage page for the full breakdown.
 - Post-V1 may add per-device mobile/Wi-Fi/roaming and media-class auto-download
   policies. Those settings never weaken destination durable storage after an
   accepted delivery and never cause an identified-delivery downgrade.

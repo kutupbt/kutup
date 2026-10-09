@@ -68,16 +68,15 @@ function Quotas({ user }: { user: UserRow }) {
   const { t } = useTranslation()
   const update = useUpdateUser()
   const schema = z.object({
-    drive: z.coerce.number<number>().positive(t('admin.quota.positive')),
-    chat: z.coerce.number<number>().positive(t('admin.quota.positive')),
+    storage: z.coerce.number<number>().positive(t('admin.quota.positive')),
   })
   const { register, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { drive: bytesToGib(user.storageQuotaBytes), chat: bytesToGib(user.chatStorageQuotaBytes) },
+    defaultValues: { storage: bytesToGib(user.storageQuotaBytes) },
   })
   useEffect(() => {
-    reset({ drive: bytesToGib(user.storageQuotaBytes), chat: bytesToGib(user.chatStorageQuotaBytes) })
-  }, [user.storageQuotaBytes, user.chatStorageQuotaBytes, reset])
+    reset({ storage: bytesToGib(user.storageQuotaBytes) })
+  }, [user.storageQuotaBytes, reset])
 
   return (
     <form
@@ -85,7 +84,7 @@ function Quotas({ user }: { user: UserRow }) {
       onSubmit={(e) =>
         void handleSubmit((v) =>
           update.mutate(
-            { id: user.id, patch: { storageQuotaBytes: gibToBytes(v.drive), chatStorageQuotaBytes: gibToBytes(v.chat) } },
+            { id: user.id, patch: { storageQuotaBytes: gibToBytes(v.storage) } },
             { onSuccess: () => toast.success(t('admin.user.quotasSaved')) },
           ),
         )(e)
@@ -93,11 +92,8 @@ function Quotas({ user }: { user: UserRow }) {
       noValidate
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t('admin.quota.drive')} error={errors.drive?.message} required>
-          {(field) => <Input {...field} {...register('drive')} type="number" min={0.01} step="any" inputMode="decimal" />}
-        </Field>
-        <Field label={t('admin.quota.chat')} error={errors.chat?.message} required>
-          {(field) => <Input {...field} {...register('chat')} type="number" min={0.01} step="any" inputMode="decimal" />}
+        <Field label={t('admin.quota.storage')} error={errors.storage?.message} description={t('admin.quota.storageHint')} required>
+          {(field) => <Input {...field} {...register('storage')} type="number" min={0.01} step="any" inputMode="decimal" />}
         </Field>
       </div>
       {update.isError ? <Alert variant="error">{apiErrorMessage(update.error, t('admin.user.saveFailed'))}</Alert> : null}
@@ -249,11 +245,8 @@ export function UserPage() {
         <CardContent className="grid gap-5 p-5 sm:grid-cols-2">
           <Fact label={t('auth.fields.username')}><Mono>{user.username}</Mono></Fact>
           <Fact label={t('admin.user.created')}>{formatInstant(user.createdAt, lang)}</Fact>
-          <Fact label={t('settings.account.driveStorage')}>
+          <Fact label={t('settings.account.storage')}>
             {formatBytes(user.storageUsedBytes, lang)} / {formatBytes(user.storageQuotaBytes, lang)}
-          </Fact>
-          <Fact label={t('settings.account.chatStorage')}>
-            {formatBytes(user.chatStorageUsedBytes, lang)} / {formatBytes(user.chatStorageQuotaBytes, lang)}
           </Fact>
           <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
         </CardContent>

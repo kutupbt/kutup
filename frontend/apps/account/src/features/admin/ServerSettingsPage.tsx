@@ -28,7 +28,7 @@ export function ServerSettingsPage() {
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
   const schema = z.object({
     registrationEnabled: z.boolean(),
-    chatQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
+    quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
   })
@@ -39,7 +39,7 @@ export function ServerSettingsPage() {
     if (!settings.data) return
     reset({
       registrationEnabled: settings.data.registrationEnabled,
-      chatQuotaGib: bytesToGib(settings.data.defaultChatStorageQuotaBytes),
+      quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
     })
@@ -54,7 +54,7 @@ export function ServerSettingsPage() {
     update.mutate(
       {
         registrationEnabled: v.registrationEnabled,
-        defaultChatStorageQuotaBytes: gibToBytes(v.chatQuotaGib),
+        defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
       },
@@ -82,15 +82,17 @@ export function ServerSettingsPage() {
                   <p className="text-sm text-muted-foreground">{t('admin.settings.registrationHint')}</p>
                 </div>
               </div>
+              <div className="mt-5 max-w-xs">
+                <Field label={t('admin.settings.defaultQuota')} error={errors.quotaGib?.message} description={t('admin.settings.defaultQuotaHint')} required>
+                  {(field) => <Input {...field} {...register('quotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
+                </Field>
+              </div>
             </CardContent>
           </Card>
         </Section>
         <Section title={t('admin.settings.chat')} description={t('admin.settings.chatHint')}>
           <Card>
-            <CardContent className="grid gap-4 p-5 sm:grid-cols-3">
-              <Field label={t('admin.settings.chatQuota')} error={errors.chatQuotaGib?.message} description={t('admin.settings.chatQuotaHint')} required>
-                {(field) => <Input {...field} {...register('chatQuotaGib')} type="number" min={0.01} step="any" inputMode="decimal" />}
-              </Field>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               <Field label={t('admin.settings.mailboxDays')} error={errors.mailboxDays?.message} description={t('admin.settings.mailboxDaysHint')} required>
                 {(field) => <Input {...field} {...register('mailboxDays')} type="number" min={0} max={MAX_RETENTION_DAYS} step={1} inputMode="numeric" />}
               </Field>

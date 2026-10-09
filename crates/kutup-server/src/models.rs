@@ -61,7 +61,8 @@ pub struct SettingsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsResponse {
     pub registration_enabled: bool,
-    pub default_chat_storage_quota_bytes: i64,
+    /// The storage quota new accounts get. Existing accounts keep theirs.
+    pub default_storage_quota_bytes: i64,
     /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
@@ -108,8 +109,6 @@ pub struct MeResponse {
     pub totp_enabled: bool,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
-    pub chat_storage_quota_bytes: i64,
-    pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub color: String,
     /// How long this account's file versions are kept (days).
@@ -427,8 +426,6 @@ pub struct UserRow {
     pub username: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
-    pub chat_storage_quota_bytes: i64,
-    pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub is_active: bool,
     pub totp_enabled: bool,
@@ -444,7 +441,6 @@ pub struct CreateAdminUserRequest {
     pub username: String,
     pub temp_password: String,
     pub storage_quota_bytes: i64,
-    pub chat_storage_quota_bytes: Option<i64>,
 }
 
 /// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminUserRequest`.
@@ -452,7 +448,6 @@ pub struct CreateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminUserRequest {
     pub storage_quota_bytes: Option<i64>,
-    pub chat_storage_quota_bytes: Option<i64>,
     pub is_active: Option<bool>,
     pub is_admin: Option<bool>,
 }
@@ -462,7 +457,7 @@ pub struct UpdateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
     pub registration_enabled: Option<bool>,
-    pub default_chat_storage_quota_bytes: Option<i64>,
+    pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
 }
