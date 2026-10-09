@@ -151,6 +151,12 @@ document open downloads about 16 MB instead of 89 MB
 (docs/research/17-web-performance.md). In development (`./install-onlyoffice.sh`
 and Vite) the directories keep their plain names (`dist/v9/`, `dist/x2t/`).
 
+Opening a document overlaps its steps: while Drive downloads and decrypts the
+file, a hidden `inner.html?warm=1&type=…` frame fetches x2t and the editor's SDK
+into the browser cache (only what is not cached already); the bridge loads
+`api.js` while x2t converts; and a PDF, which opens as itself, loads x2t only
+when it is first needed (saving, thumbnails).
+
 The bridge mounts the editor again if ONLYOFFICE's frame never reports ready
 (a handshake race seen on warm reloads), but only after loading has gone quiet
 for 7 s: on a slow link the SDK alone takes minutes, and an earlier version

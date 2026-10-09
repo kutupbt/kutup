@@ -1,6 +1,6 @@
 # Web performance: where the apps are slow and how to make them fast
 
-**Date:** 2026-10-09. **Code:** master at `39b1537`. **Status:** research; nothing here is implemented.
+**Date:** 2026-10-09. **Code:** master at `39b1537`. **Status:** Tier 1 and most of Tier 2 implemented on branch `perf/web-performance` (see §6); Tier 3 open.
 
 **Method.** Four investigations, run in parallel:
 1. **Browser measurements** with Playwright and Chromium on the local stack. Its asset hashes match production, so the byte counts apply to kutup.dev. Runs covered cold and warm loads, link speeds from unthrottled down to slow 4G, and CPU throttling.
@@ -290,3 +290,40 @@ Read from the local WebClients clone (`kutup-references/WebClients`). Drive now 
 - a one-round-trip session resume.
 
 **The one place Proton is ahead on delivery** is that every asset is content-hashed and cached; Kutup's WASM and editor files are not.
+
+## 6. Progress (branch `perf/web-performance`)
+
+Measured with the same harness on the same local stack (in-memory browser
+contexts unless "disk profile"; 40 Mbps / 40 ms unless noted).
+
+| Page | Before | After Tier 1 | After Tier 2 |
+|---|---:|---:|---:|
+| .docx first open | 19.5 s, 89 MB | 4.7 s, 16.2 MB | 3.5 s, 15.4 MB (disk profile) |
+| .docx second open | 13.4 s | 1.7 s | 1.8 s (disk profile; 1.5 s after a browser restart, 0.01 MB) |
+| .docx at 5 Mbps | fails | 24.6 s | – |
+| .docx on slow 4G | fails | 74 s | 80 s |
+| Office home, first visit | 1.33 s, 3.54 MB | 0.84 s, 1.05 MB | 0.49 s, 0.70 MB |
+| Office home, slow 4G | 19.2 s | 6.7 s | 4.3 s |
+| Drive root, slow 4G | 21.5 s | – | 4.9 s |
+
+Done:
+- **Tier 1:**
+  - **Compression:** gzip and brotli stored at build time and served as they are; the frontend image uses Alpine's nginx with the brotli module.
+  - **Caching:** versioned OnlyOffice directories and content-hashed WASM, all immutable.
+  - **Edge proxy:** HTTP/1.1 to the frontend, gzip for API JSON, TLS session cache.
+  - **Remount timer:** the editor waits for quiet loading instead of a wall-clock 7 s.
+  - **Source maps:** kept out of the image.
+- **Tier 2:**
+  - **Editor overlap:** `api.js` loads while the document converts; x2t is not loaded for PDFs; a hidden warm-up frame fetches x2t and the SDK while Drive downloads the document.
+  - **Chat WASM:** not loaded when there is nobody to exchange profiles with, and otherwise only once the page is idle.
+  - **Lazy loading:** libsodium, bip39, maplibre in Photos, livekit in Chat, and account's admin and recovery pages.
+  - **Smaller WASM:** a `wasm-release` profile (LTO, one codegen unit) and stripped name sections: crypto 1.37 → 1.04 MB, chat 11.0 → 7.7 MB, Argon2 about 5% faster.
+  - **Session restore:** in parallel (the WASM and the profile alongside the token, the server settings alongside the restore), and `/auth/settings` is fetched once per page.
+  - **Office home:** the document list is memoised and previews load when visible.
+
+Start-up JS per app, before → after: office 1,873 → 687 KB, drive 2,268 → 1,085 KB, chat 3,024 → 1,298 KB, photos 3,116 → 919 KB, maps 3,080 → 1,865 KB.
+
+Still open:
+- **OnlyOffice release build** in the fork (minified `sdk-all.js`, built web-apps).
+- **Cross-folder listing and change feed**, the encrypted local catalog, a crypto worker, and a shared static origin or CDN (Tier 3).
+- **HTTP/3:** needs UDP 443 open in the host firewall.

@@ -1,4 +1,6 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react'
+import { useTranslation } from 'react-i18next'
+import { LoadingPanel } from '@kutup/ui/components/states'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -6,17 +8,9 @@ import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { AccountShell } from './app/AccountShell'
 import { Boot } from './app/Boot'
 import { RequireAdmin, RequireSession } from './app/guards'
-import { ActivityPage } from './features/admin/ActivityPage'
-import { FederationPage } from './features/admin/FederationPage'
-import { NewUserPage } from './features/admin/NewUserPage'
-import { MapsSettingsPage } from './features/admin/MapsSettingsPage'
-import { ServerSettingsPage } from './features/admin/ServerSettingsPage'
-import { UserPage } from './features/admin/UserPage'
-import { UsersPage } from './features/admin/UsersPage'
 import { AuthorizePage } from './features/auth/AuthorizePage'
 import { FirstLoginPage } from './features/auth/FirstLoginPage'
 import { LoginPage } from './features/auth/LoginPage'
-import { RecoverPage } from './features/auth/RecoverPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
@@ -27,6 +21,32 @@ import { DevicesSessionsPage } from './features/settings/DevicesSessionsPage'
 import { MapsPage } from './features/settings/MapsPage'
 import { SecurityPage } from './features/settings/SecurityPage'
 import { NotFoundPage } from './NotFoundPage'
+
+/**
+ * Pages most visits never open (administration, account recovery) load
+ * when they are opened, keeping them out of the page's start
+ * (docs/research/17-web-performance.md).
+ */
+function page(load: () => Promise<{ default: ComponentType }>): ComponentType {
+  const Lazy: LazyExoticComponent<ComponentType> = lazy(load)
+  return function LazyPage() {
+    const { t } = useTranslation()
+    return (
+      <Suspense fallback={<LoadingPanel label={t('common.loading')} />}>
+        <Lazy />
+      </Suspense>
+    )
+  }
+}
+
+const ActivityPage = page(() => import('./features/admin/ActivityPage').then((m) => ({ default: m.ActivityPage })))
+const FederationPage = page(() => import('./features/admin/FederationPage').then((m) => ({ default: m.FederationPage })))
+const NewUserPage = page(() => import('./features/admin/NewUserPage').then((m) => ({ default: m.NewUserPage })))
+const MapsSettingsPage = page(() => import('./features/admin/MapsSettingsPage').then((m) => ({ default: m.MapsSettingsPage })))
+const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPage').then((m) => ({ default: m.ServerSettingsPage })))
+const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
+const UsersPage = page(() => import('./features/admin/UsersPage').then((m) => ({ default: m.UsersPage })))
+const RecoverPage = page(() => import('./features/auth/RecoverPage').then((m) => ({ default: m.RecoverPage })))
 
 /** When the server ends this sign-in (revoked elsewhere, expired), go to sign-in. */
 function UnauthenticatedRedirect() {

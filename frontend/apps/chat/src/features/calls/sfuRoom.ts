@@ -7,6 +7,9 @@ import {
   Track,
   type Participant,
 } from 'livekit-client'
+import { CHAT_TOPIC, ROLES_TOPIC } from './sfuTopics'
+
+export { CHAT_TOPIC, ROLES_TOPIC }
 
 // A call's room on an SFU, as group calls and call links both use it
 // (docs/chat-calls.md): media frames are encrypted in the browser
@@ -65,12 +68,6 @@ export interface SfuRoomHandlers {
   /** Bytes a participant sent to everyone in the room, outside the media. */
   data?(identity: string, payload: Uint8Array, topic: string): void
 }
-
-/** The topic of a call's chat messages. */
-export const CHAT_TOPIC = 'kutup'
-/** The topic of the hint that the meeting's hosts changed (no content). */
-export const ROLES_TOPIC = 'kutup-roles'
-
 
 /** The screen-share source in a participant's permissions (the SFU's own numbering). */
 const SCREEN_SHARE_SOURCE = 3

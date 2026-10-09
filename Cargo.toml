@@ -106,3 +106,13 @@ hex = "0.4"
 [profile.release]
 # Match the security-conscious, debuggable posture; tune later for the server/CLI.
 opt-level = 2
+
+# The browser's WASM builds (scripts/build-crypto-wasm.sh): whole-program
+# optimisation makes the module smaller and no slower; it is downloaded and
+# compiled on every first visit (docs/research/17-web-performance.md).
+[profile.wasm-release]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+

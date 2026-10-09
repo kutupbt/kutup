@@ -1,4 +1,5 @@
 import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
@@ -43,13 +44,43 @@ export function useDocuments() {
       queryKey: folderFilesKey(folder),
       queryFn: () => loadFolderFiles(folder),
     })),
+    // One stable result while no listing changes, so the documents below
+    // (and the sorted page) are not rebuilt on every render.
+    combine: (results) => ({
+      data: results.map((r) => r.data),
+      pending: results.some((r) => r.isPending),
+      failed: results.some((r) => r.error),
+    }),
   })
+  const documents = useMemo(
+    () => collectDocuments(readable, listings.data, sharedFiles.data ?? []),
+    // `readable` follows the folders query's data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [folders.data, listings.data, sharedFiles.data],
+  )
+  return {
+    root: folders.data?.root,
+    documents,
+    loading: folders.isPending || sharedFiles.isPending || listings.pending,
+    // Without the folders nothing can be listed; one folder that could not
+    // be read only leaves its documents out.
+    error: folders.error ?? null,
+    incomplete: Boolean(sharedFiles.error) || listings.failed,
+  }
+}
+
+/** Every document in the listings and the files shared by themselves, once each. */
+function collectDocuments(
+  readable: Folder[],
+  listings: (DriveFile[] | undefined)[],
+  sharedFiles: NonNullable<ReturnType<typeof useSharedFiles>['data']>,
+): DocumentEntry[] {
   const documents: DocumentEntry[] = []
   const seen = new Set<string>()
   listings.forEach((listing, i) => {
     const folder = readable[i]
-    if (!folder || !listing.data) return
-    for (const file of listing.data) {
+    if (!folder || !listing) return
+    for (const file of listing) {
       const kind = documentKindOf(file.name)
       if (!kind || seen.has(file.id)) continue
       seen.add(file.id)
@@ -62,7 +93,7 @@ export function useDocuments() {
       })
     }
   })
-  for (const shared of sharedFiles.data ?? []) {
+  for (const shared of sharedFiles) {
     // A file shared by itself that is also in a shared folder shows once.
     // One on another server, or still waiting for its owner's new key,
     // cannot be opened in the editor from here.
@@ -80,15 +111,7 @@ export function useDocuments() {
       href: editorUrl(shared.container, shared.file.id),
     })
   }
-  return {
-    root: folders.data?.root,
-    documents,
-    loading: folders.isPending || sharedFiles.isPending || listings.some((l) => l.isPending),
-    // Without the folders nothing can be listed; one folder that could not
-    // be read only leaves its documents out.
-    error: folders.error ?? null,
-    incomplete: Boolean(sharedFiles.error) || listings.some((l) => l.error),
-  }
+  return documents
 }
 
 export type DocumentOrder = 'recent' | 'name'

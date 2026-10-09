@@ -23,6 +23,22 @@ export interface AppDirectory {
 }
 
 let directory: AppDirectory | null = null
+let settings: Promise<Record<string, unknown>> | null = null
+
+/**
+ * The server's public settings (`GET /auth/settings`), fetched once per
+ * page: the app origins, Chat's capabilities and the server's name all come
+ * from it, and asking again costs a round trip on every start.
+ */
+export function loadServerSettings<T = Record<string, unknown>>(): Promise<T> {
+  if (!settings) {
+    settings = api.get<Record<string, unknown>>('/auth/settings').then((response) => response.data)
+    settings.catch(() => {
+      settings = null
+    })
+  }
+  return settings as Promise<T>
+}
 
 function assertOrigin(value: unknown, name: string): string {
   if (typeof value !== 'string') throw new Error(`server did not publish the ${name} app origin`)
@@ -36,10 +52,8 @@ function assertOrigin(value: unknown, name: string): string {
 /** Load once at boot; every later `appUrl()` is synchronous. */
 export async function loadAppDirectory(): Promise<AppDirectory> {
   if (directory) return directory
-  const response = await api.get<{ apps?: Partial<Record<keyof AppDirectory, unknown>> }>(
-    '/auth/settings',
-  )
-  const apps = response.data.apps ?? {}
+  const data = await loadServerSettings<{ apps?: Partial<Record<keyof AppDirectory, unknown>> }>()
+  const apps = data.apps ?? {}
   directory = {
     account: assertOrigin(apps.account, 'account'),
     drive: assertOrigin(apps.drive, 'drive'),

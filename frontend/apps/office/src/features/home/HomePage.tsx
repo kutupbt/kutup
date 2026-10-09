@@ -1,5 +1,5 @@
 import { ArrowDownAZ, Clock, Plus, Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { DriveFile } from '@kutup/drive-core/model'
@@ -14,22 +14,52 @@ import { PageBody } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel, Spinner } from '@kutup/ui/components/states'
 import { filterDocuments, sortDocuments, useCreateDocument, useDocuments, type DocumentEntry, type DocumentOrder } from './documents'
 
-/** The picture the editor drew of the document the last time it was saved. */
+/**
+ * The picture the editor drew of the document the last time it was saved,
+ * once the card is on screen (each one is a download and a decryption), at
+ * the size Drive's cards use; the kind icon until then.
+ */
 function Preview({ file, kind }: { file: DriveFile; kind: DocumentKind }) {
+  const box = useRef<HTMLSpanElement>(null)
+  const [visible, setVisible] = useState(false)
   const [url, setUrl] = useState<string | null>(null)
-  const stamp = file.thumbnails.lg ?? file.thumbnails.sm
   useEffect(() => {
+    const el = box.current
+    if (!el || visible) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [visible])
+  const variant = file.thumbnails.sm ? 'sm' : 'lg'
+  const stamp = file.thumbnails[variant]
+  useEffect(() => {
+    if (!visible || !stamp) return
     let alive = true
     setUrl(null)
-    void thumbnailUrl(file, file.thumbnails.lg ? 'lg' : 'sm').then((u) => alive && setUrl(u))
+    void thumbnailUrl(file, variant).then((u) => alive && setUrl(u))
     return () => {
       alive = false
     }
     // The stamp changes when a new picture is stored.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.id, stamp])
-  if (url) return <img src={url} alt="" className="size-full object-cover object-top" draggable={false} />
-  return <KindIcon kind={kind} className="size-14" />
+  }, [visible, file.id, stamp])
+  return (
+    <span ref={box} className="flex size-full items-center justify-center">
+      {url ? (
+        <img src={url} alt="" className="size-full object-cover object-top" draggable={false} />
+      ) : (
+        <KindIcon kind={kind} className="size-14" />
+      )}
+    </span>
+  )
 }
 
 function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {

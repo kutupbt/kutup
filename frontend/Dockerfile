@@ -61,7 +61,7 @@ RUN o=apps/editor/public/onlyoffice \
     && client=$(cat $o/dist/v9/.version) && x2t=x2t-$(cat $o/dist/x2t/.version) \
     && mv $o/dist/v9 "$o/dist/$client" && mv $o/dist/x2t "$o/dist/$x2t" \
     && sed -i "s#dist/v9/#dist/$client/#g" $o/inner.html \
-    && sed -i "s#dist/x2t/#dist/$x2t/#g" $o/x2t.html \
+    && sed -i "s#dist/x2t/#dist/$x2t/#g" $o/x2t.html $o/inner.html \
     && ! grep -n 'dist/v9/\|dist/x2t/' $o/inner.html $o/x2t.html \
     && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
 RUN pnpm run build \

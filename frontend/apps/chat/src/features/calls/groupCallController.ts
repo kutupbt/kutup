@@ -1,7 +1,7 @@
 import type { ChatService } from '@kutup/chat-core/service'
 import type { ChatCallMedia, ChatGroupCall, LocalMlsConversationRecord } from '@kutup/chat-core/types'
 import { canonicalAccountAddress } from '@kutup/chat-core/identity'
-import { SfuRoom, type SfuParticipant } from './sfuRoom'
+import type { SfuParticipant, SfuRoom } from './sfuRoom'
 
 // Group calls through the SFU of the server that started them, end-to-end
 // encrypted (docs/chat-calls.md):
@@ -98,6 +98,8 @@ export class GroupCallController {
       this.tags = await memberTags(tagKey, this.roster(groupId))
       const identity = (await tag(tagKey, this.account)) + hex(crypto.getRandomValues(new Uint8Array(4)))
       const { url, token } = await this.service.groupCallToken(call.host, call.roomId, identity)
+      // The SFU client (livekit) loads only when a call starts.
+      const { SfuRoom } = await import('./sfuRoom')
       const room = new SfuRoom({
         changed: () => {
           this.syncScreen()

@@ -70,21 +70,46 @@
     <div id="editor-host">
       <div id="placeholder"></div>
     </div>
-    <!-- Hidden sibling iframe that runs the x2t WASM converter. Loaded once
-         at boot; conversions go through `x2tConvert(input, fileName, format)`
-         (defined in the script below). Phase 3a wires the bridge; Phase 3b
-         calls it on first OOXML open. -->
-    <iframe
-      id="x2t-frame"
-      src="/onlyoffice/x2t.html"
-      style="display:none"
-      title="x2t bridge"
-    ></iframe>
+    <!-- The hidden sibling iframe that runs the x2t WASM converter
+         (#x2t-frame) is added by the script below: at boot for documents,
+         spreadsheets and presentations, which open through it; only when
+         first needed for a PDF, which opens as itself (x2t is 36 MB). -->
     <div id="status">bridge: idle</div>
 
     <script>
       (function () {
         'use strict'
+
+        // Warm-up (?warm=1): Drive mounts this page hidden while it downloads
+        // and decrypts a document, so the converter and the editor's code
+        // (several MB, cached for good) arrive at the same time instead of
+        // after it. The page only fetches them into the cache and stays idle
+        // (docs/research/17-web-performance.md).
+        var warmParams = new URLSearchParams(window.location.search)
+        if (warmParams.get('warm') === '1') {
+          var SDK_DIRS = { docx: 'word', xlsx: 'cell', pptx: 'slide' }
+          var sdk = SDK_DIRS[warmParams.get('type')]
+          if (!sdk) return
+          ;[
+            'dist/x2t/x2t.js',
+            'dist/x2t/x2t.wasm',
+            'dist/v9/web-apps/apps/api/documents/api.js',
+            'dist/v9/sdkjs/' + sdk + '/sdk-all-min.js',
+            'dist/v9/sdkjs/' + sdk + '/sdk-all.js',
+          ].forEach(function (path) {
+            var url = new URL(path, window.location.href)
+            // Already cached (the usual case after the first visit): done.
+            fetch(url, { cache: 'only-if-cached', mode: 'same-origin' })
+              .then(function (cached) {
+                if (cached.body) cached.body.cancel()
+              })
+              .catch(function () {
+                return fetch(url).then(function (response) { return response.arrayBuffer() })
+              })
+              .catch(function () {})
+          })
+          return
+        }
 
         // This page runs on its own origin (editor.<domain>), apart from
         // Drive, so the OnlyOffice code never shares an origin with the
@@ -207,7 +232,19 @@
           return new Promise(function (resolve) { x2tReadyResolvers.push(resolve) })
         }
 
+        var ensureX2t = function () {
+          if (document.getElementById('x2t-frame')) return
+          var frame = document.createElement('iframe')
+          frame.id = 'x2t-frame'
+          frame.src = '/onlyoffice/x2t.html'
+          frame.style.display = 'none'
+          frame.title = 'x2t bridge'
+          document.body.appendChild(frame)
+        }
+        if (new URLSearchParams(window.location.search).get('type') !== 'pdf') ensureX2t()
+
         var x2tConvert = function (input, fileName, outputFormat, extra) {
+          ensureX2t()
           return x2tWaitReady().then(function () {
             var iframe = document.getElementById('x2t-frame')
             if (!iframe || !iframe.contentWindow) {

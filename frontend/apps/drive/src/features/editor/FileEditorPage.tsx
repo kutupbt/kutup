@@ -297,50 +297,79 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   }, [kind])
 
   if (failure) return <FailurePanel failure={failure} folder={liveFolder} file={liveFile} />
+  // An office document: the editor's converter and code download while the
+  // file does (hidden, into the cache), instead of after it. First in the
+  // tree, so it stays mounted (and its downloads go on) when the editor
+  // opens. docs/research/17-web-performance.md.
+  const warmType = officeWarmType(file, folder)
+  const warm = warmType ? (
+    <iframe
+      key="warm"
+      hidden
+      aria-hidden
+      tabIndex={-1}
+      title=""
+      src={appUrl('editor', `/onlyoffice/inner.html?${new URLSearchParams({ warm: '1', type: warmType }).toString()}`)}
+    />
+  ) : null
+
   if (!opened || !keys || !liveFolder || !liveFile || !name) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background">
-        <LoadingPanel label={t('file.opening')} />
-      </div>
+      <>
+        {warm}
+        <div className="flex min-h-svh items-center justify-center bg-background">
+          <LoadingPanel label={t('file.opening')} />
+        </div>
+      </>
     )
   }
 
   return (
-    <Workspace
-      // The editors take read-only when they are built: rebuild them when
-      // this network turns out to block live editing (and when it stops).
-      key={`${generation}:${liveBlocked ? 'blocked' : 'live'}`}
-      folder={liveFolder}
-      file={liveFile}
-      name={name}
-      opened={opened}
-      keys={keys}
-      // As the file opened: an editor stays one for the session (the server
-      // drops a narrowed share's edits and closes its socket).
-      readOnly={!(picked?.folder ?? liveFolder).canUpload || liveBlocked}
-      liveBlocked={live !== 'live'}
-      unsentEdits={live === 'blockedWithEdits'}
-      notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
-      shareRole={shareRole(liveFolder, liveFile, sharedFile)}
-      mayRename={
-        liveFolder.source === 'file'
-          ? liveFolder.canUpload
-          : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
-      }
-      onRestored={(bytes, base) => {
-        if (opened.kind === 'office' || opened.kind === 'whiteboard') {
-          setOpenAt(null)
-          setOpened({ kind: opened.kind, bytes, base, resetBase: true })
-          setGeneration((g) => g + 1)
+    <>
+      {warm}
+      <Workspace
+        // The editors take read-only when they are built: rebuild them when
+        // this network turns out to block live editing (and when it stops).
+        key={`${generation}:${liveBlocked ? 'blocked' : 'live'}`}
+        folder={liveFolder}
+        file={liveFile}
+        name={name}
+        opened={opened}
+        keys={keys}
+        // As the file opened: an editor stays one for the session (the server
+        // drops a narrowed share's edits and closes its socket).
+        readOnly={!(picked?.folder ?? liveFolder).canUpload || liveBlocked}
+        liveBlocked={live !== 'live'}
+        unsentEdits={live === 'blockedWithEdits'}
+        notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
+        shareRole={shareRole(liveFolder, liveFile, sharedFile)}
+        mayRename={
+          liveFolder.source === 'file'
+            ? liveFolder.canUpload
+            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
         }
-      }}
-      onOutdated={(base) => {
-        setOpenAt(base ?? null)
-        setOpened(null)
-        setReopen((n) => n + 1)
-      }}
-    />
+        onRestored={(bytes, base) => {
+          if (opened.kind === 'office' || opened.kind === 'whiteboard') {
+            setOpenAt(null)
+            setOpened({ kind: opened.kind, bytes, base, resetBase: true })
+            setGeneration((g) => g + 1)
+          }
+        }}
+        onOutdated={(base) => {
+          setOpenAt(base ?? null)
+          setOpened(null)
+          setReopen((n) => n + 1)
+        }}
+      />
+    </>
   )
+}
+
+/** The editor files worth fetching ahead for `file`: an office document here (not on another server). */
+function officeWarmType(file: DriveFile | undefined, folder: Folder | undefined): 'docx' | 'xlsx' | 'pptx' | null {
+  if (!file?.name || !folder || fileLocation(folder).kind !== 'local') return null
+  const ext = file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase()
+  return ext === 'docx' || ext === 'xlsx' || ext === 'pptx' ? ext : null
 }
 
 async function loadOriginal(location: FileLocation, file: DriveFile, target: SnapshotTarget): Promise<Uint8Array> {
