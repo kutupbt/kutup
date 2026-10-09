@@ -7,7 +7,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   ])
   const wasm = await readFile(new URL('../../../../wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm', import.meta.url))
   await module.default({ module_or_path: wasm })
-  return { getCryptoWasm: async () => module }
+  return { getCryptoWasm: () => Promise.resolve(module) }
 })
 
 import { createHash } from 'node:crypto'
