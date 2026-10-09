@@ -643,4 +643,29 @@ assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.de
 assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
 assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
 
+// Contacts (docs/plans/contacts.md).
+const contactVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v1.json`, 'utf8'),
+)
+const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
+// Signing a reordered summary gives the canonical bytes and the vector signature.
+const reordered = JSON.parse(contactVectors.summary)
+const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid })
+const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.account, shuffled)
+assert.equal(signedContact.summary, contactVectors.summary)
+assert.equal(signedContact.signature, contactVectors.signature)
+assert.equal(
+  crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey).name,
+  'Ayşe Yılmaz',
+)
+assert.throws(() => crypto.verifyContactSummary(contactVectors.summary.replace('ayse@example.com', 'evil@example.com'), contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey))
+assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, 'bob@kutup.dev', contactIdentity.authorityPublicKey))
+assert.equal(
+  crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.sealed),
+  contactVectors.vcard,
+)
+const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.vcard)
+assert.equal(crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, resealedCard), contactVectors.vcard)
+assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.account, 'another-uid', resealedCard))
+
 console.log('crypto WASM canonical vectors passed')

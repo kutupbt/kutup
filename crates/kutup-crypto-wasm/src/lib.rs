@@ -2013,3 +2013,97 @@ pub fn verify_mail_key_list(
     serde_wasm_bindgen::to_value(&signed_list_view(&signed))
         .map_err(|error| js_error(&format!("encode key list: {error}")))
 }
+
+// --- contacts (docs/plans/contacts.md) ---------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignedContactSummaryView {
+    /// The canonical summary JSON, exactly as signed and stored.
+    summary: String,
+    signature: String,
+}
+
+/// Canonicalizes and signs a contact summary (JSON text) with the account
+/// authority derived from the master key.
+#[wasm_bindgen(js_name = signContactSummary)]
+pub fn sign_contact_summary(
+    master_key_base64: &str,
+    account: &str,
+    summary_json: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let summary: kutup_crypto::contact_card::ContactSummaryV1 = serde_json::from_str(summary_json)
+        .map_err(|error| js_error(&format!("contact summary: {error}")))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (bytes, signature) = kutup_crypto::contact_card::sign_summary(
+        &summary,
+        account,
+        identity.authority_signing_key(),
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&SignedContactSummaryView {
+        summary: String::from_utf8(bytes).map_err(|_| js_error("summary is not UTF-8"))?,
+        signature: STANDARD.encode(signature),
+    })
+    .map_err(|error| js_error(&format!("encode summary: {error}")))
+}
+
+/// Verifies a stored contact summary against the account authority and
+/// returns it parsed.
+#[wasm_bindgen(js_name = verifyContactSummary)]
+pub fn verify_contact_summary(
+    summary: &str,
+    signature_base64: &str,
+    account: &str,
+    authority_public_key_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let authority: [u8; 32] =
+        decode_canonical_base64(authority_public_key_base64, "authority key")?
+            .try_into()
+            .map_err(|_| js_error("authority key must be 32 bytes"))?;
+    let signature = decode_canonical_base64(signature_base64, "signature")?;
+    let parsed = kutup_crypto::contact_card::verify_summary(
+        summary.as_bytes(),
+        &signature,
+        account,
+        &authority,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&parsed)
+        .map_err(|error| js_error(&format!("encode summary: {error}")))
+}
+
+/// Seals a contact's vCard text under the contacts key, bound to its UID.
+#[wasm_bindgen(js_name = sealContactCard)]
+pub fn seal_contact_card(
+    master_key_base64: &str,
+    account: &str,
+    uid: &str,
+    vcard: &str,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = kutup_crypto::contact_card::seal_card(&key, account, uid, vcard.as_bytes())
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens a sealed contact card and returns its vCard text.
+#[wasm_bindgen(js_name = openContactCard)]
+pub fn open_contact_card(
+    master_key_base64: &str,
+    account: &str,
+    uid: &str,
+    sealed_base64: &str,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = decode_canonical_base64(sealed_base64, "card")?;
+    let vcard = kutup_crypto::contact_card::open_card(&key, account, uid, &sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))
+}
