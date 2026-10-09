@@ -187,6 +187,8 @@ services:
     ports:
       - "${KUTUP_HTTP_PORT:-38080}:80"
       - "${KUTUP_HTTPS_PORT:-38443}:443"
+      # HTTP/3 (QUIC); browsers fall back to TCP without it.
+      - "${KUTUP_HTTPS_PORT:-38443}:443/udp"
     # The SFU for group calls runs on the host network (nginx.conf).
     extra_hosts:
       - "host.docker.internal:host-gateway"

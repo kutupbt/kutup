@@ -348,9 +348,10 @@ one up without a restart. It needs:
   `KUTUP_ACME_EXTRA_DOMAINS` adds names beside them, such as the group-call
   SFU's `sfu.<domain>`);
 - each of those hostnames pointing at this machine;
-- ports 80 and 443 reachable from the internet. Let's Encrypt proves
-  ownership by fetching a file over port 80, so no DNS credentials are kept
-  on the server.
+- ports 80 and 443 reachable from the internet, and UDP 443 for HTTP/3
+  (optional: browsers fall back to TCP). Let's Encrypt proves ownership by
+  fetching a file over port 80, so no DNS credentials are kept on the
+  server.
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
@@ -875,7 +876,7 @@ uses the map settings above.
 ## Security Hardening
 
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
-- **Firewall:** Only expose ports 80 and 443. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet.
+- **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.
