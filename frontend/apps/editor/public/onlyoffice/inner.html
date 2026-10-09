@@ -658,13 +658,60 @@
         // its app loads but never creates the editor or reports onAppReady,
         // and the loading skeleton stays. Mount again, a bounded number of
         // times, when that happens.
+        //
+        // The race shows only once everything has loaded, so the clock runs
+        // from when loading goes quiet, not from the mount: on a slow link
+        // the SDK alone takes minutes, and mounting again would abort it and
+        // start over (docs/research/17-web-performance.md). Loading counts as
+        // going on while a script in this page or its frames has no resource
+        // entry yet (still downloading) or one arrived recently.
         var ooAppReady = false
-        var APP_READY_TIMEOUT_MS = 7000
+        var APP_READY_QUIET_MS = 7000
+        var APP_READY_LIMIT_MS = 10 * 60 * 1000
         var MAX_REMOUNTS = 2
         var remounts = 0
+        var loadingState = function (win) {
+          var state = { pending: 0, finished: 0 }
+          try {
+            // The default buffer (250 entries) fills up with OnlyOffice's
+            // hundreds of files; a full buffer would read as scripts that
+            // never finish.
+            if (typeof win.performance.setResourceTimingBufferSize === 'function') {
+              win.performance.setResourceTimingBufferSize(20000)
+            }
+            var done = Object.create(null)
+            var entries = win.performance.getEntriesByType('resource')
+            state.finished += entries.length
+            entries.forEach(function (e) { done[e.name] = true })
+            win.document.querySelectorAll('script[src]').forEach(function (s) {
+              if (!done[s.src]) state.pending += 1
+            })
+            win.document.querySelectorAll('iframe').forEach(function (f) {
+              var inner = loadingState(f.contentWindow)
+              state.pending += inner.pending
+              state.finished += inner.finished
+            })
+          } catch (err) {
+            // A frame of another origin: nothing to read.
+          }
+          return state
+        }
         var watchAppReady = function (cfg) {
-          setTimeout(function () {
-            if (ooAppReady) return
+          var mountedAt = Date.now()
+          var lastProgress = mountedAt
+          var lastFinished = -1
+          var timer = setInterval(function () {
+            if (ooAppReady) {
+              clearInterval(timer)
+              return
+            }
+            var now = Date.now()
+            var state = loadingState(window)
+            if (state.pending > 0 || state.finished !== lastFinished) lastProgress = now
+            lastFinished = state.finished
+            var stalled = now - lastProgress >= APP_READY_QUIET_MS
+            if (!stalled && now - mountedAt < APP_READY_LIMIT_MS) return
+            clearInterval(timer)
             if (remounts >= MAX_REMOUNTS) {
               console.error('[kutup-bridge] editor did not start after ' + (remounts + 1) + ' mounts')
               fail('openFailed', 'onAppReady timeout')
@@ -678,7 +725,7 @@
               console.warn('[kutup-bridge] destroyEditor failed', err)
             }
             startEditor(cfg)
-          }, APP_READY_TIMEOUT_MS)
+          }, 1000)
         }
 
         var startEditor = function (cfg) {
@@ -808,6 +855,18 @@
           }
           var useExisting = isOoxml(initialBytes)
 
+          // The editor's own code does not depend on the document: on the
+          // x2t and PDF paths it loads while the file converts (only the
+          // template path keeps the order, as templates are read through a
+          // global define() shim). docs/research/17-web-performance.md.
+          var API_JS = '/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js'
+          var apiReady = null
+          if (t.native || useExisting) {
+            apiReady = loadScript(API_JS)
+            // Awaited below; a failure is reported there, not as unhandled.
+            apiReady.catch(function () {})
+          }
+
           var docPromise
           if (t.native) {
             // Readers accept a PDF whose header is anywhere in its first
@@ -831,8 +890,11 @@
               .catch(function (err) {
                 console.error('[kutup-bridge] x2t convert failed:', err)
                 setStatus('x2t convert failed; falling back to empty doc')
-                // Fall back to template if conversion fails.
-                return loadTemplate(t.template).then(function (templateString) {
+                // Fall back to template if conversion fails (after api.js,
+                // so the two never race on the define() shim).
+                return (apiReady || Promise.resolve()).catch(function () {}).then(function () {
+                  return loadTemplate(t.template)
+                }).then(function (templateString) {
                   return new Blob([templateString], { type: 'text/plain' })
                 })
               })
@@ -852,7 +914,7 @@
             .then(function (blob) {
               var url = URL.createObjectURL(blob)
 
-              return loadScript('/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js')
+              return (apiReady || loadScript(API_JS))
                 .then(function () {
                   setStatus('api.js loaded, mounting editor…')
                   var cfg = {

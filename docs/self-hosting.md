@@ -815,20 +815,25 @@ kutup.example.com {
 }
 ```
 
-### Browser WASM cache policy
+### Browser cache policy
 
-Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
-binaries use stable filenames and form one deployment unit with the web bundle
-and API server. They must be revalidated and must never receive an immutable
-cache policy from an outer reverse proxy or CDN. The bundled frontend sends
-`Cache-Control: no-cache` for both paths. Preserve that header
-when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
-and may remain immutable.
+Every static file the apps load has a URL that changes when its content does,
+so the bundled frontend caches them for good (`Cache-Control: public,
+max-age=31536000, immutable`):
 
-Serving stale generated WASM with a newer JavaScript bundle can produce a
-fail-closed Chat or Drive initialization error because the Rust and HTTP DTOs
-no longer agree. Deploy the frontend, its generated WASM directories, and the
-backend from the same release.
+- Vite's `/assets/` bundles (content-hashed file names);
+- the Rust/WASM runtimes under `/crypto-wasm/<hash>/` and `/chat-wasm/<hash>/`,
+  directories named for the files' content hash, which the bundle names;
+- the OnlyOffice client and x2t on the editor host under
+  `/onlyoffice/dist/<version>/`, directories named for their versions.
+
+The pages that name them (`index.html`, the editor's `inner.html` and
+`x2t.html`) are `no-cache`. An outer cache or CDN may keep these policies as
+they are; it must not cache the HTML pages longer.
+
+Files are stored compressed at build time (gzip and brotli, served with
+`Vary: Accept-Encoding`). A reverse proxy in front should pass
+`Accept-Encoding` through and not recompress.
 
 ---
 
