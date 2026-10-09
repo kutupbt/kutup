@@ -1,6 +1,7 @@
-import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
-import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
+import { allFilesKey, loadAllFiles, loadFolderFiles } from '@kutup/drive-core/files'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
 import { uploadUnderFreeName } from '@kutup/drive-core/names'
@@ -38,49 +39,42 @@ export function editorUrl(folder: Pick<Folder, 'id' | 'source'>, fileId: string)
 export function useDocuments() {
   const folders = useFolders()
   const sharedFiles = useSharedFiles()
-  const readable = (folders.data?.all ?? []).filter((f) => f.key && f.source !== 'remote')
-  const listings = useQueries({
-    queries: readable.map((folder) => ({
-      queryKey: folderFilesKey(folder),
-      queryFn: () => loadFolderFiles(folder),
-    })),
-    // One stable result while no listing changes, so the documents below
-    // (and the sorted page) are not rebuilt on every render.
-    combine: (results) => ({
-      data: results.map((r) => r.data),
-      pending: results.some((r) => r.isPending),
-      failed: results.some((r) => r.error),
-    }),
+  const identity = useDriveIdentity()
+  const queryClient = useQueryClient()
+  // Every folder's files in one request (one per folder before;
+  // docs/research/17-web-performance.md), opened once the folders are.
+  const listing = useQuery({
+    queryKey: [...allFilesKey, identity.data?.userId],
+    enabled: Boolean(folders.data),
+    queryFn: () => loadAllFiles(folders.data!.all, queryClient),
   })
   const documents = useMemo(
-    () => collectDocuments(readable, listings.data, sharedFiles.data ?? []),
-    // `readable` follows the folders query's data.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [folders.data, listings.data, sharedFiles.data],
+    () => collectDocuments(folders.data?.all ?? [], listing.data, sharedFiles.data ?? []),
+    [folders.data, listing.data, sharedFiles.data],
   )
   return {
     root: folders.data?.root,
     documents,
-    loading: folders.isPending || sharedFiles.isPending || listings.pending,
-    // Without the folders nothing can be listed; one folder that could not
-    // be read only leaves its documents out.
+    loading: folders.isPending || sharedFiles.isPending || listing.isPending,
+    // Without the folders nothing can be listed; the files failing leaves
+    // only the files shared by themselves.
     error: folders.error ?? null,
-    incomplete: Boolean(sharedFiles.error) || listings.failed,
+    incomplete: Boolean(sharedFiles.error) || Boolean(listing.error),
   }
 }
 
-/** Every document in the listings and the files shared by themselves, once each. */
+/** Every document in the folders' files and the files shared by themselves, once each. */
 function collectDocuments(
-  readable: Folder[],
-  listings: (DriveFile[] | undefined)[],
+  folders: Folder[],
+  listing: Map<string, DriveFile[]> | undefined,
   sharedFiles: NonNullable<ReturnType<typeof useSharedFiles>['data']>,
 ): DocumentEntry[] {
   const documents: DocumentEntry[] = []
   const seen = new Set<string>()
-  listings.forEach((listing, i) => {
-    const folder = readable[i]
-    if (!folder || !listing) return
-    for (const file of listing) {
+  folders.forEach((folder) => {
+    const files = listing?.get(folder.id)
+    if (!files) return
+    for (const file of files) {
       const kind = documentKindOf(file.name)
       if (!kind || seen.has(file.id)) continue
       seen.add(file.id)
