@@ -38,8 +38,10 @@ one Proton account:
 2. **Build order:** address keys on the account and a unified Contacts app
    first, then Mail, then Calendar. Calendar needs Mail for invitations to
    people outside Kutup.
-3. **Mail leaves the server directly** from `mail.kutup.dev`, with SPF, DKIM,
-   DMARC, MTA-STS and a slow warm-up. No third-party relay sees mail.
+3. **Mail leaves the server directly** from `mail.kutup.dev`, **over IPv4
+   only**, with SPF, DKIM, DMARC, MTA-STS and a slow warm-up. No third-party
+   relay sees mail. IPv6 is not used for sending (its PTR was never set; not
+   needed for receiving).
 4. **Groups are per recipient, not MLS.** Group mail, shared calendars and
    contact groups encrypt to each member. See the Chat groups decision
    recorded with the roadmap.
@@ -224,23 +226,22 @@ Checked on 2026-10-09:
 | Item | State |
 |---|---|
 | IPv4 `95.217.238.230` | PTR `mail.kutup.dev` ✓; on none of 12 blocklists checked (Spamhaus, Barracuda, SpamCop, SORBS, PSBL, Mailspike, UCEPROTECT 1–3, Manitu, GBUdb, DroneBL) |
-| IPv6 `2a01:4f9:c014:4d29::1` | the box's sending address; **no PTR** yet. Hetzner has `mail.kutup.dev` on `…4d29::` instead. Add rDNS for `::1` in the Hetzner console |
-| Outbound port 25 | **blocked** (IPv4 and IPv6 to Gmail time out; 465, 587 and 53 open). Hetzner lifts it on a limit request from accounts older than a month with a paid invoice, case by case |
+| IPv6 `2a01:4f9:c014:4d29::1` | no PTR (Hetzner's rDNS sits on `…4d29::`). **Not used for sending** (decision 3); inbound over IPv6 is unaffected |
+| Outbound port 25 | open: the account's Hetzner limit request was granted before this project. Verified over IPv4 to Gmail, Outlook, Yandex and iCloud (`220` banners) |
 | `mail.kutup.dev` A/AAAA | direct to the box (not proxied) ✓ |
 | MX `kutup.dev` | Cloudflare Email Routing. Switch only once Mail is ready |
 
 Before the MX switch:
 
-1. Hetzner limit request to unblock outbound 25, stating personal mail for
-   the server's own users, low volume, no bulk.
-2. IPv6 PTR for `::1`. Until then, or if Gmail is unhappy, send over IPv4 only.
-3. SPF `v=spf1 ip4:95.217.238.230 ip6:2a01:4f9:c014:4d29::1 -all`.
-4. DKIM: RSA-2048 and Ed25519 selectors, signed by Stalwart, rotated yearly.
-5. DMARC: `p=none` with aggregate reports, then `quarantine`, then `reject`.
-6. MTA-STS (`mta-sts.kutup.dev`) and TLS-RPT. DANE later, with DNSSEC on
+1. Stalwart sends over IPv4 only (`queue` IP strategy `ipv4_only`), from
+   `95.217.238.230` with HELO `mail.kutup.dev`, which matches its PTR.
+2. SPF `v=spf1 ip4:95.217.238.230 -all`.
+3. DKIM: RSA-2048 and Ed25519 selectors, signed by Stalwart, rotated yearly.
+4. DMARC: `p=none` with aggregate reports, then `quarantine`, then `reject`.
+5. MTA-STS (`mta-sts.kutup.dev`) and TLS-RPT. DANE later, with DNSSEC on
    Cloudflare.
-7. Register the domain with Google Postmaster Tools and Microsoft SNDS.
-8. Warm up: Kutup's own staff accounts first, low daily volume, watch the
+6. Register the domain with Google Postmaster Tools and Microsoft SNDS.
+7. Warm up: Kutup's own staff accounts first, low daily volume, watch the
    reports before opening Mail to everyone.
 
 ### Third-party clients
@@ -293,7 +294,7 @@ bridge and the Drive WebDAV idea in [`06-webdav-support.md`](06-webdav-support.m
 |---|---|---|
 | **A. Address keys** | rPGP in `kutup-crypto` (and WASM) with test vectors; address key generation at sign-up and an upgrade for existing accounts; manifest binding; WKD; the list of your addresses and keys in Account | — |
 | **B. Contacts** | `contacts` table and API; Contacts app; vCard import and export; Chat, Drive and Account pickers reading it; shield shared with Chat | A (for key fields) |
-| **C1. Mail infrastructure** | Stalwart in compose (profile `mail`), RCPT hook and LMTP receiver, encrypt-on-arrival, DNS except MX, Hetzner port-25 unblock, IPv6 PTR | A |
+| **C1. Mail infrastructure** | Stalwart in compose (profile `mail`, IPv4-only sending), RCPT hook and LMTP receiver, encrypt-on-arrival, DNS except MX | A |
 | **C2. Mail app** | read, labels, compose and send (internal end-to-end, external TLS), storage-pool accounting, encrypted search | C1, B |
 | **C3. PGP to the outside** | WKD and Autocrypt lookup, PGP encrypt, sign and verify, key import and export; then the MX switch from Cloudflare | C2 |
 | **D. Calendar** | calendars and keys, events, sharing, invitations over Mail, reminders | C2 |
@@ -336,5 +337,5 @@ format, browser specs, and the two-server gate where federation is touched.
 - EteSync: [etesync-dav](https://github.com/etesync/etesync-dav) (the bridge pattern).
 - Hetzner outbound SMTP policy, quoted in
   [Discourse Meta](https://meta.discourse.org/t/ports-blocked-hetzner-cloud-server/225146)
-  and [sudonix](https://sudonix.org/post/8489). Re-check Hetzner's current FAQ
-  before filing.
+  and [sudonix](https://sudonix.org/post/8489) (already lifted for this
+  account).

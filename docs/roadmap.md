@@ -455,9 +455,8 @@ arrival, and direct sending. Phases, each with its own plan before code:
   reminders. Replaces Chat meetings' `.ics` download.
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.
 
-Blocking sending as of 2026-10-09: Hetzner blocks outbound port 25 until a
-limit request is granted, and the IPv6 address `2a01:4f9:c014:4d29::1` has
-no PTR yet.
+Sending is over IPv4 only (`95.217.238.230`, PTR `mail.kutup.dev`);
+outbound port 25 is open on the host (checked 2026-10-09).
 
 ### Photos (like Ente Photos)
 
