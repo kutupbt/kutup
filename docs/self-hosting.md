@@ -207,10 +207,13 @@ individual account's **Storage quota (GiB)** under **Admin → Users**. Lowering
 a quota below current use preserves reads and blocks new charged work rather
 than evicting files or history.
 
-Users see their pool under **Account → Settings → Storage**: a meter split into
-Drive, Chat, uploads in progress and free space, plus a breakdown by app and by
-file type. The Drive, Photos and Office storage meters and Chat's storage screen
-link there. It is read-only: only an administrator changes a quota.
+Users see their pool under **Account → Settings → Storage**: a ring of what
+fills it, largest first (file types, trash, earlier versions, previews, Chat
+attachments and history, uploads in progress), and **Free up space**, which
+empties the trash, lists large files to move to trash and points to Chat's
+media clearing. The Drive, Photos and Office storage meters open a summary
+that links there, as does Chat's storage screen. Only an administrator changes
+a quota.
 
 ### OpenTelemetry
 

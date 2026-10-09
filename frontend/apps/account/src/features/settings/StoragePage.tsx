@@ -1,217 +1,161 @@
-import { useQueries } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
-import { useFolders } from '@kutup/drive-core/folders'
-import { FILE_KINDS, type FileKind } from '@kutup/drive-core/kinds'
-import { KindIcon } from '@kutup/drive-ui/KindIcon'
-import { useRequiredSession } from '@kutup/session/store'
+import { useSearchParams } from 'react-router-dom'
+import {
+  kindTotals,
+  storageLevel,
+  usageCategories,
+  useOwnFiles,
+  useStorageUsage,
+  type StorageUsage,
+  type UsageCategory,
+} from '@kutup/drive-core/storage'
+import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
+import { Button } from '@kutup/ui/components/button'
 import { Card, CardContent } from '@kutup/ui/components/card'
-import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
+import { Donut } from '@kutup/ui/components/donut'
+import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { useStorageUsage, type StorageUsage } from './api'
+import { CleanupDialog } from './CleanupDialog'
 
 /**
  * The account's one storage pool (docs/api.md, `GET /api/user/storage`):
- * how full it is, what each app stores in it, and what kinds of files take
- * the room. The server knows only sizes; the kinds come from the names this
- * browser decrypts.
+ * a ring of what fills it, largest first, as Google One draws it, in
+ * Proton's "X of Y" terms, and a way to free space. The server knows only
+ * sizes; the file kinds come from the names this browser decrypts.
  */
 export function StoragePage() {
   const { t } = useTranslation()
   const usage = useStorageUsage()
+  const own = useOwnFiles()
+  const [params, setParams] = useSearchParams()
+  const cleaning = params.get('cleanup') === '1'
+  const setCleaning = (open: boolean) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        if (open) next.set('cleanup', '1')
+        else next.delete('cleanup')
+        return next
+      },
+      { replace: true },
+    )
+
+  const kinds = own.loading ? null : kindTotals(own.files)
 
   return (
     <PageBody width="prose">
-      <PageHeader title={t('settings.storage.title')} description={t('settings.storage.description')} />
+      <PageHeader
+        title={t('settings.storage.title')}
+        description={t('settings.storage.description')}
+        actions={
+          <Button onClick={() => setCleaning(true)} disabled={!usage.data}>
+            <Sparkles />
+            {t('settings.storage.cleanup.open')}
+          </Button>
+        }
+      />
       {usage.isPending ? (
-        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-64 w-full" />
       ) : usage.isError ? (
         <Alert variant="error">{apiErrorMessage(usage.error, t('common.tryAgain'))}</Alert>
       ) : (
         <>
-          <Overview usage={usage.data} />
-          <ByApp usage={usage.data} />
-          <ByKind />
+          <LevelAlert usage={usage.data} />
+          <Overview usage={usage.data} categories={usageCategories(usage.data, kinds)} countingFiles={own.loading} />
+          {own.failed ? <Alert variant="error">{t('settings.storage.byKindPartial')}</Alert> : null}
+          <CleanupDialog open={cleaning} onOpenChange={setCleaning} usage={usage.data} own={own} />
         </>
       )}
     </PageBody>
   )
 }
 
-function Overview({ usage }: { usage: StorageUsage }) {
+function LevelAlert({ usage }: { usage: StorageUsage }) {
+  const { t } = useTranslation()
+  const level = storageLevel(usage)
+  if (level === 'ok') return null
+  return (
+    <Alert variant={level === 'danger' ? 'error' : 'warn'} title={t(`settings.storage.level.${level}`)}>
+      {t(`settings.storage.level.${level}Hint`)}
+    </Alert>
+  )
+}
+
+function Overview({ usage, categories, countingFiles }: { usage: StorageUsage; categories: UsageCategory[]; countingFiles: boolean }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
-  const drive = driveTotal(usage)
-  const chat = chatTotal(usage)
   const quota = Math.max(usage.quotaBytes, 1)
-  const share = (bytes: number) => `${Math.min(100, (Math.max(bytes, 0) / quota) * 100)}%`
-  const free = usage.quotaBytes - usage.usedBytes - usage.reservedBytes
+  const free = Math.max(0, usage.quotaBytes - usage.usedBytes - usage.reservedBytes)
+  const percent = (bytes: number) => {
+    const value = Math.round((bytes / quota) * 1000) / 10
+    return bytes > 0 && value < 0.1 ? '<0.1' : String(value)
+  }
   return (
     <Card>
-      <CardContent className="space-y-4 p-5">
-        <p className="text-sm">
-          <span className="text-2xl font-semibold tabular-nums">{formatBytes(usage.usedBytes, lang)}</span>{' '}
-          <span className="text-muted-foreground">
-            {t('settings.storage.ofQuota', { total: formatBytes(usage.quotaBytes, lang) })}
-          </span>
-        </p>
-        <div
-          className="flex h-2.5 overflow-hidden rounded-full bg-muted"
-          role="meter"
-          aria-valuemin={0}
-          aria-valuemax={usage.quotaBytes}
-          aria-valuenow={usage.usedBytes}
-          aria-label={t('settings.storage.title')}
+      <CardContent className="grid items-center gap-6 p-5 sm:grid-cols-[auto_1fr] sm:gap-8">
+        <Donut
+          className="mx-auto size-48"
+          gap={2}
+          minPercent={1.5}
+          segments={categories.map((c) => [(c.bytes / quota) * 100, c.color])}
         >
-          <div className="h-full bg-primary" style={{ width: share(drive) }} />
-          <div className="h-full bg-status-ok" style={{ width: share(chat) }} />
-          <div className="h-full bg-status-neutral" style={{ width: share(usage.reservedBytes) }} />
+          <div>
+            <p className="text-2xl font-semibold tabular-nums">{formatBytes(usage.usedBytes, lang)}</p>
+            <p className="text-sm text-muted-foreground">{t('settings.storage.ofQuota', { total: formatBytes(usage.quotaBytes, lang) })}</p>
+          </div>
+        </Donut>
+        <div className="min-w-0">
+          <ul className="divide-y divide-border" aria-label={t('settings.storage.breakdown')}>
+            {categories.map((c) => (
+              <CategoryRow key={c.id} category={c} percent={percent(c.bytes)} />
+            ))}
+            <li className="flex items-center gap-3 py-2.5 text-sm">
+              <span aria-hidden className="size-3 shrink-0 rounded-full border border-border bg-muted" />
+              <span className="min-w-0 flex-1">{t('settings.storage.free')}</span>
+              <span className="tabular-nums text-muted-foreground">{formatBytes(free, lang)}</span>
+            </li>
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {countingFiles ? t('settings.storage.counting') : t('settings.storage.kindsNote')}
+          </p>
         </div>
-        <ul className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
-          <Legend swatch="bg-primary" label={t('settings.storage.apps.drive')} value={formatBytes(drive, lang)} />
-          <Legend swatch="bg-status-ok" label={t('settings.storage.apps.chat')} value={formatBytes(chat, lang)} />
-          {usage.reservedBytes > 0 ? (
-            <Legend swatch="bg-status-neutral" label={t('settings.storage.reserved')} value={formatBytes(usage.reservedBytes, lang)} />
-          ) : null}
-          <Legend swatch="bg-muted border border-border" label={t('settings.storage.free')} value={formatBytes(Math.max(free, 0), lang)} />
-        </ul>
-        {free <= 0 ? <Alert variant="error">{t('settings.storage.full')}</Alert> : null}
       </CardContent>
     </Card>
   )
 }
 
-function Legend({ swatch, label, value }: { swatch: string; label: string; value: string }) {
+/** Where a category can be acted on, when somewhere can. */
+function categoryHref(id: UsageCategory['id']): string | null {
+  if (id === 'trash') return appUrl('drive', '/trash')
+  if (id === 'chatMedia' || id === 'chatHistory') return appUrl('chat', '/settings/storage')
+  return null
+}
+
+function CategoryRow({ category, percent }: { category: UsageCategory; percent: string }) {
+  const { t, i18n } = useTranslation()
+  const href = categoryHref(category.id)
+  const label = t(`storage.categories.${category.id}`)
   return (
-    <li className="flex items-center gap-2">
-      <span aria-hidden className={cn('size-2.5 rounded-full', swatch)} />
-      <span>
-        {label} <span className="tabular-nums text-foreground">{value}</span>
+    <li className="flex items-center gap-3 py-2.5 text-sm">
+      <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ background: category.color }} />
+      <span className="min-w-0 flex-1 truncate">
+        {href ? (
+          <a href={href} className="hover:underline">
+            {label}
+          </a>
+        ) : (
+          label
+        )}
+        {category.count !== undefined ? (
+          <span className="text-muted-foreground"> · {t('settings.storage.fileCount', { count: category.count })}</span>
+        ) : null}
       </span>
+      <span className="shrink-0 tabular-nums">{formatBytes(category.bytes, i18n.language)}</span>
+      <span className="w-12 shrink-0 text-right tabular-nums text-muted-foreground">{percent}%</span>
     </li>
   )
-}
-
-function ByApp({ usage }: { usage: StorageUsage }) {
-  const { t, i18n } = useTranslation()
-  const lang = i18n.language
-  const { drive, chat } = usage
-  return (
-    <>
-      <Section title={t('settings.storage.apps.drive')} description={t('settings.storage.driveHint')}>
-        <Card>
-          <CardContent className="divide-y divide-border p-0">
-            <Row label={t('settings.storage.drive.files', { count: drive.filesCount })} bytes={drive.filesBytes} lang={lang} />
-            <Row label={t('settings.storage.drive.trash', { count: drive.trashCount })} bytes={drive.trashBytes} lang={lang} />
-            <Row label={t('settings.storage.drive.versions')} bytes={drive.versionsBytes} lang={lang} />
-            <Row label={t('settings.storage.drive.thumbnails')} bytes={drive.thumbnailsBytes} lang={lang} />
-            <Row label={t('settings.storage.drive.assets')} bytes={drive.assetsBytes} lang={lang} />
-          </CardContent>
-        </Card>
-      </Section>
-      <Section title={t('settings.storage.apps.chat')} description={t('settings.storage.chatHint')}>
-        <Card>
-          <CardContent className="divide-y divide-border p-0">
-            <Row label={t('settings.storage.chat.media')} bytes={chat.mediaBytes} lang={lang} />
-            <Row label={t('settings.storage.chat.history')} bytes={chat.historyBytes} lang={lang} />
-            <Row label={t('settings.storage.chat.historyMedia')} bytes={chat.historyMediaBytes} lang={lang} />
-          </CardContent>
-        </Card>
-      </Section>
-    </>
-  )
-}
-
-function Row({ label, bytes, lang, icon }: { label: string; bytes: number; lang: string; icon?: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 px-5 py-3 text-sm">
-      <span className="flex min-w-0 items-center gap-3">
-        {icon}
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="shrink-0 tabular-nums text-muted-foreground">{formatBytes(bytes, lang)}</span>
-    </div>
-  )
-}
-
-/**
- * Files this account uploaded and has not trashed, by kind, from every
- * folder it can read: what is charged to it, which includes what it put in
- * other people's folders. Sizes are of the files themselves, before
- * encryption.
- */
-function ByKind() {
-  const { t, i18n } = useTranslation()
-  const session = useRequiredSession()
-  const folders = useFolders()
-  const readable = (folders.data?.all ?? []).filter((f) => f.key)
-  const lists = useQueries({
-    queries: readable.map((folder) => ({
-      queryKey: folderFilesKey(folder),
-      queryFn: () => loadFolderFiles(folder),
-    })),
-  })
-  const loading = folders.isPending || lists.some((l) => l.isPending)
-  const failed = folders.isError || lists.some((l) => l.isError)
-
-  const totals = new Map<FileKind, { bytes: number; count: number }>()
-  const seen = new Set<string>()
-  for (const list of lists) {
-    for (const file of list.data ?? []) {
-      if (file.uploaderUserId !== session.userId || seen.has(file.id)) continue
-      seen.add(file.id)
-      const total = totals.get(file.kind) ?? { bytes: 0, count: 0 }
-      total.bytes += file.size
-      total.count += 1
-      totals.set(file.kind, total)
-    }
-  }
-  const rows = FILE_KINDS.flatMap((kind) => {
-    const total = totals.get(kind)
-    return total ? [{ kind, ...total }] : []
-  }).sort((a, b) => b.bytes - a.bytes)
-
-  return (
-    <Section title={t('settings.storage.byKind')} description={t('settings.storage.byKindHint')}>
-      {loading ? (
-        <Skeleton className="h-32 w-full" />
-      ) : (
-        <>
-          {failed ? <Alert variant="error">{t('settings.storage.byKindPartial')}</Alert> : null}
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('settings.storage.noFiles')}</p>
-          ) : (
-            <Card>
-              <CardContent className="divide-y divide-border p-0">
-                {rows.map((row) => (
-                  <Row
-                    key={row.kind}
-                    icon={<KindIcon kind={row.kind} className="size-5" />}
-                    label={t('settings.storage.kindCount', { kind: t(`settings.storage.kinds.${row.kind}`), count: row.count })}
-                    bytes={row.bytes}
-                    lang={i18n.language}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </>
-      )}
-    </Section>
-  )
-}
-
-function driveTotal(usage: StorageUsage) {
-  const d = usage.drive
-  return d.filesBytes + d.trashBytes + d.versionsBytes + d.thumbnailsBytes + d.assetsBytes
-}
-
-function chatTotal(usage: StorageUsage) {
-  const c = usage.chat
-  return c.mediaBytes + c.historyBytes + c.historyMediaBytes
 }

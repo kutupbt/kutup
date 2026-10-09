@@ -483,8 +483,15 @@ albums) is the second reference.
   Storage pages in both apps show the shared total. **Done (2026-10-09):**
   Chat joined the same pool; there is no separate Chat quota any more
   (migration `081_one_storage_pool` folded Chat usage into it). The Account
-  app's Settings → Storage page (`GET /api/user/storage`) shows the pool split
-  by app and kind, with files by type worked out in the browser.
+  app's Settings → Storage page (`GET /api/user/storage`) shows the pool as a
+  ring, largest category first (file kinds worked out in the browser from
+  decrypted names, then trash, earlier versions, previews, Chat attachments,
+  Chat history, uploads in progress). "Free up space" empties the trash,
+  lists large files (10 MB and up) to move to trash, and points to Chat's
+  per-conversation clearing. The sidebar meter in Drive, Photos and Office
+  opens a summary pop-up linking to it. **Open:** earlier versions can only
+  expire on their own (there is no endpoint to delete them), and duplicate
+  photos are not suggested yet.
 - **Open questions for the plan:** how are live photos, RAW files and
   videos handled (thumbnails and streaming)? How are duplicates found
   without the server learning which files match (a hash kept inside the
