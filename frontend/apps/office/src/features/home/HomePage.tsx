@@ -12,6 +12,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel, Spinner } from '@kutup/ui/components/states'
+import { useShownRange } from '@kutup/ui/lib/shownRange'
 import { filterDocuments, sortDocuments, useCreateDocument, useDocuments, type DocumentEntry, type DocumentOrder } from './documents'
 
 /**
@@ -62,11 +63,11 @@ function Preview({ file, kind }: { file: DriveFile; kind: DocumentKind }) {
   )
 }
 
-function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {
+function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: string; cardRef: (el: HTMLLIElement | null) => void }) {
   const { t } = useTranslation()
   const name = entry.file.name ?? t('home.unnamed')
   return (
-    <li>
+    <li ref={cardRef}>
       <a
         href={entry.href}
         data-testid="office-document"
@@ -88,6 +89,38 @@ function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {
         </span>
       </a>
     </li>
+  )
+}
+
+/**
+ * The documents, as cards. A long list draws only the rows near the screen
+ * (`useShownRange`, as Drive's lists do).
+ */
+function DocumentGrid({ entries, format }: { entries: DocumentEntry[]; format: (entry: DocumentEntry) => string }) {
+  const list = useRef<HTMLUListElement>(null)
+  const cards = useRef<(HTMLElement | null)[]>([])
+  const { range } = useShownRange(entries.length, true, list, cards)
+  return (
+    <ul
+      ref={list}
+      className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5"
+      data-testid="office-documents"
+      style={range.before || range.after ? { paddingTop: range.before, paddingBottom: range.after } : undefined}
+    >
+      {entries.slice(range.from, range.to).map((entry, offset) => {
+        const index = range.from + offset
+        return (
+          <DocumentCard
+            key={entry.file.id}
+            entry={entry}
+            when={format(entry)}
+            cardRef={(el) => {
+              cards.current[index] = el
+            }}
+          />
+        )
+      })}
+    </ul>
   )
 }
 
@@ -204,11 +237,7 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
             }
           />
         ) : (
-          <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5" data-testid="office-documents">
-            {shown.map((entry) => (
-              <DocumentCard key={entry.file.id} entry={entry} when={date.format(new Date(entry.file.updatedAt))} />
-            ))}
-          </ul>
+          <DocumentGrid entries={shown} format={(entry) => date.format(new Date(entry.file.updatedAt))} />
         )}
       </section>
     </PageBody>

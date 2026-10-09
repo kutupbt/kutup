@@ -332,6 +332,18 @@ Tried and set aside (measured):
   decrypted file keys on disk. Not shipped; worth revisiting only with a
   change feed, for folders of thousands of files, after the render costs
   below.
+- **Virtualized lists (done, as Proton Drive does).** Drive's list and grid
+  and the Office home draw only the rows near the screen
+  (`@kutup/ui/lib/shownRange`, TanStack Virtual against the window), the
+  rest stood in for by empty space. Like Proton (`DriveExplorer`'s
+  `useListVirtualizer` / `useGridVirtualizer`, `defaultConfig.overscan: 5`):
+  always, whatever the count, with 5 rows drawn beyond the screen. Row height
+  and the grid's columns are measured from what is drawn; End, Home and the
+  arrow keys scroll to a row before focusing it; Ctrl+A still selects every
+  item. With 300 files and the CPU slowed 4×: Drive 1.35 → 0.76 s of
+  main-thread time (an empty Drive is 0.69 s), Office home ~1.0 → 0.66 s.
+  Find in page only sees the rows drawn, as in Proton; Drive's own search
+  covers the folder.
 - **Render costs found instead:** every Drive row made four `Intl`
   formatters (about 1,200 per render of 300 rows, ~25 ms of formatting at
   normal speed, ~100 ms on a slow phone); they are now made once per locale
