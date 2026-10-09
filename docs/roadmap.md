@@ -444,8 +444,8 @@ address book shared by every app, Stalwart beside Kutup with encryption on
 arrival, and direct sending. Phases, each with its own plan before code:
 
 - **A. Address keys:** OpenPGP (rPGP in `kutup-crypto`), one key per address
-  in a master-key envelope, bound to the signed account manifest, published
-  by WKD.
+  in a master-key envelope, in a signed key list bound to the account
+  authority, published by WKD.
 - **B. Contacts:** the unified encrypted address book and app, used by Chat,
   Drive sharing, Mail and Calendar.
 - **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,

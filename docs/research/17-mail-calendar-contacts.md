@@ -98,11 +98,14 @@ Mail adds **address keys**, one OpenPGP key per address:
   forever. The private key is stored in a typed `AccountEnvelopeV1` under the
   master key with a new purpose, `MailAddressPrivateKey`, bound to the
   address.
-- **Bound to the account.** Each address key's fingerprint goes into the
-  signed `AccountManifestV1`. A Kutup user who has verified you in Chat or
-  Drive therefore also has your mail key verified, with no second
-  verification step. This is lighter than Proton's Key Transparency and uses
-  what Kutup already has.
+- **Bound to the account.** Each address has a signed key list (like
+  Proton's), hash-chained and signed by the **account authority**, the key
+  the `AccountManifestV1` already binds. A Kutup user who has verified you in
+  Chat or Drive therefore also has your mail key verified, with no second
+  verification step. The manifest itself is left alone: it belongs to Chat's
+  core and federation, which would otherwise have to change in lockstep.
+  This is lighter than Proton's Key Transparency and uses what Kutup already
+  has. Details in [`../plans/mail-address-keys.md`](../plans/mail-address-keys.md).
 - **Published.** The server serves Web Key Directory (WKD) at
   `openpgpkey.kutup.dev` (or the direct method under `kutup.dev`) so that
   outside PGP users find `name@kutup.dev`'s key, and attaches an Autocrypt
@@ -292,7 +295,7 @@ bridge and the Drive WebDAV idea in [`06-webdav-support.md`](06-webdav-support.m
 
 | Phase | Delivers | Depends on |
 |---|---|---|
-| **A. Address keys** | rPGP in `kutup-crypto` (and WASM) with test vectors; address key generation at sign-up and an upgrade for existing accounts; manifest binding; WKD; the list of your addresses and keys in Account | — |
+| **A. Address keys** | rPGP in `kutup-crypto` (and WASM) with test vectors; address key generation at sign-up and an upgrade for existing accounts; signed key lists bound to the account authority; WKD; the list of your addresses and keys in Account | — |
 | **B. Contacts** | `contacts` table and API; Contacts app; vCard import and export; Chat, Drive and Account pickers reading it; shield shared with Chat | A (for key fields) |
 | **C1. Mail infrastructure** | Stalwart in compose (profile `mail`, IPv4-only sending), RCPT hook and LMTP receiver, encrypt-on-arrival, DNS except MX | A |
 | **C2. Mail app** | read, labels, compose and send (internal end-to-end, external TLS), storage-pool accounting, encrypted search | C1, B |
