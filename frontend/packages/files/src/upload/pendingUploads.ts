@@ -106,4 +106,3 @@ export async function runningUploads(): Promise<Set<string>> {
   const { held = [] } = await navigator.locks.query()
   return new Set(held.map((lock) => lock.name ?? '').filter((name) => name.startsWith(LOCK_PREFIX)).map((name) => name.slice(LOCK_PREFIX.length)))
 }
-

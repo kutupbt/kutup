@@ -900,7 +900,9 @@ fn drive_names_vector() {
         drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
     assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
     assert_eq!(
-        drive_names::top_level_hash_key(&b64(&s("masterKey"))).unwrap().as_slice(),
+        drive_names::top_level_hash_key(&b64(&s("masterKey")))
+            .unwrap()
+            .as_slice(),
         b64(&s("topLevelHashKey")).as_slice()
     );
     for case in v["names"].as_array().unwrap() {

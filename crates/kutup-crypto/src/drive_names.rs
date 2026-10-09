@@ -58,7 +58,9 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
 /// above them: from the account master key.
 pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
     if master_key.len() != 32 {
-        return Err(CryptoError::InvalidInput("master key must be 32 bytes".into()));
+        return Err(CryptoError::InvalidInput(
+            "master key must be 32 bytes".into(),
+        ));
     }
     let hkdf = Hkdf::<Sha256>::new(None, master_key);
     let mut key = [0u8; 32];
