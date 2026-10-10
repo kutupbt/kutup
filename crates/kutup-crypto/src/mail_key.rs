@@ -17,7 +17,8 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use pgp::{
     composed::{
         ArmorOptions, Deserializable, EncryptionCaps, KeyType, Message, MessageBuilder,
-        SecretKeyParamsBuilder, SignedPublicKey, SignedSecretKey, SubkeyParamsBuilder,
+        SecretKeyParamsBuilder, SignedPublicKey, SignedPublicSubKey, SignedSecretKey,
+        SubkeyParamsBuilder,
     },
     crypto::{
         aead::AeadAlgorithm, ecc_curve::ECCCurve, hash::HashAlgorithm,
@@ -331,13 +332,8 @@ pub fn encrypt(
     signer_secret_key: Option<&[u8]>,
     plaintext: &[u8],
 ) -> Result<String> {
-    let recipient = SignedPublicKey::from_bytes(recipient_public_key)
-        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))?;
-    let subkey = recipient
-        .public_subkeys
-        .iter()
-        .find(|subkey| subkey.algorithm().can_encrypt())
-        .ok_or_else(|| CryptoError::InvalidInput("recipient key cannot encrypt".into()))?;
+    let recipient = parse_recipient(recipient_public_key)?;
+    let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     builder
@@ -362,9 +358,188 @@ pub fn encrypt(
         .map_err(backend)
 }
 
+/// Encrypts `plaintext` to `recipient_public_key` as a binary, unsigned
+/// OpenPGP message (SEIPDv1, AES-256): how mail from outside is stored when
+/// it arrives, encrypted before it is written anywhere. Unsigned because the
+/// server holds no key worth vouching with; binary to spare armor's third.
+pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let recipient = parse_recipient(recipient_public_key)?;
+    let subkey = encryption_subkey(&recipient)?;
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+    builder
+        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .map_err(backend)?;
+    builder.to_vec(rand::rngs::OsRng).map_err(backend)
+}
+
+/// A message encrypted once for several recipients, split the way Proton
+/// sends mail between its users (docs/plans/mail.md): one key packet per
+/// recipient (a public-key encrypted session key, PKESK) and one data packet
+/// (SEIPD) they share. The server stores `key packet || data packet` for each
+/// recipient, so no copy names another recipient's key, and Bcc stays hidden.
+pub struct SplitMessage {
+    /// One PKESK per recipient, in the order the recipients were given.
+    pub key_packets: Vec<Vec<u8>>,
+    pub data_packet: Vec<u8>,
+}
+
+/// Encrypts `plaintext` once to every key in `recipient_public_keys`, signed
+/// by `signer_secret_key`, and splits the result (see [`SplitMessage`]).
+pub fn encrypt_split(
+    recipient_public_keys: &[&[u8]],
+    signer_secret_key: &[u8],
+    plaintext: &[u8],
+) -> Result<SplitMessage> {
+    if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_SPLIT_RECIPIENTS {
+        return Err(CryptoError::InvalidInput(
+            "a message needs 1 to 100 recipient keys".into(),
+        ));
+    }
+    let recipients = recipient_public_keys
+        .iter()
+        .map(|key| parse_recipient(key))
+        .collect::<Result<Vec<_>>>()?;
+    let signer = SignedSecretKey::from_bytes(signer_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+    for recipient in &recipients {
+        builder
+            .encrypt_to_key(rand::rngs::OsRng, encryption_subkey(recipient)?)
+            .map_err(backend)?;
+    }
+    builder.sign(
+        &signer.primary_key,
+        Password::empty(),
+        HashAlgorithm::Sha512,
+    );
+    let message = builder.to_vec(rand::rngs::OsRng).map_err(backend)?;
+    let mut rest = message.as_slice();
+    let mut key_packets = Vec::with_capacity(recipients.len());
+    for _ in &recipients {
+        let (tag, _, length) = packet_extent(rest)?;
+        if tag != TAG_PKESK {
+            return Err(CryptoError::InvalidInput("expected a key packet".into()));
+        }
+        key_packets.push(rest[..length].to_vec());
+        rest = &rest[length..];
+    }
+    if rest.is_empty() || packet_tag(rest[0]) != Some(TAG_SEIPD) {
+        return Err(CryptoError::InvalidInput("expected a data packet".into()));
+    }
+    Ok(SplitMessage {
+        key_packets,
+        data_packet: rest.to_vec(),
+    })
+}
+
+/// The 8-byte key ID a key packet is encrypted to, so a server can check it
+/// names the recipient's current key without being able to open it.
+pub fn key_packet_key_id(key_packet: &[u8]) -> Result<[u8; 8]> {
+    let (tag, header, length) = packet_extent(key_packet)?;
+    if tag != TAG_PKESK || length != key_packet.len() {
+        return Err(CryptoError::InvalidInput("not a single key packet".into()));
+    }
+    let body = &key_packet[header..];
+    // Version 3: version, 8-byte key ID, algorithm, encrypted session key.
+    if body.len() < 10 || body[0] != 3 {
+        return Err(CryptoError::InvalidInput("unsupported key packet".into()));
+    }
+    Ok(body[1..9].try_into().expect("eight bytes"))
+}
+
+/// The key ID of a whole message's first key packet: whom it is for, as far
+/// as a server can tell without opening it.
+pub fn message_key_id(message: &[u8]) -> Result<[u8; 8]> {
+    let (tag, _, length) = packet_extent(message)?;
+    if tag != TAG_PKESK {
+        return Err(CryptoError::InvalidInput(
+            "message does not start with a key packet".into(),
+        ));
+    }
+    key_packet_key_id(&message[..length])
+}
+
+/// The key ID of the subkey `public_key` is encrypted to.
+pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
+    let recipient = parse_recipient(public_key)?;
+    let id = encryption_subkey(&recipient)?.legacy_key_id();
+    id.as_ref()
+        .try_into()
+        .map_err(|_| CryptoError::InvalidInput("unexpected key ID length".into()))
+}
+
+const MAX_SPLIT_RECIPIENTS: usize = 100;
+const TAG_PKESK: u8 = 1;
+const TAG_SEIPD: u8 = 18;
+
+fn packet_tag(first: u8) -> Option<u8> {
+    match first {
+        b if b & 0xc0 == 0xc0 => Some(b & 0x3f),
+        b if b & 0x80 == 0x80 => Some((b >> 2) & 0x0f),
+        _ => None,
+    }
+}
+
+/// A packet's tag, header length and whole length (header and body), for
+/// packets with a definite length; key packets always have one.
+fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
+    let invalid = || CryptoError::InvalidInput("malformed OpenPGP packet".into());
+    let first = *bytes.first().ok_or_else(invalid)?;
+    let tag = packet_tag(first).ok_or_else(invalid)?;
+    let (header, body) = if first & 0x40 != 0 {
+        match *bytes.get(1).ok_or_else(invalid)? {
+            l @ 0..=191 => (2, l as usize),
+            l @ 192..=223 => {
+                let second = *bytes.get(2).ok_or_else(invalid)? as usize;
+                (3, ((l as usize - 192) << 8) + second + 192)
+            }
+            255 => {
+                let length: [u8; 4] = bytes.get(2..6).ok_or_else(invalid)?.try_into().unwrap();
+                (6, u32::from_be_bytes(length) as usize)
+            }
+            _ => return Err(invalid()),
+        }
+    } else {
+        match first & 0x03 {
+            0 => (2, *bytes.get(1).ok_or_else(invalid)? as usize),
+            1 => {
+                let length: [u8; 2] = bytes.get(1..3).ok_or_else(invalid)?.try_into().unwrap();
+                (3, u16::from_be_bytes(length) as usize)
+            }
+            2 => {
+                let length: [u8; 4] = bytes.get(1..5).ok_or_else(invalid)?.try_into().unwrap();
+                (5, u32::from_be_bytes(length) as usize)
+            }
+            _ => return Err(invalid()),
+        }
+    };
+    let total = header + body;
+    if total > bytes.len() {
+        return Err(invalid());
+    }
+    Ok((tag, header, total))
+}
+
+fn parse_recipient(public_key: &[u8]) -> Result<SignedPublicKey> {
+    SignedPublicKey::from_bytes(public_key)
+        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))
+}
+
+fn encryption_subkey(recipient: &SignedPublicKey) -> Result<&SignedPublicSubKey> {
+    recipient
+        .public_subkeys
+        .iter()
+        .find(|subkey| subkey.algorithm().can_encrypt())
+        .ok_or_else(|| CryptoError::InvalidInput("recipient key cannot encrypt".into()))
+}
+
 /// A decrypted message.
 pub struct DecryptedMessage {
     pub data: Zeroizing<Vec<u8>>,
+    /// Whether the message carried a signature at all.
+    pub signed: bool,
     /// Whether the message carried a signature valid for `signer_public_key`.
     pub verified: bool,
 }
@@ -392,6 +567,7 @@ pub fn decrypt(
             .decompress()
             .map_err(|_| CryptoError::AuthFailed)?;
     }
+    let signed = decrypted.is_one_pass_signed() || decrypted.is_signed();
     let data = Zeroizing::new(
         decrypted
             .as_data_vec()
@@ -405,7 +581,11 @@ pub fn decrypt(
         }
         None => false,
     };
-    Ok(DecryptedMessage { data, verified })
+    Ok(DecryptedMessage {
+        data,
+        signed,
+        verified,
+    })
 }
 
 /// One key in an address's signed key list.

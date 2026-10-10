@@ -47,6 +47,7 @@ const CLIENT_KEYS: Record<string, string> = {
   'web-photos': 'apps.photos',
   'web-office': 'apps.office',
   'web-contacts': 'apps.contacts',
+  'web-mail': 'apps.mail',
   cli: 'settings.sessions.cli',
 }
 

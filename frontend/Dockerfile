@@ -1,4 +1,4 @@
-# The Kutup web apps (account, drive, chat, maps, photos, office, contacts) and the
+# The Kutup web apps (account, drive, chat, maps, photos, office, contacts, mail) and the
 # OnlyOffice editor sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
@@ -66,7 +66,7 @@ RUN o=apps/editor/public/onlyoffice \
     && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat maps photos office contacts editor; do cp -r apps/$app/dist /out/$app; done \
+    && for app in account drive chat maps photos office contacts mail editor; do cp -r apps/$app/dist /out/$app; done \
     && find /out -name '*.map' -delete
 
 # Every text file and WASM over 1 KB is stored compressed beside itself,

@@ -26,12 +26,21 @@ pub struct StorageUsageResponse {
     pub drive: DriveUsage,
     pub chat: ChatUsage,
     pub contacts: ContactsUsage,
+    pub mail: MailUsage,
 }
 
 /// The address book: each contact's summary and sealed card.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactsUsage {
+    pub bytes: i64,
+    pub count: i64,
+}
+
+/// Mail: every stored message, encrypted, attachments included.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MailUsage {
     pub bytes: i64,
     pub count: i64,
 }
@@ -114,6 +123,14 @@ pub async fn usage(
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
+    let (mail_bytes, mail_count): (i64, i64) = sqlx::query_as(
+        "SELECT (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = $1), 0)
+               + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = $1), 0))::bigint,
+                (SELECT COUNT(*) FROM mail_messages WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let (quota, used, files, files_count, trash, trash_count, versions, thumbnails, assets) = (
         row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
     );
@@ -138,6 +155,10 @@ pub async fn usage(
         contacts: ContactsUsage {
             bytes: contacts_bytes,
             count: contacts_count,
+        },
+        mail: MailUsage {
+            bytes: mail_bytes,
+            count: mail_count,
         },
     }))
 }

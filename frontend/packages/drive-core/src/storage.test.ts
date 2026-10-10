@@ -8,6 +8,7 @@ const usage: StorageUsage = {
   drive: { filesBytes: 300, filesCount: 3, trashBytes: 50, trashCount: 1, versionsBytes: 40, thumbnailsBytes: 5, assetsBytes: 5 },
   chat: { mediaBytes: 120, historyBytes: 70, historyMediaBytes: 10 },
   contacts: { bytes: 0, count: 0 },
+  mail: { bytes: 0, count: 0 },
 }
 
 describe('usageCategories', () => {

@@ -32,6 +32,7 @@ editor=$(origin_of editor KUTUP_EDITOR_URL)
 maps=$(origin_of maps KUTUP_MAPS_URL)
 photos=$(origin_of photos KUTUP_PHOTOS_URL)
 contacts=$(origin_of contacts KUTUP_CONTACTS_URL)
+mail=$(origin_of mail KUTUP_MAIL_URL)
 
 conf=/etc/nginx/conf.d/kutup.conf
 {
@@ -44,7 +45,7 @@ server {
 }
 NGINX
   editor_origin=$(printf '%s' "$editor" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
-  for app in account drive chat maps photos office contacts; do
+  for app in account drive chat maps photos office contacts mail; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
@@ -53,7 +54,11 @@ NGINX
     # frame the editor sandbox; nothing may frame an app.
     frames="'self' blob:"
     if [ "$app" = drive ]; then frames="$frames $editor_origin"; fi
-    app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
+    # Mail shows a message's remote images once its reader allows them
+    # (its sanitiser blocks them until then).
+    images="'self' data: blob:"
+    if [ "$app" = mail ]; then images="$images https:"; fi
+    app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src $images; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
     cat <<NGINX
 server {
     listen 80;
@@ -140,4 +145,4 @@ server {
 }
 NGINX
 } > "$conf"
-echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts editor=$editor"
+echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts mail=$mail editor=$editor"

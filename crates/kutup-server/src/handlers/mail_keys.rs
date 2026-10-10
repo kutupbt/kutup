@@ -409,6 +409,10 @@ pub struct PublicMailKey {
 pub struct MailKeyLookup {
     pub address: String,
     pub account: String,
+    /// The account authority the server holds for `account`, base64: the
+    /// key the lists must chain under. A client that has verified the
+    /// account (a Chat safety number) checks it against its pin.
+    pub account_authority_public_key: String,
     pub keys: Vec<PublicMailKey>,
     pub key_lists: Vec<SignedKeyList>,
 }
@@ -477,6 +481,13 @@ pub async fn lookup_keys(
     let Some((address_id, account, keys)) = public_keys(&state, &address).await? else {
         return Err(AppError::not_found("not found"));
     };
+    let authority: String = sqlx::query_scalar(
+        "SELECT u.account_authority_public_key FROM mail_addresses a JOIN users u ON u.id = a.user_id
+          WHERE a.id = $1",
+    )
+    .bind(address_id)
+    .fetch_one(&state.pool)
+    .await?;
     let lists: Vec<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT data, signature FROM mail_key_lists WHERE address_id = $1 ORDER BY sequence",
     )
@@ -486,6 +497,7 @@ pub async fn lookup_keys(
     Ok(Json(MailKeyLookup {
         address,
         account,
+        account_authority_public_key: authority,
         keys,
         key_lists: lists
             .into_iter()

@@ -1,0 +1,20 @@
+# The mail gate (scripts/test-mail-inbound.sh): the backend's API and
+# Stalwart's port 25 on loopback ports, the setup run once in the foreground
+# without the certificate watch, and a sink standing in for the outside
+# world (mail for outside.test goes there, tests/mail/plan.ndjson).
+services:
+  backend:
+    ports:
+      - "127.0.0.1:${KUTUP_MAIL_TEST_PORT:-39086}:3000"
+  stalwart-setup:
+    restart: "no"
+    environment:
+      STALWART_WATCH_CERTIFICATES: "0"
+      STALWART_EXTRA_PLAN: /etc/kutup-stalwart/test-plan.ndjson
+    volumes:
+      - ./tests/mail/plan.ndjson:/etc/kutup-stalwart/test-plan.ndjson:ro
+  mail-sink:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/sink.py"]
+    volumes:
+      - ./tests/mail/sink.py:/sink.py:ro

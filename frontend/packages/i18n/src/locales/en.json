@@ -35,7 +35,8 @@
     "maps": "Maps",
     "office": "Office",
     "photos": "Photos",
-    "contacts": "Contacts"
+    "contacts": "Contacts",
+    "mail": "Mail"
   },
   "theme": {
     "dark": "Dark theme",
@@ -131,7 +132,8 @@
       "chatMedia": "Chat attachments",
       "chatHistory": "Chat history backup",
       "reserved": "Uploads in progress",
-      "contacts": "Contacts"
+      "contacts": "Contacts",
+      "mail": "Mail"
     }
   },
   "uploads": {

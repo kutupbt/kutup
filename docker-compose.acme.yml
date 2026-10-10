@@ -4,7 +4,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
 #
 # Needs KUTUP_BASE_DOMAIN in .env, every app hostname (account, drive, chat,
-# photos, maps, office, contacts, editor) pointing at this machine, and ports 80 and 443
+# photos, maps, office, contacts, mail, editor) pointing at this machine, and ports 80 and 443
 # reachable from the internet. docs/self-hosting.md, "Automatic certificates".
 
 services:

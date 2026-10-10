@@ -1,14 +1,14 @@
 // Where each Kutup app lives.
 //
 // The origins are server configuration (KUTUP_ACCOUNT_URL, KUTUP_DRIVE_URL,
-// KUTUP_CHAT_URL, KUTUP_MAPS_URL, KUTUP_PHOTOS_URL, KUTUP_OFFICE_URL, KUTUP_CONTACTS_URL, KUTUP_EDITOR_URL), published by `GET /api/auth/settings`,
+// KUTUP_CHAT_URL, KUTUP_MAPS_URL, KUTUP_PHOTOS_URL, KUTUP_OFFICE_URL, KUTUP_CONTACTS_URL, KUTUP_MAIL_URL, KUTUP_EDITOR_URL), published by `GET /api/auth/settings`,
 // so a self-hoster can use any hostnames. The server enforces the same map
 // for session forks; the client never derives an origin from a URL
 // parameter.
 
 import api from './client'
 
-export type AppId = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts'
+export type AppId = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail'
 
 export interface AppDirectory {
   account: string
@@ -22,6 +22,8 @@ export interface AppDirectory {
   editor: string
   /** The address book (docs/plans/contacts.md). */
   contacts: string
+  /** Mail (docs/plans/mail.md). */
+  mail: string
 }
 
 let directory: AppDirectory | null = null
@@ -65,6 +67,7 @@ export async function loadAppDirectory(): Promise<AppDirectory> {
     office: assertOrigin(apps.office, 'office'),
     editor: assertOrigin(apps.editor, 'editor'),
     contacts: assertOrigin(apps.contacts, 'contacts'),
+    mail: assertOrigin(apps.mail, 'mail'),
   }
   return directory
 }

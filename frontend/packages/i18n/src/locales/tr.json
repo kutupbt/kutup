@@ -35,7 +35,8 @@
     "maps": "Haritalar",
     "office": "Ofis",
     "photos": "Galeri",
-    "contacts": "Kişiler"
+    "contacts": "Kişiler",
+    "mail": "Posta"
   },
   "theme": {
     "dark": "Koyu tema",
@@ -131,7 +132,8 @@
       "chatMedia": "Sohbet ekleri",
       "chatHistory": "Sohbet geçmişi yedeği",
       "reserved": "Süren yüklemeler",
-      "contacts": "Kişiler"
+      "contacts": "Kişiler",
+      "mail": "Posta"
     }
   },
   "uploads": {

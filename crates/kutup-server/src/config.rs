@@ -49,6 +49,17 @@ pub struct Config {
     /// Stable canonical DNS suffix used by every local Chat account. This is
     /// required even when inter-server federation is disabled.
     pub chat_server_name: String,
+    /// Mail from outside (docs/plans/mail.md): Stalwart's bearer token for
+    /// the RCPT hook and its LMTP password. Empty keeps mail off.
+    pub mail_inbound_token: String,
+    /// Where the LMTP receiver listens (internal network only).
+    pub mail_lmtp_bind: String,
+    /// Stalwart's submission port, for mail to outside recipients.
+    pub mail_submission_addr: String,
+    /// Outside recipients one account may send to per hour and per day, so
+    /// one compromised account cannot burn the server's reputation.
+    pub mail_send_per_hour: i64,
+    pub mail_send_per_day: i64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -129,6 +140,8 @@ pub struct AppOrigins {
     pub photos: String,
     /// The Contacts app (docs/plans/contacts.md).
     pub contacts: String,
+    /// The Mail app (docs/plans/mail.md).
+    pub mail: String,
 }
 
 impl AppOrigins {
@@ -143,6 +156,7 @@ impl AppOrigins {
             ClientType::WebPhotos => Some(&self.photos),
             ClientType::WebOffice => Some(&self.office),
             ClientType::WebContacts => Some(&self.contacts),
+            ClientType::WebMail => Some(&self.mail),
             ClientType::Cli => None,
         }
     }
@@ -160,7 +174,7 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
     Ok(origin.ascii_serialization())
 }
 
-/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS,MAIL}_URL win; otherwise KUTUP_BASE_DOMAIN gives
 /// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
 /// (`http://<app>.localhost:<port>`) and production refuses to start.
 pub fn resolve_app_origins(
@@ -189,6 +203,7 @@ pub fn resolve_app_origins(
         maps: pick("maps", "KUTUP_MAPS_URL", 5177)?,
         photos: pick("photos", "KUTUP_PHOTOS_URL", 5178)?,
         contacts: pick("contacts", "KUTUP_CONTACTS_URL", 5180)?,
+        mail: pick("mail", "KUTUP_MAIL_URL", 5181)?,
     };
     let all = [
         &origins.account,
@@ -199,6 +214,7 @@ pub fn resolve_app_origins(
         &origins.maps,
         &origins.photos,
         &origins.contacts,
+        &origins.mail,
     ];
     for (i, a) in all.iter().enumerate() {
         if all[i + 1..].contains(a) {
@@ -280,6 +296,11 @@ impl Config {
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
             chat_server_name,
+            mail_inbound_token: get_env("MAIL_INBOUND_TOKEN", ""),
+            mail_lmtp_bind: get_env("MAIL_LMTP_BIND", "0.0.0.0:2424"),
+            mail_submission_addr: get_env("MAIL_SUBMISSION_ADDR", "stalwart:2587"),
+            mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
+            mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
@@ -312,6 +333,9 @@ impl Config {
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
+        }
+        if !cfg.mail_inbound_token.is_empty() && cfg.mail_inbound_token.len() < 32 {
+            panic!("MAIL_INBOUND_TOKEN must be at least 32 characters long");
         }
         cfg
     }
@@ -385,6 +409,7 @@ mod tests {
         assert_eq!(o.maps, "https://maps.example.org");
         assert_eq!(o.photos, "https://photos.example.org");
         assert_eq!(o.contacts, "https://contacts.example.org");
+        assert_eq!(o.mail, "https://mail.example.org");
     }
 
     #[test]
@@ -412,6 +437,7 @@ mod tests {
         assert_eq!(o.maps, "http://maps.localhost:5177");
         assert_eq!(o.photos, "http://photos.localhost:5178");
         assert_eq!(o.contacts, "http://contacts.localhost:5180");
+        assert_eq!(o.mail, "http://mail.localhost:5181");
     }
 
     #[test]

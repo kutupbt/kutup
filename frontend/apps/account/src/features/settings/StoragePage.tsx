@@ -133,6 +133,7 @@ function categoryHref(id: UsageCategory['id']): string | null {
   if (id === 'trash') return appUrl('drive', '/trash')
   if (id === 'chatMedia' || id === 'chatHistory') return appUrl('chat', '/settings/storage')
   if (id === 'contacts') return appUrl('contacts')
+  if (id === 'mail') return appUrl('mail')
   return null
 }
 

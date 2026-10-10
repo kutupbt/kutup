@@ -58,12 +58,22 @@ export {
   DEFAULT_MAIL_KEY_FLAGS,
   MAIL_KEY_FLAGS,
   armorMailPublicKey,
+  encryptMailMessage,
   generateMailAddressKey,
   inspectMailAddressPublicKey,
+  openMailMessage,
   signMailKeyList,
   verifyMailKeyList,
 } from './mailKey'
-export type { GeneratedMailAddressKey, MailKeyEntry, MailKeyListInput, SignedMailKeyList } from './mailKey'
+export type {
+  GeneratedMailAddressKey,
+  MailKeyEntry,
+  MailKeyListInput,
+  OpenedMail,
+  SealedMail,
+  SealedMailKey,
+  SignedMailKeyList,
+} from './mailKey'
 export { openContactCard, sealContactCard, signContactSummary, verifyContactSummary } from './contactCard'
 export type { ContactSummary } from './contactCard'
 export type { AccountIdentityKeysV1 } from './identity'

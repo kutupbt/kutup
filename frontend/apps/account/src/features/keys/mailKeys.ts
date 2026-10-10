@@ -1,16 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
-import {
-  DEFAULT_MAIL_KEY_FLAGS,
-  deriveAccountIdentityKeys,
-  generateMailAddressKey,
-  signMailKeyList,
-  toBase64,
-  verifyMailKeyList,
-  type SignedMailKeyList,
-} from '@kutup/crypto'
+import { deriveAccountIdentityKeys, toBase64, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
+import { addFirstAddressKey } from '@kutup/mail-core/addressKey'
 import api from '@kutup/session/client'
-import { useRequiredSession, type Session } from '@kutup/session/store'
+import { useRequiredSession } from '@kutup/session/store'
 
 // The account's email addresses and their OpenPGP keys
 // (docs/plans/mail-address-keys.md), as Proton's Settings → Encryption and
@@ -63,24 +56,6 @@ export function useMailAddresses() {
 
 export type CheckedMailAddress = MailAddress & { verifiedList: SignedMailKeyList | null }
 
-/** Generates an address's first key and publishes its first signed key list. */
-async function addFirstKey(session: Session, address: MailAddress) {
-  const masterKey = toBase64(session.masterKey)
-  const key = await generateMailAddressKey(masterKey, session.email, address.address)
-  const list = await signMailKeyList(masterKey, {
-    account: address.address,
-    address: address.address,
-    sequence: 1,
-    issuedAt: new Date().toISOString(),
-    keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: DEFAULT_MAIL_KEY_FLAGS }],
-  })
-  await api.post(`/mail/addresses/${address.id}/keys`, {
-    publicKey: key.publicKey,
-    privateKeyEnvelope: key.envelope,
-    keyList: { data: list.data, signature: list.signature },
-  })
-}
-
 /**
  * Makes sure every address has a key, once per sign-in: new accounts get
  * theirs right after sign-up, existing accounts on their next visit. Two tabs
@@ -94,7 +69,7 @@ export function useEnsureMailKeys() {
   const started = useRef(new Set<string>())
   const add = useMutation({
     mutationKey: createMailKeyMutation,
-    mutationFn: (address: MailAddress) => addFirstKey(session, address),
+    mutationFn: (address: MailAddress) => addFirstAddressKey(session, address),
     onSettled: () => queryClient.invalidateQueries({ queryKey: mailAddressesKey }),
     onError: (error) => console.warn('mail keys: could not create the address key', error),
   })

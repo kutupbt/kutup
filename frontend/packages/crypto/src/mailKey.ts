@@ -87,3 +87,70 @@ export async function verifyMailKeyList(
     previous?.signature,
   )
 }
+
+/** An address key as its owner holds it: sealed, opened only inside WASM. */
+export interface SealedMailKey {
+  masterKeyBase64: string
+  loginEmail: string
+  address: string
+  envelope: string
+  fingerprint: string
+}
+
+export interface OpenedMail {
+  /** The message as sent: RFC 5322 bytes. */
+  data: Uint8Array
+  /** Whether it carried an OpenPGP signature. */
+  signed: boolean
+  /** Whether that signature is valid for the sender key given. */
+  verified: boolean
+}
+
+/**
+ * Opens a stored message (docs/plans/mail.md) with the address key; with
+ * `senderPublicKey` (base64), checks its signature too.
+ */
+export async function openMailMessage(key: SealedMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
+  const opened = (await getCryptoWasm()).openMailMessage(
+    key.masterKeyBase64,
+    key.loginEmail,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    message,
+    senderPublicKey,
+  )
+  try {
+    return { data: opened.data, signed: opened.signed, verified: opened.verified }
+  } finally {
+    opened.free()
+  }
+}
+
+export interface SealedMail {
+  /** One base64 key packet per recipient key, in the order given. */
+  keyPackets: string[]
+  dataPacket: Uint8Array
+}
+
+/**
+ * Encrypts `plaintext` once to every key (base64; include your own for your
+ * copy) and signs it with the address key, split the way the server stores
+ * mail between Kutup users.
+ */
+export async function encryptMailMessage(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
+  const sealed = (await getCryptoWasm()).encryptMailMessage(
+    key.masterKeyBase64,
+    key.loginEmail,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    recipientPublicKeys,
+    plaintext,
+  )
+  try {
+    return { keyPackets: sealed.keyPackets, dataPacket: sealed.dataPacket }
+  } finally {
+    sealed.free()
+  }
+}

@@ -35,6 +35,10 @@ export interface StorageUsage {
     bytes: number
     count: number
   }
+  mail: {
+    bytes: number
+    count: number
+  }
 }
 
 export function useStorageUsage(enabled = true) {
@@ -54,7 +58,7 @@ export function storageLevel(usage: Pick<StorageUsage, 'quotaBytes' | 'usedBytes
   return ratio >= 1 ? 'danger' : ratio >= 0.8 ? 'warning' : 'ok'
 }
 
-export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'contacts' | 'reserved'
+export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'contacts' | 'mail' | 'reserved'
 
 export interface UsageCategory {
   id: UsageCategoryId
@@ -73,6 +77,7 @@ const COLOR: Record<Exclude<UsageCategoryId, FileKind>, string> = {
   chatMedia: 'var(--usage-chat)',
   chatHistory: 'var(--usage-chat-history)',
   contacts: 'var(--usage-contacts)',
+  mail: 'var(--usage-mail)',
   reserved: 'var(--usage-reserved)',
 }
 
@@ -113,6 +118,7 @@ export function usageCategories(usage: StorageUsage, kinds?: KindTotals | null):
     { id: 'previews', bytes: drive.thumbnailsBytes + drive.assetsBytes, color: COLOR.previews },
     { id: 'chatMedia', bytes: chat.mediaBytes, color: COLOR.chatMedia },
     { id: 'chatHistory', bytes: chat.historyBytes + chat.historyMediaBytes, color: COLOR.chatHistory },
+    { id: 'mail', bytes: usage.mail.bytes, count: usage.mail.count, color: COLOR.mail },
     { id: 'contacts', bytes: usage.contacts.bytes, count: usage.contacts.count, color: COLOR.contacts },
     { id: 'reserved', bytes: usage.reservedBytes, color: COLOR.reserved },
   )

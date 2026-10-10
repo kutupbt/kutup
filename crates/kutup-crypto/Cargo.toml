@@ -48,3 +48,11 @@ required-features = ["mail"]
 [[test]]
 name = "mail_key_gnupg"
 required-features = ["mail"]
+
+[[test]]
+name = "mail_arrival_vectors"
+required-features = ["mail"]
+
+[[test]]
+name = "mail_split_vectors"
+required-features = ["mail"]
