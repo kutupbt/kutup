@@ -1,6 +1,6 @@
 # Mail (Phase C)
 
-**Status:** C1 in progress (2026-10-10). Phase C of
+**Status:** C1 done (2026-10-10); C2 next. Phase C of
 [`../research/17-mail-calendar-contacts.md`](../research/17-mail-calendar-contacts.md),
 after [`mail-address-keys.md`](mail-address-keys.md) (A) and
 [`contacts.md`](contacts.md) (B).
