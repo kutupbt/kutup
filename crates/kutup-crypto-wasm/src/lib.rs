@@ -1862,6 +1862,151 @@ pub fn inspect_mail_address_public_key(
     .map_err(|error| js_error(&format!("encode public key: {error}")))
 }
 
+fn open_mail_secret(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let envelope = decode_canonical_base64(envelope_base64, "envelope")?;
+    let fingerprint: [u8; 20] = hex::decode(fingerprint_hex)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| js_error("fingerprint must be 40 hex digits"))?;
+    kutup_crypto::mail_key::open_address_key(
+        &envelope,
+        &master_key,
+        login_email,
+        address,
+        &fingerprint,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// A message opened with an address key (docs/plans/mail.md).
+#[wasm_bindgen(js_name = OpenedMail)]
+pub struct OpenedMailJs {
+    data: Vec<u8>,
+    signed: bool,
+    verified: bool,
+}
+
+#[wasm_bindgen(js_class = OpenedMail)]
+impl OpenedMailJs {
+    /// The message as sent: RFC 5322 bytes.
+    #[wasm_bindgen(getter)]
+    pub fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+
+    /// Whether the message carried an OpenPGP signature.
+    #[wasm_bindgen(getter)]
+    pub fn signed(&self) -> bool {
+        self.signed
+    }
+
+    /// Whether that signature is valid for the sender key given.
+    #[wasm_bindgen(getter)]
+    pub fn verified(&self) -> bool {
+        self.verified
+    }
+}
+
+/// Opens a stored message with the address key sealed in `envelope`; the
+/// secret key never leaves WASM. With `sender_public_key_base64`, checks the
+/// message's signature against it.
+#[wasm_bindgen(js_name = openMailMessage)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_mail_message(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    message: &[u8],
+    sender_public_key_base64: Option<String>,
+) -> Result<OpenedMailJs, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let sender = sender_public_key_base64
+        .map(|key| decode_canonical_base64(&key, "sender public key"))
+        .transpose()?;
+    let opened = kutup_crypto::mail_key::decrypt(&secret, message, sender.as_deref())
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(OpenedMailJs {
+        data: opened.data.to_vec(),
+        signed: opened.signed,
+        verified: opened.verified,
+    })
+}
+
+/// A message encrypted once for several recipients and split into key
+/// packets and a shared data packet.
+#[wasm_bindgen(js_name = SealedMail)]
+pub struct SealedMailJs {
+    key_packets: Vec<String>,
+    data_packet: Vec<u8>,
+}
+
+#[wasm_bindgen(js_class = SealedMail)]
+impl SealedMailJs {
+    /// One base64 key packet per recipient key, in the order given.
+    #[wasm_bindgen(getter, js_name = keyPackets)]
+    pub fn key_packets(&self) -> Vec<String> {
+        self.key_packets.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = dataPacket)]
+    pub fn data_packet(&self) -> Vec<u8> {
+        self.data_packet.clone()
+    }
+}
+
+/// Encrypts `plaintext` to every key in `recipient_public_keys` (base64,
+/// include your own for your copy), signed with the address key sealed in
+/// `envelope`.
+#[wasm_bindgen(js_name = encryptMailMessage)]
+#[allow(clippy::too_many_arguments)]
+pub fn encrypt_mail_message(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<SealedMailJs, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| decode_canonical_base64(key, "recipient public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    let split = kutup_crypto::mail_key::encrypt_split(&refs, &secret, plaintext)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(SealedMailJs {
+        key_packets: split
+            .key_packets
+            .iter()
+            .map(|p| STANDARD.encode(p))
+            .collect(),
+        data_packet: split.data_packet,
+    })
+}
+
 /// An ASCII-armored public key, for "Download public key".
 #[wasm_bindgen(js_name = armorMailPublicKey)]
 pub fn armor_mail_public_key(public_key_base64: &str) -> Result<String, JsValue> {

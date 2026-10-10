@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use kutup_crypto::mail_key::{
-    armor_public_key, decrypt, encrypt, encrypt_binary, generate_address_key,
+    armor_public_key, decrypt, encrypt, encrypt_binary, encrypt_split, generate_address_key,
 };
 
 fn gpg(home: &PathBuf, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
@@ -82,6 +82,21 @@ fn gnupg_reads_kutup_keys_and_kutup_reads_gnupg() {
     let (ok, plaintext, err) = gpg(&home, &["--decrypt"], &stored);
     assert!(ok, "decrypt stored: {err}");
     assert_eq!(plaintext, b"stored on arrival");
+
+    // A copy joined from a split message (key packet + shared data packet)
+    // is an ordinary OpenPGP message: GnuPG opens it and checks Alice's
+    // signature.
+    let split = encrypt_split(
+        &[&alice.public_key, &bob.public_key],
+        &alice.secret_key,
+        b"split for bob",
+    )
+    .unwrap();
+    let bobs = [split.key_packets[1].as_slice(), &split.data_packet].concat();
+    let (ok, plaintext, err) = gpg(&home, &["--decrypt"], &bobs);
+    assert!(ok, "decrypt split: {err}");
+    assert_eq!(plaintext, b"split for bob");
+    assert!(err.contains("Good signature"), "verify split: {err}");
 
     let _ = std::fs::remove_dir_all(&home);
 }

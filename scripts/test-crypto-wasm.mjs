@@ -643,6 +643,41 @@ assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.de
 assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
 assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
 
+// Mail between Kutup users (docs/plans/mail.md): a split message opens for
+// each recipient with the shared data packet; fresh ones round-trip.
+const splitVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-split-v1.json`, 'utf8'),
+)
+const arrivalVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-arrival-v1.json`, 'utf8'),
+)
+const b64bytes = (value) => new Uint8Array(Buffer.from(value, 'base64'))
+const joinPackets = (key, data) => new Uint8Array([...b64bytes(key), ...data])
+const aliceEnvelope = mailVectors.envelope
+const openAs = (message, sender) =>
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, message, sender)
+const splitData = b64bytes(splitVectors.dataPacket)
+const alicesCopy = openAs(joinPackets(splitVectors.keyPackets[0], splitData), mailVectors.publicKey)
+assert.deepEqual(Buffer.from(alicesCopy.data), Buffer.from(splitVectors.plaintext, 'base64'))
+assert.equal(alicesCopy.signed, true)
+assert.equal(alicesCopy.verified, true)
+assert.throws(() => openAs(joinPackets(splitVectors.keyPackets[1], splitData), mailVectors.publicKey))
+const arrived = openAs(b64bytes(arrivalVectors.ciphertext), undefined)
+assert.deepEqual(Buffer.from(arrived.data), Buffer.from(arrivalVectors.plaintext, 'base64'))
+assert.equal(arrived.signed, false)
+assert.equal(arrived.verified, false)
+assert.throws(() =>
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, 'bob@kutup.dev', aliceEnvelope, mailVectors.fingerprint, b64bytes(arrivalVectors.ciphertext)),
+)
+const sealedMail = crypto.encryptMailMessage(
+  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  [mailVectors.publicKey, splitVectors.bobPublicKey], new TextEncoder().encode('hello bob'),
+)
+assert.equal(sealedMail.keyPackets.length, 2)
+const reopenedMail = openAs(joinPackets(sealedMail.keyPackets[0], sealedMail.dataPacket), mailVectors.publicKey)
+assert.equal(new TextDecoder().decode(reopenedMail.data), 'hello bob')
+assert.equal(reopenedMail.verified, true)
+
 // Contacts (docs/plans/contacts.md).
 const contactVectors = JSON.parse(
   await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v1.json`, 'utf8'),
