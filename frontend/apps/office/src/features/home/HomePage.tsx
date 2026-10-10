@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { DOCUMENT_KINDS, type DocumentKind } from '@kutup/drive-core/documents'
+import { personOf, usePeople } from '@kutup/drive-core/people'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { appUrl } from '@kutup/session/apps'
@@ -66,7 +67,12 @@ function Preview({ file, kind }: { file: DriveFile; kind: DocumentKind }) {
 
 function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: string; cardRef: (el: HTMLLIElement | null) => void }) {
   const { t } = useTranslation()
+  const people = usePeople()
   const name = entry.file.name ?? t('home.unnamed')
+  // Someone else's: who shared it (by their name once they gave it), and
+  // whose it is when an editor passed it on.
+  const sharer = entry.sharer ? personOf(people.data, entry.sharer).name : null
+  const owner = entry.owner ? personOf(people.data, entry.owner).name : null
   return (
     <li ref={cardRef}>
       <Link
@@ -83,8 +89,11 @@ function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: st
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <KindIcon kind={entry.kind} className="size-4" />
-            <span className="truncate">
-              {entry.owner ? t('home.changedBy', { when, owner: entry.owner }) : t('home.changed', { when })}
+            <span
+              className="truncate"
+              title={sharer && owner && entry.sharer !== entry.owner ? t('home.sharedByOwner', { sharer, owner }) : (entry.sharer ?? undefined)}
+            >
+              {sharer ? t('home.sharedBy', { when, sharer }) : t('home.changed', { when })}
             </span>
           </span>
         </span>

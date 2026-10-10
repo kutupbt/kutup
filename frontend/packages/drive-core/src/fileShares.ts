@@ -62,6 +62,8 @@ export interface SharedFile {
   canShare: boolean
   state: SharedFileState
   ownerAccount: string
+  /** Who shared it with this account: the owner, or an editor the owner lets share. */
+  sharerAccount: string
   sharedAt: string
   /** From another server: the accepted invite's id here (to remove it). */
   remoteShareId?: string
@@ -135,6 +137,7 @@ async function openShared(row: SharedFileRow, me: DriveIdentity, remoteShareId?:
     canShare: row.canEdit && row.editorsCanShare && state === 'ready',
     state,
     ownerAccount: row.ownerAccount,
+    sharerAccount: row.sharerAccount,
     sharedAt: row.sharedAt,
     remoteShareId,
   }
@@ -221,6 +224,7 @@ async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<S
       canShare: false,
       state: 'gone',
       ownerAccount: row.ownerAccount,
+      sharerAccount: row.ownerAccount,
       sharedAt: row.createdAt,
       remoteShareId: row.id,
     }

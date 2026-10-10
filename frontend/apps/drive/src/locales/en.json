@@ -253,6 +253,7 @@
     "emptyTitle": "Nothing shared with you yet",
     "emptyDescription": "Folders and files other people share with you appear here, including folders from other Kutup servers.",
     "from": "From {{account}}",
+    "ownedBy": "owned by {{account}}",
     "addInvite": "Add from invite link",
     "invite": {
       "title": "Add from an invite link",

@@ -247,7 +247,9 @@
     "downloadFailed": "The download failed.",
     "zipTooLarge": "This folder is over 1 GB. Use Chrome or Edge to download it as a ZIP, or download files one by one.",
     "myFiles": "My files",
-    "sharedWithMe": "Shared with me"
+    "sharedWithMe": "Shared with me",
+    "sharedBy": "From {{name}}",
+    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}"
   },
   "viewer": {
     "imageUnreadable": "This browser can't display this image. Download it to open it on your device."

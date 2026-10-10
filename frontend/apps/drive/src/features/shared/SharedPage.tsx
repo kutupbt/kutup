@@ -109,7 +109,18 @@ export function SharedPage() {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
               if (!s) return null
-              const from = <PersonLabel account={s.ownerAccount} format={(name) => t('shared.from', { account: name })} />
+              // Who shared it; and whose it is, when an editor passed it on.
+              const from = (
+                <>
+                  <PersonLabel account={s.sharerAccount} format={(name) => t('shared.from', { account: name })} />
+                  {s.sharerAccount !== s.ownerAccount ? (
+                    <>
+                      {' · '}
+                      <PersonLabel account={s.ownerAccount} format={(name) => t('shared.ownedBy', { account: name })} />
+                    </>
+                  ) : null}
+                </>
+              )
               return s.state === 'gone' ? (
                 <>{from} · {t('shared.gone')}</>
               ) : s.state === 'waiting' ? (

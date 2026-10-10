@@ -25,6 +25,7 @@ import { rekeyFile } from '@kutup/drive-core/rekey'
 import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
+import { personOf, usePeople } from '@kutup/drive-core/people'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } from './paths'
 import { contentAt, currentContent } from './content'
@@ -347,6 +348,13 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         unsentEdits={live === 'blockedWithEdits'}
         notice={sharedFile?.state === 'editsWait' && sharedFile.canEdit ? t('file.editsWait') : null}
         shareRole={shareRole(liveFolder, liveFile, sharedFile)}
+        sharedBy={
+          sharedFile
+            ? { sharer: sharedFile.sharerAccount, owner: sharedFile.ownerAccount }
+            : liveFolder.source !== 'owned' && liveFolder.ownerAccount
+              ? { sharer: liveFolder.ownerAccount, owner: liveFolder.ownerAccount }
+              : null
+        }
         mayRename={
           liveFolder.source === 'file'
             ? liveFolder.canUpload
@@ -477,6 +485,7 @@ function Workspace({
   unsentEdits,
   notice,
   shareRole: mayShare,
+  sharedBy,
   mayRename,
   onRestored,
   onOutdated,
@@ -496,6 +505,8 @@ function Workspace({
   notice: string | null
   /** How this account may share the file from here, if at all. */
   shareRole: ShareRole | null
+  /** Someone else's file: who shared it with this account, and whose it is. */
+  sharedBy: { sharer: string; owner: string } | null
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
@@ -580,6 +591,7 @@ function Workspace({
         ) : (
           <span className="min-w-0 truncate px-1.5 text-sm font-medium">{name}</span>
         )}
+        {sharedBy ? <SharedBy {...sharedBy} /> : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {notice ? (
             <span className="hidden rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground sm:inline" title={notice}>
@@ -674,6 +686,23 @@ function Workspace({
         onClose={() => setSharing(false)}
       />
     </div>
+  )
+}
+
+/** Who shared the file (by their name once they gave it), beside its name. */
+function SharedBy({ sharer, owner }: { sharer: string; owner: string }) {
+  const { t } = useTranslation()
+  const people = usePeople()
+  const sharerName = personOf(people.data, sharer).name
+  const ownerName = personOf(people.data, owner).name
+  return (
+    <span
+      data-testid="file-shared-by"
+      className="hidden min-w-0 truncate text-xs text-muted-foreground md:inline"
+      title={sharer !== owner ? t('file.sharedByOwner', { sharer: sharerName, owner: ownerName }) : sharer}
+    >
+      {t('file.sharedBy', { name: sharerName })}
+    </span>
   )
 }
 

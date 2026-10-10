@@ -247,7 +247,9 @@
     "downloadFailed": "İndirme başarısız oldu.",
     "zipTooLarge": "Bu klasör 1 GB'tan büyük. ZIP olarak indirmek için Chrome ya da Edge kullanın ya da dosyaları tek tek indirin.",
     "myFiles": "Dosyalarım",
-    "sharedWithMe": "Benimle paylaşılanlar"
+    "sharedWithMe": "Benimle paylaşılanlar",
+    "sharedBy": "{{name}} paylaştı",
+    "sharedByOwner": "Sizinle {{sharer}} paylaştı; sahibi {{owner}}"
   },
   "viewer": {
     "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."

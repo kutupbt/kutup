@@ -253,6 +253,7 @@
     "emptyTitle": "Henüz sizinle bir şey paylaşılmadı",
     "emptyDescription": "Başkalarının sizinle paylaştığı klasörler ve dosyalar, diğer Kutup sunucularından gelen klasörler dahil, burada görünür.",
     "from": "{{account}} tarafından",
+    "ownedBy": "sahibi {{account}}",
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
       "title": "Davet bağlantısından ekle",

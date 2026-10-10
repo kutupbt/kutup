@@ -23,6 +23,8 @@ export interface DocumentEntry {
   kind: DocumentKind
   /** The owner's account, when the document is someone else's. */
   owner: string | null
+  /** Who shared it with this account (the owner, or an editor the owner lets share). */
+  sharer: string | null
   /** Where it opens: the file page, here in Office. */
   href: string
 }
@@ -74,6 +76,7 @@ function collectDocuments(
         file,
         kind,
         owner: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
+        sharer: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
         href: filePath(folder, file.id),
       })
     }
@@ -93,6 +96,7 @@ function collectDocuments(
       file: shared.file,
       kind,
       owner: shared.ownerAccount,
+      sharer: shared.sharerAccount,
       href: filePath(shared.container, shared.file.id),
     })
   }

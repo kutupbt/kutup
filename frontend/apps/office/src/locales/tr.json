@@ -52,7 +52,8 @@
       "name": "Ad"
     },
     "changed": "{{when}} tarihinde değişti",
-    "changedBy": "{{when}} tarihinde değişti · {{owner}}",
+    "sharedBy": "{{sharer}} paylaştı · {{when}} tarihinde değişti",
+    "sharedByOwner": "Sizinle {{sharer}} paylaştı; sahibi {{owner}}",
     "unnamed": "Okunamayan bir belge",
     "loading": "Belgeleriniz yükleniyor…",
     "loadFailedTitle": "Belgeleriniz yüklenemedi",
