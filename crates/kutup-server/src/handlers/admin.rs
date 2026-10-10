@@ -179,6 +179,11 @@ pub async fn create_user(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
+    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
+        return Err(AppError::bad_request(
+            "this username is reserved for the server",
+        ));
+    }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
         req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;

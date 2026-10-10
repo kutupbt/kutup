@@ -175,11 +175,11 @@ fn mail_from_outside_arrives_encrypted() {
     let tag = uuid::Uuid::new_v4().simple().to_string();
 
     let first = format!(
-        "From: =?UTF-8?Q?=C3=87a=C4=9Flar?= <caglar@example.net>\r\n\
+        "From: =?UTF-8?Q?=C3=87a=C4=9Flar?= <caglar@sender.test>\r\n\
 To: {address}\r\n\
 Subject: =?UTF-8?B?w4dhcsWfYW1iYSB0b3BsYW50xLFzxLE=?=\r\n\
 Date: Fri, 09 Oct 2026 10:00:00 +0000\r\n\
-Message-ID: <first-{tag}@example.net>\r\n\
+Message-ID: <first-{tag}@sender.test>\r\n\
 MIME-Version: 1.0\r\n\
 Content-Type: text/plain; charset=utf-8\r\n\
 \r\n\
@@ -187,13 +187,13 @@ G\u{fc}nayd\u{131}n,\r\n\
 .a line that starts with a dot\r\n"
     );
     let reply = format!(
-        "From: caglar@example.net\r\nTo: {address}\r\nSubject: Re: hi\r\n\
-Message-ID: <reply-{tag}@example.net>\r\nIn-Reply-To: <first-{tag}@example.net>\r\n\r\nok\r\n"
+        "From: caglar@sender.test\r\nTo: {address}\r\nSubject: Re: hi\r\n\
+Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\r\n\r\nok\r\n"
     );
 
     let mut smtp = Smtp::connect(&smtp_address);
-    assert_eq!(smtp.command("EHLO sender.example.net"), 250);
-    assert_eq!(smtp.command("MAIL FROM:<caglar@example.net>"), 250);
+    assert_eq!(smtp.command("EHLO sender.sender.test"), 250);
+    assert_eq!(smtp.command("MAIL FROM:<caglar@sender.test>"), 250);
     // Case and a +tag do not matter; an unknown address is refused at RCPT
     // by the hook, before any data is sent.
     assert_eq!(
@@ -210,10 +210,10 @@ Message-ID: <reply-{tag}@example.net>\r\nIn-Reply-To: <first-{tag}@example.net>\
     );
     assert_eq!(smtp.data(first.as_bytes()), 250);
     // The same message again (a mailing-list copy) is accepted, not stored.
-    assert_eq!(smtp.command("MAIL FROM:<caglar@example.net>"), 250);
+    assert_eq!(smtp.command("MAIL FROM:<caglar@sender.test>"), 250);
     assert_eq!(smtp.command(&format!("RCPT TO:<{address}>")), 250);
     assert_eq!(smtp.data(first.as_bytes()), 250);
-    assert_eq!(smtp.command("MAIL FROM:<caglar@example.net>"), 250);
+    assert_eq!(smtp.command("MAIL FROM:<caglar@sender.test>"), 250);
     assert_eq!(smtp.command(&format!("RCPT TO:<{address}>")), 250);
     assert_eq!(smtp.data(reply.as_bytes()), 250);
     assert_eq!(smtp.command("QUIT"), 221);
@@ -233,14 +233,14 @@ Message-ID: <reply-{tag}@example.net>\r\nIn-Reply-To: <first-{tag}@example.net>\
     );
     let first_row = got
         .iter()
-        .find(|m| m["messageId"] == format!("first-{tag}@example.net"))
+        .find(|m| m["messageId"] == format!("first-{tag}@sender.test"))
         .expect("first message");
     let reply_row = got
         .iter()
-        .find(|m| m["messageId"] == format!("reply-{tag}@example.net"))
+        .find(|m| m["messageId"] == format!("reply-{tag}@sender.test"))
         .expect("reply");
     assert_eq!(first_row["subject"], "Çarşamba toplantısı");
-    assert_eq!(first_row["from"]["address"], "caglar@example.net");
+    assert_eq!(first_row["from"]["address"], "caglar@sender.test");
     assert_eq!(first_row["from"]["name"], "Çağlar");
     assert_eq!(first_row["to"][0]["address"], address.as_str());
     assert_eq!(first_row["protection"], "zero_access");
@@ -323,8 +323,8 @@ Message-ID: <reply-{tag}@example.net>\r\nIn-Reply-To: <first-{tag}@example.net>\
     };
     let rcpt = |expected: u16| {
         let mut smtp = Smtp::connect(&smtp_address);
-        assert_eq!(smtp.command("EHLO sender.example.net"), 250);
-        assert_eq!(smtp.command("MAIL FROM:<caglar@example.net>"), 250);
+        assert_eq!(smtp.command("EHLO sender.sender.test"), 250);
+        assert_eq!(smtp.command("MAIL FROM:<caglar@sender.test>"), 250);
         assert_eq!(smtp.command(&format!("RCPT TO:<{address}>")), expected);
         assert_eq!(smtp.command("QUIT"), 221);
     };
@@ -734,4 +734,203 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
 
 fn send_result(response: reqwest::blocking::Response) -> Value {
     response.json().unwrap()
+}
+
+/// Sends a plain message from `user` to `to` (outside addresses get the
+/// plaintext too), as the browser does.
+fn send_plain(
+    c: &Client,
+    base: &str,
+    user: &User,
+    from: &Address,
+    to: &[String],
+    body: &str,
+) -> reqwest::blocking::Response {
+    let domain = from.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: safety\r\nMessage-ID: <{message_id}>\r\n\r\n{body}\r\n",
+        from.address,
+        to.join(", ")
+    );
+    let split =
+        mail_key::encrypt_split(&[&from.public_key], &from.secret_key, mime.as_bytes()).unwrap();
+    let mut parts = vec![
+        (
+            "meta",
+            serde_json::to_vec(&json!({
+                "to": to.iter().map(|a| json!({ "address": a })).collect::<Vec<_>>(),
+                "subject": "safety",
+                "messageId": message_id,
+                // Sending to yourself takes your own key packet as a recipient too.
+                "keyPackets": if to.contains(&from.address) {
+                    json!({ "self": b64(&split.key_packets[0]), from.address.clone(): b64(&split.key_packets[0]) })
+                } else {
+                    json!({ "self": b64(&split.key_packets[0]) })
+                },
+            }))
+            .unwrap(),
+        ),
+        ("data", split.data_packet),
+    ];
+    if to.iter().any(|a| !a.ends_with(&format!("@{domain}"))) {
+        parts.push(("mime", mime.into_bytes()));
+    }
+    bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        .multipart(form(parts))
+        .send()
+        .unwrap()
+}
+
+fn code(response: reqwest::blocking::Response) -> (u16, String) {
+    let status = response.status().as_u16();
+    let body: Value = response.json().unwrap_or(Value::Null);
+    (
+        status,
+        body["code"].as_str().unwrap_or_default().to_string(),
+    )
+}
+
+#[test]
+fn sending_safety() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut parts = admin.splitn(3, ':');
+    let (email, username, password) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let admin = common::admin_token(&c, &base, email, password, username);
+    let status = |user: &User| -> Value {
+        bearer(c.get(format!("{base}/api/mail/sending")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+
+    // A new account: 50 outside recipients a day.
+    let user = register(&c, &base);
+    let me = set_up_address(&c, &base, &user);
+    let now = status(&user);
+    assert_eq!(now["newAccount"], true);
+    assert_eq!(now["perDay"], 50);
+    let many: Vec<String> = (0..51).map(|i| format!("r{i}@outside.test")).collect();
+    assert_eq!(
+        code(send_plain(&c, &base, &user, &me, &many, "too many")),
+        (429, "sendLimit".into())
+    );
+    let r = send_plain(&c, &base, &user, &me, &["one@outside.test".into()], "hello");
+    assert_eq!(r.status(), 200, "send: {}", r.text().unwrap_or_default());
+    assert_eq!(status(&user)["sentDay"], 1);
+
+    // Paused by an administrator: nothing goes outside, Kutup mail still flows.
+    let update = |target: &User, body: Value| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/users/{}/mail-sending", target.id)),
+            &admin,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), 204, "admin update");
+    };
+    update(&user, json!({ "paused": true }));
+    assert_eq!(status(&user)["paused"], "admin");
+    assert_eq!(
+        code(send_plain(
+            &c,
+            &base,
+            &user,
+            &me,
+            &["two@outside.test".into()],
+            "paused"
+        )),
+        (403, "sendingPaused".into())
+    );
+    assert_eq!(
+        send_plain(
+            &c,
+            &base,
+            &user,
+            &me,
+            std::slice::from_ref(&me.address),
+            "to myself"
+        )
+        .status(),
+        200
+    );
+    update(
+        &user,
+        json!({ "paused": false, "perDay": 1000, "perHour": 1000 }),
+    );
+    assert_eq!(status(&user)["paused"], Value::Null);
+    assert_eq!(status(&user)["perDay"], 1000);
+
+    // Ten recipients that do not exist: Stalwart's report comes back and
+    // pauses the account for its bounces.
+    let bouncer = register(&c, &base);
+    let bouncer_address = set_up_address(&c, &base, &bouncer);
+    let missing: Vec<String> = (0..10).map(|i| format!("gone{i}@bounce.test")).collect();
+    assert_eq!(
+        send_plain(&c, &base, &bouncer, &bouncer_address, &missing, "hello").status(),
+        200
+    );
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while status(&bouncer)["paused"] != "bounces" && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    assert_eq!(status(&bouncer)["paused"], "bounces");
+    // The administrator sees it, paused and flagged, with its bounces.
+    let senders: Value = bearer(
+        c.get(format!("{base}/api/admin/mail/senders?attention=true")),
+        &admin,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let row = senders
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["userId"] == bouncer.id.as_str())
+        .expect("paused sender listed");
+    assert_eq!(row["pausedReason"], "bounces");
+    assert_eq!(row["flagReason"], "bounces");
+    assert!(row["bouncesWeek"].as_i64().unwrap() >= 10);
+    assert_eq!(row["sentWeek"], 10);
+    // Resuming clears the pause; the flag stays until cleared.
+    update(&bouncer, json!({ "paused": false }));
+    assert_eq!(status(&bouncer)["paused"], Value::Null);
+
+    // Role addresses: nobody may register them, and postmaster@ reaches an
+    // administrator (here one with an address key).
+    let reserved = c
+        .post(format!("{base}/api/auth/register"))
+        .json(&json!({ "email": "postmaster@example.com", "username": "postmaster" }))
+        .send()
+        .unwrap();
+    assert_eq!(reserved.status(), 400);
+    let Ok(smtp_address) = std::env::var("KUTUP_LIVE_SMTP") else {
+        return;
+    };
+    let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
+        .json(&json!({ "isAdmin": true }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    let domain = me.address.split_once('@').unwrap().1.to_string();
+    let mut smtp = Smtp::connect(&smtp_address);
+    assert_eq!(smtp.command("EHLO reporter.sender.test"), 250);
+    assert_eq!(smtp.command("MAIL FROM:<reporter@sender.test>"), 250);
+    assert_eq!(smtp.command(&format!("RCPT TO:<postmaster@{domain}>")), 250);
+    assert_eq!(smtp.command("QUIT"), 221);
 }

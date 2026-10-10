@@ -161,7 +161,10 @@
     "forwardedDate": "Tarih: {{date}}",
     "forwardedSubject": "Konu: {{subject}}",
     "addContactOffer": "{{address}} kişilerinize eklensin mi?",
-    "addContact": "Ekle"
+    "addContact": "Ekle",
+    "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
+    "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
+    "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",

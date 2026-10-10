@@ -15,6 +15,7 @@ const ACTION_KEYS: Record<string, string> = {
   'user.wipe': 'userWipe',
   'settings.update': 'settingsUpdate',
   'maps.settings.update': 'mapsSettingsUpdate',
+  'mail.sending.update': 'mailSendingUpdate',
   'federation.policy.update': 'federationPolicyUpdate',
   'federation.rule.upsert': 'federationRuleUpsert',
   'federation.rule.delete': 'federationRuleDelete',

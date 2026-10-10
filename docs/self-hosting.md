@@ -926,6 +926,21 @@ has signed in to the Account app once, which creates its address key.
 
    Stalwart sends over IPv4 only, so no IPv6 PTR is needed.
 
+**Sending safety.** One account sending spam can get the server's address
+blocklisted, and then nobody's mail arrives. Kutup limits mail to outside
+addresses per account (100 recipients an hour and 500 a day, and 50 a day in
+an account's first week: `MAIL_SEND_RECIPIENTS_PER_HOUR`, `…_PER_DAY`,
+`MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), pauses an
+account whose mail bounces too often, and shows who sends how much under
+Administration → Mail sending, where an account can be paused, resumed or
+given its own limits. `postmaster@` and `abuse@` are delivered to the
+administrator: read them. Before the MX switch, register the domain with
+[Google Postmaster Tools](https://postmaster.google.com) and
+[Microsoft SNDS](https://sendersupport.olc.protection.outlook.com/snds/) so
+complaints and reputation reach you. Stalwart's spam filter does not score
+outgoing mail: its rules judge the connection more than the content, and
+refused ordinary mail in tests.
+
 Stalwart keeps its queue (mail not yet handed over) and its DKIM keys in the
 `stalwart_data` volume. Back it up with the rest; losing it means
 publishing new DKIM records.

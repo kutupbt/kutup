@@ -123,6 +123,25 @@ export function useFolder(folder: FolderId, q = '') {
   })
 }
 
+/** Your limits on mail to outside addresses, and whether it is paused. */
+export interface SendingStatus {
+  perHour: number
+  perDay: number
+  sentHour: number
+  sentDay: number
+  /** The lower limits of an account's first week apply. */
+  newAccount: boolean
+  paused: 'admin' | 'bounces' | 'spam' | null
+}
+
+export function useSendingStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['mail', 'sending'],
+    enabled,
+    queryFn: async () => (await api.get<SendingStatus>('/mail/sending')).data,
+  })
+}
+
 export function useCounts() {
   return useQuery({
     queryKey: countsKey,

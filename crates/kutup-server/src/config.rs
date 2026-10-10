@@ -60,6 +60,10 @@ pub struct Config {
     /// one compromised account cannot burn the server's reputation.
     pub mail_send_per_hour: i64,
     pub mail_send_per_day: i64,
+    /// An account's first days, and the outside recipients a day it may
+    /// send to in them (most abuse comes from new accounts).
+    pub mail_new_account_days: i64,
+    pub mail_new_account_per_day: i64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -301,6 +305,8 @@ impl Config {
             mail_submission_addr: get_env("MAIL_SUBMISSION_ADDR", "stalwart:2587"),
             mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
             mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
+            mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
+            mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),

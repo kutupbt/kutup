@@ -600,6 +600,7 @@ fn build_router(state: AppState) -> Router {
             post(handlers::mail::delete_messages),
         )
         .route("/api/mail/counts", get(handlers::mail::counts))
+        .route("/api/mail/sending", get(handlers::mail_sending::own_status))
         .route("/api/mail/threads/:id", get(handlers::mail::thread))
         .route(
             "/api/mail/drafts",
@@ -1640,6 +1641,14 @@ fn build_router(state: AppState) -> Router {
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
                 .route("/api/admin/stats", get(admin::get_stats))
+                .route(
+                    "/api/admin/mail/senders",
+                    get(handlers::mail_sending::senders),
+                )
+                .route(
+                    "/api/admin/users/:id/mail-sending",
+                    get(handlers::mail_sending::one).put(handlers::mail_sending::update),
+                )
                 .route("/api/admin/activity", get(admin::activity))
                 .route("/api/admin/activity/export", get(admin::activity_export))
                 .route(
