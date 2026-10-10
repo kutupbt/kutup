@@ -3,7 +3,7 @@
 
 import { isAxiosError } from 'axios'
 import { loadAppDirectory } from './apps'
-import { consumeFork, hasForkInLocation, pendingForkReturnTo, requestFork, type ForkChild } from './fork'
+import { consumeFork, hasForkInLocation, pendingForkReturnTo, requestFork, UnrequestedForkError, type ForkChild } from './fork'
 import { restoreSession } from './persist'
 
 export type ChildBootResult =
@@ -38,6 +38,8 @@ function askAccount(app: ForkChild, returnTo?: string): ChildBootResult {
  *
  * A fork that cannot be redeemed (reloaded link, expired after 60 s) asks for
  * a fresh one; repeated failures throw rather than bounce between origins.
+ * A fork this tab never asked for is ignored: the app starts as if it were
+ * not there, with this browser's own session or a fresh sign-in.
  * Network failures throw with any stored session intact.
  */
 export function bootChildApp(app: ForkChild): Promise<ChildBootResult> {
@@ -62,15 +64,7 @@ let nextTaken = false
 let booting: Promise<ChildBootResult> | null = null
 
 async function boot(app: ForkChild): Promise<ChildBootResult> {
-  if (!hasForkInLocation()) {
-    // The app origins and the stored session are independent: both at once.
-    const [, restored] = await Promise.all([loadAppDirectory(), restoreSession()])
-    if (restored === 'restored') {
-      sessionStorage.removeItem(ATTEMPTS_KEY)
-      return { kind: 'ready' }
-    }
-    return askAccount(app)
-  }
+  if (!hasForkInLocation()) return withoutFork(app)
   await loadAppDirectory()
   // Kept for a retry: the link that was asked for, not this /login page.
   const returnTo = pendingForkReturnTo()
@@ -79,9 +73,22 @@ async function boot(app: ForkChild): Promise<ChildBootResult> {
     sessionStorage.removeItem(ATTEMPTS_KEY)
     return { kind: 'ready', next }
   } catch (error) {
+    // Someone else's link: as if it were not there, landing on the home.
+    if (error instanceof UnrequestedForkError) return withoutFork(app, '/')
     if (isAxiosError(error) && !error.response) throw error
     return askAccount(app, returnTo)
   }
+}
+
+/** This origin's stored session, or else a fork from the account app. */
+async function withoutFork(app: ForkChild, next?: string): Promise<ChildBootResult> {
+  // The app origins and the stored session are independent: both at once.
+  const [, restored] = await Promise.all([loadAppDirectory(), restoreSession()])
+  if (restored === 'restored') {
+    sessionStorage.removeItem(ATTEMPTS_KEY)
+    return next ? { kind: 'ready', next } : { kind: 'ready' }
+  }
+  return askAccount(app, next)
 }
 
 /** Test seam: forget the page load's start. */
