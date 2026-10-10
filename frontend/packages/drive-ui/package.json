@@ -15,7 +15,7 @@
     "@kutup/i18n": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "lucide-react": "^1.8.0",
     "react-i18next": "^17.0.4",
     "sonner": "^2.0.7",
