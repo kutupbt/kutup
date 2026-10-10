@@ -1,6 +1,6 @@
 # Drive identity pins
 
-**Status:** planned 2026-10-10; built on branch `fix/drive-identity-pins`.
+**Status:** built 2026-10-10 on branch `fix/drive-identity-pins` (slices 1–5); the items under "Later" remain.
 
 ## Problem
 
@@ -74,11 +74,12 @@ over these bytes, plus `incarnationId == hash(authority)`. Vectors in
   first-login setup, checked against the stored keys before storage.
 - `PUT /api/auth/drive-key-binding`: an account made before this signs its
   binding at its next sign-in (the account app does it).
-- Every response that hands out someone's Drive keys also hands out
-  `accountAuthorityPublicKey` and `driveKeyBinding`: person lookups, named
-  share rows (sender, owner), file share rows (sharer, owner), access lists
-  (members), and the federated account lookup, whose remote server returns
-  the remote account's binding (`kutup-federation-proto`).
+- The person lookups (`GET /api/users/by-email/:account`, and the federated
+  `GET /api/drive/federation/users/:username`, whose remote server answers
+  for its own account) hand out `accountAuthorityPublicKey` and
+  `driveKeyBinding`. Share rows keep carrying only the keys they were made
+  with: the client looks the person up and checks those keys against the
+  binding, so one lookup per person serves every row.
 
 ### 3. Identity pins (`kutup-crypto::identity_pins`)
 

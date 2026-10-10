@@ -573,9 +573,43 @@ Look up another local user's registered Drive identity (used when sharing a coll
   "account": "bob@example.com",
   "driveHpkePublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
-  "driveSigningPublicKey": "<canonical base64, 32 bytes>"
+  "driveSigningPublicKey": "<canonical base64, 32 bytes>",
+  "accountAuthorityPublicKey": "<canonical base64, 32 bytes>",
+  "driveKeyBinding": "<canonical base64, 64 bytes>"
 }
 ```
+
+`driveKeyBinding` is the account authority's signature over the account's
+address and Drive keys (`kutup_crypto::drive_key_binding`); it is absent for an
+account that has not signed one yet. Clients check it and pin the authority
+(docs/plans/drive-identity-pins.md); the federated lookup
+(`GET /api/drive/federation/users/:username`) returns the same two fields.
+
+### PUT /api/user/drive-key-binding
+
+An account made before Drive key bindings stores its own (the account app does
+this at sign-in when `GET /api/user/me` says `hasDriveKeyBinding: false`).
+Checked against the account's stored keys and address; `400` when it does not
+match, `409` before the account has keys. Body: `{ "driveKeyBinding": "<base64>" }`.
+Registration and first-login setup take the same field.
+
+**Auth:** Bearer JWT · **Response:** `204`
+
+### GET /api/user/identity-pins · PUT /api/user/identity-pins
+
+The account's pins on other accounts' authorities: one list sealed under a key
+derived from its master key (`kutup_crypto::identity_pins`), opaque to the
+server, shared by every app of the account.
+
+**Auth:** Bearer JWT
+
+**Body (PUT) and response:** `{ "revision": 3, "envelope": "<canonical base64>" }`
+
+`GET` answers `404` before the first list. A `PUT` must carry the stored
+revision plus one (the first is 1), else `409` with
+`{ "code": "revision_conflict", "revision": <stored> }`: the client merges with
+the stored list and tries again. The revision is authenticated inside the
+envelope, and clients remember the highest they have seen.
 
 
 ### GET /api/account/ui-preferences · PUT /api/account/ui-preferences

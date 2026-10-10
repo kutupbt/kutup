@@ -849,6 +849,18 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
 - The CLI has no Replace for a taken name (it skips the same file, and
   `--keep-both` keeps both).
 
+### Drive · identity pins: what is left
+
+Drive checks other people's keys against their authority's binding and pins
+the authority in a synced list (docs/plans/drive-identity-pins.md). Still to do:
+
+- Chat reads and writes the same synced pins instead of its origin's own, so
+  one "trusted" or "changed" holds in every app.
+- Comparing an identity in person (Chat's safety number or QR code) marks the
+  pin `verified` for Drive too; Drive shows a verified mark.
+- The CLI checks bindings and uses the synced pins when it shares and opens
+  shares.
+
 ### Drive · share dialogs: what is left
 
 Done (October 2026): each person in the file and folder share dialogs has a
