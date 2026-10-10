@@ -1,6 +1,6 @@
 # Mail groups
 
-**Status:** plan, for agreement before code (2026-10-10). Follows Mail C1–C3
+**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a done; G1b–G1d next. Follows Mail C1–C3
 ([`mail.md`](mail.md)); its own pull request after #87 → #88 → #90.
 
 ## Goal
@@ -241,7 +241,21 @@ log.
 
 1. **G1a data and delivery:** migration 088, group pools, distribution list
    delivery from outside and from Kutup users, role groups with the
-   administrator fallback, RCPT rules for who may post, security.txt.
+   administrator fallback, RCPT rules for who may post, security.txt. Done:
+   migration 089 (088 is another branch's); `mail/groups.rs` (find,
+   receivers with the administrator fallback, post policies, group storage,
+   one stored data packet per message with a key packet per member,
+   chunks of 1000, release of copies nobody holds); the RCPT hook and LMTP
+   answer for groups (550 5.7.1 for a sender the group does not take, 452
+   when full, 550 5.2.1 with nobody to receive); sending from Kutup with a
+   key packet per member (`GET /api/mail/groups/recipients`, `409
+   groupChanged`, members reached directly get one copy); list copies
+   charged to the group in usage, reconcile and deletion; the groups API
+   for administrators, owners and managers with audit entries; usernames and
+   group names kept apart; `security.txt`. The mail gate covers creation and
+   names, member rights, delivery from outside and from Kutup, duplicates,
+   post policy, a full group, release on delete, the role fallback and
+   security.txt.
 2. **G1b shared mailboxes:** group keys, shares, server-signed lists, WKD,
    delivery, shared rows, sending as the group, key rotation on removal.
 3. **G1c apps:** the administration page, Mail's shared mailboxes, From
