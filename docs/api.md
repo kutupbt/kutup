@@ -1165,7 +1165,16 @@ The role addresses are system groups: they take mail from anyone, cannot be
 deleted, and while none of their members can receive mail it goes to every
 active administrator.
 
-- `GET /api/mail/groups` — the caller's groups, with `myRole`.
+- `GET /api/mail/groups` — the caller's groups, with `myRole` and
+  `myCanSendAs`.
+- `GET /api/mail/accounts?address=` — `{ "userId", "username", "address" }`
+  of the active account at a Kutup address with a mail key, so members are
+  added by address (there is no user search). Rate-limited like user lookup.
+- `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or name
+  starts with `q` and that take the caller's mail, for the composer's
+  suggestions.
+- Message rows carry `groupAddress` (the list or shared mailbox a copy came
+  through) and `sentBy` (who sent a shared mailbox's message).
 - `GET /api/mail/groups/:id` — `{ "group", "members": [{ "userId", "username",
   "address", "role", "canSendAs", "active" }], "goesToAdministrators" }`, for
   members and administrators.

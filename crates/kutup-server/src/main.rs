@@ -707,6 +707,16 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/mail/groups", get(handlers::mail_groups::my_groups))
         .route(
+            "/api/mail/accounts",
+            get(handlers::mail_groups::resolve_account)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/mail/groups/directory",
+            get(handlers::mail_groups::directory)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
             "/api/mail/groups/recipients",
             get(handlers::mail_groups::recipients)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),

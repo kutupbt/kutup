@@ -28,7 +28,8 @@
     "adminMaps": "Maps",
     "storage": "Storage",
     "keys": "Encryption keys",
-    "mailSending": "Mail sending"
+    "mailSending": "Mail sending",
+    "mailGroups": "Mail groups"
   },
   "auth": {
     "fields": {
@@ -759,6 +760,44 @@
       "serverLimit": "Server's limit",
       "saved": "Saved",
       "cardHint": "What this account sends to outside addresses. Pause it here, or give it its own limits."
+    },
+    "mailGroups": {
+      "title": "Mail groups",
+      "description": "Distribution lists and shared mailboxes, each with its own storage. The role addresses are always here: give them the people who read them.",
+      "create": "New group",
+      "emptyTitle": "No groups",
+      "emptyDescription": "Create a distribution list or a shared mailbox.",
+      "address": "Address",
+      "kind": "Kind",
+      "members": "Members",
+      "storage": "Storage",
+      "quota": "Storage",
+      "deleteOne": "Delete {{address}}",
+      "role": {
+        "postmaster": "delivery problems",
+        "abuse": "spam and abuse complaints",
+        "security": "vulnerability reports",
+        "hostmaster": "DNS"
+      },
+      "deleteTitle": "Delete {{address}}?",
+      "deleteShared": "The shared mailbox and all its mail are deleted, and its address becomes free. This cannot be undone.",
+      "deleteList": "The list is deleted and its address becomes free. Members keep the mail they already received.",
+      "delete": "Delete group",
+      "quotaTitle": "Storage of {{address}}",
+      "quotaDescription": "The group's mail is counted here, never against its members.",
+      "quotaGib": "Storage (GB)",
+      "createTitle": "New group",
+      "createDescription": "An address of this server for a team.",
+      "name": "Name before the @",
+      "nameHint": "Its address: {{address}}",
+      "kindHint": {
+        "list": "Each member gets the mail in their own inbox and handles it on their own.",
+        "shared": "One mailbox the members read and answer together; once someone reads a message, it is read for everyone. Its key is made now, in this browser."
+      },
+      "owners": "Owners",
+      "addOwner": "Add owner",
+      "created": "Group created.",
+      "createFailed": "The group could not be created."
     }
   }
 }

@@ -26,6 +26,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openComposer } from './composerState'
+import { useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
 import { ThreadView } from './ThreadView'
 
@@ -58,8 +59,11 @@ export function MailboxPage() {
   const q = params.get('q') ?? ''
   const navigate = useNavigate()
   const account = useMailAccount()
-  const folder = (KNOWN.has(folderParam) ? folderParam : 'inbox') as FolderId
-  const list = useFolder(folder, q)
+  const scope = useMailboxScope()
+  const { base, group } = scope
+  // A shared mailbox has no drafts: they are each member's own.
+  const folder = (KNOWN.has(folderParam) && !(group && folderParam === 'drafts') ? folderParam : 'inbox') as FolderId
+  const list = useFolder(folder, q, group)
   const update = useUpdateMessages()
   const remove = useDeleteMessages()
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -80,27 +84,27 @@ export function MailboxPage() {
       const index = messages.findIndex((m) => m.threadId === threadId)
       if (event.key === 'n') {
         event.preventDefault()
-        openComposer({ kind: 'new' })
+        openComposer({ kind: 'new', fromGroup: group })
       } else if (event.key === '/') {
         event.preventDefault()
         document.querySelector<HTMLInputElement>('[data-mail-search]')?.focus()
       } else if ((event.key === 'j' || event.key === 'ArrowDown') && messages.length) {
         event.preventDefault()
         const next = messages[Math.min(index + 1, messages.length - 1)]
-        void navigate(`/${folder}/${next.threadId}${search}`)
+        void navigate(`${base}/${folder}/${next.threadId}${search}`)
       } else if ((event.key === 'k' || event.key === 'ArrowUp') && messages.length) {
         event.preventDefault()
         const previous = messages[Math.max(index - 1, 0)]
-        void navigate(`/${folder}/${previous.threadId}${search}`)
+        void navigate(`${base}/${folder}/${previous.threadId}${search}`)
       } else if (event.key === 'Escape' && threadId) {
-        void navigate(`/${folder}${search}`)
+        void navigate(`${base}/${folder}${search}`)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [messages, threadId, folder, search, navigate])
+  }, [messages, threadId, folder, search, navigate, base, group])
 
-  if (!KNOWN.has(folderParam)) return <Navigate to="/inbox" replace />
+  if (!KNOWN.has(folderParam) || (group && folderParam === 'drafts')) return <Navigate to={`${base}/inbox`} replace />
 
   if (account.isError) {
     return (
@@ -122,7 +126,7 @@ export function MailboxPage() {
   function apply(change: Omit<MessageChange, 'ids'>, done?: string) {
     const ids = chosen.map((m) => m.id)
     update.mutate(
-      { ids, ...change },
+      { ids, ...change, ...(group ? { group } : {}) },
       {
         onSuccess: () => {
           setSelected(new Set())
@@ -219,7 +223,7 @@ export function MailboxPage() {
                     }
                     aria-label={t('list.select', { subject: message.subject || t('list.noSubject') })}
                   />
-                  <Link to={`/${folder}/${message.threadId}${search}`} className="min-w-0 flex-1 py-1" aria-current={open ? 'true' : undefined}>
+                  <Link to={`${base}/${folder}/${message.threadId}${search}`} className="min-w-0 flex-1 py-1" aria-current={open ? 'true' : undefined}>
                     <span className="flex items-center gap-2">
                       <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>
                         {correspondent(message, t)}
@@ -234,6 +238,14 @@ export function MailboxPage() {
                       <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>
                         {message.subject || t('list.noSubject')}
                       </span>
+                      {message.groupAddress && !group ? (
+                        <span className="shrink-0 truncate rounded bg-muted px-1.5 text-[11px] text-muted-foreground" title={t('list.viaGroup', { address: message.groupAddress })}>
+                          {message.groupAddress.split('@')[0]}
+                        </span>
+                      ) : null}
+                      {message.sentBy ? (
+                        <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t('list.sentBy', { name: message.sentBy })}</span>
+                      ) : null}
                       {folder === 'all' || folder === 'starred' ? (
                         <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t(`folders.${message.folder}`)}</span>
                       ) : null}
@@ -244,7 +256,7 @@ export function MailboxPage() {
                     className={cn('m-1 rounded p-1 hover:bg-muted', !message.starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
                     aria-label={message.starred ? t('actions.unstar') : t('actions.star')}
                     aria-pressed={message.starred}
-                    onClick={() => update.mutate({ ids: [message.id], starred: !message.starred })}
+                    onClick={() => update.mutate({ ids: [message.id], starred: !message.starred, ...(group ? { group } : {}) })}
                   >
                     <Star className={cn('size-4', message.starred ? 'fill-status-warn text-status-warn' : 'text-muted-foreground')} />
                   </button>
@@ -269,7 +281,7 @@ export function MailboxPage() {
       {listPane}
       <div className={cn('min-h-0 min-w-0 flex-1 overflow-hidden', !threadId && 'hidden md:block')}>
         {threadId && account.data ? (
-          <ThreadView account={account.data} folder={folder} threadId={threadId} onClose={() => void navigate(`/${folder}${search}`)} />
+          <ThreadView account={account.data} folder={folder} threadId={threadId} onClose={() => void navigate(`${base}/${folder}${search}`)} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
             <Mail className="size-10" aria-hidden />
@@ -288,7 +300,7 @@ export function MailboxPage() {
         errorFallback={t('common.tryAgain')}
         onConfirm={() =>
           remove.mutate(
-            chosen.map((m) => m.id),
+            { ids: chosen.map((m) => m.id), group },
             {
               onSuccess: () => {
                 toast.success(t('toasts.deleted', { count: chosen.length }))

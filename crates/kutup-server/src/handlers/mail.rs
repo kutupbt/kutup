@@ -63,6 +63,10 @@ pub struct MailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachment_count: i32,
+    /// The distribution list or shared mailbox it came through.
+    pub group_address: Option<String>,
+    /// A shared mailbox's sent mail: the member who sent it.
+    pub sent_by: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -111,12 +115,16 @@ pub(crate) struct Row {
     in_reply_to: Option<String>,
     references_list: Vec<String>,
     attachment_count: i32,
+    group_address: Option<String>,
+    sent_by_name: Option<String>,
 }
 
 /// The columns a [`Row`] reads.
 pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, seen, starred, protection,
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
-    reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count";
+    reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count,
+    (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
+    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
 impl From<Row> for MailMessage {
     fn from(row: Row) -> Self {
@@ -144,6 +152,8 @@ impl From<Row> for MailMessage {
             in_reply_to: row.in_reply_to,
             references: row.references_list,
             attachment_count: row.attachment_count,
+            group_address: row.group_address,
+            sent_by: row.sent_by_name,
         }
     }
 }

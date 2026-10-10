@@ -1,6 +1,6 @@
 # Mail groups
 
-**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a and G1b done; G1c–G1d next. Follows Mail C1–C3
+**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a–G1c done. Follows Mail C1–C3
 ([`mail.md`](mail.md)); its own pull request after #87 → #88 → #90.
 
 ## Goal
@@ -275,7 +275,23 @@ log.
    to), writing to it from Kutup, leaving with a new key the leaver never
    gets, and deletion.
 3. **G1c apps:** the administration page, Mail's shared mailboxes, From
-   picker and group settings, Contacts suggestions.
+   picker and group settings, Contacts suggestions. Done: Account →
+   Administration → Mail groups (role addresses first with their purpose,
+   create a list or a shared mailbox, whose first key is made in the
+   administrator's browser for its owners; quotas; delete); one group dialog
+   (`@kutup/mail-core/ui/GroupDialog`) used there and in Mail → Groups for
+   members (added by address), roles, "may send as", name, description and
+   who may post, which shares a shared mailbox's keys with joining members
+   and makes a new key when someone leaves; an administrator without shares
+   can only start a mailbox over with a new key, after a warning that new
+   members then see mail from that point on. Mail shows shared mailboxes
+   under the own folders (`/g/{groupId}/{folder}`, unread counts, their
+   folders while open), opens their mail with the group keys the reader
+   holds, offers a From picker for the mailboxes one may send as (replies
+   from inside default to it), labels list copies and shows who sent a
+   shared mailbox's mail; recipient suggestions add groups the writer may
+   send to after contacts. Strings in the shared `mailGroups` namespace and
+   the apps, en and tr. Browser spec 60.
 4. **G1d gates:** the mail gate (a list with three members from outside and
    from Kutup, a full group, a role group's fallback, a shared mailbox read
    by two members, a removed member who cannot read new mail, GnuPG writing

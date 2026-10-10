@@ -46,6 +46,9 @@ pub struct MailGroup {
     pub created_at: OffsetDateTime,
     /// The caller's role in it, if a member.
     pub my_role: Option<String>,
+    /// Whether the caller may send as it (a shared mailbox's owners and
+    /// managers always may).
+    pub my_can_send_as: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -75,7 +78,9 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     g.system_role, g.storage_quota_bytes, g.storage_used_bytes,
     (SELECT COUNT(*) FROM mail_group_members c WHERE c.group_id = g.id) AS member_count,
     g.created_at,
-    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role";
+    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
+    COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
+               WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as";
 
 async fn group_row(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup> {
     sqlx::query_as(&format!(
@@ -429,7 +434,10 @@ async fn check_key_changes(
                 .with_details(json!({ "code": "newKeyNeeded" })),
         );
     }
-    // Every joining member gets every existing key.
+    // Every joining member gets every existing key, unless a new key comes
+    // with the change (someone without shares, such as an administrator who
+    // is not a member, can only start the mailbox over with a new key: then
+    // joining members read mail from now on).
     let mut shares = Vec::new();
     for key in &keys {
         let for_key: Vec<ShareInput> = input
@@ -445,7 +453,9 @@ async fn check_key_changes(
         covered.sort();
         let mut needed = added.clone();
         needed.sort();
-        if covered != needed {
+        let complete = covered == needed;
+        let partial = covered.iter().all(|id| needed.contains(id));
+        if !complete && !(input.new_key.is_some() && partial) {
             return Err(AppError::bad_request(
                 "each joining member needs a share of every group key",
             )
@@ -1200,4 +1210,114 @@ pub async fn rotate_group_key(
     )
     .await;
     Ok(Json(fingerprint))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResolveQuery {
+    address: String,
+}
+
+/// A Kutup account found by its address, to add to a group.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountRef {
+    pub user_id: Uuid,
+    pub username: String,
+    pub address: String,
+}
+
+/// `GET /api/mail/accounts?address=` — the active account with this Kutup
+/// address and a mail key (the address is public anyway, through key
+/// lookup), so a group can be given members by address.
+#[utoipa::path(
+    get,
+    path = "/api/mail/accounts",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("address" = String, Query, description = "A Kutup address")),
+    responses(
+        (status = 200, description = "The account", body = MailAccountRef),
+        (status = 404, description = "No active account with a mail key at this address"),
+    )
+)]
+pub async fn resolve_account(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(query): Query<ResolveQuery>,
+) -> AppResult<Json<MailAccountRef>> {
+    let address =
+        kutup_crypto::mail_key::canonical_address(query.address.trim().to_lowercase().as_str())
+            .map_err(|_| AppError::not_found("not found"))?;
+    sqlx::query_as(
+        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address
+           FROM mail_addresses a
+           JOIN users u ON u.id = a.user_id AND u.is_active
+          WHERE a.address = $1
+            AND EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id AND k.is_primary)",
+    )
+    .bind(&address)
+    .fetch_optional(&state.pool)
+    .await?
+    .map(Json)
+    .ok_or_else(|| AppError::not_found("not found"))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// A group the caller may write to, for address suggestions.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MailGroupEntry {
+    pub address: String,
+    pub display_name: String,
+    pub kind: String,
+}
+
+/// `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or
+/// name starts with `q` and that take the caller's mail (anyone, Kutup
+/// users, or the caller's own groups), for the composer's suggestions.
+#[utoipa::path(
+    get,
+    path = "/api/mail/groups/directory",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("q" = String, Query, description = "The start of an address or name")),
+    responses((status = 200, description = "Matching groups", body = Vec<MailGroupEntry>))
+)]
+pub async fn directory(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<DirectoryQuery>,
+) -> AppResult<Json<Vec<MailGroupEntry>>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let q: String = query.q.trim().to_lowercase().chars().take(100).collect();
+    if q.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let pattern = format!(
+        "{}%",
+        q.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    Ok(Json(
+        sqlx::query_as(
+            "SELECT g.address, g.display_name, g.kind FROM mail_groups g
+              WHERE (g.address LIKE $1 OR lower(g.display_name) LIKE $1)
+                AND (g.post_policy IN ('anyone', 'local')
+                     OR EXISTS (SELECT 1 FROM mail_group_members m
+                                 WHERE m.group_id = g.id AND m.user_id = $2
+                                   AND (g.post_policy = 'members' OR m.role IN ('owner', 'manager'))))
+              ORDER BY g.address
+              LIMIT 10",
+        )
+        .bind(pattern)
+        .bind(user_id)
+        .fetch_all(&state.pool)
+        .await?,
+    ))
 }
