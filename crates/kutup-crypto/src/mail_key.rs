@@ -753,6 +753,52 @@ pub fn message_key_id(message: &[u8]) -> Result<[u8; 8]> {
     key_packet_key_id(&message[..length])
 }
 
+/// The key IDs an OpenPGP message (armored or binary) is encrypted to, as
+/// far as a server can tell without opening it: its leading key packets,
+/// which must be followed by encrypted data. Version 6 key packets carry no
+/// key ID and are skipped; a message with none readable is still encrypted.
+/// Errors when `message` is not an encrypted OpenPGP message.
+pub fn pgp_message_key_ids(message: &[u8]) -> Result<Vec<[u8; 8]>> {
+    let not_encrypted = || CryptoError::InvalidInput("not an encrypted OpenPGP message".into());
+    let trimmed = message.trim_ascii_start();
+    let binary;
+    let mut rest: &[u8] = if trimmed.starts_with(b"-----BEGIN PGP MESSAGE-----") {
+        let mut reader = pgp::armor::Dearmor::new(std::io::BufReader::new(trimmed));
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut bytes).map_err(|_| not_encrypted())?;
+        if reader.typ != Some(pgp::armor::BlockType::Message) {
+            return Err(not_encrypted());
+        }
+        binary = bytes;
+        &binary
+    } else {
+        message
+    };
+    let mut ids = Vec::new();
+    let mut key_packets = 0;
+    loop {
+        let tag = rest
+            .first()
+            .and_then(|first| packet_tag(*first))
+            .ok_or_else(not_encrypted)?;
+        match tag {
+            TAG_PKESK => {
+                let (_, header, length) = packet_extent(rest).map_err(|_| not_encrypted())?;
+                if rest.get(header) == Some(&3) {
+                    ids.push(key_packet_key_id(&rest[..length])?);
+                }
+                key_packets += 1;
+                if key_packets > MAX_SPLIT_RECIPIENTS * 2 {
+                    return Err(not_encrypted());
+                }
+                rest = &rest[length..];
+            }
+            TAG_SEIPD | TAG_AEAD if key_packets > 0 => return Ok(ids),
+            _ => return Err(not_encrypted()),
+        }
+    }
+}
+
 /// The key ID of the subkey `public_key` is encrypted to.
 pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
     let recipient = parse_recipient(public_key)?;
@@ -765,6 +811,7 @@ pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
 const MAX_SPLIT_RECIPIENTS: usize = 100;
 const TAG_PKESK: u8 = 1;
 const TAG_SEIPD: u8 = 18;
+const TAG_AEAD: u8 = 20;
 
 fn packet_tag(first: u8) -> Option<u8> {
     match first {

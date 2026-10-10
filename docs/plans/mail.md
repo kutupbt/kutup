@@ -273,7 +273,11 @@ help pages (checked 2026-10-10):
    Autocrypt key; vectors and GnuPG interop both ways.
 2. **C3b server:** outside key lookup (WKD, Proton HKP, keys.openpgp.org),
    PGP packages in `POST /api/mail/send`, `end_to_end` on arrival for PGP
-   mail.
+   mail. The server checks each package is the same message and holds an
+   encrypted OpenPGP message, but cannot check it is encrypted to the right
+   key (a pinned key is known only to the browser). Submissions go one by
+   one, the plaintext first: a refusal of the first fails the send, a later
+   one marks its recipients `failed`.
 3. **C3c app:** per-recipient protection in the composer, PGP/MIME
    building, Autocrypt, opening and verifying PGP mail, pinning keys to
    contacts.
@@ -282,6 +286,7 @@ help pages (checked 2026-10-10):
    Proton account, documented.
 5. **C3e:** key import and export; then the MX switch from Cloudflare
    (DNS, done by the operator).
+
 ## Sending safety
 
 Decided 2026-10-10. One account sending spam can get the server's IPv4

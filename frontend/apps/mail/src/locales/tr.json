@@ -143,6 +143,7 @@
     "invalidRecipient": "{{address}} geçerli bir adres değil.",
     "unknownRecipient": "{{address}} bu sunucuda bir adres değil.",
     "notDeliveredFull": "Gönderildi, ancak {{addresses}} adresine ulaştırılamadı: depolama alanı dolu.",
+    "notSentRefused": "Gönderildi, ancak posta sunucusu {{addresses}} için reddetti.",
     "sendLimit": "Gönderme sınırına ulaştınız. Daha sonra yeniden deneyin.",
     "sendFailed": "Posta gönderilemedi.",
     "saving": "Kaydediliyor…",

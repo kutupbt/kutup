@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use kutup_crypto::mail_key::{
-    armor_public_key, decrypt, encrypt_armored_signed, generate_address_key,
-    inspect_external_public_key, verify_cleartext, verify_detached,
+    armor_public_key, decrypt, encrypt_armored_signed, encryption_key_id, generate_address_key,
+    inspect_external_public_key, pgp_message_key_ids, verify_cleartext, verify_detached,
 };
 
 const DAY: u64 = 86_400;
@@ -180,6 +180,17 @@ fn kutup_and_gnupg_exchange_signed_encrypted_mail() {
     );
     // Alice's own copy opens with her key.
     assert!(decrypt(&alice.secret_key, message.as_bytes(), None).is_ok());
+    // A server sees whom it is for, without opening it.
+    let mut ids = pgp_message_key_ids(message.as_bytes()).unwrap();
+    ids.sort();
+    let mut expected = vec![
+        encryption_key_id(&info.public_key).unwrap(),
+        encryption_key_id(&alice.public_key).unwrap(),
+    ];
+    expected.sort();
+    assert_eq!(ids, expected);
+    assert!(pgp_message_key_ids(b"Content-Type: text/plain\r\n\r\nhi").is_err());
+    assert!(pgp_message_key_ids(&dave_public).is_err());
 
     // Dave writes to Alice, signed: Kutup opens it and verifies Dave.
     let (ok, encrypted, err) = gpg(
@@ -196,6 +207,10 @@ fn kutup_and_gnupg_exchange_signed_encrypted_mail() {
         b"from dave",
     );
     assert!(ok, "dave encrypts: {err}");
+    assert_eq!(
+        pgp_message_key_ids(&encrypted).unwrap(),
+        vec![encryption_key_id(&alice.public_key).unwrap()]
+    );
     let opened = decrypt(&alice.secret_key, &encrypted, Some(&info.public_key)).unwrap();
     assert_eq!(&*opened.data, b"from dave");
     assert!(opened.signed && opened.verified);

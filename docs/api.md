@@ -1027,7 +1027,8 @@ first, at most 200 per page (default 50).
 **Auth:** Bearer JWT
 
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
-`protection` is `zero_access` (encrypted on arrival) or `end_to_end`. Pass
+`protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
+Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
 `next` as `before` for the next page; it is absent on the last. `400` for an
 unknown folder or cursor.
 
@@ -1079,17 +1080,25 @@ most 25 MB) → `{ "id", "size" }`; `GET` the list; `GET` or `DELETE`
 
 ### POST /api/mail/send
 
-Multipart: `meta` (the draft fields, plus `draftId` and `keyPackets`: base64
-key packets, `self` for your copy and one per Kutup recipient address),
-`data` (the shared data packet) and, when any recipient is outside Kutup,
-`mime` (the same message in plaintext, From you, the same Message-ID, no Bcc
-header). The server stores `key packet || data packet` for you (Sent) and
-each Kutup recipient (Inbox), hands `mime` to Stalwart for the others, and
-deletes the draft.
+Multipart: `meta` (the draft fields, plus `draftId`, `keyPackets`: base64
+key packets, `self` for your copy and one per Kutup recipient address, and
+`pgp`: `[{ "recipients": [...] }]`), `data` (the shared data packet),
+`pgp0`, `pgp1`, … (one per `pgp` entry: an RFC 3156 `multipart/encrypted`
+message for outside recipients with OpenPGP keys, To and Cc together, each
+Bcc recipient alone) and, when outside recipients without a PGP message
+remain, `mime` (the message in plaintext). Each of `mime` and the PGP
+messages must be From you with the same Message-ID and no Bcc header; a PGP
+message must hold an encrypted OpenPGP message, and `mime` is refused when
+nobody needs it. The server stores `key packet || data packet` for you
+(Sent) and each Kutup recipient (Inbox), hands `mime` and each PGP message
+to Stalwart, and deletes the draft. Your sent copy is `end_to_end` when no
+recipient got the plaintext.
 
 **Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
-status `delivered` (Kutup, end to end), `sent` (outside) or `full` (a Kutup
-user out of storage; not delivered). Errors: `409` `keyChanged` with
+status `delivered` (Kutup, end to end), `sent` (outside), `full` (a Kutup
+user out of storage; not delivered) or `failed` (refused by Stalwart after
+an earlier submission of the same send went out; the plaintext goes first,
+and its refusal fails the whole send). Errors: `409` `keyChanged` with
 `address` (fetch the key again), `422` `unknownRecipient` or `refused`, `429`
 `sendLimit` (`MAIL_SEND_RECIPIENTS_PER_HOUR`, `…_PER_DAY`: 100 and 500 outside
 recipients by default), `413` over 25 MB or quota, `503` when Stalwart is

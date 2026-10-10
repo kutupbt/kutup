@@ -143,6 +143,7 @@
     "invalidRecipient": "{{address}} is not a valid address.",
     "unknownRecipient": "{{address}} is not an address on this server.",
     "notDeliveredFull": "Sent, but not delivered to {{addresses}}: their storage is full.",
+    "notSentRefused": "Sent, but the mail server refused it for {{addresses}}.",
     "sendLimit": "You have reached the sending limit. Try again later.",
     "sendFailed": "The message could not be sent.",
     "saving": "Saving…",

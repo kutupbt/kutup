@@ -360,8 +360,10 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       )
       const results = await sendDraft(account, current(), parts)
       const full = results.filter((r) => r.status === 'full').map((r) => r.address)
+      const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
       if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
-      else toast.success(t('compose.sent'))
+      if (failed.length) toast.warning(t('compose.notSentRefused', { addresses: failed.join(', ') }))
+      if (!full.length && !failed.length) toast.success(t('compose.sent'))
       refresh()
       closeComposer()
       const first = to[0]?.address

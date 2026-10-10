@@ -345,7 +345,8 @@ export async function draftAttachmentPart(account: MailAccount, draftId: string,
 
 export interface SendRecipient {
   address: string
-  status: 'delivered' | 'sent' | 'full'
+  /** `failed`: refused by the mail server after mail to others had gone out. */
+  status: 'delivered' | 'sent' | 'full' | 'failed'
 }
 
 /** A Kutup recipient address that does not exist. */

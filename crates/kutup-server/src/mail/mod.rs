@@ -253,7 +253,13 @@ async fn record(
             thread_id: None,
             direction: "inbound",
             folder: if readable.spam { "spam" } else { "inbox" },
-            protection: "zero_access",
+            // Encrypted by its sender with OpenPGP: end to end; otherwise
+            // it came in clear and is encrypted here (zero access).
+            protection: if readable.pgp_encrypted {
+                "end_to_end"
+            } else {
+                "zero_access"
+            },
             seen: false,
             object_key: key,
             object_version: version,
