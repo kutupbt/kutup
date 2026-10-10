@@ -28,7 +28,8 @@ import {
   type SfuAccess,
   type WaitingPerson,
 } from '../callLinks/callLinks'
-import { CHAT_TOPIC, ROLES_TOPIC, SfuRoom, type SfuParticipant } from './sfuRoom'
+import type { SfuParticipant, SfuRoom } from './sfuRoom'
+import { CHAT_TOPIC, ROLES_TOPIC } from './sfuTopics'
 
 // A call through a link (docs/chat-calls.md): anyone holding the link joins,
 // with or without an account.
@@ -209,6 +210,8 @@ export class LinkCallController {
       this.patch({ phase: 'connecting' })
       this.joinedAtMs = Date.now()
       this.leftAtMs = null
+      // The SFU client (livekit) loads only when a call starts.
+      const { SfuRoom } = await import('./sfuRoom')
       const room = new SfuRoom({
         changed: () => void this.refresh(),
         disconnected: (why) => {

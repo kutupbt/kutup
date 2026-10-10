@@ -1,153 +1,169 @@
-// frontend/src/components/editors/lang.ts
-// Maps file extensions to CodeMirror 6 language extensions.
-// Extensions not listed return null (plain-text mode).
+// Maps file extensions and code-fence names to CodeMirror 6 languages.
+// Markdown (what notes are) is bundled; every other language is its own
+// chunk, loaded when a file or a fenced code block needs it
+// (docs/research/18-web-performance.md). Anything not listed is plain text.
 import { type Extension } from '@codemirror/state'
-import { Language, LanguageSupport, StreamLanguage } from '@codemirror/language'
+import { LanguageDescription, LanguageSupport, StreamLanguage, type StreamParser } from '@codemirror/language'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { javascript } from '@codemirror/lang-javascript'
-import { python } from '@codemirror/lang-python'
-import { rust } from '@codemirror/lang-rust'
-import { go } from '@codemirror/lang-go'
-import { json } from '@codemirror/lang-json'
-import { yaml } from '@codemirror/lang-yaml'
-import { html } from '@codemirror/lang-html'
-import { css } from '@codemirror/lang-css'
-import { sql } from '@codemirror/lang-sql'
-import { cpp } from '@codemirror/lang-cpp'
-import { java } from '@codemirror/lang-java'
-import { php } from '@codemirror/lang-php'
-import { xml } from '@codemirror/lang-xml'
-import { shell } from '@codemirror/legacy-modes/mode/shell'
-import { ruby } from '@codemirror/legacy-modes/mode/ruby'
-import { toml } from '@codemirror/legacy-modes/mode/toml'
-import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
-import { perl } from '@codemirror/legacy-modes/mode/perl'
-import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
-import { lua } from '@codemirror/legacy-modes/mode/lua'
-import { swift } from '@codemirror/legacy-modes/mode/swift'
 
-export function langForExtension(ext: string): Extension | null {
-  switch (ext.toLowerCase()) {
-    case 'md':
-    case 'markdown':
-      // GitHub-flavoured (tasks, strikethrough, tables), as the preview is;
-      // fenced code blocks are highlighted in their language as you type.
-      return markdown({ base: markdownLanguage, codeLanguages: languageForFence })
-    case 'js':
-    case 'mjs':
-    case 'cjs':
-    case 'jsx':
-      return javascript()
-    case 'ts':
-    case 'tsx':
-      return javascript({ typescript: true, jsx: true })
-    case 'py':
-      return python()
-    case 'rs':
-      return rust()
-    case 'go':
-      return go()
-    case 'json':
-      return json()
-    case 'yaml':
-    case 'yml':
-      return yaml()
-    case 'html':
-    case 'htm':
-      return html()
-    case 'css':
-      return css()
-    case 'sql':
-      return sql()
-    case 'c':
-    case 'h':
-    case 'cpp':
-    case 'cc':
-    case 'cxx':
-    case 'c++':
-    case 'hpp':
-    case 'hh':
-    case 'hxx':
-    case 'h++':
-      return cpp()
-    case 'java':
-      return java()
-    case 'php':
-    case 'phtml':
-      return php()
-    case 'xml':
-    case 'svg':
-    case 'xsl':
-    case 'xsd':
-      return xml()
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-    case 'fish':
-      return StreamLanguage.define(shell)
-    case 'rb':
-    case 'rake':
-    case 'gemspec':
-      return StreamLanguage.define(ruby)
-    case 'toml':
-      return StreamLanguage.define(toml)
-    case 'dockerfile':
-    case 'containerfile':
-      return StreamLanguage.define(dockerFile)
-    case 'pl':
-    case 'pm':
-      return StreamLanguage.define(perl)
-    case 'ps1':
-    case 'psm1':
-      return StreamLanguage.define(powerShell)
-    case 'lua':
-      return StreamLanguage.define(lua)
-    case 'swift':
-      return StreamLanguage.define(swift)
-    case 'txt':
-    default:
-      return null
-  }
+/** A language from a legacy (stream) mode. */
+function legacy<T>(load: () => Promise<StreamParser<T>>): () => Promise<LanguageSupport> {
+  return async () => new LanguageSupport(StreamLanguage.define(await load()))
 }
 
-/** Names a fence may give a language by, beyond the file extensions above. */
-const FENCE_NAMES: Record<string, string> = {
-  javascript: 'js',
-  node: 'js',
-  typescript: 'ts',
-  python: 'py',
-  python3: 'py',
-  rust: 'rs',
-  golang: 'go',
-  jsonc: 'json',
-  json5: 'json',
-  shell: 'sh',
-  console: 'sh',
-  shellscript: 'sh',
-  ruby: 'rb',
-  docker: 'dockerfile',
-  powershell: 'ps1',
-  perl: 'pl',
-  html5: 'html',
-  postgres: 'sql',
-  postgresql: 'sql',
-  mysql: 'sql',
-  sqlite: 'sql',
-}
+/** Every language beside Markdown, by file extension and by name. */
+export const LANGUAGES: readonly LanguageDescription[] = [
+  LanguageDescription.of({
+    name: 'javascript',
+    alias: ['js', 'node'],
+    extensions: ['js', 'mjs', 'cjs', 'jsx'],
+    load: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
+  }),
+  LanguageDescription.of({
+    name: 'typescript',
+    alias: ['ts'],
+    extensions: ['ts', 'tsx'],
+    load: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ typescript: true, jsx: true })),
+  }),
+  LanguageDescription.of({
+    name: 'python',
+    alias: ['py', 'python3'],
+    extensions: ['py'],
+    load: () => import('@codemirror/lang-python').then((m) => m.python()),
+  }),
+  LanguageDescription.of({
+    name: 'rust',
+    alias: ['rs'],
+    extensions: ['rs'],
+    load: () => import('@codemirror/lang-rust').then((m) => m.rust()),
+  }),
+  LanguageDescription.of({
+    name: 'go',
+    alias: ['golang'],
+    extensions: ['go'],
+    load: () => import('@codemirror/lang-go').then((m) => m.go()),
+  }),
+  LanguageDescription.of({
+    name: 'json',
+    alias: ['jsonc', 'json5'],
+    extensions: ['json'],
+    load: () => import('@codemirror/lang-json').then((m) => m.json()),
+  }),
+  LanguageDescription.of({
+    name: 'yaml',
+    alias: ['yml'],
+    extensions: ['yaml', 'yml'],
+    load: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
+  }),
+  LanguageDescription.of({
+    name: 'html',
+    alias: ['htm', 'html5'],
+    extensions: ['html', 'htm'],
+    load: () => import('@codemirror/lang-html').then((m) => m.html()),
+  }),
+  LanguageDescription.of({
+    name: 'css',
+    extensions: ['css'],
+    load: () => import('@codemirror/lang-css').then((m) => m.css()),
+  }),
+  LanguageDescription.of({
+    name: 'sql',
+    alias: ['postgres', 'postgresql', 'mysql', 'sqlite'],
+    extensions: ['sql'],
+    load: () => import('@codemirror/lang-sql').then((m) => m.sql()),
+  }),
+  LanguageDescription.of({
+    name: 'cpp',
+    alias: ['c', 'c++'],
+    extensions: ['c', 'h', 'cpp', 'cc', 'cxx', 'c++', 'hpp', 'hh', 'hxx', 'h++'],
+    load: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  }),
+  LanguageDescription.of({
+    name: 'java',
+    extensions: ['java'],
+    load: () => import('@codemirror/lang-java').then((m) => m.java()),
+  }),
+  LanguageDescription.of({
+    name: 'php',
+    extensions: ['php', 'phtml'],
+    load: () => import('@codemirror/lang-php').then((m) => m.php()),
+  }),
+  LanguageDescription.of({
+    name: 'xml',
+    extensions: ['xml', 'svg', 'xsl', 'xsd'],
+    load: () => import('@codemirror/lang-xml').then((m) => m.xml()),
+  }),
+  LanguageDescription.of({
+    name: 'shell',
+    alias: ['sh', 'bash', 'zsh', 'fish', 'console', 'shellscript'],
+    extensions: ['sh', 'bash', 'zsh', 'fish'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/shell').then((m) => m.shell)),
+  }),
+  LanguageDescription.of({
+    name: 'ruby',
+    alias: ['rb'],
+    extensions: ['rb', 'rake', 'gemspec'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/ruby').then((m) => m.ruby)),
+  }),
+  LanguageDescription.of({
+    name: 'toml',
+    extensions: ['toml'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/toml').then((m) => m.toml)),
+  }),
+  LanguageDescription.of({
+    name: 'dockerfile',
+    alias: ['docker', 'containerfile'],
+    extensions: ['dockerfile', 'containerfile'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/dockerfile').then((m) => m.dockerFile)),
+  }),
+  LanguageDescription.of({
+    name: 'perl',
+    alias: ['pl'],
+    extensions: ['pl', 'pm'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/perl').then((m) => m.perl)),
+  }),
+  LanguageDescription.of({
+    name: 'powershell',
+    alias: ['ps1'],
+    extensions: ['ps1', 'psm1'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/powershell').then((m) => m.powerShell)),
+  }),
+  LanguageDescription.of({
+    name: 'lua',
+    extensions: ['lua'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/lua').then((m) => m.lua)),
+  }),
+  LanguageDescription.of({
+    name: 'swift',
+    extensions: ['swift'],
+    load: legacy(() => import('@codemirror/legacy-modes/mode/swift').then((m) => m.swift)),
+  }),
+]
 
-const fenceCache = new Map<string, Language | null>()
+function byExtension(ext: string): LanguageDescription | null {
+  const lower = ext.toLowerCase()
+  return LANGUAGES.find((d) => d.extensions.includes(lower)) ?? null
+}
 
 /**
  * The language of a fenced code block (```` ```python ````), by its info
- * string's first word, or null (plain). Markdown inside Markdown stays plain.
+ * string's first word (a name or an extension), or null (plain). Markdown
+ * inside Markdown stays plain. CodeMirror loads it when the block shows.
  */
-export function languageForFence(info: string): Language | null {
+export function languageForFence(info: string): LanguageDescription | null {
   const word = info.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
-  const cached = fenceCache.get(word)
-  if (cached !== undefined) return cached
-  const ext = FENCE_NAMES[word] ?? word
-  const support = ext === 'md' || ext === 'markdown' ? null : langForExtension(ext)
-  const language = support instanceof LanguageSupport ? support.language : support instanceof Language ? support : null
-  fenceCache.set(word, language)
-  return language
+  if (!word || word === 'md' || word === 'markdown') return null
+  return LanguageDescription.matchLanguageName(LANGUAGES, word, false) ?? byExtension(word)
+}
+
+/** The editor language for a file with extension `ext`, loaded; null for plain text. */
+export async function loadLanguage(ext: string): Promise<Extension | null> {
+  const lower = ext.toLowerCase()
+  if (lower === 'md' || lower === 'markdown') {
+    // GitHub-flavoured (tasks, strikethrough, tables), as the preview is;
+    // fenced code blocks are highlighted in their language as you type.
+    return markdown({ base: markdownLanguage, codeLanguages: languageForFence })
+  }
+  const description = byExtension(lower)
+  return description ? description.load() : null
 }

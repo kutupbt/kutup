@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { deriveAccountIdentityKeys, toBase64 } from '@kutup/crypto'
-import api from '@kutup/session/client'
+import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
 
 export interface DriveIdentity {
@@ -25,8 +25,8 @@ export function useDriveIdentity() {
     queryKey: ['drive-identity', session.sessionId],
     staleTime: Infinity,
     queryFn: async (): Promise<DriveIdentity> => {
-      const [{ data }, identity] = await Promise.all([
-        api.get<{ chat?: { serverName?: string } }>('/auth/settings'),
+      const [data, identity] = await Promise.all([
+        loadServerSettings<{ chat?: { serverName?: string } }>(),
         deriveAccountIdentityKeys(toBase64(session.masterKey)),
       ])
       const serverName = data.chat?.serverName

@@ -107,6 +107,37 @@ function fillFolder(folder: Folder, files: DriveFile[], queryClient: ReturnType<
     .finally(() => filling.delete(folder.id))
 }
 
+/** The key of the account's whole listing (`GET /drive/files`); under `['files']`, so every change refreshes it. */
+export const allFilesKey = ['files', 'all'] as const
+
+/**
+ * Every file in every folder on this server the account can open, in one
+ * request instead of one per folder (`GET /drive/files`), each opened with
+ * its folder's key, grouped by folder (folders on other servers are not in
+ * it). Each folder's own listing is primed with its part.
+ */
+export async function loadAllFiles(
+  folders: Folder[],
+  queryClient?: ReturnType<typeof useQueryClient>,
+): Promise<Map<string, DriveFile[]>> {
+  const { data } = await api.get<FileRowLike[]>('/drive/files')
+  const byId = new Map(folders.filter((f) => f.key && folderLocation(f).kind === 'local').map((f) => [f.id, f]))
+  const rows = new Map<string, FileRowLike[]>()
+  for (const row of data) {
+    if (!byId.has(row.collectionId)) continue
+    rows.set(row.collectionId, [...(rows.get(row.collectionId) ?? []), row])
+  }
+  const out = new Map<string, DriveFile[]>()
+  await Promise.all(
+    [...byId.values()].map(async (folder) => {
+      const files = await Promise.all((rows.get(folder.id) ?? []).map((row) => openRow(row, folder)))
+      out.set(folder.id, files)
+      queryClient?.setQueryData(folderFilesKey(folder), files)
+    }),
+  )
+  return out
+}
+
 /** The files directly in a folder, decrypted. */
 export function useFolderFiles(folder: Folder | undefined) {
   const queryClient = useQueryClient()

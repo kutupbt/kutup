@@ -62,24 +62,26 @@ let nextTaken = false
 let booting: Promise<ChildBootResult> | null = null
 
 async function boot(app: ForkChild): Promise<ChildBootResult> {
-  await loadAppDirectory()
-  if (hasForkInLocation()) {
-    // Kept for a retry: the link that was asked for, not this /login page.
-    const returnTo = pendingForkReturnTo()
-    try {
-      const next = await consumeFork()
+  if (!hasForkInLocation()) {
+    // The app origins and the stored session are independent: both at once.
+    const [, restored] = await Promise.all([loadAppDirectory(), restoreSession()])
+    if (restored === 'restored') {
       sessionStorage.removeItem(ATTEMPTS_KEY)
-      return { kind: 'ready', next }
-    } catch (error) {
-      if (isAxiosError(error) && !error.response) throw error
-      return askAccount(app, returnTo)
+      return { kind: 'ready' }
     }
+    return askAccount(app)
   }
-  if ((await restoreSession()) === 'restored') {
+  await loadAppDirectory()
+  // Kept for a retry: the link that was asked for, not this /login page.
+  const returnTo = pendingForkReturnTo()
+  try {
+    const next = await consumeFork()
     sessionStorage.removeItem(ATTEMPTS_KEY)
-    return { kind: 'ready' }
+    return { kind: 'ready', next }
+  } catch (error) {
+    if (isAxiosError(error) && !error.response) throw error
+    return askAccount(app, returnTo)
   }
-  return askAccount(app)
 }
 
 /** Test seam: forget the page load's start. */

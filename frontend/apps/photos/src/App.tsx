@@ -1,5 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import { LoadingPanel } from '@kutup/ui/components/states'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
 import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
@@ -16,13 +18,24 @@ import { AlbumPage } from './features/albums/AlbumPage'
 import { AlbumsPage } from './features/albums/AlbumsPage'
 import { LibraryProvider } from './features/library/LibraryProvider'
 import { ArchivePage, FavouritesPage, HiddenPage } from './features/library/MarkedPages'
-import { PlacesPage } from './features/places/PlacesPage'
 import { PublicAlbumPage } from './features/public/PublicAlbumPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { TimelinePage } from './features/timeline/TimelinePage'
 import { UploadButton } from './features/upload/UploadButton'
 import { NotFoundPage } from './NotFoundPage'
+
+// The map (maplibre, about a megabyte) loads only when Places is opened.
+const PlacesPage = lazy(() => import('./features/places/PlacesPage').then((m) => ({ default: m.PlacesPage })))
+
+function Places() {
+  const { t } = useTranslation()
+  return (
+    <Suspense fallback={<LoadingPanel label={t('places.loading')} />}>
+      <PlacesPage />
+    </Suspense>
+  )
+}
 
 /** When the sign-in ends (signed out elsewhere, expired), ask the account app again. */
 function UnauthenticatedHandler() {
@@ -63,7 +76,7 @@ function SignedIn() {
         <Routes>
           <Route element={<PhotosShell primaryAction={<UploadButton />} />}>
             <Route index element={<TimelinePage />} />
-            <Route path="/places" element={<PlacesPage />} />
+            <Route path="/places" element={<Places />} />
             <Route path="/albums" element={<AlbumsPage />} />
             <Route path="/albums/:id" element={<AlbumPage />} />
             <Route path="/favourites" element={<FavouritesPage />} />

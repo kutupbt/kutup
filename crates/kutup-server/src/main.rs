@@ -705,6 +705,7 @@ fn build_router(state: AppState) -> Router {
             post(drive_federation::create_federated_share),
         )
         .route("/api/collections/:id/files", get(files::list_files))
+        .route("/api/drive/files", get(files::list_all_files))
         // --- Folder access: key history, who has access, rotation. ---
         .route("/api/collections/:id/epochs", get(folder_access::epochs))
         .route("/api/collections/:id/access", get(folder_access::access))

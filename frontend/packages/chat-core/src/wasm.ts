@@ -1,11 +1,13 @@
 import type { ChatWasmModule } from './types'
 
-// Epoch 2 escapes the pre-fix immutable browser cache used by the original
-// stable URLs. Future deployments rely on mandatory revalidation and do not
-// need an epoch bump unless the public path itself changes again.
-const RUNTIME_CACHE_EPOCH = '2'
-const MODULE_URL = `/chat-wasm/kutup_chat_core.js?runtime=${RUNTIME_CACHE_EPOCH}`
-const WASM_URL = `/chat-wasm/kutup_chat_core_bg.wasm?runtime=${RUNTIME_CACHE_EPOCH}`
+// The runtime's directory is named for its content hash (the build passes
+// it in, @kutup/config/vite), so a new build is a new URL and the files can
+// be cached for good. Without it (tests) the files are looked for directly
+// under /chat-wasm/.
+declare const __KUTUP_CHAT_WASM__: string | undefined
+const BASE = typeof __KUTUP_CHAT_WASM__ === 'string' && __KUTUP_CHAT_WASM__ ? `/chat-wasm/${__KUTUP_CHAT_WASM__}` : '/chat-wasm'
+const MODULE_URL = `${BASE}/kutup_chat_core.js`
+const WASM_URL = `${BASE}/kutup_chat_core_bg.wasm`
 let modulePromise: Promise<ChatWasmModule> | null = null
 
 /** Load and initialize the same-origin wasm-bindgen module once per page. */

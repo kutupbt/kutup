@@ -177,6 +177,7 @@
     "failed": "The details could not be saved. Try again."
   },
   "places": {
+    "loading": "Opening the map…",
     "group_one": "{{count}} photo here",
     "group_other": "{{count}} photos here",
     "mapsOffTitle": "Maps are off",

@@ -1,4 +1,5 @@
-import { cpSync, createReadStream, existsSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { cpSync, createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
@@ -13,16 +14,43 @@ export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'offic
 export type WasmModule = 'crypto' | 'chat'
 
 /**
- * The WASM runtimes are fetched from absolute paths on the page's own origin
- * (`/crypto-wasm/…`, `/chat-wasm/…`, see @kutup/crypto/rustWasm and
- * @kutup/chat-core/wasm). `pnpm build:wasm` writes them once to frontend/wasm;
- * this serves them in dev and copies them into each app's dist on build.
+ * A WASM runtime's content hash (16 hex digits): its directory's files, in
+ * name order. Missing (not built yet) is the empty string.
+ */
+export function wasmHash(module: WasmModule): string {
+  const dir = path.join(WASM_ROOT, `${module}-wasm`)
+  if (!existsSync(dir)) return ''
+  const hash = createHash('sha256')
+  for (const name of readdirSync(dir).sort()) {
+    const file = path.join(dir, name)
+    if (!statSync(file).isFile()) continue
+    hash.update(name).update('\0').update(readFileSync(file)).update('\0')
+  }
+  return hash.digest('hex').slice(0, 16)
+}
+
+/**
+ * The WASM runtimes are fetched from absolute paths on the page's own origin,
+ * `/crypto-wasm/<hash>/…` and `/chat-wasm/<hash>/…` (see @kutup/crypto/rustWasm
+ * and @kutup/chat-core/wasm), the hash being the files' own: a new build is a
+ * new URL, so they can be cached for good. The bundle learns the hashes as
+ * `__KUTUP_CRYPTO_WASM__` and `__KUTUP_CHAT_WASM__`. `pnpm build:wasm` writes
+ * the files once to frontend/wasm; this serves them in dev and copies them
+ * into each app's dist on build.
  */
 function kutupWasm(modules: WasmModule[]): Plugin {
   const dirs = modules.map((m) => `${m}-wasm`)
   let outDir = 'dist'
   return {
     name: 'kutup-wasm',
+    config() {
+      return {
+        define: {
+          __KUTUP_CRYPTO_WASM__: JSON.stringify(wasmHash('crypto')),
+          __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
+        },
+      }
+    },
     configResolved(config) {
       outDir = path.resolve(config.root, config.build.outDir)
     },
@@ -49,7 +77,8 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         if (!existsSync(src)) {
           throw new Error(`${src} is missing — run \`pnpm -C frontend build:wasm\` first`)
         }
-        cpSync(src, path.join(outDir, dir), { recursive: true })
+        const hash = wasmHash(dir === 'crypto-wasm' ? 'crypto' : 'chat')
+        cpSync(src, path.join(outDir, dir, hash), { recursive: true })
       }
     },
   }
@@ -83,7 +112,9 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
       },
     },
     optimizeDeps: { include: ['libsodium-wrappers-sumo', 'buffer'] },
-    build: { target: 'es2022', sourcemap: true },
+    // Maps are written for local debugging but not referenced from the
+    // bundles; the image leaves them out (frontend/Dockerfile).
+    build: { target: 'es2022', sourcemap: 'hidden' },
     server: {
       host: `${opts.app}.${domain}`,
       port,

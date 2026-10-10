@@ -1,5 +1,5 @@
 import { ArrowDownAZ, Clock, Plus, Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { DriveFile } from '@kutup/drive-core/model'
@@ -12,31 +12,62 @@ import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel, Spinner } from '@kutup/ui/components/states'
+import { useShownRange } from '@kutup/ui/lib/shownRange'
 import { filterDocuments, sortDocuments, useCreateDocument, useDocuments, type DocumentEntry, type DocumentOrder } from './documents'
 
-/** The picture the editor drew of the document the last time it was saved. */
+/**
+ * The picture the editor drew of the document the last time it was saved,
+ * once the card is on screen (each one is a download and a decryption), at
+ * the size Drive's cards use; the kind icon until then.
+ */
 function Preview({ file, kind }: { file: DriveFile; kind: DocumentKind }) {
+  const box = useRef<HTMLSpanElement>(null)
+  const [visible, setVisible] = useState(false)
   const [url, setUrl] = useState<string | null>(null)
-  const stamp = file.thumbnails.lg ?? file.thumbnails.sm
   useEffect(() => {
+    const el = box.current
+    if (!el || visible) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [visible])
+  const variant = file.thumbnails.sm ? 'sm' : 'lg'
+  const stamp = file.thumbnails[variant]
+  useEffect(() => {
+    if (!visible || !stamp) return
     let alive = true
     setUrl(null)
-    void thumbnailUrl(file, file.thumbnails.lg ? 'lg' : 'sm').then((u) => alive && setUrl(u))
+    void thumbnailUrl(file, variant).then((u) => alive && setUrl(u))
     return () => {
       alive = false
     }
     // The stamp changes when a new picture is stored.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.id, stamp])
-  if (url) return <img src={url} alt="" className="size-full object-cover object-top" draggable={false} />
-  return <KindIcon kind={kind} className="size-14" />
+  }, [visible, file.id, stamp])
+  return (
+    <span ref={box} className="flex size-full items-center justify-center">
+      {url ? (
+        <img src={url} alt="" className="size-full object-cover object-top" draggable={false} />
+      ) : (
+        <KindIcon kind={kind} className="size-14" />
+      )}
+    </span>
+  )
 }
 
-function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {
+function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: string; cardRef: (el: HTMLLIElement | null) => void }) {
   const { t } = useTranslation()
   const name = entry.file.name ?? t('home.unnamed')
   return (
-    <li>
+    <li ref={cardRef}>
       <a
         href={entry.href}
         data-testid="office-document"
@@ -58,6 +89,38 @@ function DocumentCard({ entry, when }: { entry: DocumentEntry; when: string }) {
         </span>
       </a>
     </li>
+  )
+}
+
+/**
+ * The documents, as cards. A long list draws only the rows near the screen
+ * (`useShownRange`, as Drive's lists do).
+ */
+function DocumentGrid({ entries, format }: { entries: DocumentEntry[]; format: (entry: DocumentEntry) => string }) {
+  const list = useRef<HTMLUListElement>(null)
+  const cards = useRef<(HTMLElement | null)[]>([])
+  const { range } = useShownRange(entries.length, true, list, cards)
+  return (
+    <ul
+      ref={list}
+      className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5"
+      data-testid="office-documents"
+      style={range.before || range.after ? { paddingTop: range.before, paddingBottom: range.after } : undefined}
+    >
+      {entries.slice(range.from, range.to).map((entry, offset) => {
+        const index = range.from + offset
+        return (
+          <DocumentCard
+            key={entry.file.id}
+            entry={entry}
+            when={format(entry)}
+            cardRef={(el) => {
+              cards.current[index] = el
+            }}
+          />
+        )
+      })}
+    </ul>
   )
 }
 
@@ -174,11 +237,7 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
             }
           />
         ) : (
-          <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5" data-testid="office-documents">
-            {shown.map((entry) => (
-              <DocumentCard key={entry.file.id} entry={entry} when={date.format(new Date(entry.file.updatedAt))} />
-            ))}
-          </ul>
+          <DocumentGrid entries={shown} format={(entry) => date.format(new Date(entry.file.updatedAt))} />
         )}
       </section>
     </PageBody>

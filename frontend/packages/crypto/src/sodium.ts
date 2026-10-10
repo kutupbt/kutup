@@ -1,13 +1,24 @@
 // libsodium-wrappers-sumo singleton — sumo build required for Argon2id.
 // Standard libsodium-wrappers does NOT include Argon2id.
-import _sodium from 'libsodium-wrappers-sumo'
+//
+// Loaded on first use, not with the page: it is about a megabyte (its WASM
+// is inlined as base64) and most pages never need it
+// (docs/research/18-web-performance.md).
+type Sodium = typeof import('libsodium-wrappers-sumo')
 
-let ready = false
+let pending: Promise<Sodium> | null = null
 
-export async function getSodium() {
-  if (!ready) {
-    await _sodium.ready
-    ready = true
+export function getSodium(): Promise<Sodium> {
+  if (!pending) {
+    pending = import('libsodium-wrappers-sumo').then(async (module) => {
+      // A CommonJS module: the bundler hands it over as `default`.
+      const sodium = ((module as { default?: Sodium }).default ?? module) as Sodium
+      await sodium.ready
+      return sodium
+    })
+    pending.catch(() => {
+      pending = null
+    })
   }
-  return _sodium
+  return pending
 }

@@ -1,12 +1,14 @@
 // One loader for Kutup-owned browser cryptography. Feature adapters expose
 // typed operations; this module owns only generated-module initialization.
 
-// Epoch 2 escapes the pre-fix immutable browser cache used by the original
-// stable URLs. Future deployments rely on mandatory revalidation and do not
-// need an epoch bump unless the public path itself changes again.
-const RUNTIME_CACHE_EPOCH = '2'
-const MODULE_URL = `/crypto-wasm/kutup_crypto_wasm.js?runtime=${RUNTIME_CACHE_EPOCH}`
-const WASM_URL = `/crypto-wasm/kutup_crypto_wasm_bg.wasm?runtime=${RUNTIME_CACHE_EPOCH}`
+// The runtime's directory is named for its content hash (the build passes
+// it in, @kutup/config/vite), so a new build is a new URL and the files can
+// be cached for good. Without it (tests) the files are looked for directly
+// under /crypto-wasm/.
+declare const __KUTUP_CRYPTO_WASM__: string | undefined
+const BASE = typeof __KUTUP_CRYPTO_WASM__ === 'string' && __KUTUP_CRYPTO_WASM__ ? `/crypto-wasm/${__KUTUP_CRYPTO_WASM__}` : '/crypto-wasm'
+const MODULE_URL = `${BASE}/kutup_crypto_wasm.js`
+const WASM_URL = `${BASE}/kutup_crypto_wasm_bg.wasm`
 
 export interface CryptoWasmModule {
   default(input?: unknown): Promise<unknown>

@@ -1,4 +1,4 @@
-import api from '@kutup/session/client'
+import { loadServerSettings } from '@kutup/session/apps'
 import type { ChatCapabilities } from './types'
 import { parseAccountAddress } from './identity'
 import { DIRECT_CHAT_SUITE, isDirectChatSuiteId } from './suites'
@@ -29,6 +29,6 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
 
 /** The server's public Chat capability advertisement (`GET /auth/settings`). */
 export async function fetchChatCapabilities(): Promise<ChatCapabilities | null> {
-  const response = await api.get<{ chat?: ChatCapabilities | null }>('/auth/settings')
-  return response.data.chat ?? null
+  const data = await loadServerSettings<{ chat?: ChatCapabilities | null }>()
+  return data.chat ?? null
 }

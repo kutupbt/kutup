@@ -140,6 +140,29 @@ assets into `public/onlyoffice/` before Vite runs, and the final Nginx image
 serves the complete editor same-origin. The asset image is not a service and
 does not run in production.
 
+In the image the client and x2t move to directories named for their versions
+(`dist/kutup-v9.4.0.131.3/`, `dist/x2t-kutup-v9.4.0.131.1/`, from their
+`.version` files) and the bridge pages are rewritten to match, so everything
+under `/onlyoffice/dist/` is cached as immutable and a new asset image is a
+new URL; the bridge pages themselves are `no-cache`. Every text file and WASM
+is stored compressed (gzip and brotli) at build time and served as it is
+(`frontend/docker/precompress.sh`, `brotli_static`/`gzip_static`): a cold
+document open downloads about 16 MB instead of 89 MB
+(docs/research/18-web-performance.md). In development (`./install-onlyoffice.sh`
+and Vite) the directories keep their plain names (`dist/v9/`, `dist/x2t/`).
+
+Opening a document overlaps its steps: while Drive downloads and decrypts the
+file, a hidden `inner.html?warm=1&type=…` frame fetches x2t and the editor's SDK
+into the browser cache (only what is not cached already); the bridge loads
+`api.js` while x2t converts; and a PDF, which opens as itself, loads x2t only
+when it is first needed (saving, thumbnails).
+
+The bridge mounts the editor again if ONLYOFFICE's frame never reports ready
+(a handshake race seen on warm reloads), but only after loading has gone quiet
+for 7 s: on a slow link the SDK alone takes minutes, and an earlier version
+that counted 7 s from the mount aborted those downloads and never opened the
+document below about 10 Mbps.
+
 The packaging repository pins immutable upstream commits and artifact hashes,
 rejects unsafe archives, verifies required files and the complete output tree,
 and publishes source metadata, licenses, modification notices, and an SPDX

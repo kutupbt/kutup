@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
+import { useShownRange, type ShownRange } from '@kutup/ui/lib/shownRange'
 import { formatBytes, formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { draggedItems, endItemDrag, startItemDrag } from './dragItems'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
@@ -109,6 +110,7 @@ export function Explorer(props: ExplorerProps) {
   const rowRefs = useRef<(HTMLElement | null)[]>([])
   const surface = useRef<HTMLDivElement>(null)
   const [dropKey, setDropKey] = useState<string | null>(null)
+  const shown = useShownRange(items.length, props.view === 'grid', surface, rowRefs)
   const marquee = useMarquee({
     surface,
     items: () => items.map((item, i) => ({ key: itemKey(item), el: rowRefs.current[i] ?? null })),
@@ -129,7 +131,7 @@ export function Explorer(props: ExplorerProps) {
     if (kept.length !== selection.size) onSelectionChange(new Set(kept))
   }, [items, selection, onSelectionChange])
 
-  const focusRow = (index: number) => rowRefs.current[index]?.focus()
+  const focusRow = (index: number) => shown.focus(index)
 
   // Ctrl/⌘+A and Escape also work when no item has focus yet (after a
   // dialog closes, or on arrival), as long as nothing else wants the keys:
@@ -324,7 +326,11 @@ export function Explorer(props: ExplorerProps) {
     // Fills the rest of the page, so the space below the last item is
     // somewhere to start a selection box or open the "new" menu.
     <div ref={surface} className="relative flex-1 pb-16" onPointerDown={marquee.onPointerDown}>
-      {props.view === 'grid' ? <GridView {...props} rowProps={rowProps} /> : <ListView {...props} rowProps={rowProps} />}
+      {props.view === 'grid' ? (
+        <GridView {...props} rowProps={rowProps} range={shown.range} />
+      ) : (
+        <ListView {...props} rowProps={rowProps} range={shown.range} />
+      )}
       {marquee.rect ? (
         <div
           aria-hidden
@@ -412,7 +418,7 @@ function SharedMark() {
   )
 }
 
-function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor, rowProps }: ExplorerProps & { rowProps: RowProps }) {
+function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor, rowProps, range }: ExplorerProps & { rowProps: RowProps; range: ShownRange }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   return (
@@ -431,7 +437,9 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
           </tr>
         </thead>
         <tbody>
-          {items.map((item, index) => {
+          {range.before > 0 ? <tr aria-hidden style={{ height: range.before }} /> : null}
+          {items.slice(range.from, range.to).map((item, offset) => {
+            const index = range.from + offset
             const selected = selection.has(itemKey(item))
             return (
               <tr
@@ -469,17 +477,25 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
               </tr>
             )
           })}
+          {range.after > 0 ? <tr aria-hidden style={{ height: range.after }} /> : null}
         </tbody>
       </table>
     </div>
   )
 }
 
-function GridView({ items, selection, actionsFor, renderPreview, rowProps }: ExplorerProps & { rowProps: RowProps }) {
+function GridView({ items, selection, actionsFor, renderPreview, rowProps, range }: ExplorerProps & { rowProps: RowProps; range: ShownRange }) {
   const { i18n } = useTranslation()
   return (
-    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
-      {items.map((item, index) => {
+    <ul
+      className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4"
+      role="grid"
+      aria-multiselectable
+      // The rows not drawn, as space (p-4 is 1rem).
+      style={range.before || range.after ? { paddingTop: `calc(1rem + ${range.before}px)`, paddingBottom: `calc(1rem + ${range.after}px)` } : undefined}
+    >
+      {items.slice(range.from, range.to).map((item, offset) => {
+        const index = range.from + offset
         const selected = selection.has(itemKey(item))
         const tile = cn(
           'group relative cursor-default select-none rounded-xl border border-border bg-card outline-none transition-colors',
