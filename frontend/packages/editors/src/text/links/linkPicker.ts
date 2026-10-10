@@ -5,7 +5,7 @@
 
 import { startCompletion, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
-import { matches, terms } from '../../../search/match'
+import { matches, terms } from '../../search'
 import { kutupLinkMarkdown } from './kutupLinks'
 import type { KutupItem } from './useKutupItems'
 

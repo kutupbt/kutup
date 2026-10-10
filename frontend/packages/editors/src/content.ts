@@ -1,8 +1,10 @@
 import { listVersions } from '@kutup/collab/api'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
-import api from '@kutup/session/client'
+import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
+import { resolveApiBase } from '@kutup/session/apiBase'
+import api, { freshAccessToken } from '@kutup/session/client'
 import { sealedAt } from '@kutup/drive-core/keyring'
-import { fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
+import { contentPath, fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { fromBase64 } from '@kutup/crypto'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { editorKindFor, extensionOf } from './editorKind'
@@ -101,4 +103,20 @@ async function remoteContent(location: FileLocation, file: DriveFile): Promise<F
   } finally {
     doc.destroy()
   }
+}
+
+/** The file's current plaintext (its latest edit, for documents), as a Blob. */
+export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSignal): Promise<Blob> {
+  if (!file.fileKey) throw new Error('file is not open')
+  const content = await currentContent(folder, file)
+  if (content.kind === 'plain') return new Blob([content.bytes as BlobPart], { type: file.mimeType })
+  const base = await resolveApiBase()
+  const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
+  const parts: BlobPart[] = []
+  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
+  for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {
+    // Blobs, not one growing buffer: the browser may keep large ones on disk.
+    parts.push(new Blob([plain as BlobPart]))
+  }
+  return new Blob(parts, { type: file.mimeType })
 }

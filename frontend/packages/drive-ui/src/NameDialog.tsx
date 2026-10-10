@@ -56,13 +56,13 @@ export function NameDialog({
   const name = value.trim()
   const problem =
     name.length === 0
-      ? t('dialogs.name.required')
+      ? t('nameDialog.required')
       : name.length > MAX_NAME
-        ? t('dialogs.name.tooLong', { max: MAX_NAME })
+        ? t('nameDialog.tooLong', { max: MAX_NAME })
         : /[/\\]/.test(name)
-          ? t('dialogs.name.slash')
+          ? t('nameDialog.slash')
           : canonicalName(name) !== canonicalName(initial) && taken?.has(canonicalName(name))
-            ? t('dialogs.name.taken')
+            ? t('nameDialog.taken')
             : null
 
   function handle(event: FormEvent) {
@@ -79,13 +79,13 @@ export function NameDialog({
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
         <form className="space-y-4" onSubmit={handle}>
-          <Field label={t('dialogs.name.label')} error={value !== initial ? (problem ?? undefined) : undefined} required>
+          <Field label={t('nameDialog.label')} error={value !== initial ? (problem ?? undefined) : undefined} required>
             {(field) => (
               <Input {...field} ref={input} value={value} onChange={(e) => setValue(e.target.value)} autoFocus autoComplete="off" />
             )}
           </Field>
           {error ? (
-            <Alert variant="error">{asNameTaken(error) ? t('dialogs.name.taken') : apiErrorMessage(error, t('dialogs.name.failed'))}</Alert>
+            <Alert variant="error">{asNameTaken(error) ? t('nameDialog.taken') : apiErrorMessage(error, t('nameDialog.failed'))}</Alert>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>

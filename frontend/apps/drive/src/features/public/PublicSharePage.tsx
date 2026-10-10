@@ -9,7 +9,7 @@ import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collect
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { isListName, stateToListJson } from '@kutup/map/list'
-import { editorKindFor } from '../editor/editorKind'
+import { editorKindFor } from '@kutup/editors/editorKind'
 import { streamDownload } from '@kutup/files/download/streamDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'

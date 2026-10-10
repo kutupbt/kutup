@@ -3,7 +3,7 @@ import { appOrigin, appUrl, newAccount, registerAccount } from '../fixtures/apps
 
 const PASSWORD = 'Deneme123*OfficeHomePassword'
 
-test('the Office home starts a document in Drive and lists it afterwards', async ({ browser }) => {
+test('the Office home starts a document in Office and lists it afterwards', async ({ browser }) => {
   test.slow()
   const account = newAccount('officehome', PASSWORD)
   const context = await browser.newContext()
@@ -14,20 +14,33 @@ test('the Office home starts a document in Drive and lists it afterwards', async
   await expect(page.getByRole('heading', { name: 'Start something new' })).toBeVisible({ timeout: 120_000 })
   await expect(page.getByText('Nothing here yet')).toBeVisible({ timeout: 60_000 })
 
-  // A new note is an ordinary Drive file: it opens in Drive's editor.
+  // A new note is an ordinary Drive file, and it opens here, in Office.
   await page.getByTestId('office-new-note').click()
-  await page.waitForURL((url) => url.origin === appOrigin('drive') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
-  const editor = page.url()
-  // Drive signs itself in through the account app first; let it settle.
-  // Opened from Office, its back button returns there, not to the folder.
-  await expect(page.getByRole('link', { name: 'Back to Office' })).toBeVisible({ timeout: 120_000 })
-  expect(page.url()).toBe(editor)
+  await page.waitForURL((url) => url.origin === appOrigin('office') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
+  const editor = new URL(page.url())
+  await expect(page.locator('.cm-content')).toBeVisible({ timeout: 60_000 })
+  // Its back button returns to the Office home.
   await page.getByRole('link', { name: 'Back to Office' }).click()
-  await page.waitForURL((url) => url.origin === appOrigin('office'), { timeout: 60_000 })
+  await page.waitForURL((url) => url.origin === appOrigin('office') && url.pathname === '/', { timeout: 60_000 })
   const cards = page.getByTestId('office-document')
   await expect(cards).toHaveCount(1, { timeout: 60_000 })
   await expect(cards).toContainText('Untitled note.md')
-  await expect(cards).toHaveAttribute('href', editor)
+  await expect(cards).toHaveAttribute('href', editor.pathname)
+
+  // One address per document: Drive opens it in Office too, and the back
+  // button there returns to the Drive folder it came from.
+  const drive = await context.newPage()
+  await drive.goto(appUrl('drive'))
+  await drive.getByText('Untitled note.md', { exact: true }).first().dblclick({ timeout: 120_000 })
+  await drive.waitForURL((url) => url.origin === appOrigin('office') && url.pathname === editor.pathname, { timeout: 60_000 })
+  await expect(drive.locator('.cm-content')).toBeVisible({ timeout: 120_000 })
+  await drive.getByRole('link', { name: 'Back to My files' }).click()
+  await drive.waitForURL((url) => url.origin === appOrigin('drive') && url.pathname === '/', { timeout: 60_000 })
+  // A link to it on Drive, from before, goes to the same address in Office.
+  await drive.goto(appUrl('drive', editor.pathname))
+  await drive.waitForURL((url) => url.origin === appOrigin('office') && url.pathname === editor.pathname, { timeout: 120_000 })
+  await expect(drive.locator('.cm-content')).toBeVisible({ timeout: 60_000 })
+  await drive.close()
 
   // The kinds in the sidebar narrow the list.
   await page.getByRole('link', { name: 'Spreadsheets' }).click()

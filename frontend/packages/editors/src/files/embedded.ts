@@ -8,7 +8,7 @@
 import { fetchAsset, uploadAsset } from '@kutup/collab/whiteboardAssets'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
 import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
-import { imageTypeOf } from '../editor/text/noteImages'
+import { imageTypeOf } from '../text/noteImages'
 
 const NOTE_ASSET = /kutup:asset\/([A-Za-z0-9-]{1,100})/g
 

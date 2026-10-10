@@ -1,4 +1,4 @@
-import { extensionOf } from '../editor/editorKind'
+import { extensionOf } from '../editorKind'
 import { thumbnailsOfText, thumbnailSourceFor } from './make'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails, type ThumbnailTarget } from '@kutup/drive-core/thumbnails'

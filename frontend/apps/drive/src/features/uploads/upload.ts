@@ -20,7 +20,7 @@ import {
 import type { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
 import type { UploadOutcome } from '@kutup/drive-ui/uploadStore'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
-import type { CreatedFile } from '../drive/embedded'
+import type { CreatedFile } from '@kutup/editors/files/embedded'
 
 /**
  * A file into a federated folder: the other server takes one multipart body,

@@ -192,5 +192,13 @@
     "label": "Suggestions from your contacts",
     "offer": "{{address}} is not in your contacts.",
     "add": "Add to contacts"
+  },
+  "nameDialog": {
+    "label": "Name",
+    "required": "Enter a name.",
+    "tooLong": "Use at most {{max}} characters.",
+    "slash": "Names cannot contain / or \\.",
+    "taken": "Something here already has that name.",
+    "failed": "The name could not be saved."
   }
 }

@@ -1,6 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
+import { FileRoute } from '@kutup/editors/FileRoute'
+import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -24,6 +27,16 @@ function FileSharesUpkeep() {
   return null
 }
 
+/** A document's new thumbnail (drawn as it is saved) shows on the home without a reload. */
+function ThumbnailRefresh() {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    setThumbnailStoredListener(() => void queryClient.invalidateQueries({ queryKey: ['files'] }))
+    return () => setThumbnailStoredListener(null)
+  }, [queryClient])
+  return null
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -31,7 +44,12 @@ export function App() {
         <Boot>
           <UnauthenticatedHandler />
           <FileSharesUpkeep />
+          <ThumbnailRefresh />
           <Routes>
+            {/* A document opens full screen, outside the Office frame: the
+                same page and address as Drive's (@kutup/editors/paths). */}
+            <Route path="/file/:cid/:fid" element={<FileRoute />} />
+            <Route path="/shared/file/:fid" element={<FileRoute shared />} />
             <Route element={<OfficeShell />}>
               <Route index element={<HomePage />} />
               <Route path="/notes" element={<HomePage kind="note" />} />

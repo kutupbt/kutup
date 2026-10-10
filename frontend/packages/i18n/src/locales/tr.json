@@ -192,5 +192,13 @@
     "label": "Kişilerinizden öneriler",
     "offer": "{{address}} kişilerinizde değil.",
     "add": "Kişilere ekle"
+  },
+  "nameDialog": {
+    "label": "Ad",
+    "required": "Bir ad girin.",
+    "tooLong": "En fazla {{max}} karakter kullanın.",
+    "slash": "Adlarda / ya da \\ bulunamaz.",
+    "taken": "Burada bu adda bir şey zaten var.",
+    "failed": "Ad kaydedilemedi."
   }
 }

@@ -50,10 +50,11 @@ NGINX
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
     # count as eval); in-tab viewers render decrypted PDFs and media from
-    # blob: URLs; Chat and collaboration use WebSockets. Drive alone may
-    # frame the editor sandbox; nothing may frame an app.
+    # blob: URLs; Chat and collaboration use WebSockets. Office (documents,
+    # PDFs) and Drive alone may frame the editor sandbox; nothing may frame
+    # an app.
     frames="'self' blob:"
-    if [ "$app" = drive ]; then frames="$frames $editor_origin"; fi
+    if [ "$app" = office ] || [ "$app" = drive ]; then frames="$frames $editor_origin"; fi
     # Mail shows a message's remote images once its reader allows them
     # (its sanitiser blocks them until then).
     images="'self' data: blob:"
@@ -113,8 +114,8 @@ NGINX
   host=$(host_of "$editor")
   # The same policy as the dev server (frontend/packages/config/vite.ts):
   # OnlyOffice needs eval and inline script, so its origin holds nothing
-  # worth stealing and only Drive may embed it.
-  csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'self' $drive; base-uri 'none'; form-action 'none'"
+  # worth stealing and only Office and Drive may embed it.
+  csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'self' $office $drive; base-uri 'none'; form-action 'none'"
   cat <<NGINX
 server {
     listen 80;

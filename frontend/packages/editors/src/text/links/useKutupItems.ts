@@ -4,7 +4,7 @@ import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import type { ItemKind } from '@kutup/drive-core/kinds'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { useDriveIndex } from '../../../search/useDriveIndex'
+import { useDriveIndex } from '../../driveIndex'
 
 /** An item a note can link to, as this reader sees it. */
 export interface KutupItem {
@@ -49,8 +49,8 @@ export function useKutupItems(enabled: boolean): KutupItems {
   const { t } = useTranslation()
   const drive = useDriveIndex(enabled)
   const shared = useSharedFiles({ enabled })
-  const myFiles = t('nav.myFiles')
-  const sharedWithMe = t('nav.shared')
+  const myFiles = t('file.myFiles')
+  const sharedWithMe = t('file.sharedWithMe')
   return useMemo(() => {
     const byId = new Map<string, KutupItem>()
     const folders: KutupItem[] = []

@@ -1,0 +1,254 @@
+{
+  "editor": {
+    "status": {
+      "connecting": "Connecting…",
+      "ready": "Live",
+      "error": "Offline — reconnecting"
+    },
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveHint": "Save the current state (Ctrl+S)",
+    "saveVersion": "Save version",
+    "saveVersionHint": "Save a named version that is kept forever",
+    "nameVersion": {
+      "title": "Name this version",
+      "description": "Named versions are kept forever and appear at the top of the history.",
+      "label": "Version name"
+    },
+    "history": "History",
+    "historyTitle": "Version history",
+    "closeHistory": "Close history",
+    "shortcutsButton": "Keyboard shortcuts",
+    "cursorColor": "Cursor colour",
+    "useColor": "Use {{color}}",
+    "customColor": "Custom colour…",
+    "colorSaveFailed": "Couldn't save your cursor colour",
+    "restoreFailed": "Couldn't restore this version",
+    "restored": "Version restored",
+    "preRestoreLabel": "Before restore, {{time}}",
+    "restoredLabel": "Restored from {{time}}",
+    "quotaSave": "Storage quota exceeded — couldn't save",
+    "mode": {
+      "label": "View",
+      "edit": "Edit",
+      "split": "Split",
+      "read": "Read"
+    },
+    "code": {
+      "copy": "Copy code",
+      "copied": "Copied"
+    },
+    "unfold": "Unfold",
+    "notePlaceholder": "Start writing… Markdown works: # headings, - lists, ``` code.",
+    "palette": {
+      "title": "Command palette",
+      "placeholder": "Type a command…",
+      "empty": "No command matches.",
+      "switcher": "Open a file or folder",
+      "switcherPlaceholder": "Find a file or folder…",
+      "livePreview": "Live preview: show the note as it reads",
+      "sourceMode": "Source mode: show plain Markdown",
+      "switcherEmpty": "Nothing by that name.",
+      "fold": "Fold at the cursor",
+      "unfold": "Unfold at the cursor",
+      "foldAll": "Fold everything",
+      "unfoldAll": "Unfold everything",
+      "groups": {
+        "view": "View",
+        "file": "File",
+        "fold": "Folding"
+      }
+    },
+    "focus": {
+      "enter": "Focus mode (Ctrl/⌘+Shift+F)",
+      "exit": "Leave focus mode (Esc)"
+    },
+    "callout": {
+      "note": "Note",
+      "abstract": "Summary",
+      "info": "Info",
+      "todo": "To do",
+      "tip": "Tip",
+      "success": "Success",
+      "question": "Question",
+      "warning": "Warning",
+      "failure": "Failure",
+      "danger": "Danger",
+      "bug": "Bug",
+      "example": "Example",
+      "quote": "Quote"
+    },
+    "menu": {
+      "addLink": "Add link",
+      "addExternalLink": "Add external link",
+      "format": "Format",
+      "paragraph": "Paragraph",
+      "insert": "Insert",
+      "highlight": "Highlight",
+      "callout": "Callout",
+      "strikethrough": "Strikethrough",
+      "math": "Math",
+      "bullet": "Bullet list",
+      "numbered": "Numbered list",
+      "task": "Task list",
+      "heading": "Heading {{level}}",
+      "quote": "Quote",
+      "body": "Body text",
+      "table": "Table",
+      "codeBlock": "Code block",
+      "mathBlock": "Math block",
+      "rule": "Horizontal rule",
+      "picture": "Picture…",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "pastePlain": "Paste as plain text",
+      "selectAll": "Select all",
+      "clipboardBlocked": "Your browser didn’t allow the clipboard here. Use Ctrl+C / Ctrl+V (⌘ on a Mac) instead."
+    },
+    "links": {
+      "noAccess": "You don’t have access to this item, or it is gone",
+      "loading": "Looking this item up…"
+    },
+    "image": {
+      "adding_one": "Adding the image…",
+      "adding_other": "Adding {{count}} images…",
+      "loading": "Image loading",
+      "unavailable": "Image unavailable",
+      "tooLarge": "Images up to {{limit}} can be added.",
+      "unsupported": "This kind of image can’t be added: use PNG, JPEG, GIF, WebP or AVIF.",
+      "failed": "The image could not be added. Try again."
+    },
+    "outline": {
+      "title": "Outline",
+      "hint": "The note’s headings; click one to go there",
+      "close": "Close the outline",
+      "empty": "No headings yet. Start a line with # to add one."
+    },
+    "statusBar": {
+      "selected": "{{words}} · {{chars}} selected",
+      "cursor": "Ln {{line}}, Col {{col}}",
+      "words_one": "{{count}} word",
+      "words_other": "{{count}} words",
+      "chars_one": "{{count}} character",
+      "chars_other": "{{count}} characters",
+      "collaborators_one": "{{count}} other person here",
+      "collaborators_other": "{{count}} other people here"
+    },
+    "shortcuts": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "code": "Inline code",
+      "link": "Link (nothing selected: link a file or folder)",
+      "focusMode": "Focus mode (Esc to leave)",
+      "fold": "Fold or unfold the section at the cursor",
+      "foldAll": "Fold or unfold everything",
+      "palette": "Command palette",
+      "switcher": "Open a file or folder",
+      "kutupLink": "Link a file or folder in your Drive (![[ shows a picture)",
+      "continueList": "Continue a list (again on an empty item to end it)",
+      "title": "Editor keyboard shortcuts",
+      "description": "Save and search work anywhere on the page; the rest only while the editor has focus.",
+      "save": "Save",
+      "search": "Find in document",
+      "undo": "Undo",
+      "redo": "Redo",
+      "comment": "Toggle line comment",
+      "cycleMode": "Cycle Edit / Split / Read",
+      "cycleModeRev": "Cycle modes backward",
+      "addCursor": "Add a cursor at the click",
+      "rectSelect": "Rectangular selection"
+    },
+    "versions": {
+      "loading": "Loading versions…",
+      "loadFailed": "Couldn't load the version history.",
+      "empty": "No versions yet",
+      "emptyHint": "Versions are saved automatically as you edit, or when you choose Save version.",
+      "kept": "Kept",
+      "today": "Today, {{time}}",
+      "yesterday": "Yesterday, {{time}}",
+      "meta": "{{size}} · key {{key}}",
+      "name": "Name",
+      "namePlaceholder": "Version name",
+      "keep": "Keep forever",
+      "unkeep": "Stop keeping",
+      "restore": "Restore",
+      "updateFailed": "Couldn't update this version",
+      "delete": "Delete",
+      "deleteTitle": "Delete this version?",
+      "deleteDescription": "{{version}} will be deleted from the version history, freeing {{size}}.",
+      "deleteWarning": "This cannot be undone. The other versions stay.",
+      "deleteKept": "This version is marked Keep forever. Deleting it cannot be undone.",
+      "deleteSubmit": "Delete permanently",
+      "deleted": "Version deleted",
+      "deleteFailed": "Couldn't delete this version",
+      "current": "Current"
+    },
+    "restore": {
+      "title": "Restore this version?",
+      "description": "Save the current state as a backup version first, or restore directly without a backup.",
+      "restoreOnly": "Restore only",
+      "saveAndRestore": "Save & restore"
+    },
+    "whiteboard": {
+      "loading": "Loading whiteboard…",
+      "imageQuota": "Storage quota exceeded — image not uploaded"
+    },
+    "office": {
+      "loading": "Loading the document editor…",
+      "unsupported": "This kind of office file can't be edited here.",
+      "unavailable": "The document editor could not be loaded. Try again, or download the file.",
+      "notPdf": "This file doesn't look like a PDF, so the PDF editor can't open it. Download it or open it in the viewer.",
+      "openFailed": "The editor could not open this document. Try again, or download the file.",
+      "about": {
+        "open": "About this editor",
+        "title": "About this editor",
+        "developer": "Documents, spreadsheets and presentations are edited with ONLYOFFICE, originally developed by Ascensio System SIA.",
+        "modified": "This is a modified version: CryptPad adapted ONLYOFFICE to run entirely in the browser, and Kutup maintains its own changes on top.",
+        "licence": "It is free software under the GNU AGPL v3 with ONLYOFFICE's additional terms. Its source code, with the changes and their dates, is public.",
+        "licenceLink": "Licence and notices",
+        "termsLink": "ONLYOFFICE additional terms",
+        "editorSource": "Source code of the editor",
+        "converterSource": "Source code of the file converter (x2t)",
+        "trademark": "ONLYOFFICE is a trademark of Ascensio System SIA. Kutup is not affiliated with or endorsed by ONLYOFFICE."
+      }
+    },
+    "viewOnly": "View only"
+  },
+  "file": {
+    "opening": "Opening…",
+    "liveBlocked": "This network blocks live editing.",
+    "liveBlockedBody": "You are seeing the file as it was last saved, read-only. Download it to work on a copy, or open it from another network to edit.",
+    "liveBlockedUnsent": "Your latest changes have not reached the server. They are kept in this tab and sent if the connection comes back; do not close it. Or download the file as it was last saved.",
+    "failedTitle": "This file can't be opened",
+    "backToDrive": "Back to Drive",
+    "backToOffice": "Back to Office",
+    "backTo": "Back to {{folder}}",
+    "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
+    "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",
+    "tooLarge": "At {{size}} it is too large to open in the browser (the limit is {{limit}}). Download it instead.",
+    "loadFailed": "It could not be loaded. Check your connection and try again.",
+    "noPreviewTitle": "No preview for this kind of file",
+    "noPreview": "Download it to open it on your device.",
+    "restoring": "Restoring…",
+    "waitingForOwner": "This file moved to a new key, and its owner has not updated your access yet. It opens once they open Kutup Drive again.",
+    "editsWait": "View only until the owner updates access",
+    "actions": {
+      "download": "Download",
+      "rename": "Rename",
+      "share": "Share"
+    },
+    "rename": {
+      "title": "Rename",
+      "submit": "Rename"
+    },
+    "downloadFailed": "The download failed.",
+    "zipTooLarge": "This folder is over 1 GB. Use Chrome or Edge to download it as a ZIP, or download files one by one.",
+    "myFiles": "My files",
+    "sharedWithMe": "Shared with me"
+  },
+  "viewer": {
+    "imageUnreadable": "This browser can't display this image. Download it to open it on your device."
+  }
+}

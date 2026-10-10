@@ -18,7 +18,7 @@ export interface AppDirectory {
   photos: string
   /** The Office home: documents, spreadsheets and presentations kept in Drive. */
   office: string
-  /** The keyless OnlyOffice sandbox; embedded by drive, never navigated to. */
+  /** The keyless OnlyOffice sandbox; embedded by Office and Drive, never navigated to. */
   editor: string
   /** The address book (docs/plans/contacts.md). */
   contacts: string

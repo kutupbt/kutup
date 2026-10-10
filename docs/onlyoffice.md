@@ -88,7 +88,9 @@ frontend/public/onlyoffice/
 
 A PDF you may change (write access, on this server) opens straight in
 ONLYOFFICE's PDF editor: annotate, fill in forms, change text and pages. One
-you may only read, or on another server, opens in Drive's viewer. The PDF editor opens the raw PDF (no x2t on
+you may only read, or on another server, opens in the PDF viewer. Either way it
+opens on the Office site, like every document (`docs/architecture.md`, "File
+editor route"). The PDF editor opens the raw PDF (no x2t on
 the way in: its `drawingfile` WASM engine reads it) and routes straight to
 `pdfeditor` (`document.isForm: false`; left undefined, `api.js` would ask
 DocumentServer whether it is a form). Saving asks the editor for its
@@ -215,5 +217,5 @@ updates. Each fork's `KUTUP.md` says how to build and release.
 - [`docs/architecture.md`](architecture.md) — overall system & E2EE model.
 - [`docs/research/05-cryptpad-onlyoffice-integration.md`](research/05-cryptpad-onlyoffice-integration.md) — deep code-level analysis of CryptPad's integration (May 2026 snapshot).
 - [`docs/research/04-office-collab-engines.md`](research/04-office-collab-engines.md) — original engine-selection rationale.
-- [`frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx`](../frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx) — host-side React wrapper.
+- [`frontend/packages/editors/src/office/OfficeEditor.tsx`](../frontend/packages/editors/src/office/OfficeEditor.tsx) — host-side React wrapper, on the file page Office and Drive share.
 - [`frontend/apps/editor/public/onlyoffice/inner.html`](../frontend/apps/editor/public/onlyoffice/inner.html) — postMessage bridge.

@@ -13,7 +13,7 @@ import {
   toThumbnailImage,
   type MadeThumbnails,
 } from '@kutup/files/thumbnails'
-import { editorKindFor, extensionOf } from '../editor/editorKind'
+import { editorKindFor, extensionOf } from '../editorKind'
 import { fileKind } from '@kutup/drive-core/kinds'
 
 export { thumbnailsOfPicture, type MadeThumbnails }

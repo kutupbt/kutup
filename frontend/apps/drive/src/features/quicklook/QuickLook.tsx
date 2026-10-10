@@ -5,14 +5,14 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@kutup/ui/components/dialog'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
-import { readFile } from '../drive/copy'
+import { readFile } from '@kutup/editors/content'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
-import { editorKindFor, extensionOf } from '../editor/editorKind'
-import { chooseViewer } from '../editor/viewers/dispatch'
+import { editorKindFor, extensionOf } from '@kutup/editors/editorKind'
+import { chooseViewer } from '@kutup/editors/viewers/dispatch'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 
-const MarkdownPreview = lazy(() => import('../editor/text/markdown/MarkdownPreview'))
+const MarkdownPreview = lazy(() => import('@kutup/editors/text/markdown/MarkdownPreview'))
 
 /** Quick Look decrypts in memory; beyond this, open or download instead. */
 const MAX_PREVIEW_BYTES = 100 * 1024 * 1024

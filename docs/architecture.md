@@ -575,6 +575,14 @@ Across servers, each browser connects only to its own server. For a file on anot
 Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
 
 ### File editor route + cross-tab session
-Editable files open at `/file/:cid/:fid` in a new browser tab via `window.open`. The route mounts `FileEditorPage`, which opens the typed owner or named-share collection-key envelope, then the typed per-file key and metadata records, then mounts `TextCollabEditor` full height.
+A file opens full screen at `/file/:cid/:fid` (`/shared/file/:fid` for a file shared by itself). The page is one shared package, `@kutup/editors` (`frontend/packages/editors`), mounted by both Drive and Office; it opens the folder and file keys, then the editor or viewer the file needs (the collaborative text editor, OnlyOffice in the `editor.` sandbox, Excalidraw, or an image, PDF or media viewer).
+
+Each file has **one address**, whichever app it is opened from (`appFor` in `packages/editors/src/paths.ts`):
+
+- **Office** (`office.<domain>`) opens what is edited: notes and code, `.docx`/`.xlsx`/`.pptx`, PDFs (in OnlyOffice's PDF editor, or the viewer when the file is read-only or on another server) and whiteboards.
+- **Maps** opens place lists (`.kutupmap`).
+- **Drive** opens everything else: photos, videos, audio and other files.
+
+Drive's lists, search and New menu link a document straight to Office (`?from=drive`, so its back button returns to the folder); the Office home opens it in place. A file opened in the other app (an older `drive.<domain>/file/…` link, say) is replaced by its address in the right one, keeping `?from=`. The back button goes to the app named in `from` (only `drive` or `office` are honoured), or else to Office's home or the file's Drive folder. Only Office and Drive may frame the OnlyOffice sandbox (its `frame-ancestors`; `frontend/docker/40-kutup-hosts.sh`).
 
 Sensitive material is held tab-locally (Redux + `sessionStorage`). To avoid forcing a fresh login when a new editor tab opens, an already-authenticated tab broadcasts its session payload over a same-origin `BroadcastChannel('kutup-session')`. The fresh tab requests the session on boot (500 ms timeout); on hit it dispatches `setAuth`, on miss it redirects to `/login?next=<path>`. Logout is also broadcast — every tab signs out together so a sibling tab can't re-hydrate a fresh tab after sign-out. See `frontend/src/lib/sessionSync.ts`.

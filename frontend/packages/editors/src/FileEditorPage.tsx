@@ -17,8 +17,8 @@ import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { NameDialog } from '../dialogs/NameDialog'
-import { downloadFile, FsaRequiredError } from '../drive/downloads'
+import { NameDialog } from '@kutup/drive-ui/NameDialog'
+import { downloadFile, FsaRequiredError } from './files/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
@@ -26,8 +26,7 @@ import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fil
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
-import { folderPath, mapsListUrl } from '../drive/paths'
-import { isListName } from '@kutup/map/list'
+import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } from './paths'
 import { contentAt, currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
@@ -39,7 +38,7 @@ import { collabSocketFailures, resetCollabConnectivity, subscribeCollabConnectiv
 import { loadVersionBytes, saveSnapshot, type LogPosition, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
-import { exportScene, thumbnailsOfDrawing, thumbnailsOfPicture } from '../thumbnails/make'
+import { exportScene, thumbnailsOfDrawing, thumbnailsOfPicture } from './thumbnails/make'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 import RestoreConfirmDialog, { type RestoreChoice } from './versions/RestoreConfirmDialog'
@@ -166,8 +165,13 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   useEffect(() => {
     if (picked || !listsLoaded) return
     if (sharedFile?.state === 'waiting') setFailure('waitingForOwner')
-    // A place list opens in Maps (a link to it here, from before, still works).
-    else if (folder && file && isListName(file.name)) window.location.replace(mapsListUrl(folder, file.id))
+    // A file has one address: one opened in the other app goes there (a
+    // link from before, or one typed in), and a place list to Maps.
+    else if (folder && file && appFor(file.name) === 'maps') window.location.replace(mapsListUrl(folder, file.id))
+    else if (folder && file && appFor(file.name) !== currentApp()) {
+      const app = appFor(file.name) as 'drive' | 'office'
+      window.location.replace(appUrl(app, `${filePath(folder, file.id)}${window.location.search}`))
+    }
     else if (folder && file) setPicked({ folder, file })
     // A document just created from New may not be in the cached list yet:
     // only a list fresh from the server can say the file is not there.
@@ -385,24 +389,49 @@ function useDownload(folder: Folder | undefined, file: DriveFile | undefined) {
       await downloadFile(folder, file)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
-      toast.error(error instanceof FsaRequiredError ? t('drive.zipTooLarge') : t('drive.downloadFailed'))
+      toast.error(error instanceof FsaRequiredError ? t('file.zipTooLarge') : t('file.downloadFailed'))
     }
   }, [folder, file, t])
 }
 
 /**
- * Opened from Office's home (`?from=office`): its back button returns there
- * instead of to the file's folder. Only this one value is honoured, so the
- * parameter cannot send anyone elsewhere.
+ * Where the back button goes: to the app the file was opened from (`?from=`,
+ * only `drive` or `office`, so the parameter cannot send anyone elsewhere),
+ * or else this app's own place for it — Office's home, or the file's folder
+ * in Drive.
  */
-function useOpenedFromOffice(): boolean {
+function useBack(folder: Folder | undefined): { app: 'drive' | 'office'; path: string; label: string } {
+  const { t } = useTranslation()
   const [params] = useSearchParams()
-  return params.get('from') === 'office'
+  const app = openedFrom(params.get('from')) ?? currentApp()
+  if (app === 'office') return { app, path: '/', label: t('file.backToOffice') }
+  if (!folder) return { app, path: '/', label: t('file.backToDrive') }
+  return {
+    app,
+    path: folderPath(folder),
+    label: t('file.backTo', {
+      folder: folder.isRoot ? t('file.myFiles') : folder.source === 'file' ? t('file.sharedWithMe') : folder.name,
+    }),
+  }
+}
+
+/** A link back: within this app, or to the other one. */
+function BackLink({ back, children, labelled }: { back: ReturnType<typeof useBack>; children: ReactNode; labelled?: boolean }) {
+  const label = labelled ? back.label : undefined
+  return back.app === currentApp() ? (
+    <Link to={back.path} aria-label={label}>
+      {children}
+    </Link>
+  ) : (
+    <a href={appUrl(back.app, back.path)} aria-label={label}>
+      {children}
+    </a>
+  )
 }
 
 function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Folder; file?: DriveFile }) {
   const { t, i18n } = useTranslation()
-  const fromOffice = useOpenedFromOffice()
+  const back = useBack(folder)
   const download = useDownload(folder, file)
   const description =
     failure === 'tooLarge'
@@ -418,19 +447,13 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
         <p className="text-sm text-muted-foreground">{description}</p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="outline" asChild>
-            {fromOffice ? (
-              <a href={appUrl('office')}>
-                <ArrowLeft /> {t('file.backToOffice')}
-              </a>
-            ) : (
-              <Link to={folder ? folderPath(folder) : '/'}>
-                <ArrowLeft /> {t('file.backToDrive')}
-              </Link>
-            )}
+            <BackLink back={back}>
+              <ArrowLeft /> {back.app === 'office' ? t('file.backToOffice') : t('file.backToDrive')}
+            </BackLink>
           </Button>
           {failure === 'tooLarge' ? (
             <Button onClick={() => void download()}>
-              <Download /> {t('drive.actions.download')}
+              <Download /> {t('file.actions.download')}
             </Button>
           ) : null}
         </div>
@@ -475,7 +498,7 @@ function Workspace({
   onOutdated: (base?: SessionBase) => void
 }) {
   const { t } = useTranslation()
-  const fromOffice = useOpenedFromOffice()
+  const back = useBack(folder)
   const download = useDownload(folder, file)
   const rename = useRenameFile()
   const [renaming, setRenaming] = useState(false)
@@ -536,27 +559,16 @@ function Workspace({
     <div className="flex h-svh flex-col overflow-hidden bg-background">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-2 sm:px-3">
         <Button variant="ghost" size="icon" asChild>
-          {fromOffice ? (
-            <a href={appUrl('office')} aria-label={t('file.backToOffice')}>
-              <ArrowLeft />
-            </a>
-          ) : (
-            <Link
-              to={folderPath(folder)}
-              aria-label={t('file.backTo', {
-                folder: folder.isRoot ? t('nav.myFiles') : folder.source === 'file' ? t('nav.shared') : folder.name,
-              })}
-            >
-              <ArrowLeft />
-            </Link>
-          )}
+          <BackLink back={back} labelled>
+            <ArrowLeft />
+          </BackLink>
         </Button>
         <KutupLogo size={22} className="hidden shrink-0 sm:block" />
         {mayRename ? (
           <button
             type="button"
             onClick={() => setRenaming(true)}
-            title={t('drive.actions.rename')}
+            title={t('file.actions.rename')}
             className="min-w-0 truncate rounded px-1.5 py-1 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {name}
@@ -607,8 +619,8 @@ function Workspace({
               variant="ghost"
               size="icon"
               onClick={() => setSharing(true)}
-              title={t('drive.actions.share')}
-              aria-label={t('drive.actions.share')}
+              title={t('file.actions.share')}
+              aria-label={t('file.actions.share')}
             >
               <UserPlus />
             </Button>
@@ -617,8 +629,8 @@ function Workspace({
             variant="ghost"
             size="icon"
             onClick={() => void download()}
-            title={t('drive.actions.download')}
-            aria-label={t('drive.actions.download')}
+            title={t('file.actions.download')}
+            aria-label={t('file.actions.download')}
           >
             <Download />
           </Button>
@@ -636,7 +648,7 @@ function Workspace({
           </p>
           <Button size="sm" variant="outline" onClick={() => void download()}>
             <Download />
-            {t('drive.actions.download')}
+            {t('file.actions.download')}
           </Button>
         </div>
       ) : null}
@@ -645,9 +657,9 @@ function Workspace({
       </div>
       <NameDialog
         open={renaming}
-        title={t('dialogs.rename.title')}
+        title={t('file.rename.title')}
         initial={name}
-        submit={t('dialogs.rename.submit')}
+        submit={t('file.rename.submit')}
         pending={rename.isPending}
         error={rename.error}
         onClose={() => (setRenaming(false), rename.reset())}
@@ -669,7 +681,7 @@ function NoPreview({ onDownload }: { onDownload: () => void }) {
         <p className="font-medium">{t('file.noPreviewTitle')}</p>
         <p className="text-sm text-muted-foreground">{t('file.noPreview')}</p>
         <Button onClick={onDownload}>
-          <Download /> {t('drive.actions.download')}
+          <Download /> {t('file.actions.download')}
         </Button>
       </div>
     </div>
