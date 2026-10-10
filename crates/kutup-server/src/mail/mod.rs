@@ -5,6 +5,7 @@
 //! stored in S3 with its readable fields in `mail_messages`, charged to the
 //! account's one storage pool.
 
+pub mod filters;
 pub mod headers;
 pub mod lmtp;
 pub mod outside_keys;
@@ -389,6 +390,21 @@ pub(crate) async fn insert_message(
         .bind(message.size)
         .execute(&mut **tx)
         .await?;
+    // The account's filters, on incoming mail and its own sent copies; never
+    // on drafts or on mail filed as spam (docs/plans/mail-filters.md).
+    if (message.direction == "inbound" && message.folder == "inbox")
+        || (message.direction == "outbound" && message.folder == "sent")
+    {
+        filters::on_arrival(
+            tx,
+            message.user_id,
+            message.address_id,
+            message.id,
+            message.direction,
+            readable,
+        )
+        .await?;
+    }
     Ok(true)
 }
 

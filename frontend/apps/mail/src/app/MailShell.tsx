@@ -14,12 +14,13 @@ import {
   Search,
   Send,
   Star,
+  Settings,
   Trash2,
   UserRound,
 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { useCounts, type FolderId } from '@kutup/mail-core/api'
 import { appUrl } from '@kutup/session/apps'
@@ -30,6 +31,7 @@ import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
+import { Tooltip } from '@kutup/ui/components/tooltip'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
@@ -184,6 +186,14 @@ export function MailShell() {
       sidebarFooter={<StorageMeter />}
       headerStart={<SearchBox />}
       headerEnd={
+        <>
+        <Tooltip label={t('settings.title')}>
+          <Button variant="ghost" size="icon" asChild aria-label={t('settings.title')}>
+            <Link to="/settings">
+              <Settings />
+            </Link>
+          </Button>
+        </Tooltip>
         <UserMenu
           name={session.username ?? session.email}
           email={session.email}
@@ -192,6 +202,7 @@ export function MailShell() {
             void signOut().then(() => window.location.assign(appUrl('account', '/login')))
           }}
         />
+        </>
       }
     >
       <Outlet />

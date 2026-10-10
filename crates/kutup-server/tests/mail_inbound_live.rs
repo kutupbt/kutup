@@ -1533,3 +1533,177 @@ fn folders_and_labels() {
     assert_eq!(places["folders"].as_array().unwrap().len(), 1);
     assert_eq!(places["labels"], json!([]));
 }
+
+/// Sends `subject` from `user` to themselves (an Inbox copy and a Sent copy).
+fn send_to_self(c: &Client, base: &str, user: &User, address: &Address, subject: &str) {
+    let domain = address.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {0}\r\nTo: {0}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+        address.address
+    );
+    let split =
+        mail_key::encrypt_split(&[&address.public_key], &address.secret_key, mime.as_bytes())
+            .unwrap();
+    let packet = b64(&split.key_packets[0]);
+    let meta = json!({
+        "to": [{ "address": address.address }],
+        "subject": subject,
+        "messageId": message_id,
+        "keyPackets": { "self": packet, address.address.clone(): packet },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+}
+
+#[test]
+fn filters_file_mail_on_arrival_and_on_existing_mail() {
+    use kutup_crypto::mail_names::MailNameKind::{Filter, Folder, Label};
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let account = address.address.clone();
+    let post = |path: &str, body: Value| {
+        bearer(c.post(format!("{base}{path}")), &user.token)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+
+    // Mail from before the filter exists, to apply it to later.
+    send_to_self(&c, &base, &user, &address, "Eski fatura");
+
+    let invoices = uuid::Uuid::new_v4().to_string();
+    assert_eq!(post("/api/mail/folders", json!({ "id": invoices, "name": sealed_name(&user, &account, Folder, &invoices, "Faturalar"), "color": "#3366cc" })).status().as_u16(), 201);
+    let paid = uuid::Uuid::new_v4().to_string();
+    assert_eq!(post("/api/mail/labels", json!({ "id": paid, "name": sealed_name(&user, &account, Label, &paid, "Ödenecek"), "color": "#22aa55" })).status().as_u16(), 201);
+
+    // Subject contains "FATURA" (any case, Turkish İ folded): into the folder, labelled, starred.
+    let filter = uuid::Uuid::new_v4().to_string();
+    let r = post(
+        "/api/mail/filters",
+        json!({
+            "id": filter,
+            "name": sealed_name(&user, &account, Filter, &filter, "Faturalar"),
+            "match": "all",
+            "conditions": [{ "field": "subject", "op": "contains", "value": "FATURA" }],
+            "actions": { "folder": format!("custom:{invoices}"), "labels": [paid], "star": true },
+        }),
+    );
+    assert_eq!(r.status().as_u16(), 201);
+    // A filter that names no action, or someone else's folder, is refused.
+    let bad = uuid::Uuid::new_v4().to_string();
+    let name = sealed_name(&user, &account, Filter, &bad, "Bad");
+    assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": {} })).status().as_u16(), 400);
+    assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": { "folder": format!("custom:{}", uuid::Uuid::new_v4()) } })).status().as_u16(), 400);
+
+    // On arrival: the Inbox copy and the Sent copy are both filed.
+    send_to_self(&c, &base, &user, &address, "Ekim faturası");
+    send_to_self(&c, &base, &user, &address, "Merhaba");
+    let filed = folder(&c, &base, &user.token, &format!("folder:{invoices}"));
+    let new: Vec<&Value> = filed
+        .iter()
+        .filter(|m| m["subject"] == "Ekim faturası")
+        .collect();
+    assert_eq!(new.len(), 2, "both copies filed: {filed:?}");
+    for m in &new {
+        assert_eq!(m["labels"], json!([paid]));
+        assert_eq!(m["starred"], true);
+    }
+    assert!(
+        new.iter().any(|m| m["direction"] == "inbound")
+            && new.iter().any(|m| m["direction"] == "outbound")
+    );
+    let inbox = folder(&c, &base, &user.token, "inbox");
+    assert!(inbox.iter().any(|m| m["subject"] == "Merhaba"));
+    assert!(
+        inbox.iter().any(|m| m["subject"] == "Eski fatura"),
+        "older mail is left alone until applied"
+    );
+
+    // Apply to existing: the older invoice is filed too.
+    let r = post("/api/mail/filters/apply", json!({ "ids": [filter] }));
+    assert_eq!(r.status().as_u16(), 202);
+    let run = r.json::<Value>().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let started = Instant::now();
+    loop {
+        let status: Value = bearer(
+            c.get(format!("{base}/api/mail/filters/runs/{run}")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        if status["finished"] == true {
+            assert_eq!(status["failed"], false);
+            assert!(status["changed"].as_i64().unwrap() >= 1);
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "run did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let filed = folder(&c, &base, &user.token, &format!("folder:{invoices}"));
+    assert!(filed.iter().any(|m| m["subject"] == "Eski fatura"));
+
+    // Switched off, a filter does nothing.
+    let r = bearer(
+        c.patch(format!("{base}/api/mail/filters/{filter}")),
+        &user.token,
+    )
+    .json(&json!({ "enabled": false }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    send_to_self(&c, &base, &user, &address, "Kasım faturası");
+    assert!(folder(&c, &base, &user.token, "inbox")
+        .iter()
+        .any(|m| m["subject"] == "Kasım faturası"));
+
+    // Deleting the folder drops it from the filter, which keeps its label and star.
+    let r = bearer(
+        c.delete(format!("{base}/api/mail/folders/{invoices}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert!(r.status().is_success());
+    let filters: Value = bearer(c.get(format!("{base}/api/mail/filters")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        filters[0]["actions"],
+        json!({ "labels": [paid], "star": true })
+    );
+    // Deleting the label too leaves only the star.
+    bearer(
+        c.delete(format!("{base}/api/mail/labels/{paid}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    let filters: Value = bearer(c.get(format!("{base}/api/mail/filters")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(filters[0]["actions"], json!({ "star": true }));
+}
