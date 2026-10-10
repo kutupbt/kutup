@@ -27,6 +27,7 @@ const server = {
   pins: null as { revision: number; envelope: string } | null,
   puts: 0,
   conflictOnce: false,
+  batches: [] as string[][],
 }
 
 vi.mock('@kutup/session/client', () => {
@@ -38,6 +39,11 @@ vi.mock('@kutup/session/client', () => {
         if (url === '/user/identity-pins') return server.pins ? Promise.resolve({ data: server.pins }) : Promise.reject(notFound())
         const person = server.people.get(decodeURIComponent(url.split('/').pop()!))
         return person ? Promise.resolve({ data: person }) : Promise.reject(notFound())
+      }),
+      post: vi.fn((url: string, body: { accounts: string[] }) => {
+        if (url !== '/users/drive-identities') return Promise.reject(new Error(url))
+        server.batches.push(body.accounts)
+        return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
       }),
       put: vi.fn((_url: string, body: { revision: number; envelope: string }) => {
         server.puts++
@@ -90,6 +96,7 @@ beforeEach(() => {
   server.pins = null
   server.puts = 0
   server.conflictOnce = false
+  server.batches = []
   localStorage.clear()
 })
 
@@ -162,6 +169,12 @@ describe('checkIdentity', () => {
     server.pins = null
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
     expect(PinsRolledBack).toBeDefined()
+  })
+
+  it('looks up everyone a page asks about at once in one request', async () => {
+    for (const name of ['a', 'b', 'c']) publish(`${name}@kutup.dev`, name.toUpperCase())
+    await Promise.all(['a', 'b', 'c'].map((name) => checkIdentity(me, `${name}@kutup.dev`)))
+    expect(server.batches).toEqual([['a@kutup.dev', 'b@kutup.dev', 'c@kutup.dev']])
   })
 
   it('trusts the account itself', async () => {

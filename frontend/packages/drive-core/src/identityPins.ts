@@ -81,12 +81,54 @@ export function publishedIdentity(me: DriveIdentity, account: string): Promise<P
 async function fetchIdentity(me: DriveIdentity, account: string): Promise<PublishedIdentity> {
   const [username, server] = account.split('@')
   if (!username || !server) throw new Error('not an account address')
-  const local = server === me.account.split('@')[1]
-  const { data } = local
-    ? await api.get<PublishedIdentity>(`/users/by-email/${encodeURIComponent(account)}`)
-    : await api.get<PublishedIdentity>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
+  const data =
+    server === me.account.split('@')[1]
+      ? await localIdentity(account)
+      : (await api.get<PublishedIdentity>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })).data
   if (data.account !== account) throw new Error('the lookup answered for another account')
   return data
+}
+
+// People on this server are looked up together: everyone a page asks about
+// in the same moment goes in one request (`POST /users/drive-identities`,
+// up to 100), not one lookup each against the per-address lookup limit.
+const BATCH = 100
+let queued: { account: string; resolve: (identity: PublishedIdentity) => void; reject: (error: unknown) => void }[] = []
+let flushing: ReturnType<typeof setTimeout> | null = null
+
+export class IdentityNotFound extends Error {
+  constructor(readonly account: string) {
+    super(`no Drive identity for ${account}`)
+  }
+}
+
+function localIdentity(account: string): Promise<PublishedIdentity> {
+  return new Promise((resolve, reject) => {
+    queued.push({ account, resolve, reject })
+    flushing ??= setTimeout(() => void flush(), 10)
+  })
+}
+
+async function flush(): Promise<void> {
+  const batch = queued
+  queued = []
+  flushing = null
+  for (let start = 0; start < batch.length; start += BATCH) {
+    const part = batch.slice(start, start + BATCH)
+    try {
+      const { data } = await api.post<PublishedIdentity[]>('/users/drive-identities', {
+        accounts: [...new Set(part.map((entry) => entry.account))],
+      })
+      const found = new Map(data.map((identity) => [identity.account, identity]))
+      for (const entry of part) {
+        const identity = found.get(entry.account)
+        if (identity) entry.resolve(identity)
+        else entry.reject(new IdentityNotFound(entry.account))
+      }
+    } catch (error) {
+      for (const entry of part) entry.reject(error)
+    }
+  }
 }
 
 // --------------------------------------------------------------- pins
@@ -367,6 +409,8 @@ export async function verifyPerson(me: DriveIdentity, account: string, scanned: 
 /** Test seam: forget what this page has looked up and pinned. */
 export function resetIdentityPinsForTesting(): void {
   published.clear()
+  queued = []
+  flushing = null
   store = null
   writes = Promise.resolve()
 }

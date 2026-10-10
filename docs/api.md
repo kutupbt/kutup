@@ -585,6 +585,17 @@ account that has not signed one yet. Clients check it and pin the authority
 (docs/plans/drive-identity-pins.md); the federated lookup
 (`GET /api/drive/federation/users/:username`) returns the same two fields.
 
+### POST /api/users/drive-identities
+
+The Drive identities of up to 100 accounts on this server at once, by exact
+address: what a page that shows many people checks them with, in one request.
+Body: `{ "accounts": ["alice@example.org", …] }`. Answers an array of
+`{ account, accountAuthorityPublicKey, driveHpkePublicKey,
+driveSigningPublicKey, driveKeyBinding? }` for the accounts found (unknown,
+disabled and not yet set-up accounts are left out); `400` for more than 100.
+
+**Auth:** Bearer JWT; counted with the user lookups (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), one per request.
+
 ### PUT /api/user/drive-key-binding
 
 An account made before Drive key bindings stores its own (the account app does
