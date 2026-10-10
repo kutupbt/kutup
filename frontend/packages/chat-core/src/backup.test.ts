@@ -305,6 +305,52 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(await restored.restoredHistoryAsync()).toHaveLength(1)
   })
 
+  it('keeps a queued change through a restart that restores, so it is not numbered twice', async () => {
+    const transport = new ScriptedTransport()
+    transport.enforceDeviceChains = true
+    const sourceDatabase = `backup-queued-restart-source:${crypto.randomUUID()}`
+    const restoredDatabase = `backup-queued-restart-restored:${crypto.randomUUID()}`
+    databaseNames.push(sourceDatabase, restoredDatabase)
+    let text = 'durable'
+    const history = async () => {
+      const entry = historyEntry()
+      return [{ ...entry, content: { ...entry.content, text, body: { text } } }]
+    }
+    const source = await open(transport, sourceDatabase, history)
+    await source.settled()
+
+    // The edit is queued but cannot be sent before the page goes away.
+    const append = transport.appendSegment.bind(transport)
+    transport.appendSegment = async () => {
+      throw Object.assign(new Error('offline'), { response: { status: 503 } })
+    }
+    text = 'durable, edited'
+    await source.flushNow().catch(() => undefined)
+    source.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(source), 1)
+    transport.appendSegment = append
+
+    // Another device adds to the backup meanwhile, so the next start restores.
+    const first = transport.appendRequests[0]
+    await transport.appendSegment({
+      ...structuredClone(first),
+      operationId: '77777777-7777-4777-8777-777777777777',
+      sourceDeviceId: 10,
+      deviceSequence: 1,
+      previousSegmentDigest: zeroDigest,
+    })
+
+    const reopened = await open(transport, sourceDatabase, history)
+    await reopened.settled()
+    const own = transport.segments.filter(segment => segment.sourceDeviceId === 9)
+    expect(own.map(segment => segment.deviceSequence)).toEqual([1, 2])
+
+    const restored = await open(transport, restoredDatabase, async () => [])
+    await restored.settled()
+    const restoredHistory = await restored.restoredHistoryAsync()
+    expect(restoredHistory.map(entry => entry.content.text)).toEqual(['durable, edited'])
+  })
+
   it('preserves one authenticated outgoing origin across linked devices', async () => {
     const firstTransport = new ScriptedTransport()
     const secondTransport = new ScriptedTransport()
