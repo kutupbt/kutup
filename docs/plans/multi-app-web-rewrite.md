@@ -65,7 +65,7 @@ office.<d>   ──▶ │ /  → OnlyOffice bundle (no /api, no cookies)    │
 | App | Owns |
 |---|---|
 | **account** | login (+2FA), register, first-login, recovery, the fork producer (`/authorize`), app switcher landing, settings (profile, security/2FA, recovery phrase, sessions, language, appearance, per-product sections `/drive/…`, `/chat/…`), admin (`/admin/…`). |
-| **drive** | explorer (unified list), shared with me, trash, uploads, sharing dialogs, public-link page `/s/:token`, editors (`/file/:cid/:fid`: text/markdown collab, OnlyOffice, Excalidraw, viewers), version history. |
+| **drive** | explorer (unified list), shared with me, trash, uploads, sharing dialogs, public-link page `/s/:token`, editors (`/file/:cid/:fid`: text/markdown collab, OnlyOffice, Excalidraw, viewers), version history. Since then the file page is a package both Drive and Office mount, and documents open on `office.<d>` (`docs/architecture.md`, "File editor route"). |
 | **chat** | conversation list, thread, details panel, groups, requests, safety verification, chat devices, backup/recovery status. |
 
 Cross-app bridges (send-to-chat, save-to-drive) are **not** built in this

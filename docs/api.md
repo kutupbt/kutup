@@ -1918,6 +1918,7 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
   "ownerUserId": "<uuid>",
+  "ownerAccount": "alice@example.org",
   "expiresAt": "2026-04-01T00:00:00Z",
   "collectionKind": "album",
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
@@ -1926,6 +1927,8 @@ Get metadata for a public share. The wrapped collection key is included; the lin
 ```
 
 `expiresAt` is `null` when the share has no expiry. Returns `410 Gone` if the share has expired.
+`ownerAccount` is the address of the account that made the link: every public
+page says who shared it, so a link cannot pass its content off as the server's.
 `collectionKind`, `nameEnvelope` and `nameRevision` are present for collection shares; the name
 opens under the collection key (album links show the album's name).
 
@@ -2005,6 +2008,50 @@ Download a file from a public share. Streams the encrypted blob (`application/oc
 **Response:** the raw encrypted bytes.
 
 Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target. For an album link, the album's items count as belonging to it.
+
+---
+
+### POST /api/share/:token/report
+
+Report a public link to the server's administrators. Anyone may, without an
+account; rate-limited per address (20/hour, `RATE_LIMIT_REPORT_PER_HOUR`),
+which is not stored.
+
+**Auth:** None
+
+**Request body:**
+```json
+{
+  "reason": "phishing",
+  "details": "Asks for a bank password",
+  "link": "https://office.example.org/s/<token>#key=…"
+}
+```
+
+`reason` is `phishing`, `malware`, `illegal`, `abuse` or `other`; `details`
+(optional) is at most 2,000 characters. `link` (optional) is the whole link,
+key included, so an administrator can see what it shows: it must be one of this
+server's Drive, Office or Photos public pages for this token, else `400`. It is
+erased when the report is resolved. A link with 50 open reports takes no more.
+
+**Response:** `204 No Content` · `404` unknown link · `410` removed.
+
+Every public-link endpoint answers `410` with `{"error": "…", "code":
+"link_removed"}` for a link an administrator took down or whose owner's
+account is disabled (an expired link answers `410` without that code).
+
+---
+
+### GET /api/share/:token/files/:fileId/assets/:assetId
+
+A picture in a note reached by a public link: the asset envelope, sealed
+under the note's file key at the generation in `X-Kutup-Key-Generation`, as
+`GET /api/files/:fileId/assets/:assetId` serves it to members.
+
+**Auth:** None (the token is the capability)
+
+Returns `403` if the file does not belong to the shared target, `404` for an
+unknown asset, `410` if the share has expired.
 
 ---
 
@@ -2859,6 +2906,28 @@ The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
 All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
 Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (emails, usernames) are snapshotted into the row's `payload` at action time.
+
+### GET /api/admin/reports
+
+Reports on public links: open ones oldest first (default, `?status=open`), or
+the latest 100 resolved (`?status=resolved`). Each carries the report
+(`id`, `reason`, `details`, `link` while open, `createdAt`, `resolvedAt`,
+`resolution`: `dismissed`, `removed` or `disabled`), its link (`shareId`,
+`shareType`, `shareCreatedAt`, `shareRemovedAt`), the account that made it
+(`ownerUserId`, `ownerEmail`, `ownerUsername`, `ownerIsActive`) and
+`openReportsOnLink`.
+
+### POST /api/admin/reports/:id/dismiss
+
+Close an open report: nothing to do. `204`; `404` for no such open report.
+Logged as `report.dismiss`.
+
+### POST /api/admin/reports/:id/remove-link
+
+Take the reported link down (it answers `410 link_removed` from then on) and
+close every open report on it. `204`; `404` for no such open report. Logged as
+`share.remove`. Disabling the owner (`PUT /api/admin/users/:id` with
+`isActive: false`) takes every link of theirs down and closes their reports.
 
 ### GET /api/admin/users
 

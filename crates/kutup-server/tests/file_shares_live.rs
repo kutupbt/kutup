@@ -717,6 +717,12 @@ fn a_public_link_to_one_file() {
         .unwrap();
     assert_eq!(public["shareType"], "file");
     assert_eq!(public["file"]["id"], file.id.as_str());
+    // The page says who shared it.
+    // (The domain is the server's name, whichever this test runs against.)
+    assert!(public["ownerAccount"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{}@", alice.username)));
     let key = drive_envelope::open_b64(
         public["collectionKeyEnvelope"].as_str().unwrap(),
         &link_key,
@@ -737,6 +743,51 @@ fn a_public_link_to_one_file() {
         )
         .unwrap(),
         b"just this file"
+    );
+    // A picture in the file (a note's image) reaches the link; one in a
+    // neighbour does not.
+    for f in [&file, &neighbour] {
+        assert!(put_asset(&c, &base, &alice.token, f, "img-1", b"picture")
+            .status()
+            .is_success());
+    }
+    let asset = c
+        .get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-1",
+            file.id
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(asset.status(), StatusCode::OK);
+    assert_eq!(asset.headers()["x-kutup-key-generation"], "1");
+    assert_eq!(
+        drive_envelope::open_b64(
+            &b64(&asset.bytes().unwrap()),
+            &file.key,
+            DriveEnvelopeContextV1::whiteboard_asset(&file.id, "img-1", 1).unwrap(),
+        )
+        .unwrap(),
+        b"picture"
+    );
+    assert_eq!(
+        c.get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-1",
+            neighbour.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        c.get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-2",
+            file.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
     );
     // No saved editing state yet: the upload is the file.
     assert_eq!(
@@ -908,5 +959,229 @@ fn a_public_link_to_one_file() {
             .unwrap()
             .status(),
         StatusCode::NOT_FOUND
+    );
+}
+
+/// Makes a public link to `file`, owned by `owner`; returns its token.
+fn file_link(c: &Client, base: &str, owner: &User, file: &Sealed) -> String {
+    let link_key = [0x33u8; 32];
+    let id = uuid();
+    let r = bearer(c.post(format!("{base}/api/share")), &owner.token)
+        .json(&json!({
+            "shareType": "file",
+            "targetId": file.id,
+            "collectionKeyEnvelope": drive_envelope::seal_b64(&file.key, &link_key,
+                DriveEnvelopeContextV1::public_link_file_key(&file.id, &owner.id, 1).unwrap()).unwrap(),
+            "id": id,
+            "ownerLinkKeyEnvelope": owner_link_key(&link_key, owner, &id),
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED, "{:?}", r.text());
+    r.json::<Value>().unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Reports on public links: anyone reports, an administrator takes the link
+/// down or disables its owner, and the link answers `410 link_removed`. Needs
+/// the database too, to make an admin: `KUTUP_LIVE_DATABASE_URL`.
+#[test]
+fn reports_take_public_links_down() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::new();
+    let (alice, admin) = (register(&c, &base), register(&c, &base));
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        sqlx::query("UPDATE users SET is_admin = true WHERE id = $1::uuid")
+            .bind(&admin.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+    let folder = create_folder(&c, &base, &alice);
+    let (first, second) = (
+        seal_file(&folder, &uuid(), b"phish"),
+        seal_file(&folder, &uuid(), b"more"),
+    );
+    for f in [&first, &second] {
+        assert!(upload(&c, &base, &alice.token, &folder, f)
+            .status()
+            .is_success());
+    }
+    let token = file_link(&c, &base, &alice, &first);
+    let office: Value = c
+        .get(format!("{base}/api/auth/settings"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let office = office["apps"]["office"]
+        .as_str()
+        .unwrap()
+        .trim_end_matches('/')
+        .to_string();
+    let report = |token: &str, body: Value| {
+        c.post(format!("{base}/api/share/{token}/report"))
+            .json(&body)
+            .send()
+            .unwrap()
+            .status()
+    };
+
+    // Anyone reports, without an account; only this server's page of this link may go along.
+    assert_eq!(
+        report(&token, json!({ "reason": "spam" })),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        report(
+            &token,
+            json!({ "reason": "phishing", "link": format!("https://evil.example/s/{token}#key=x") })
+        ),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        report(
+            &token,
+            json!({ "reason": "phishing", "link": format!("{office}/s/other#key=x") })
+        ),
+        StatusCode::BAD_REQUEST
+    );
+    let link = format!("{office}/s/{token}#key=abc");
+    assert_eq!(
+        report(
+            &token,
+            json!({ "reason": "phishing", "details": "asks for a password", "link": link })
+        ),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        report("no-such-token", json!({ "reason": "other" })),
+        StatusCode::NOT_FOUND
+    );
+
+    // Only an administrator sees reports.
+    assert_eq!(
+        bearer(c.get(format!("{base}/api/admin/reports")), &alice.token)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let open = get(&c, format!("{base}/api/admin/reports"), &admin.token);
+    let mine = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["link"] == link.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(mine["reason"], "phishing");
+    assert_eq!(mine["details"], "asks for a password");
+    assert_eq!(mine["ownerUserId"], alice.id.as_str());
+    assert_eq!(mine["shareType"], "file");
+    let id = mine["id"].as_str().unwrap();
+
+    // Taken down: every request to the link says so; the report is closed and the key forgotten.
+    let removed = bearer(
+        c.post(format!("{base}/api/admin/reports/{id}/remove-link")),
+        &admin.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+    for path in [
+        format!("/api/share/{token}"),
+        format!("/api/share/{token}/download/{}", first.id),
+    ] {
+        let r = c.get(format!("{base}{path}")).send().unwrap();
+        assert_eq!(r.status(), StatusCode::GONE, "{path}");
+        assert_eq!(r.json::<Value>().unwrap()["code"], "link_removed", "{path}");
+    }
+    assert_eq!(
+        report(&token, json!({ "reason": "other" })),
+        StatusCode::GONE
+    );
+    let open = get(&c, format!("{base}/api/admin/reports"), &admin.token);
+    assert!(!open.as_array().unwrap().iter().any(|r| r["id"] == id));
+    let resolved = get(
+        &c,
+        format!("{base}/api/admin/reports?status=resolved"),
+        &admin.token,
+    );
+    let closed = resolved
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id)
+        .unwrap();
+    assert_eq!(closed["resolution"], "removed");
+    assert!(closed["link"].is_null());
+
+    // Disabling the owner takes every link of theirs down and answers its reports.
+    let other = file_link(&c, &base, &alice, &second);
+    assert_eq!(
+        report(&other, json!({ "reason": "abuse" })),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/share/{other}"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let disabled = bearer(
+        c.put(format!("{base}/api/admin/users/{}", alice.id)),
+        &admin.token,
+    )
+    .json(&json!({ "isActive": false }))
+    .send()
+    .unwrap();
+    assert!(disabled.status().is_success());
+    let r = c.get(format!("{base}/api/share/{other}")).send().unwrap();
+    assert_eq!(r.status(), StatusCode::GONE);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "link_removed");
+    let resolved = get(
+        &c,
+        format!("{base}/api/admin/reports?status=resolved"),
+        &admin.token,
+    );
+    assert!(resolved
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["ownerUserId"] == alice.id.as_str() && r["resolution"] == "disabled"));
+
+    // Enabled again, the link the administrator did not take down works again.
+    let enabled = bearer(
+        c.put(format!("{base}/api/admin/users/{}", alice.id)),
+        &admin.token,
+    )
+    .json(&json!({ "isActive": true }))
+    .send()
+    .unwrap();
+    assert!(enabled.status().is_success());
+    assert_eq!(
+        c.get(format!("{base}/api/share/{other}"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/share/{token}"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::GONE
     );
 }

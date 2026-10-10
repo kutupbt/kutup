@@ -5,13 +5,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from 'next-themes'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { initI18n } from '@kutup/i18n'
+import { initI18n, mergeMessages } from '@kutup/i18n'
 import { configureClient } from '@kutup/session/client'
 import { App } from './App'
 import en from './locales/en.json'
 import tr from './locales/tr.json'
+import editorsEn from '@kutup/editors/locales/en.json'
+import editorsTr from '@kutup/editors/locales/tr.json'
 
-initI18n({ en, tr })
+// The file page's strings (@kutup/editors) come with it.
+initI18n({ en: mergeMessages(en, editorsEn), tr: mergeMessages(tr, editorsTr) })
 configureClient({ clientType: 'web-office' })
 
 const queryClient = new QueryClient({

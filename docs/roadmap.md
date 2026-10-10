@@ -646,7 +646,8 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
     whole.
 - **Office home: what is left.** `office.<domain>` lists the notes, office
   documents and whiteboards an account can open and starts new ones in My
-  files; they are Drive files and open in Drive's editors. Still open:
+  files; they are Drive files and open on the Office site, where Drive
+  sends them too (one address per file). Still open:
   "recent" means last changed, since nothing records when a file was last
   opened; there is no template gallery, only blank documents; a new
   document always goes to My files; files in folders on other servers are

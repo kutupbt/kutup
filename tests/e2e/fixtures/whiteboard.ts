@@ -1,4 +1,5 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test'
+import { waitForFilePage } from './drive'
 
 /**
  * The whiteboard editor exposes Excalidraw's API as window.__EXCALIDRAW_API__
@@ -8,7 +9,7 @@ import { expect, type BrowserContext, type Page } from '@playwright/test'
 export async function createWhiteboard(drive: Page): Promise<string> {
   await drive.getByRole('button', { name: 'New' }).first().click()
   await drive.getByRole('menuitem', { name: 'Whiteboard', exact: true }).click()
-  await drive.waitForURL(/\/file\//, { timeout: 60_000 })
+  await waitForFilePage(drive)
   await whiteboardReady(drive)
   return drive.url()
 }

@@ -75,7 +75,7 @@
     "onlyOwnerRemoves": "Only the owner can change or remove people.",
     "settingFailed": "The setting could not be saved.",
     "linksTitle": "Public links",
-    "linksHint": "Anyone with a link can open and download this file, without an account. The key is in the link itself; the server never sees it.",
+    "linksHint": "Anyone with a link can open and download this file, without an account, and sees your address as the one who shared it. The key is in the link itself; the server never sees it.",
     "link": "Public link",
     "linkCreated": "Created {{date}}",
     "copy": "Copy",
@@ -192,5 +192,39 @@
     "label": "Suggestions from your contacts",
     "offer": "{{address}} is not in your contacts.",
     "add": "Add to contacts"
+  },
+  "nameDialog": {
+    "label": "Name",
+    "required": "Enter a name.",
+    "tooLong": "Use at most {{max}} characters.",
+    "slash": "Names cannot contain / or \\.",
+    "taken": "Something here already has that name.",
+    "failed": "The name could not be saved."
+  },
+  "publicNotice": {
+    "sharedBy": "Shared publicly by {{owner}}.",
+    "unchecked": "Kutup can't see or check what people share by link. Never type a password or payment details because a shared file asks you to."
+  },
+  "reportLink": {
+    "button": "Report",
+    "title": "Report this link",
+    "description": "Tell this server's administrators about a link that tricks people, spreads malware or breaks the law. You don't need an account, and nothing about you is kept.",
+    "reason": "What is wrong with it?",
+    "choose": "Choose a reason",
+    "reasons": {
+      "phishing": "Phishing or fraud (asks for passwords, payments)",
+      "malware": "Malware or a harmful file",
+      "illegal": "Illegal content",
+      "abuse": "Harassment or abuse",
+      "other": "Something else"
+    },
+    "details": "Details",
+    "detailsHint": "Optional. What should the administrators look for?",
+    "shareLink": "Let the administrators open this link",
+    "shareLinkHint": "Files shared by link are end-to-end encrypted: the server can't see them. This sends the whole link, its key included, so the administrators can look. It is deleted once they have dealt with your report.",
+    "send": "Send report",
+    "sentTitle": "Report sent",
+    "sent": "Thank you. The administrators will look at it.",
+    "failed": "The report could not be sent. Try again in a while."
   }
 }

@@ -501,7 +501,7 @@ fn build_router(state: AppState) -> Router {
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
         file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
-        sessions as session_routes, shares, trash, tus,
+        link_reports, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -1244,6 +1244,15 @@ fn build_router(state: AppState) -> Router {
             get(shares::public_share_state),
         )
         .route(
+            "/api/share/:token/report",
+            post(link_reports::report_public_link)
+                .route_layer(from_fn(middleware::rate_limit_report)),
+        )
+        .route(
+            "/api/share/:token/files/:fileId/assets/:assetId",
+            get(shares::public_share_asset),
+        )
+        .route(
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )
@@ -1659,6 +1668,15 @@ fn build_router(state: AppState) -> Router {
                     post(admin::rotate_temp_password),
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/reports", get(link_reports::list_reports))
+                .route(
+                    "/api/admin/reports/:id/dismiss",
+                    post(link_reports::dismiss_report),
+                )
+                .route(
+                    "/api/admin/reports/:id/remove-link",
+                    post(link_reports::remove_reported_link),
+                )
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route(
                     "/api/admin/mail/senders",

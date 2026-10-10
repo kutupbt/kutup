@@ -19,6 +19,7 @@
     "devices": "Editor devices",
     "admin": "Administration",
     "users": "Users",
+    "reports": "Reports",
     "activity": "Activity",
     "federation": "Federation",
     "serverSettings": "Server settings",
@@ -517,6 +518,40 @@
       "deleted": "{{email}} deleted",
       "actionFailed": "The action failed."
     },
+    "reports": {
+      "title": "Reports",
+      "description": "Public links people reported. The server can't see what a link shows: open it when the reporter included it, then dismiss the report, take the link down, or disable the account that made it (which takes all of its links down).",
+      "open": "Open",
+      "resolved": "Resolved",
+      "emptyTitle": "No open reports",
+      "emptyDescription": "Reports anyone makes from a public link's page show up here.",
+      "noneResolvedTitle": "Nothing resolved yet",
+      "noneResolvedDescription": "Reports you dismiss or act on are listed here.",
+      "more_one": "and {{count}} more report on this link",
+      "more_other": "and {{count}} more reports on this link",
+      "owner": "Shared by",
+      "link": "Link",
+      "fileLink": "Link to one file, made {{date}}",
+      "folderLink": "Link to a folder or album, made {{date}}",
+      "linkRemoved": "taken down",
+      "openLink": "Open the link",
+      "noLink": "The reporter did not include the link.",
+      "dismiss": "Dismiss",
+      "dismissed": "Report dismissed",
+      "remove": "Take link down",
+      "removeTitle": "Take this link down?",
+      "removeDescription": "Anyone who opens it is told it was removed. {{email}} keeps the file and can share it again; every open report on this link is closed.",
+      "removed": "Link taken down",
+      "disableTitle": "Disable this account?",
+      "disableDescription": "{{email}} is signed out everywhere and cannot sign in, and every public link of theirs stops working, until you enable the account again. Their data is kept.",
+      "disabled": "Account disabled",
+      "actionFailed": "That did not work. Try again.",
+      "resolution": {
+        "dismissed": "Dismissed",
+        "removed": "Link taken down",
+        "disabled": "Account disabled"
+      }
+    },
     "activity": {
       "title": "Activity",
       "description": "What administrators changed, newest first.",
@@ -551,7 +586,9 @@
         "federationPeerRetry": "{{admin}} retried discovery for {{domain}}",
         "federationPeerRetryBulk": "{{admin}} retried discovery for several servers",
         "unknown": "{{admin}}: {{action}}",
-        "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail"
+        "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
+        "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
+        "shareRemove": "{{admin}} took down a public link of {{target}}"
       }
     },
     "settings": {

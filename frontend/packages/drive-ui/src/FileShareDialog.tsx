@@ -308,7 +308,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                     size="sm"
                     variant="ghost"
                     disabled={!identity.data}
-                    onClick={() => identity.data && void fileLinkUrl(link, identity.data).then(copy, () => toast.error(t('common.tryAgain')))}
+                    onClick={() => identity.data && void fileLinkUrl(link, identity.data, target.file.name).then(copy, () => toast.error(t('common.tryAgain')))}
                   >
                     {t('fileShare.copy')}
                   </Button>
