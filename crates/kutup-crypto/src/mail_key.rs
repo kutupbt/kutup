@@ -324,6 +324,83 @@ pub fn open_address_key(
     Ok(Zeroizing::new(secret.to_vec()))
 }
 
+/// Shortest passphrase an exported key may be locked with.
+pub const MIN_EXPORT_PASSPHRASE_CHARS: usize = 8;
+
+/// An address's secret key as a file to keep or move to another OpenPGP
+/// program (Proton's "Export private key"): ASCII-armored, every secret part
+/// locked with `passphrase` (OpenPGP's iterated and salted S2K, AES-256).
+pub fn export_address_secret_key(secret_key: &[u8], passphrase: &str) -> Result<Zeroizing<String>> {
+    if passphrase.chars().count() < MIN_EXPORT_PASSPHRASE_CHARS {
+        return Err(CryptoError::InvalidInput(
+            "the passphrase is too short".into(),
+        ));
+    }
+    let mut key = SignedSecretKey::from_bytes(secret_key)
+        .map_err(|_| CryptoError::InvalidInput("address secret key does not parse".into()))?;
+    let password = Password::from(passphrase);
+    key.primary_key
+        .set_password(rand::rngs::OsRng, &password)
+        .map_err(backend)?;
+    for subkey in &mut key.secret_subkeys {
+        subkey
+            .key
+            .set_password(rand::rngs::OsRng, &password)
+            .map_err(backend)?;
+    }
+    key.to_armored_string(ArmorOptions::default())
+        .map(Zeroizing::new)
+        .map_err(backend)
+}
+
+/// Reads an address key from an OpenPGP secret key file (armored or binary,
+/// locked with `passphrase` or not), as exported by Kutup, Proton or GnuPG:
+/// it must be a key Kutup can use for `address` (the shape
+/// [`inspect_address_public_key`] checks: Ed25519 primary, one Curve25519
+/// encryption subkey, one user ID for the address). Returns it unlocked, to
+/// be sealed at once. A wrong passphrase is [`CryptoError::AuthFailed`].
+pub fn import_address_secret_key(
+    file: &[u8],
+    passphrase: &str,
+    address: &str,
+) -> Result<GeneratedAddressKey> {
+    if file.is_empty() || file.len() > 64 * 1024 {
+        return Err(CryptoError::InvalidInput("key file size is invalid".into()));
+    }
+    let trimmed = file.trim_ascii_start();
+    let mut key = if trimmed.starts_with(b"-----BEGIN PGP PRIVATE KEY BLOCK-----") {
+        SignedSecretKey::from_armor_single(trimmed).map(|(key, _)| key)
+    } else {
+        SignedSecretKey::from_bytes(file)
+    }
+    .map_err(|_| CryptoError::InvalidInput("not an OpenPGP secret key".into()))?;
+    let password = Password::from(passphrase);
+    key.primary_key
+        .remove_password(&password)
+        .map_err(|_| CryptoError::AuthFailed)?;
+    for subkey in &mut key.secret_subkeys {
+        subkey
+            .key
+            .remove_password(&password)
+            .map_err(|_| CryptoError::AuthFailed)?;
+    }
+    let public = SignedPublicKey::from(key.clone());
+    let public_key = public.to_bytes().map_err(backend)?;
+    let info = inspect_address_public_key(&public_key, address)?;
+    let secret_key = Zeroizing::new(key.to_bytes().map_err(backend)?);
+    if secret_key.len() > MAX_SECRET_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "address secret key size is invalid".into(),
+        ));
+    }
+    Ok(GeneratedAddressKey {
+        secret_key,
+        public_key,
+        fingerprint: info.fingerprint,
+        sha256_fingerprint: info.sha256_fingerprint,
+    })
+}
+
 /// Encrypts `plaintext` to `recipient_public_key` (SEIPDv1, AES-256, the
 /// form every OpenPGP client reads), signed by `signer_secret_key` when given.
 /// Returns an ASCII-armored message.
@@ -371,6 +448,321 @@ pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<V
         .encrypt_to_key(rand::rngs::OsRng, subkey)
         .map_err(backend)?;
     builder.to_vec(rand::rngs::OsRng).map_err(backend)
+}
+
+/// An outside correspondent's key (docs/plans/mail.md, C3), as found
+/// through WKD, Proton's key server, keys.openpgp.org or an Autocrypt
+/// header: checked and reduced to its binary form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalKeyInfo {
+    /// The key, binary, as given (armor removed).
+    pub public_key: Vec<u8>,
+    /// Lowercase hex, 40 digits (version 4).
+    pub fingerprint: String,
+    pub created_at_secs: u32,
+}
+
+/// Largest outside key accepted (keys with many signatures run large).
+const MAX_EXTERNAL_KEY_LEN: usize = 256 * 1024;
+
+fn parse_public_key(bytes: &[u8]) -> Result<SignedPublicKey> {
+    let invalid = || CryptoError::InvalidInput("public key does not parse".into());
+    if bytes.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+        SignedPublicKey::from_armor_single(bytes)
+            .map(|(key, _)| key)
+            .map_err(|_| invalid())
+    } else {
+        SignedPublicKey::from_bytes(bytes).map_err(|_| invalid())
+    }
+}
+
+/// When a key or subkey stops being valid: its creation plus the
+/// expiration its newest self-signature sets, if any.
+fn expired(created: u32, signatures: &[pgp::packet::Signature], now_secs: u64) -> bool {
+    let newest = signatures
+        .iter()
+        .filter_map(|sig| sig.created().map(|at| (at.as_secs(), sig)))
+        .max_by_key(|(at, _)| *at);
+    match newest.and_then(|(_, sig)| sig.key_expiration_time()) {
+        Some(lifetime) if lifetime.as_secs() != 0 => {
+            u64::from(created) + u64::from(lifetime.as_secs()) <= now_secs
+        }
+        _ => false,
+    }
+}
+
+fn email_of(user_id: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(user_id).ok()?;
+    let address = match (text.rfind('<'), text.rfind('>')) {
+        (Some(open), Some(close)) if open < close => &text[open + 1..close],
+        _ => text,
+    };
+    let address = address.trim().to_lowercase();
+    (address.contains('@') && !address.contains(char::is_whitespace)).then_some(address)
+}
+
+/// Whether `signature` was issued by `key`'s primary key (by key ID or
+/// fingerprint); certifications by others are not self-signatures.
+fn self_issued(signature: &pgp::packet::Signature, key: &SignedPublicKey) -> bool {
+    let id = key.primary_key.legacy_key_id();
+    let fingerprint = key.primary_key.fingerprint();
+    signature
+        .issuer_key_id()
+        .iter()
+        .any(|issuer| **issuer == id)
+        || signature
+            .issuer_fingerprint()
+            .iter()
+            .any(|issuer| **issuer == fingerprint)
+}
+
+/// The usable encryption subkey of an outside key: bound by a valid binding
+/// signature, not revoked, not expired at `now_secs`; the newest wins.
+fn usable_encryption_subkey(key: &SignedPublicKey, now_secs: u64) -> Option<&SignedPublicSubKey> {
+    key.public_subkeys
+        .iter()
+        .filter(|sub| sub.algorithm().can_encrypt())
+        .filter(|sub| {
+            let bindings: Vec<_> = sub
+                .signatures
+                .iter()
+                .filter(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyBinding))
+                .filter(|sig| {
+                    sig.verify_subkey_binding(&key.primary_key, &sub.key)
+                        .is_ok()
+                })
+                .cloned()
+                .collect();
+            let revoked = sub.signatures.iter().any(|sig| {
+                sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation)
+                    && sig
+                        .verify_subkey_binding(&key.primary_key, &sub.key)
+                        .is_ok()
+            });
+            !bindings.is_empty()
+                && !revoked
+                && !expired(sub.created_at().as_secs(), &bindings, now_secs)
+        })
+        .max_by_key(|sub| sub.created_at().as_secs())
+}
+
+/// A single outside key (armored or binary) as it is, unchecked: its binary
+/// form, fingerprint and creation time, for showing a key pinned to a
+/// contact even once it has expired. Use [`inspect_external_public_key`]
+/// before encrypting to it.
+pub fn describe_external_public_key(public_key: &[u8]) -> Result<ExternalKeyInfo> {
+    if public_key.is_empty() || public_key.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let key = parse_public_key(public_key)?;
+    if key.primary_key.version() != pgp::types::KeyVersion::V4 {
+        return Err(CryptoError::InvalidInput(
+            "only version 4 keys are supported".into(),
+        ));
+    }
+    Ok(ExternalKeyInfo {
+        public_key: key.to_bytes().map_err(backend)?,
+        fingerprint: hex::encode(key.fingerprint().as_bytes()),
+        created_at_secs: key.primary_key.created_at().as_secs(),
+    })
+}
+
+/// Every key in a key server's answer (armored or binary; WKD and HKP may
+/// serve several), each checked by [`inspect_external_public_key`]; the
+/// newest valid one wins.
+pub fn inspect_external_public_keys(
+    keys: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<ExternalKeyInfo> {
+    if keys.is_empty() || keys.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let parsed: Vec<SignedPublicKey> = if keys.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----")
+    {
+        SignedPublicKey::from_armor_many(keys)
+            .map(|(iter, _)| iter.filter_map(|key| key.ok()).collect())
+            .map_err(|_| CryptoError::InvalidInput("public keys do not parse".into()))?
+    } else {
+        SignedPublicKey::from_bytes_many(keys)
+            .map(|iter| iter.filter_map(|key| key.ok()).collect())
+            .map_err(|_| CryptoError::InvalidInput("public keys do not parse".into()))?
+    };
+    parsed
+        .iter()
+        .filter_map(|key| key.to_bytes().ok())
+        .filter_map(|bytes| inspect_external_public_key(&bytes, address, now_secs).ok())
+        .max_by_key(|info| info.created_at_secs)
+        .ok_or_else(|| CryptoError::InvalidInput("no usable key for the address".into()))
+}
+
+/// Checks an outside key for `address` at `now_secs`: version 4, not
+/// revoked, a user ID for the address with a valid self-signature that has
+/// not expired or been revoked, and a bound encryption subkey Kutup can use.
+/// Certifications by other keys (Proton adds one) are ignored, as OpenPGP
+/// implementations do. Armored or binary in.
+pub fn inspect_external_public_key(
+    public_key: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<ExternalKeyInfo> {
+    if public_key.is_empty() || public_key.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let key = parse_public_key(public_key)?;
+    if key.primary_key.version() != pgp::types::KeyVersion::V4 {
+        return Err(CryptoError::InvalidInput(
+            "only version 4 keys are supported".into(),
+        ));
+    }
+    // A revocation counts when the key itself issued it and it verifies
+    // (designated revokers are not honoured).
+    if key
+        .details
+        .revocation_signatures
+        .iter()
+        .any(|sig| self_issued(sig, &key) && sig.verify_key(&key.primary_key).is_ok())
+    {
+        return Err(CryptoError::InvalidInput("public key is revoked".into()));
+    }
+    let created = key.primary_key.created_at().as_secs();
+    let address = address.trim().to_lowercase();
+    // The user ID for the address, with its valid self-signatures; other
+    // people's certifications (Proton adds its own) do not count either way.
+    let (_, own) = key
+        .details
+        .users
+        .iter()
+        .filter(|user| email_of(user.id.id()).as_deref() == Some(address.as_str()))
+        .find_map(|user| {
+            let own: Vec<_> = user
+                .signatures
+                .iter()
+                .filter(|sig| self_issued(sig, &key))
+                .filter(|sig| {
+                    sig.verify_certification(&key.primary_key, pgp::types::Tag::UserId, &user.id)
+                        .is_ok()
+                })
+                .cloned()
+                .collect();
+            (!own.is_empty()).then_some((user, own))
+        })
+        .ok_or_else(|| {
+            CryptoError::InvalidInput(
+                "public key has no self-signed user ID for the address".into(),
+            )
+        })?;
+    if own
+        .iter()
+        .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::CertRevocation))
+    {
+        return Err(CryptoError::InvalidInput("user ID is revoked".into()));
+    }
+    let certifications: Vec<_> = own
+        .iter()
+        .filter(|sig| sig.typ() != Some(pgp::packet::SignatureType::CertRevocation))
+        .cloned()
+        .collect();
+    if certifications.is_empty() || expired(created, &certifications, now_secs) {
+        return Err(CryptoError::InvalidInput("public key has expired".into()));
+    }
+    if usable_encryption_subkey(&key, now_secs).is_none() {
+        return Err(CryptoError::InvalidInput(
+            "public key has no usable encryption subkey".into(),
+        ));
+    }
+    Ok(ExternalKeyInfo {
+        public_key: key.to_bytes().map_err(backend)?,
+        fingerprint: hex::encode(key.fingerprint().as_bytes()),
+        created_at_secs: created,
+    })
+}
+
+/// Encrypts `plaintext` to every outside key (each checked by
+/// [`inspect_external_public_key`]) and to `own_public_key`, signed with
+/// `signer_secret_key` inside the encryption, as Proton and Thunderbird
+/// send PGP/MIME: an armored message for the `application/octet-stream`
+/// part of RFC 3156 `multipart/encrypted`.
+pub fn encrypt_armored_signed(
+    recipient_public_keys: &[&[u8]],
+    signer_secret_key: &[u8],
+    plaintext: &[u8],
+    now_secs: u64,
+) -> Result<String> {
+    if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_SPLIT_RECIPIENTS {
+        return Err(CryptoError::InvalidInput(
+            "a message needs 1 to 100 recipient keys".into(),
+        ));
+    }
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| parse_public_key(key))
+        .collect::<Result<Vec<_>>>()?;
+    let signer = SignedSecretKey::from_bytes(signer_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+    for key in &keys {
+        let subkey = usable_encryption_subkey(key, now_secs).ok_or_else(|| {
+            CryptoError::InvalidInput("a recipient key has no usable encryption subkey".into())
+        })?;
+        builder
+            .encrypt_to_key(rand::rngs::OsRng, subkey)
+            .map_err(backend)?;
+    }
+    builder.sign(
+        &signer.primary_key,
+        Password::empty(),
+        HashAlgorithm::Sha512,
+    );
+    builder
+        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .map_err(backend)
+}
+
+/// Whether `signature` (armored or binary, as in a `multipart/signed`
+/// message's `application/pgp-signature` part) signs `content` with
+/// `signer_public_key` or one of its subkeys.
+pub fn verify_detached(signature: &[u8], content: &[u8], signer_public_key: &[u8]) -> Result<bool> {
+    let signature = if signature.starts_with(b"-----BEGIN PGP SIGNATURE-----") {
+        pgp::composed::DetachedSignature::from_armor_single(signature).map(|(sig, _)| sig)
+    } else {
+        pgp::composed::DetachedSignature::from_bytes(signature)
+    }
+    .map_err(|_| CryptoError::InvalidInput("signature does not parse".into()))?;
+    let signer = parse_public_key(signer_public_key)?;
+    if signature.verify(&signer.primary_key, content).is_ok() {
+        return Ok(true);
+    }
+    Ok(signer
+        .public_subkeys
+        .iter()
+        .any(|sub| signature.verify(&sub.key, content).is_ok()))
+}
+
+/// A cleartext-signed message (`-----BEGIN PGP SIGNED MESSAGE-----`): its
+/// text, and whether it verifies against `signer_public_key` when given.
+pub fn verify_cleartext(message: &str, signer_public_key: Option<&[u8]>) -> Result<(String, bool)> {
+    let (signed, _) = pgp::composed::CleartextSignedMessage::from_string(message)
+        .map_err(|_| CryptoError::InvalidInput("not a cleartext-signed message".into()))?;
+    let verified = match signer_public_key {
+        Some(key) => {
+            let signer = parse_public_key(key)?;
+            signed.verify(&signer.primary_key).is_ok()
+                || signer
+                    .public_subkeys
+                    .iter()
+                    .any(|sub| signed.verify(&sub.key).is_ok())
+        }
+        None => false,
+    };
+    Ok((signed.signed_text(), verified))
 }
 
 /// A message encrypted once for several recipients, split the way Proton
@@ -461,6 +853,52 @@ pub fn message_key_id(message: &[u8]) -> Result<[u8; 8]> {
     key_packet_key_id(&message[..length])
 }
 
+/// The key IDs an OpenPGP message (armored or binary) is encrypted to, as
+/// far as a server can tell without opening it: its leading key packets,
+/// which must be followed by encrypted data. Version 6 key packets carry no
+/// key ID and are skipped; a message with none readable is still encrypted.
+/// Errors when `message` is not an encrypted OpenPGP message.
+pub fn pgp_message_key_ids(message: &[u8]) -> Result<Vec<[u8; 8]>> {
+    let not_encrypted = || CryptoError::InvalidInput("not an encrypted OpenPGP message".into());
+    let trimmed = message.trim_ascii_start();
+    let binary;
+    let mut rest: &[u8] = if trimmed.starts_with(b"-----BEGIN PGP MESSAGE-----") {
+        let mut reader = pgp::armor::Dearmor::new(std::io::BufReader::new(trimmed));
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut bytes).map_err(|_| not_encrypted())?;
+        if reader.typ != Some(pgp::armor::BlockType::Message) {
+            return Err(not_encrypted());
+        }
+        binary = bytes;
+        &binary
+    } else {
+        message
+    };
+    let mut ids = Vec::new();
+    let mut key_packets = 0;
+    loop {
+        let tag = rest
+            .first()
+            .and_then(|first| packet_tag(*first))
+            .ok_or_else(not_encrypted)?;
+        match tag {
+            TAG_PKESK => {
+                let (_, header, length) = packet_extent(rest).map_err(|_| not_encrypted())?;
+                if rest.get(header) == Some(&3) {
+                    ids.push(key_packet_key_id(&rest[..length])?);
+                }
+                key_packets += 1;
+                if key_packets > MAX_SPLIT_RECIPIENTS * 2 {
+                    return Err(not_encrypted());
+                }
+                rest = &rest[length..];
+            }
+            TAG_SEIPD | TAG_AEAD if key_packets > 0 => return Ok(ids),
+            _ => return Err(not_encrypted()),
+        }
+    }
+}
+
 /// The key ID of the subkey `public_key` is encrypted to.
 pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
     let recipient = parse_recipient(public_key)?;
@@ -473,6 +911,7 @@ pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
 const MAX_SPLIT_RECIPIENTS: usize = 100;
 const TAG_PKESK: u8 = 1;
 const TAG_SEIPD: u8 = 18;
+const TAG_AEAD: u8 = 20;
 
 fn packet_tag(first: u8) -> Option<u8> {
     match first {

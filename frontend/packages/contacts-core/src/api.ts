@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   deriveAccountIdentityKeys,
+  describeExternalMailKey,
+  fromBase64,
   openContactCard,
   sealContactCard,
   signContactSummary,
@@ -10,7 +12,7 @@ import {
 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { updateSession, useRequiredSession, type Session } from '@kutup/session/store'
-import { displayName, newUid, type Contact, type ContactDraft, type ContactGroup } from './model'
+import { displayName, emptyDraft, newUid, type Contact, type ContactDraft, type ContactGroup, type ContactKey } from './model'
 import { parseVCards, toVCard } from './vcard'
 
 // The account's address book (docs/plans/contacts.md): summaries verified
@@ -49,8 +51,13 @@ async function openRow(row: ContactRow, account: string, masterKey: string, auth
     const vcard = await openContactCard(masterKey, account, summary.uid, row.card)
     const [card] = parseVCards(vcard)
     if (!card) return null
-    // The signed summary is authoritative for what it holds.
-    const draft = { ...card.draft, name: summary.name, groups: summary.groups }
+    // The signed summary is authoritative for what it holds: a pinned key
+    // counts only when the summary names its fingerprint, with its flags.
+    const keys = (await withFingerprints(card.draft.keys)).flatMap((key) => {
+      const pinned = summary.pinnedKeys.find((p) => p.address === key.address && p.fingerprint === key.fingerprint)
+      return pinned ? [{ ...key, encrypt: pinned.encrypt, sign: pinned.sign }] : []
+    })
+    const draft = { ...card.draft, name: summary.name, groups: summary.groups, keys }
     return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt }
   } catch (error) {
     console.warn('contacts: a contact did not verify or open', row.id, error)
@@ -68,21 +75,41 @@ export function useContacts() {
   return useQuery({
     queryKey: contactsKey,
     enabled: account.isSuccess,
-    queryFn: async () => {
-      const masterKey = toBase64(session.masterKey)
-      const { authorityPublicKey } = await deriveAccountIdentityKeys(masterKey)
-      const rows: ContactRow[] = []
-      for (let offset = 0; ; ) {
-        const { data } = await api.get<{ contacts: ContactRow[]; total: number }>('/contacts', { params: { offset, limit: 1000 } })
-        rows.push(...data.contacts)
-        offset += data.contacts.length
-        if (data.contacts.length === 0 || offset >= data.total) break
-      }
-      const opened = await Promise.all(rows.map((row) => openRow(row, account.data!, masterKey, authorityPublicKey)))
-      const contacts = opened.filter((contact): contact is Contact => contact !== null)
-      return { contacts, unreadable: rows.length - contacts.length }
-    },
+    queryFn: () => loadContacts(session, account.data!),
   })
+}
+
+async function loadContacts(session: Session, account: string): Promise<{ contacts: Contact[]; unreadable: number }> {
+  const masterKey = toBase64(session.masterKey)
+  const { authorityPublicKey } = await deriveAccountIdentityKeys(masterKey)
+  const rows: ContactRow[] = []
+  for (let offset = 0; ; ) {
+    const { data } = await api.get<{ contacts: ContactRow[]; total: number }>('/contacts', { params: { offset, limit: 1000 } })
+    rows.push(...data.contacts)
+    offset += data.contacts.length
+    if (data.contacts.length === 0 || offset >= data.total) break
+  }
+  const opened = await Promise.all(rows.map((row) => openRow(row, account, masterKey, authorityPublicKey)))
+  const contacts = opened.filter((contact): contact is Contact => contact !== null)
+  return { contacts, unreadable: rows.length - contacts.length }
+}
+
+/** Most pinned keys one contact may have (kutup-crypto `MAX_PINNED_KEYS`). */
+const MAX_PINNED_KEYS = 20
+
+/** Keys with their fingerprints, read from the keys themselves; keys that do not parse are dropped. */
+async function withFingerprints(keys: ContactKey[]): Promise<ContactKey[]> {
+  const read = await Promise.all(
+    keys.map(async (key) => {
+      try {
+        const info = await describeExternalMailKey(fromBase64(key.publicKey))
+        return { ...key, address: key.address.toLowerCase(), publicKey: info.publicKey, fingerprint: info.fingerprint }
+      } catch {
+        return null
+      }
+    }),
+  )
+  return read.filter((key): key is ContactKey => key !== null)
 }
 
 function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
@@ -90,12 +117,23 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
   const emails = draft.emails
     .map((email) => ({ address: email.address.trim().toLowerCase(), label: email.label?.trim() || undefined }))
     .filter((email) => email.address && !seen.has(email.address) && seen.add(email.address))
-  return { uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys: [] }
+  const pinnedKeys = draft.keys
+    .filter((key) => seen.has(key.address) && key.fingerprint)
+    .map(({ address, fingerprint, encrypt, sign }) => ({ address, fingerprint, encrypt, sign }))
+    .sort((a, b) => (a.address === b.address ? a.fingerprint.localeCompare(b.fingerprint) : a.address < b.address ? -1 : 1))
+    .slice(0, MAX_PINNED_KEYS)
+  return { uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
 }
 
 /** The request body for a contact: signed summary and sealed card. */
-async function prepare(session: Session, account: string, uid: string, draft: ContactDraft) {
+async function prepare(session: Session, account: string, uid: string, input: ContactDraft) {
   const masterKey = toBase64(session.masterKey)
+  // One key per address that is still among the emails.
+  const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
+  const keys = (await withFingerprints(input.keys)).filter(
+    (key, i, all) => addresses.has(key.address) && all.findIndex((k) => k.address === key.address) === i,
+  )
+  const draft = { ...input, keys }
   const summary = summaryOf(uid, draft)
   const signed = await signContactSummary(masterKey, account, summary)
   const card = await sealContactCard(masterKey, account, uid, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
@@ -200,6 +238,33 @@ export function useDeleteGroup() {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: contactGroupsKey }),
   })
+}
+
+/**
+ * Pins `publicKey` (binary, base64) for `address`: on the contact that has
+ * the address, or on a new contact named after it (docs/plans/mail.md, C3;
+ * a key is pinned only at the person's request). Replaces a key pinned
+ * there before.
+ */
+export function usePinKey() {
+  const queryClient = useQueryClient()
+  return useContactMutation(
+    async (input: { address: string; name?: string; publicKey: string }, session, account) => {
+      const address = input.address.trim().toLowerCase()
+      const key: ContactKey = { address, publicKey: input.publicKey, fingerprint: '', encrypt: true, sign: true }
+      // Fresh, so the key lands on the contact as it is now.
+      const { contacts } = await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session, account) })
+      const existing = contacts.find((c) => c.draft.emails.some((e) => e.address.trim().toLowerCase() === address))
+      if (existing) {
+        const draft = { ...existing.draft, keys: [...existing.draft.keys.filter((k) => k.address !== address), key] }
+        const body = await prepare(session, account, existing.uid, draft)
+        await api.put(`/contacts/${existing.id}`, { ...body, revision: existing.revision })
+        return
+      }
+      const draft: ContactDraft = { ...emptyDraft(), name: input.name?.trim() ?? '', emails: [{ address }], keys: [key] }
+      await api.post('/contacts', await prepare(session, account, newUid(), draft))
+    },
+  )
 }
 
 export { useContactEmailSearch, type ContactEmailMatch } from './search'

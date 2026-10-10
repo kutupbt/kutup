@@ -1,4 +1,5 @@
-//! IP classification shared by the unified federation resolver. Feature
+//! IP classification shared by the unified federation resolver and the
+//! narrow public fetchers (Chat link previews, mail key lookup). Feature
 //! adapters never validate or dereference caller-supplied URLs themselves.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -47,6 +48,52 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
         IpAddr::V4(v4) => PRIVATE_V4.iter().any(|&(net, bits)| v4_in(v4, net, bits)),
         IpAddr::V6(v6) => PRIVATE_V6.iter().any(|&(net, bits)| v6_in(v6, net, bits)),
     }
+}
+
+/// Globally routable unicast: not loopback, private, link-local, shared
+/// (CGNAT), multicast, broadcast, documentation, benchmarking, reserved,
+/// unique-local, or an IPv4 address wrapped in IPv6.
+pub fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_v4(ip),
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_public_v4(mapped);
+            }
+            let segments = ip.segments();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                // fc00::/7 unique local, fe80::/10 link-local
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                // 2001:db8::/32 documentation
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                // 64:ff9b::/96 NAT64 and ::/96 IPv4-compatible can reach IPv4 space
+                || (segments[0] == 0x0064 && segments[1] == 0xff9b)
+                || segments[..6] == [0, 0, 0, 0, 0, 0])
+        }
+    }
+}
+
+fn is_public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || a == 0
+        // 100.64.0.0/10 shared address space
+        || (a == 100 && (64..128).contains(&b))
+        // 192.0.0.0/24 protocol assignments
+        || (a == 192 && b == 0 && c == 0)
+        // 198.18.0.0/15 benchmarking
+        || (a == 198 && (b == 18 || b == 19))
+        // 240.0.0.0/4 reserved
+        || a >= 240)
 }
 
 #[cfg(test)]

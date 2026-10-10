@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds the two images Kutup is made of and pushes them to a registry, so a
-# server can run Kutup without building it (docker-compose.images.yml). The
-# Rust build needs several GiB of memory; a small VPS cannot do it.
+# Builds the images Kutup is made of and pushes them to a registry, so a
+# server can run Kutup without building it (docker-compose.images.yml, and
+# docker-compose.mail-images.yml for Mail's Stalwart setup). The Rust build
+# needs several GiB of memory; a small VPS cannot do it.
 #
 #   scripts/publish-images.sh            # build and push
 #   scripts/publish-images.sh --no-push  # build only
@@ -31,7 +32,7 @@ tag="$(git rev-parse --short=12 HEAD)"
 source_url="https://github.com/kutupbt/kutup"
 
 build() {
-  local name="$1" dockerfile="$2" title="$3"
+  local name="$1" dockerfile="$2" title="$3" context="${4:-.}"
   docker build \
     --file "$dockerfile" \
     --tag "$registry/$name:$tag" \
@@ -39,17 +40,20 @@ build() {
     --label "org.opencontainers.image.revision=$revision" \
     --label "org.opencontainers.image.title=$title" \
     --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
-    .
+    "$context"
 }
 
 build kutup-server Dockerfile.server "Kutup server"
 build kutup-web frontend/Dockerfile "Kutup web apps"
+build kutup-stalwart-setup stalwart/Dockerfile "Kutup Stalwart setup" stalwart
 
 if [ "$push" = 1 ]; then
   docker push "$registry/kutup-server:$tag"
   docker push "$registry/kutup-web:$tag"
+  docker push "$registry/kutup-stalwart-setup:$tag"
 fi
 
 echo
 echo "KUTUP_SERVER_IMAGE=$registry/kutup-server:$tag"
 echo "KUTUP_WEB_IMAGE=$registry/kutup-web:$tag"
+echo "KUTUP_STALWART_SETUP_IMAGE=$registry/kutup-stalwart-setup:$tag"

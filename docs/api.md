@@ -965,7 +965,10 @@ mail-key purpose and this account's login email; the key list verifies against
 the account's authority key, names this account and address, follows the
 current list (sequence + 1, previous hash) or is sequence 1, and lists exactly
 the stored keys plus the new one. Primary and flags then follow the list. All
-in one transaction.
+in one transaction. The same call adds a new key (rotation: the list makes it
+primary and keeps the others to open older mail) and a key imported from an
+OpenPGP secret key file (the browser unlocks the file and seals the key like a
+generated one; the server cannot tell them apart).
 
 **Auth:** Bearer JWT
 
@@ -974,6 +977,22 @@ in one transaction.
 **Response:** the address, as in `GET /api/mail/addresses`. `400` for an
 invalid key, envelope or list; `409` when the list does not follow the current
 one (another device changed it; reload and retry) or the key is in use.
+
+### PUT /api/mail/addresses/:id/key-list
+
+Publish the next signed key list for the same keys: another key made primary,
+or a key marked obsolete (flag `NOT_OBSOLETE` cleared: not encrypted to, still
+opens older mail) or compromised (both flags cleared: its signatures are no
+longer trusted either). The list is checked as for adding a key and must list
+exactly the stored keys; its primary must keep both flags.
+
+**Auth:** Bearer JWT
+
+**Body:** `{ "keyList": { "data": "base64", "signature": "base64" } }`
+
+**Response:** the address, as in `GET /api/mail/addresses`. `400` for an
+invalid list or one that adds or leaves out a key; `409` when it does not
+follow the current one.
 
 ### GET /api/mail/keys?email=
 
@@ -985,6 +1004,22 @@ manifest. Rate-limited like user lookup.
 
 **Response:** `{ "address": "...", "account": "username@server", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
 
+### GET /api/mail/keys/outside?email=
+
+An outside address's OpenPGP key (docs/plans/mail.md, C3), looked up by the
+server in order: its Web Key Directory (advanced, then direct), Proton's key
+server for Proton's own domains, keys.openpgp.org (verified addresses). The
+key is checked before it is returned: version 4, not revoked, a user ID for
+the address with a valid self-signature (other keys' certifications are
+ignored), not expired, a bound encryption subkey. Cached for an hour.
+Rate-limited like user lookup.
+
+**Auth:** Bearer JWT
+
+**Response:** `{ "address", "source": "wkd" | "proton" | "keysOpenpgp", "publicKey", "fingerprint", "createdAt" }`;
+`404` when no source has a usable key; `400` for a Kutup address (use
+`GET /api/mail/keys`).
+
 ### GET /.well-known/openpgpkey/hu/:hash?l=:local
 
 Web Key Directory, direct method, outside `/api`: the binary public keys of
@@ -992,6 +1027,10 @@ Web Key Directory, direct method, outside `/api`: the binary public keys of
 `application/octet-stream`. `hash` is the z-base-32 SHA-1 of the lowercased
 local part and must match `l`; anything else is `404`. No authentication;
 rate-limited. `GET /.well-known/openpgpkey/policy` returns an empty policy.
+The advanced method answers the same at
+`/.well-known/openpgpkey/:domain/hu/:hash?l=` and
+`/.well-known/openpgpkey/:domain/policy`, for `domain` equal to the server
+name (served on `openpgpkey.<server name>`); any other domain is `404`.
 
 ---
 
@@ -1011,7 +1050,8 @@ first, at most 200 per page (default 50).
 **Auth:** Bearer JWT
 
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
-`protection` is `zero_access` (encrypted on arrival) or `end_to_end`. Pass
+`protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
+Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
 `next` as `before` for the next page; it is absent on the last. `400` for an
 unknown folder or cursor.
 
@@ -1063,17 +1103,25 @@ most 25 MB) → `{ "id", "size" }`; `GET` the list; `GET` or `DELETE`
 
 ### POST /api/mail/send
 
-Multipart: `meta` (the draft fields, plus `draftId` and `keyPackets`: base64
-key packets, `self` for your copy and one per Kutup recipient address),
-`data` (the shared data packet) and, when any recipient is outside Kutup,
-`mime` (the same message in plaintext, From you, the same Message-ID, no Bcc
-header). The server stores `key packet || data packet` for you (Sent) and
-each Kutup recipient (Inbox), hands `mime` to Stalwart for the others, and
-deletes the draft.
+Multipart: `meta` (the draft fields, plus `draftId`, `keyPackets`: base64
+key packets, `self` for your copy and one per Kutup recipient address, and
+`pgp`: `[{ "recipients": [...] }]`), `data` (the shared data packet),
+`pgp0`, `pgp1`, … (one per `pgp` entry: an RFC 3156 `multipart/encrypted`
+message for outside recipients with OpenPGP keys, To and Cc together, each
+Bcc recipient alone) and, when outside recipients without a PGP message
+remain, `mime` (the message in plaintext). Each of `mime` and the PGP
+messages must be From you with the same Message-ID and no Bcc header; a PGP
+message must hold an encrypted OpenPGP message, and `mime` is refused when
+nobody needs it. The server stores `key packet || data packet` for you
+(Sent) and each Kutup recipient (Inbox), hands `mime` and each PGP message
+to Stalwart, and deletes the draft. Your sent copy is `end_to_end` when no
+recipient got the plaintext.
 
 **Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
-status `delivered` (Kutup, end to end), `sent` (outside) or `full` (a Kutup
-user out of storage; not delivered). Errors: `409` `keyChanged` with
+status `delivered` (Kutup, end to end), `sent` (outside), `full` (a Kutup
+user out of storage; not delivered) or `failed` (refused by Stalwart after
+an earlier submission of the same send went out; the plaintext goes first,
+and its refusal fails the whole send). Errors: `409` `keyChanged` with
 `address` (fetch the key again), `422` `unknownRecipient` or `refused`, `429`
 `sendLimit` (`MAIL_SEND_RECIPIENTS_PER_HOUR`, `…_PER_DAY`: 100 and 500 outside
 recipients by default), `413` over 25 MB or quota, `503` when Stalwart is
@@ -1082,7 +1130,10 @@ unreachable.
 ### GET /api/mail/sending
 
 Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
-"sentDay", "newAccount", "paused" }`. `paused` is `admin`, `bounces` or `spam`
+"sentDay", "newAccount", "paused", "outsideAllowed" }`. `outsideAllowed` is
+false while the server does not send outside for you (`MAIL_OUTSIDE_SENDING`
+`off`, or `admins` and you are not one); `POST /api/mail/send` then answers
+`403` with `code: outsideSendingOff` for any outside recipient. `paused` is `admin`, `bounces` or `spam`
 while sending outside is paused (mail between Kutup users still goes). New
 accounts may send to 50 outside recipients a day in their first week
 (`MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), then

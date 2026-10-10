@@ -54,6 +54,41 @@ export async function generateMailAddressKey(
   return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, loginEmail, address, seconds)
 }
 
+/** Shortest passphrase an exported key may be locked with (kutup-crypto `MIN_EXPORT_PASSPHRASE_CHARS`). */
+export const MIN_MAIL_KEY_PASSPHRASE = 8
+
+/** An address key as an armored OpenPGP secret key file locked with `passphrase`. */
+export async function exportMailAddressKey(key: SealedMailKey, passphrase: string): Promise<string> {
+  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, passphrase)
+}
+
+/** The passphrase does not open the key file. */
+export class WrongKeyPassphrase extends Error {
+  constructor() {
+    super('wrong passphrase')
+  }
+}
+
+/**
+ * Reads an address key from an OpenPGP secret key file (Kutup's export,
+ * Proton's or GnuPG's) for `address`, sealed under the master key.
+ */
+export async function importMailAddressKey(
+  masterKeyBase64: string,
+  loginEmail: string,
+  address: string,
+  file: Uint8Array,
+  passphrase: string,
+): Promise<GeneratedMailAddressKey> {
+  try {
+    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, loginEmail, address, file, passphrase)
+  } catch (error) {
+    // WASM throws its messages as strings.
+    if (error === 'wrong passphrase' || (error instanceof Error && error.message === 'wrong passphrase')) throw new WrongKeyPassphrase()
+    throw error
+  }
+}
+
 export async function inspectMailAddressPublicKey(
   publicKeyBase64: string,
   address: string,
@@ -153,4 +188,51 @@ export async function encryptMailMessage(key: SealedMailKey, recipientPublicKeys
   } finally {
     sealed.free()
   }
+}
+
+/** An outside correspondent's key, checked (docs/plans/mail.md, C3). */
+export interface ExternalMailKey {
+  /** Binary, base64. */
+  publicKey: string
+  fingerprint: string
+  createdAt: number
+}
+
+/**
+ * Checks an outside key for `address`: self-signed, not revoked or expired,
+ * a user ID for the address and an encryption subkey. Armored or binary.
+ */
+export async function inspectExternalMailKey(publicKey: Uint8Array, address: string): Promise<ExternalMailKey> {
+  return (await getCryptoWasm()).inspectExternalMailKey(publicKey, address)
+}
+
+/** An outside key as it is, unchecked: for showing a pinned key, even an expired one. */
+export async function describeExternalMailKey(publicKey: Uint8Array): Promise<ExternalMailKey> {
+  return (await getCryptoWasm()).describeExternalMailKey(publicKey)
+}
+
+/**
+ * Encrypts to outside keys and the sender's own (base64), signed inside:
+ * the armored message for a PGP/MIME `multipart/encrypted` part.
+ */
+export async function encryptMailPgp(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
+  return (await getCryptoWasm()).encryptMailPgp(
+    key.masterKeyBase64,
+    key.loginEmail,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    recipientPublicKeys,
+    plaintext,
+  )
+}
+
+/** Whether a `multipart/signed` signature signs `content` with the key (base64). */
+export async function verifyMailDetachedSignature(signature: Uint8Array, content: Uint8Array, signerPublicKey: string): Promise<boolean> {
+  return (await getCryptoWasm()).verifyMailDetachedSignature(signature, content, signerPublicKey)
+}
+
+/** A cleartext-signed message's text, and whether it verifies against the key when given. */
+export async function verifyMailCleartext(message: string, signerPublicKey?: string): Promise<{ text: string; verified: boolean }> {
+  return (await getCryptoWasm()).verifyMailCleartext(message, signerPublicKey)
 }

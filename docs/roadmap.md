@@ -448,7 +448,7 @@ arrival, and direct sending. Phases, each with its own plan before code:
   authority, published by WKD; created after sign-in and shown in Account →
   Settings → Encryption keys
   ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)). Key import,
-  rotation and marking keys obsolete or compromised come with Mail (C3).
+  export, rotation and marking keys obsolete or compromised came with C3e.
 - **B. Contacts** (done): the encrypted address book and its app at
   `contacts.` ([`plans/contacts.md`](plans/contacts.md)): names and emails
   readable and signed by the account, everything else sealed; groups, vCard
@@ -464,8 +464,16 @@ arrival, and direct sending. Phases, each with its own plan before code:
   recipient), sending outside through Stalwart (DKIM, sending limits),
   drafts, folders, search on readable fields, safe HTML. Later (C2f): body
   search in the browser, labels and custom folders, emptying Trash and Spam
-  after 30 days, web push. Then C3: PGP to outside users and the MX switch
-  from Cloudflare.
+  after 30 days, web push. C3, PGP with outside users (in progress): the
+  server finds their keys (WKD, Proton, keys.openpgp.org) and accepts
+  ready-made PGP/MIME messages; Mail encrypts to found or pinned keys,
+  opens and verifies PGP mail, sends an Autocrypt header and offers to
+  trust keys that come with mail; Contacts keeps pinned keys; the mail gate
+  runs against a GnuPG correspondent; address keys can be rotated,
+  imported, exported and retired. Left: the operator's MX switch from
+  Cloudflare (checklist in `self-hosting.md`; for kutup.dev the website
+  Worker must also pass WKD through) and the manual Proton check
+  (`test/mail-proton.md`).
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.

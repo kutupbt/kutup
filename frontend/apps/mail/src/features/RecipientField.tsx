@@ -1,10 +1,12 @@
-import { LockKeyhole, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
+import type { PinnedKeys } from '@kutup/mail-core/api'
 import type { Mailbox } from '@kutup/mail-core/mime'
 import { cn } from '@kutup/ui/lib/cn'
 import { isAddress, parseRecipients } from './recipients'
+import { RecipientLock } from './RecipientLock'
 
 /**
  * To, Cc or Bcc: chips for the people added, and a field that suggests from
@@ -16,6 +18,7 @@ export function RecipientField({
   value,
   onChange,
   domain,
+  pinned,
   autoFocus,
 }: {
   label: string
@@ -23,6 +26,8 @@ export function RecipientField({
   onChange: (next: Mailbox[]) => void
   /** This server's domain: its addresses get end-to-end encryption. */
   domain: string
+  /** Keys pinned in Contacts (undefined while they load). */
+  pinned: PinnedKeys | undefined
   autoFocus?: boolean
 }) {
   const { t } = useTranslation()
@@ -43,7 +48,6 @@ export function RecipientField({
       </label>
       {value.map((mailbox) => {
         const valid = isAddress(mailbox.address)
-        const internal = valid && mailbox.address.endsWith(`@${domain}`)
         return (
           <span
             key={mailbox.address}
@@ -53,7 +57,7 @@ export function RecipientField({
               valid ? 'border-border bg-muted/60' : 'border-destructive text-destructive',
             )}
           >
-            {internal ? <LockKeyhole className="size-3 text-primary" aria-label={t('compose.endToEnd')} /> : null}
+            {valid ? <RecipientLock address={mailbox.address} domain={domain} pinned={pinned} /> : null}
             <span className="truncate">{mailbox.name || mailbox.address}</span>
             {!valid ? <span className="sr-only">{t('compose.invalidAddress')}</span> : null}
             <button

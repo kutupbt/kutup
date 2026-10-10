@@ -52,7 +52,13 @@ For Kutup users, verification already exists: a pin on the account authority
 Kutup address with that account's state where the app holds the pin. A
 contact-held copy of the pin, so every app sees the same shield without asking
 Chat, is part of slice B4. For outside PGP users, the summary pins their key
-fingerprint (`pinnedKeys`), as Proton's `KEY` field does. Mail (C3) uses it.
+fingerprint (`pinnedKeys`, with its encrypt and sign preferences), as
+Proton's `KEY` field does, and the sealed vCard holds the key itself in
+Proton's form (`ITEM1.EMAIL`, `ITEM1.KEY:data:application/pgp-keys;base64,…`,
+`ITEM1.X-PM-ENCRYPT`, `ITEM1.X-PM-SIGN`). A key in the card counts only when
+the signed summary names its fingerprint. Keys are added from a key file in
+the contact's view or trusted from a message in Mail (C3), never on their
+own.
 
 ## Data
 

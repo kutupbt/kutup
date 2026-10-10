@@ -42,7 +42,12 @@
     "endToEnd": "Uçtan uca şifreli",
     "zeroAccess": "Sıfır erişimli şifrelemeyle saklanıyor: ulaştığı anda şifrelendi",
     "sentZeroAccess": "Sıfır erişimli şifrelemeyle gönderildi: sizin kopyanız şifreli, alıcınınki değil",
-    "failed": "Gönderen doğrulanamadı"
+    "failed": "Gönderen doğrulanamadı",
+    "pgpEncrypted": "PGP ile şifrelenmiş ileti",
+    "pgpEncryptedSigned": "PGP ile şifrelenmiş ve imzalanmış ileti",
+    "pgpVerified": "Doğrulanmış gönderenden PGP ile şifrelenmiş ileti",
+    "pgpSigned": "PGP ile imzalanmış ileti",
+    "pgpSignedVerified": "Doğrulanmış gönderenden PGP ile imzalanmış ileti"
   },
   "list": {
     "to": "Alıcı:",
@@ -81,7 +86,15 @@
     "forward": "İlet",
     "editDraft": "Taslağı düzenle",
     "downloadOriginal": "Özgün postayı indir (.eml)",
-    "addSender": "Göndereni kişilere ekle"
+    "addSender": "Göndereni kişilere ekle",
+    "trustKeyTitle": "{{address}} açık anahtarını gönderdi",
+    "trustKeyDescription": "İletilerinin ondan geldiğini doğrulamak için bu anahtara güvenin. Ona giden e-postalar da bu anahtarla şifrelenir. Parmak izi: {{fingerprint}}",
+    "replaceKeyTitle": "{{address}} farklı bir açık anahtar gönderdi",
+    "replaceKeyDescription": "Bu, onun için güvendiğiniz anahtar değil. Yalnızca anahtarını değiştirdiğini biliyorsanız güvenin. Parmak izi: {{fingerprint}}",
+    "trustKey": "Anahtara güven",
+    "keyTrusted": "{{address}} için anahtara güvenildi.",
+    "trustFailed": "Anahtar Kişiler'e kaydedilemedi.",
+    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir."
   },
   "actions": {
     "archive": "Arşivle",
@@ -143,6 +156,7 @@
     "invalidRecipient": "{{address}} geçerli bir adres değil.",
     "unknownRecipient": "{{address}} bu sunucuda bir adres değil.",
     "notDeliveredFull": "Gönderildi, ancak {{addresses}} adresine ulaştırılamadı: depolama alanı dolu.",
+    "notSentRefused": "Gönderildi, ancak posta sunucusu {{addresses}} için reddetti.",
     "sendLimit": "Gönderme sınırına ulaştınız. Daha sonra yeniden deneyin.",
     "sendFailed": "Posta gönderilemedi.",
     "saving": "Kaydediliyor…",
@@ -164,7 +178,22 @@
     "addContact": "Ekle",
     "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
-    "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider."
+    "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
+    "pinnedKeyUnusable": "{{address}} için güvendiğiniz anahtar artık kullanılamıyor. Kişiler'de değiştirin ya da kaldırın.",
+    "keyLookupFailed": "{{address}} için anahtarlar aranamadı. Yeniden deneyin.",
+    "lock": {
+      "looking": "Şifreleme anahtarları aranıyor",
+      "lookupFailed": "Şifreleme anahtarları aranamadı",
+      "pinned": "Güvendiğiniz bir anahtarla uçtan uca şifreli",
+      "pinnedUnusable": "Bu adres için güvendiğiniz anahtar artık kullanılamıyor",
+      "found": {
+        "wkd": "Alıcının alan adından alınan bir anahtarla uçtan uca şifreli (Web Key Directory)",
+        "proton": "Alıcının Proton anahtarıyla uçtan uca şifreli",
+        "keysOpenpgp": "keys.openpgp.org'dan alınan bir anahtarla uçtan uca şifreli"
+      }
+    },
+    "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
+    "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",

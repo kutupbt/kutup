@@ -71,6 +71,9 @@ services:
       MAIL_SEND_RECIPIENTS_PER_DAY: ${MAIL_SEND_RECIPIENTS_PER_DAY:-500}
       MAIL_NEW_ACCOUNT_DAYS: ${MAIL_NEW_ACCOUNT_DAYS:-7}
       MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY: ${MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY:-50}
+      # off, admins (the sending trial) or on; off until SPF, DKIM, DMARC and
+      # the PTR are in place (docs/self-hosting.md, "Mail").
+      MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-off}
 
 volumes:
   stalwart_data:

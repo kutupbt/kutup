@@ -35,9 +35,14 @@ pub const MAX_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_ENCRYPTED_BYTES: usize = MAX_MESSAGE_BYTES + 64 * 1024;
 /// A draft's text, without its attachments.
 const MAX_DRAFT_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// A PGP/MIME message: the encrypted message armored (4/3), its line breaks
+/// and the MIME wrapper.
+const MAX_PGP_MESSAGE_BYTES: usize = MAX_ENCRYPTED_BYTES / 3 * 4 + 1024 * 1024;
 /// The body limit of the send route: the data packet, the plaintext for
-/// outside recipients and the metadata.
-pub const SEND_BODY_LIMIT: usize = 2 * MAX_ENCRYPTED_BYTES + 1024 * 1024;
+/// outside recipients without keys, and PGP messages for those with keys
+/// (four of the largest; smaller messages fit many more).
+pub const SEND_BODY_LIMIT: usize =
+    2 * MAX_ENCRYPTED_BYTES + 4 * MAX_PGP_MESSAGE_BYTES + 1024 * 1024;
 const MAX_RECIPIENTS: usize = 100;
 const MAX_REFERENCES: usize = 50;
 
@@ -94,6 +99,19 @@ pub struct SendMeta {
     /// Base64 key packets: `self` for the sender's copy, and one per Kutup
     /// recipient address.
     pub key_packets: BTreeMap<String, String>,
+    /// Ready-made PGP/MIME messages for outside recipients with keys
+    /// (docs/plans/mail.md, C3), in parts `pgp0`, `pgp1`, …: To and Cc in
+    /// one, each Bcc recipient in their own. Outside recipients in none get
+    /// `mime`.
+    #[serde(default)]
+    pub pgp: Vec<PgpPackage>,
+}
+
+/// One PGP/MIME message and whom it goes to.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PgpPackage {
+    pub recipients: Vec<String>,
 }
 
 /// The sender's address and current primary key.
@@ -207,6 +225,7 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
             attachment_count: meta.attachment_count,
             spam: false,
             bounce: None,
+            pgp_encrypted: false,
         },
         bcc,
     })
@@ -708,7 +727,9 @@ pub async fn delete_draft_attachment(
 pub struct SendRecipient {
     pub address: String,
     /// `delivered` (a Kutup user, end to end), `sent` (handed to the outside
-    /// world), or `full` (a Kutup user whose storage is full: not delivered).
+    /// world), `full` (a Kutup user whose storage is full: not delivered), or
+    /// `failed` (refused by the mail server after mail to others had already
+    /// gone out).
     pub status: String,
 }
 
@@ -730,18 +751,20 @@ struct LocalCopy {
 }
 
 /// `POST /api/mail/send` — sends a message. Multipart: `meta` (JSON:
-/// readable fields, `keyPackets`, optional `draftId`), `data` (the shared
-/// data packet) and, when there are outside recipients, `mime` (the same
-/// message in plaintext, for Stalwart).
+/// readable fields, `keyPackets`, optional `draftId` and `pgp`), `data` (the
+/// shared data packet), `pgp0`, `pgp1`, … (PGP/MIME messages for outside
+/// recipients with keys, as `pgp` lists them) and, when other outside
+/// recipients remain, `mime` (the message in plaintext, for Stalwart).
 #[utoipa::path(
     post,
     path = "/api/mail/send",
     tag = "mail",
     security(("BearerAuth" = [])),
-    request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "meta, data and mime"),
+    request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "meta, data, pgp0… and mime"),
     responses(
         (status = 200, description = "Sent", body = SendResult),
         (status = 409, description = "A recipient's key changed (code keyChanged, address)"),
+        (status = 403, description = "Outside sending is off on this server (code outsideSendingOff), or paused for you (code sendingPaused)"),
         (status = 413, description = "Too large, or your storage quota exceeded"),
         (status = 422, description = "No such Kutup address (code unknownRecipient), or refused outside"),
         (status = 429, description = "Sending limit reached"),
@@ -753,15 +776,18 @@ pub async fn send(
     mut multipart: Multipart,
 ) -> AppResult<Json<SendResult>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let parts = read_parts(
-        &mut multipart,
-        &[
-            ("meta", 512 * 1024),
-            ("data", MAX_ENCRYPTED_BYTES),
-            ("mime", MAX_MESSAGE_BYTES + 1024 * 1024),
-        ],
-    )
-    .await?;
+    let pgp_parts: Vec<String> = (0..MAX_RECIPIENTS).map(|i| format!("pgp{i}")).collect();
+    let mut limits = vec![
+        ("meta", 512 * 1024),
+        ("data", MAX_ENCRYPTED_BYTES),
+        ("mime", MAX_MESSAGE_BYTES + 1024 * 1024),
+    ];
+    limits.extend(
+        pgp_parts
+            .iter()
+            .map(|name| (name.as_str(), MAX_PGP_MESSAGE_BYTES)),
+    );
+    let parts = read_parts(&mut multipart, &limits).await?;
     let meta: SendMeta = meta_part(&parts)?;
     let data = parts
         .get("data")
@@ -842,25 +868,48 @@ pub async fn send(
         }
     }
 
-    // Outside recipients: the plaintext, checked, and the sending limits.
-    let mime = if external.is_empty() {
-        None
-    } else {
-        let mime = parts
-            .get("mime")
-            .ok_or_else(|| AppError::bad_request("missing mime for outside recipients"))?;
-        let parsed = Readable::parse(mime);
-        if parsed.from.as_ref().map(|m| m.address.as_str()) != Some(sender.address.as_str())
-            || parsed.message_id != readable.message_id
-            || has_bcc_header(mime)
-        {
+    // Outside recipients: PGP messages for those with keys, the plaintext
+    // for the rest, each checked; then the sending limits.
+    let bcc: Vec<&str> = checked.bcc.iter().map(|m| m.address.as_str()).collect();
+    let packages = pgp_packages(
+        &meta.pgp,
+        &parts,
+        &external,
+        &bcc,
+        &sender.address,
+        readable,
+    )?;
+    let plain: Vec<String> = external
+        .iter()
+        .filter(|address| !packages.iter().any(|(to, _)| to.contains(address)))
+        .cloned()
+        .collect();
+    let mime = match (plain.is_empty(), parts.get("mime")) {
+        (true, None) => None,
+        (true, Some(_)) => {
             return Err(AppError::bad_request(
-                "mime must be the same message: From you, the same Message-ID, no Bcc header",
-            ));
+                "no plaintext: every outside recipient has a PGP message",
+            ))
+        }
+        (false, None) => return Err(AppError::bad_request("missing mime for outside recipients")),
+        (false, Some(mime)) => {
+            if !same_message(mime, &sender.address, readable) {
+                return Err(AppError::bad_request(
+                    "mime must be the same message: From you, the same Message-ID, no Bcc header",
+                ));
+            }
+            Some(mime)
+        }
+    };
+    if !external.is_empty() {
+        if !state.config.mail_outside_sending.allows(user.is_admin) {
+            return Err(AppError::forbidden(
+                "this server does not send mail to outside addresses yet",
+            )
+            .with_details(json!({ "code": "outsideSendingOff" })));
         }
         crate::mail::safety::check_send(&state, user_id, external.len() as i64).await?;
-        Some(mime)
-    };
+    }
 
     // Store every copy, then record them under the pool locks.
     let own_key = crate::mail::object_key(user_id, Uuid::new_v4());
@@ -927,7 +976,8 @@ pub async fn send(
                 thread_id: thread,
                 direction: "outbound",
                 folder: "sent",
-                protection: if external.is_empty() {
+                // End to end when nobody got the plaintext.
+                protection: if plain.is_empty() {
                     "end_to_end"
                 } else {
                     "zero_access"
@@ -978,50 +1028,70 @@ pub async fn send(
                 status: "delivered".into(),
             });
         }
-        // Outside mail goes last: once Stalwart has it, it is sent.
-        if let Some(mime) = mime {
-            crate::mail::submit::submit(
+        // Outside mail goes last: once Stalwart has it, it is sent. The
+        // plaintext first, the likeliest to be refused: a refusal of the
+        // first submission fails the whole send; a later one fails only its
+        // recipients, since the others' mail is already on its way.
+        let submissions = mime
+            .map(|mime| (plain.as_slice(), mime.as_slice()))
+            .into_iter()
+            .chain(
+                packages
+                    .iter()
+                    .map(|(to, message)| (to.as_slice(), message.as_slice())),
+            );
+        let mut handed = false;
+        for (recipients, message) in submissions {
+            let submitted = crate::mail::submit::submit(
                 &state.config.mail_submission_addr,
                 &format!("kutup@{server_name}"),
                 &state.config.mail_inbound_token,
                 crate::mail::submit::Envelope {
                     from: &sender.address,
-                    recipients: &external,
-                    message: mime,
+                    recipients,
+                    message,
                 },
             )
-            .await
-            .map_err(|error| {
-                if refused_as_spam(&error) {
-                    spam_refused = true;
+            .await;
+            let status = match submitted {
+                Ok(()) => "sent",
+                Err(error) => {
+                    if refused_as_spam(&error) {
+                        spam_refused = true;
+                    }
+                    if !handed {
+                        return Err(submit_error(error));
+                    }
+                    tracing::warn!(error = %error, "mail: a later submission failed");
+                    "failed"
                 }
-                submit_error(error)
-            })?;
-            results.extend(external.iter().map(|address| SendRecipient {
+            };
+            handed |= status == "sent";
+            results.extend(recipients.iter().map(|address| SendRecipient {
                 address: address.clone(),
-                status: "sent".into(),
+                status: status.into(),
             }));
         }
         tx.commit().await?;
         Ok(results)
     }
     .await;
+    if spam_refused {
+        if let Err(error) = crate::mail::safety::record(
+            &state.pool,
+            user_id,
+            crate::mail::safety::Event::SpamRefused,
+            1,
+        )
+        .await
+        {
+            tracing::warn!(error = %error, "mail: spam refusal not recorded");
+        }
+    }
     let results = match recorded {
         Ok(results) => results,
         Err(error) => {
             remove_objects(&state, &objects).await;
-            if spam_refused {
-                if let Err(error) = crate::mail::safety::record(
-                    &state.pool,
-                    user_id,
-                    crate::mail::safety::Event::SpamRefused,
-                    1,
-                )
-                .await
-                {
-                    tracing::warn!(error = %error, "mail: spam refusal not recorded");
-                }
-            }
             return Err(error);
         }
     };
@@ -1048,6 +1118,89 @@ pub async fn send(
         message: row(&state, user_id, id).await?,
         recipients: statuses,
     }))
+}
+
+/// Whether `message` is the message being sent: From the sender, the same
+/// Message-ID, and no Bcc header (Bcc recipients are not named to others).
+fn same_message(message: &[u8], sender: &str, readable: &Readable) -> bool {
+    let parsed = Readable::parse(message);
+    parsed.from.as_ref().map(|m| m.address.as_str()) == Some(sender)
+        && parsed.message_id == readable.message_id
+        && !has_bcc_header(message)
+}
+
+/// The PGP messages `pgp` lists, each checked: the same message (see
+/// [`same_message`]), encrypted (RFC 3156 `multipart/encrypted` around an
+/// encrypted OpenPGP message), for outside recipients of this message, each
+/// in one package only, and a Bcc recipient alone in theirs (key IDs would
+/// name them to the others).
+fn pgp_packages<'a>(
+    pgp: &[PgpPackage],
+    parts: &'a BTreeMap<String, Vec<u8>>,
+    external: &[String],
+    bcc: &[&str],
+    sender: &str,
+    readable: &Readable,
+) -> AppResult<Vec<(Vec<String>, &'a Vec<u8>)>> {
+    let bad = |text: &str| Err(AppError::bad_request(format!("pgp: {text}")));
+    if pgp.len() > MAX_RECIPIENTS {
+        return bad("too many messages");
+    }
+    for name in parts.keys() {
+        if let Some(index) = name.strip_prefix("pgp") {
+            if index.parse::<usize>().map_or(true, |i| i >= pgp.len()) {
+                return bad(&format!("unexpected part {name}"));
+            }
+        }
+    }
+    let mut covered = std::collections::BTreeSet::new();
+    let mut packages = Vec::with_capacity(pgp.len());
+    for (index, package) in pgp.iter().enumerate() {
+        let Some(message) = parts.get(&format!("pgp{index}")) else {
+            return bad(&format!("missing part pgp{index}"));
+        };
+        if package.recipients.is_empty() {
+            return bad("a message without recipients");
+        }
+        let mut recipients = Vec::with_capacity(package.recipients.len());
+        for address in &package.recipients {
+            let Some(found) = external.iter().find(|e| e.eq_ignore_ascii_case(address)) else {
+                return bad(&format!("{address} is not an outside recipient"));
+            };
+            if !covered.insert(found.to_ascii_lowercase()) {
+                return bad(&format!("{address} is in two messages"));
+            }
+            if package.recipients.len() > 1 && bcc.iter().any(|b| b.eq_ignore_ascii_case(found)) {
+                return bad("a Bcc recipient must have a message of their own");
+            }
+            recipients.push(found.clone());
+        }
+        if !same_message(message, sender, readable) {
+            return bad("must be the same message: From you, the same Message-ID, no Bcc header");
+        }
+        if !Readable::parse(message).pgp_encrypted || !is_multipart_encrypted(message) {
+            return bad("must be PGP/MIME (multipart/encrypted)");
+        }
+        packages.push((recipients, message));
+    }
+    Ok(packages)
+}
+
+/// Whether the top Content-Type is RFC 3156 `multipart/encrypted` (inline
+/// PGP is read on arrival but not sent).
+fn is_multipart_encrypted(message: &[u8]) -> bool {
+    use mail_parser::MimeHeaders as _;
+    mail_parser::MessageParser::default()
+        .parse_headers(message)
+        .and_then(|parsed| {
+            parsed.content_type().map(|kind| {
+                kind.ctype().eq_ignore_ascii_case("multipart")
+                    && kind
+                        .subtype()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("encrypted"))
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Whether the message's header block has a Bcc field.
@@ -1121,6 +1274,113 @@ mod tests {
             references: vec!["root@example.org".into()],
             attachment_count: 1,
             thread_id: None,
+        }
+    }
+
+    fn pgp_mime(from: &str, message_id: &str, armored: &str) -> Vec<u8> {
+        format!(
+            "From: {from}\r\nTo: dave@example.org\r\nMessage-ID: <{message_id}>\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"b\"\r\n\r\n\
+             --b\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n\
+             --b\r\nContent-Type: application/octet-stream\r\n\r\n{armored}\r\n--b--\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn pgp_packages_are_checked() {
+        use kutup_crypto::mail_key::{encrypt_armored_signed, generate_address_key};
+        let key = generate_address_key("alice@kutup.test", 1_790_000_000).unwrap();
+        let armored = encrypt_armored_signed(
+            &[&key.public_key],
+            &key.secret_key,
+            b"Content-Type: text/plain\r\n\r\nhi\r\n",
+            1_790_000_100,
+        )
+        .unwrap()
+        .replace('\n', "\r\n");
+        let checked = check_meta(&meta(), &sender(), "kutup.test").unwrap();
+        let readable = &checked.readable;
+        let external = vec![
+            "dave@example.org".to_string(),
+            "erin@example.org".to_string(),
+            "carol@example.org".to_string(),
+        ];
+        let bcc = ["carol@example.org"];
+        let good = pgp_mime("alice@kutup.test", "abc@kutup.test", &armored);
+        let package = |to: &[&str]| PgpPackage {
+            recipients: to.iter().map(|a| a.to_string()).collect(),
+        };
+        let parts_of = |messages: &[&[u8]]| {
+            messages
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (format!("pgp{i}"), m.to_vec()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let check = |pgp: &[PgpPackage], parts: &BTreeMap<String, Vec<u8>>| {
+            pgp_packages(pgp, parts, &external, &bcc, "alice@kutup.test", readable)
+                .map(|packages| packages.into_iter().map(|(to, _)| to).collect::<Vec<_>>())
+        };
+
+        // To and Cc together, each Bcc alone.
+        let parts = parts_of(&[&good, &good]);
+        let packages = check(
+            &[
+                package(&["Dave@Example.org", "erin@example.org"]),
+                package(&["carol@example.org"]),
+            ],
+            &parts,
+        )
+        .unwrap();
+        assert_eq!(packages[0], vec!["dave@example.org", "erin@example.org"]);
+        assert_eq!(packages[1], vec!["carol@example.org"]);
+
+        // A Bcc recipient sharing a message, a recipient twice, a stranger.
+        let one = parts_of(&[&good]);
+        assert!(check(&[package(&["dave@example.org", "carol@example.org"])], &one).is_err());
+        assert!(check(
+            &[
+                package(&["dave@example.org"]),
+                package(&["dave@example.org"])
+            ],
+            &parts
+        )
+        .is_err());
+        assert!(check(&[package(&["mallory@example.org"])], &one).is_err());
+        assert!(check(&[package(&[])], &one).is_err());
+        // Parts and the list must agree.
+        assert!(check(&[], &one).is_err());
+        assert!(check(
+            &[
+                package(&["dave@example.org"]),
+                package(&["erin@example.org"])
+            ],
+            &one
+        )
+        .is_err());
+
+        // Not the same message, or not encrypted.
+        let other_sender = pgp_mime("eve@kutup.test", "abc@kutup.test", &armored);
+        let other_id = pgp_mime("alice@kutup.test", "other@kutup.test", &armored);
+        let plaintext = pgp_mime(
+            "alice@kutup.test",
+            "abc@kutup.test",
+            "-----BEGIN PGP MESSAGE-----\r\n\r\nhi\r\n-----END PGP MESSAGE-----",
+        );
+        let mut with_bcc = b"Bcc: carol@example.org\r\n".to_vec();
+        with_bcc.extend_from_slice(&good);
+        let inline =
+            format!("From: alice@kutup.test\r\nMessage-ID: <abc@kutup.test>\r\n\r\n{armored}\r\n");
+        for bad in [
+            &other_sender,
+            &other_id,
+            &plaintext,
+            &with_bcc,
+            &inline.into_bytes(),
+        ] {
+            assert!(check(&[package(&["dave@example.org"])], &parts_of(&[bad])).is_err());
         }
     }
 

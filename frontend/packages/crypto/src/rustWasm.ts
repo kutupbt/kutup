@@ -50,6 +50,21 @@ export interface CryptoWasmModule {
   ): import('./contactCard').ContactSummary
   sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
   openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
+  exportMailAddressKey(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    passphrase: string,
+  ): string
+  importMailAddressKey(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    file: Uint8Array,
+    passphrase: string,
+  ): { publicKey: string; envelope: string; fingerprint: string; sha256Fingerprint: string }
   generateMailAddressKey(
     masterKeyBase64: string,
     loginEmail: string,
@@ -90,6 +105,19 @@ export interface CryptoWasmModule {
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
+  inspectExternalMailKey(publicKey: Uint8Array, address: string): { publicKey: string; fingerprint: string; createdAt: number }
+  describeExternalMailKey(publicKey: Uint8Array): { publicKey: string; fingerprint: string; createdAt: number }
+  encryptMailPgp(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    recipientPublicKeys: string[],
+    plaintext: Uint8Array,
+  ): string
+  verifyMailDetachedSignature(signature: Uint8Array, content: Uint8Array, signerPublicKeyBase64: string): boolean
+  verifyMailCleartext(message: string, signerPublicKeyBase64?: string): { text: string; verified: boolean }
   sealAccountEnvelope(
     plaintextBase64: string,
     keyBase64: string,

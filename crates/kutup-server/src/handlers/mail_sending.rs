@@ -32,6 +32,9 @@ pub struct MailSendingStatus {
     /// Why sending to outside addresses is paused (`admin`, `bounces`,
     /// `spam`); absent when it is not.
     pub paused: Option<String>,
+    /// Whether this server sends your mail to addresses outside Kutup
+    /// (`MAIL_OUTSIDE_SENDING`); mail between Kutup users always goes.
+    pub outside_allowed: bool,
 }
 
 /// `GET /api/mail/sending` — your limits on mail to outside addresses, and
@@ -56,6 +59,7 @@ pub async fn own_status(
         sent_day: standing.sent_day,
         new_account: standing.new_account,
         paused: standing.paused,
+        outside_allowed: state.config.mail_outside_sending.allows(user.is_admin),
     }))
 }
 

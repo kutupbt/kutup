@@ -17,7 +17,7 @@ readable by the server (decision 1 of the design). Phase C has three parts:
 |---|---|
 | **C1. Infrastructure** (this plan in detail) | Stalwart in compose, inbound recipient check, LMTP receiver, encrypt-on-arrival, storage, pool accounting, DNS records except MX |
 | **C2. Mail app** | `mail.kutup.dev`: folders, reading, compose and send (internal end-to-end, external over TLS through Stalwart), drafts, labels, search |
-| **C3. PGP to the outside** | WKD and Autocrypt lookup, PGP encrypt, sign and verify, key import and export; then the MX switch from Cloudflare |
+| **C3. PGP to the outside** (below) | Key lookup (WKD, Proton, keys.openpgp.org), PGP/MIME encrypt, sign and verify both ways, Autocrypt, key import and export; then the MX switch from Cloudflare |
 
 ## Stalwart 0.16: configuration is data
 
@@ -210,6 +210,118 @@ deletes the draft.
    mail gate extended to sending outside, docs.
 6. **C2f later:** body search in the browser (research 15 and 16), labels
    and custom folders, Trash and Spam emptied after 30 days, web push.
+
+## C3: PGP with the rest of the world
+
+End-to-end mail with every OpenPGP user (Proton, Thunderbird, GnuPG,
+Mailvelope) in both directions. Tuta uses its own protocol, so mail with
+Tuta stays TLS on the way and zero-access at rest; its password-protected
+messages work as for anyone. Proton's behaviour, from its web client and
+help pages (checked 2026-10-10):
+
+- Proton's **servers** look keys up for outside addresses through Web Key
+  Directory and keys.openpgp.org (`core/v4/keys/all`, `API_KEY_SOURCE` WKD
+  and KOO) and **encrypt to them by default** as PGP/MIME, signed, even when
+  the user has not pinned the key (`encryptToUntrusted`). So Proton users
+  write to `name@kutup.dev` end to end once Kutup's WKD answers and Kutup
+  opens PGP/MIME.
+- Proton verifies signatures only with keys its user pinned or Proton's own
+  (`verificationPreferences.ts`: fetching WKD to verify would tell the
+  sender's domain the mail was read). Mail from Kutup therefore shows as
+  "PGP-encrypted and signed" until the Proton user trusts the key, which
+  Proton offers when the mail carries it: an Autocrypt header (read, Level 1,
+  `prefer-encrypt=mutual`) or an attached `.asc`.
+- Proton's own users' keys come from HKP at
+  `https://mail-api.proton.me/pks/lookup?op=get&search=<address>`; proton.me
+  serves no WKD (both methods answer 404 or nothing). Domains whose MX is
+  Proton's (`*.protonmail.ch`) are asked the same way.
+- Proton signs inside the encryption (one OpenPGP message), sends no
+  protected headers, and builds the RFC 3156 wrapper on its server.
+
+### How Kutup does it
+
+- **Finding keys** is the server's job, as at Proton (a browser cannot read
+  other domains' WKD): `GET /api/mail/keys?email=` answers outside
+  addresses too, from WKD (advanced, then direct), Proton's HKP for Proton
+  domains and MX, then keys.openpgp.org (verified addresses only). Each key
+  must carry a valid self-signed user ID for the address and a usable
+  encryption subkey (`kutup-crypto` checks). Lookups go through the SSRF
+  guard, are cached for an hour, and are rate-limited.
+- **Trust:** a contact's pinned key (the signed contact summary's
+  `pinnedKeys`) wins; otherwise a found key is used to encrypt, as Proton
+  does, and marked "found through WKD" (or Proton, keys.openpgp.org).
+  Signatures verify only against pinned keys; a key that comes with a
+  message (Autocrypt, `.asc`) is offered for pinning.
+- **Sending** is built in the browser: PGP recipients get RFC 3156
+  `multipart/encrypted` (inner message signed and encrypted in one OpenPGP
+  message, armored), To and Cc in one message, each Bcc in their own (key
+  IDs would name them). The server receives these ready-made messages and
+  submits each, never their plaintext; only recipients without keys get the
+  plaintext message. Every outgoing message carries an Autocrypt header with
+  the sender's key.
+- **Receiving:** mail that arrives PGP-encrypted to the address key
+  (`multipart/encrypted`, or an inline PGP message) is marked `end_to_end`
+  on arrival and opened twice in the browser (the zero-access layer, then
+  the sender's); `multipart/signed` and cleartext-signed mail is verified.
+  Padlocks follow Proton's texts: "PGP-encrypted message", "…and signed",
+  "…from verified sender", "Sender verification failed".
+
+### C3 slices
+
+1. **C3a crypto:** outside key checks, multi-recipient armored encryption
+   with signature, detached and cleartext signature verification, the
+   Autocrypt key; vectors and GnuPG interop both ways.
+2. **C3b server:** outside key lookup (WKD, Proton HKP, keys.openpgp.org),
+   PGP packages in `POST /api/mail/send`, `end_to_end` on arrival for PGP
+   mail. The server checks each package is the same message and holds an
+   encrypted OpenPGP message, but cannot check it is encrypted to the right
+   key (a pinned key is known only to the browser). Submissions go one by
+   one, the plaintext first: a refusal of the first fails the send, a later
+   one marks its recipients `failed`.
+3. **C3c app:** per-recipient protection in the composer, PGP/MIME
+   building, Autocrypt, opening and verifying PGP mail, pinning keys to
+   contacts. Done as follows. The composer shows a lock per recipient
+   (Kutup, a pinned key, a found key with its source, a pinned key that no
+   longer works); a pinned key that no longer works stops the send rather
+   than sending in clear, and so does a failed lookup. PGP/MIME encrypts the
+   body entity (`buildBody`) to the recipients' keys and the sender's own,
+   signed inside; the header fields, subject included, stay readable as at
+   Proton. Every message (plaintext, PGP/MIME, and between Kutup users)
+   carries `Autocrypt: addr=…; prefer-encrypt=mutual; keydata=…`. Reading
+   opens `multipart/encrypted` (also when signed in a second
+   `multipart/signed` layer), inline PGP, `multipart/signed` over the exact
+   signed part, and cleartext signatures; header fields repeated inside the
+   encrypted part win (protected headers). A key from an Autocrypt header or
+   an attached key file is offered for trusting when it is usable for the
+   sender and is not the pinned one ("sent a different public key" when it
+   would replace it).
+4. **C3d gates:** the mail gate with a GnuPG correspondent (a WKD server and
+   a sink that decrypts with `gpg`), both ways; a manual check against a real
+   Proton account, documented. Done: `scripts/test-mail-inbound.sh` makes
+   Dave's key with GnuPG and serves it from a WKD stand-in (the backend's
+   `MAIL_TEST_KEY_ORIGIN` on a test stack); the live test finds it, sends
+   PGP/MIME (refusing plaintext dressed as PGP and plaintext nobody needs),
+   and receives Dave's GnuPG reply as `end_to_end`, opening and verifying
+   it; the gate checks the copy at the sink is PGP/MIME, DKIM-signed, has no
+   plaintext, and that GnuPG opens it with a good signature. The Proton
+   check is [`docs/test/mail-proton.md`](../test/mail-proton.md).
+5. **C3e:** key import and export; then the MX switch from Cloudflare
+   (DNS, done by the operator). Done: Account → Settings → Encryption keys
+   creates a new key (it becomes primary; older keys stay to open older
+   mail, which Mail now tries them for), imports one from an OpenPGP secret
+   key file (Kutup's export, Proton's, GnuPG's; Curve25519 with one user ID
+   for the address, unlocked in the browser and sealed like a generated
+   key), exports one locked with a passphrase (iterated and salted S2K,
+   AES-256; Proton's file name), and marks keys obsolete or compromised
+   through `PUT /api/mail/addresses/{id}/key-list`; Mail no longer trusts
+   signatures by a key its owner marked compromised. WKD gains the advanced
+   method on `openpgpkey.<server name>`, which GnuPG and Proton ask first
+   whenever the name resolves. The MX switch checklist is in
+   [`../self-hosting.md`](../self-hosting.md) ("Moving MX to Kutup"). For
+   kutup.dev (checked 2026-10-10): the website Worker on `kutup.dev` must
+   pass `/.well-known/openpgpkey/` through (it answers 404 today), and
+   `openpgpkey.kutup.dev` (resolved by the wildcard record) needs the
+   certificate; MX is still Cloudflare Email Routing, with its SPF include.
 
 ## Sending safety
 

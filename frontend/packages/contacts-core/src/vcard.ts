@@ -1,8 +1,14 @@
 import ICAL from 'ical.js'
-import { emptyDraft, type ContactDraft } from './model'
+import { emptyDraft, type ContactDraft, type ContactKey } from './model'
 
 // vCard text in and out, with ical.js as Proton does (docs/plans/contacts.md).
 // Kutup writes vCard 4.0; it reads 3.0 and 4.0, one card or many in a file.
+// Pinned OpenPGP keys are written as Proton writes them: each email in its
+// own group (`ITEM1.EMAIL`), its key and preferences in the same group
+// (`ITEM1.KEY:data:application/pgp-keys;base64,…`, `ITEM1.X-PM-ENCRYPT`,
+// `ITEM1.X-PM-SIGN`).
+
+const KEY_PREFIX = 'data:application/pgp-keys;base64,'
 
 const PRODID = '-//Kutup//Contacts//EN'
 
@@ -36,10 +42,15 @@ function componentToDraft(card: ICAL.Component): ContactDraft {
     draft.familyName = text(n[0])
     draft.givenName = text(n[1])
   }
+  const groups = new Map<string, string>()
   for (const property of card.getAllProperties('email')) {
     const address = text(property.getFirstValue()).replace(/^mailto:/i, '')
-    if (address) draft.emails.push({ address, label: label(property) })
+    if (!address) continue
+    draft.emails.push({ address, label: label(property) })
+    const group = scalar(property.getParameter('group')).toLowerCase()
+    if (group && !groups.has(group)) groups.set(group, address.toLowerCase())
   }
+  draft.keys = keysOf(card, groups)
   for (const property of card.getAllProperties('tel')) {
     const value = text(property.getFirstValue()).replace(/^tel:/i, '')
     if (value) draft.phones.push({ value, label: label(property) })
@@ -68,6 +79,26 @@ function componentToDraft(card: ICAL.Component): ContactDraft {
   const photo = card.getFirstProperty('photo')
   if (photo) draft.photo = photoText(photo)
   return draft
+}
+
+/** The first key of each email's group, with its preferences (`fingerprint` is filled in later). */
+function keysOf(card: ICAL.Component, groups: Map<string, string>): ContactKey[] {
+  const keys: ContactKey[] = []
+  const flag = (name: string, group: string) =>
+    card.getAllProperties(name).find((p) => scalar(p.getParameter('group')).toLowerCase() === group)
+  const byPref = (a: ICAL.Property, b: ICAL.Property) => Number(a.getParameter('pref') ?? 100) - Number(b.getParameter('pref') ?? 100)
+  for (const property of [...card.getAllProperties('key')].sort(byPref)) {
+    const group = scalar(property.getParameter('group')).toLowerCase()
+    const address = groups.get(group)
+    const value = text(property.getFirstValue())
+    if (!address || !value.toLowerCase().startsWith(KEY_PREFIX) || keys.some((k) => k.address === address)) continue
+    const publicKey = value.slice(KEY_PREFIX.length).replace(/\s/g, '')
+    if (!/^[A-Za-z0-9+/]+=*$/.test(publicKey)) continue
+    // Absent preferences mean yes, as at Proton for a pinned key.
+    const yes = (name: string) => text(flag(name, group)?.getFirstValue()).toLowerCase() !== 'false'
+    keys.push({ address, publicKey, fingerprint: '', encrypt: yes('x-pm-encrypt'), sign: yes('x-pm-sign') })
+  }
+  return keys
 }
 
 function birthdayText(value: unknown): string {
@@ -118,9 +149,28 @@ export function toVCard(draft: ContactDraft, uid: string, name: string): string 
     n.setValue([draft.familyName, draft.givenName, '', '', ''] as never)
     card.addProperty(n)
   }
-  for (const email of draft.emails) {
-    if (email.address.trim()) card.addProperty(typed(new ICAL.Property('email'), email.label)).setValue(email.address.trim())
-  }
+  draft.emails
+    .filter((email) => email.address.trim())
+    .forEach((email, i) => {
+      const group = `item${i + 1}`
+      const address = email.address.trim()
+      const property = typed(new ICAL.Property('email'), email.label)
+      property.setParameter('group', group)
+      card.addProperty(property).setValue(address)
+      const key = draft.keys.find((k) => k.address === address.toLowerCase())
+      if (!key) return
+      // A URI in vCard 4.0: its commas are not escaped as text's are.
+      card.addProperty(new ICAL.Property(['key', { group, pref: '1' }, 'uri', `${KEY_PREFIX}${key.publicKey}`], card))
+      for (const [name, on] of [
+        ['x-pm-encrypt', key.encrypt],
+        ['x-pm-sign', key.sign],
+      ] as const) {
+        const flag = new ICAL.Property(name)
+        flag.setParameter('group', group)
+        flag.setValue(String(on))
+        card.addProperty(flag)
+      }
+    })
   for (const phone of draft.phones) {
     if (phone.value.trim()) card.addProperty(typed(new ICAL.Property('tel'), phone.label)).setValue(phone.value.trim())
   }

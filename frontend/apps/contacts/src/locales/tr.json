@@ -130,5 +130,20 @@
     "done_one": "{{count}} kişi içe aktarıldı",
     "done_other": "{{count}} kişi içe aktarıldı",
     "failed": "İçe aktarma tamamlanmadı. Başarısız gruptan hiçbir şey kaydedilmedi."
+  },
+  "keys": {
+    "title": "OpenPGP anahtarı",
+    "label": "{{address}} için OpenPGP anahtarı",
+    "add": "OpenPGP anahtarı ekle",
+    "replace": "Değiştir",
+    "remove": "Anahtarı kaldır",
+    "trusted": "Güvenilir",
+    "trustedHint": "Bu adrese giden e-postalar bu anahtarla şifrelenir ve imzaları bu anahtarla doğrulanır.",
+    "unusable": "Kullanılamaz",
+    "unusableHint": "Anahtarın süresi dolmuş, iptal edilmiş ya da artık bu adresi içermiyor. E-postalar bu anahtarla şifrelenmez.",
+    "pinned": "{{address}} için anahtar kaydedildi.",
+    "removed": "{{address}} için anahtar kaldırıldı.",
+    "noUsableKey": "Bu dosyada {{address}} için kullanılabilir bir OpenPGP anahtarı yok.",
+    "saveFailed": "Kişi kaydedilemedi."
   }
 }

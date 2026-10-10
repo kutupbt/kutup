@@ -4,10 +4,28 @@ import type { MailMessage, OpenedMessage } from '@kutup/mail-core/api'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { cn } from '@kutup/ui/lib/cn'
 
-type Kind = 'verified' | 'endToEnd' | 'zeroAccess' | 'sentZeroAccess' | 'failed'
+type Kind =
+  | 'verified'
+  | 'endToEnd'
+  | 'zeroAccess'
+  | 'sentZeroAccess'
+  | 'failed'
+  | 'pgpEncrypted'
+  | 'pgpEncryptedSigned'
+  | 'pgpVerified'
+  | 'pgpSigned'
+  | 'pgpSignedVerified'
 
 /** How a message was protected, as Proton's padlock tells it (`helpers/message/icon.ts`). */
 function protectionOf(message: MailMessage, opened?: OpenedMessage): Kind {
+  // OpenPGP mail from outside: a signature counts only with a pinned key.
+  const pgp = opened?.pgp
+  if (pgp) {
+    if (opened.verified) return pgp.encrypted ? 'pgpVerified' : 'pgpSignedVerified'
+    if (opened.signed && pgp.pinned) return 'failed'
+    if (pgp.encrypted) return opened.signed ? 'pgpEncryptedSigned' : 'pgpEncrypted'
+    if (opened.signed) return 'pgpSigned'
+  }
   if (message.protection === 'end_to_end') {
     if (opened?.signed && !opened.verified) return 'failed'
     return opened?.verified ? 'verified' : 'endToEnd'
@@ -21,6 +39,11 @@ const ICON = {
   zeroAccess: Lock,
   sentZeroAccess: Lock,
   failed: ShieldAlert,
+  pgpEncrypted: LockKeyhole,
+  pgpEncryptedSigned: LockKeyhole,
+  pgpVerified: ShieldCheck,
+  pgpSigned: Lock,
+  pgpSignedVerified: ShieldCheck,
 } as const
 
 export function Padlock({ message, opened, className }: { message: MailMessage; opened?: OpenedMessage; className?: string }) {
@@ -35,7 +58,11 @@ export function Padlock({ message, opened, className }: { message: MailMessage; 
         aria-label={label}
         className={cn(
           'inline-flex shrink-0',
-          kind === 'failed' ? 'text-destructive' : kind === 'verified' || kind === 'endToEnd' ? 'text-primary' : 'text-muted-foreground',
+          kind === 'failed'
+            ? 'text-destructive'
+            : kind === 'zeroAccess' || kind === 'sentZeroAccess' || kind === 'pgpSigned'
+              ? 'text-muted-foreground'
+              : 'text-primary',
           className,
         )}
       >

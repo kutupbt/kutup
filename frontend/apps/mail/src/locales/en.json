@@ -42,7 +42,12 @@
     "endToEnd": "End-to-end encrypted",
     "zeroAccess": "Stored with zero-access encryption: encrypted the moment it arrived",
     "sentZeroAccess": "Sent with zero-access encryption: your copy is encrypted, the recipient's is not",
-    "failed": "Sender verification failed"
+    "failed": "Sender verification failed",
+    "pgpEncrypted": "PGP-encrypted message",
+    "pgpEncryptedSigned": "PGP-encrypted and signed message",
+    "pgpVerified": "PGP-encrypted message from verified sender",
+    "pgpSigned": "PGP-signed message",
+    "pgpSignedVerified": "PGP-signed message from verified sender"
   },
   "list": {
     "to": "To:",
@@ -81,7 +86,15 @@
     "forward": "Forward",
     "editDraft": "Edit draft",
     "downloadOriginal": "Download the original (.eml)",
-    "addSender": "Add sender to contacts"
+    "addSender": "Add sender to contacts",
+    "trustKeyTitle": "{{address}} sent their public key",
+    "trustKeyDescription": "Trust it to check that their messages are from them. Mail to them is then encrypted to this key. Fingerprint: {{fingerprint}}",
+    "replaceKeyTitle": "{{address}} sent a different public key",
+    "replaceKeyDescription": "It is not the key you trust for them. Only trust it if you know they changed their key. Fingerprint: {{fingerprint}}",
+    "trustKey": "Trust key",
+    "keyTrusted": "Key trusted for {{address}}.",
+    "trustFailed": "The key could not be saved to Contacts.",
+    "pgpSignatureFailed": "This message's signature does not match the key you trust for its sender. It may not be from them."
   },
   "actions": {
     "archive": "Archive",
@@ -143,6 +156,7 @@
     "invalidRecipient": "{{address}} is not a valid address.",
     "unknownRecipient": "{{address}} is not an address on this server.",
     "notDeliveredFull": "Sent, but not delivered to {{addresses}}: their storage is full.",
+    "notSentRefused": "Sent, but the mail server refused it for {{addresses}}.",
     "sendLimit": "You have reached the sending limit. Try again later.",
     "sendFailed": "The message could not be sent.",
     "saving": "Saving…",
@@ -164,7 +178,22 @@
     "addContact": "Add",
     "sendingPaused": "Mail to outside addresses is paused for your account. Ask your administrator.",
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
-    "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes."
+    "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
+    "pinnedKeyUnusable": "The key you trust for {{address}} can no longer be used. Replace or remove it in Contacts.",
+    "keyLookupFailed": "Keys for {{address}} could not be looked up. Try again.",
+    "lock": {
+      "looking": "Looking up encryption keys",
+      "lookupFailed": "Encryption keys could not be looked up",
+      "pinned": "End-to-end encrypted with a key you trust",
+      "pinnedUnusable": "The key you trust for this address can no longer be used",
+      "found": {
+        "wkd": "End-to-end encrypted with a key from the recipient's domain (Web Key Directory)",
+        "proton": "End-to-end encrypted with the recipient's Proton key",
+        "keysOpenpgp": "End-to-end encrypted with a key from keys.openpgp.org"
+      }
+    },
+    "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
+    "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",

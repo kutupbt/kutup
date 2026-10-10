@@ -1,7 +1,8 @@
 //! What the server may read of an incoming message (docs/plans/mail.md):
 //! the subject, the addresses, the dates, threading ids and the attachment
-//! count, Proton's readable fields. Read once on arrival, before the message
-//! is encrypted; nothing from the body is kept.
+//! count, Proton's readable fields, and whether the body is OpenPGP
+//! encrypted. Read once on arrival, before the message is encrypted;
+//! nothing from the body is kept.
 
 use mail_parser::{Address, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
 use serde::Serialize;
@@ -41,6 +42,9 @@ pub struct Readable {
     /// A delivery report (RFC 3464) for mail this address sent: how many
     /// recipients failed, and the Message-ID of the message they failed for.
     pub bounce: Option<Bounce>,
+    /// The body is an encrypted OpenPGP message (RFC 3156
+    /// `multipart/encrypted`, or inline PGP): end to end from its sender.
+    pub pgp_encrypted: bool,
 }
 
 /// A delivery failure report.
@@ -74,6 +78,7 @@ impl Readable {
             attachment_count: i32::try_from(message.attachment_count()).unwrap_or(i32::MAX),
             spam: spam_verdict(raw),
             bounce: bounce(&message),
+            pgp_encrypted: pgp_encrypted(&message),
         }
     }
 }
@@ -132,6 +137,49 @@ fn bounce(message: &Message<'_>) -> Option<Bounce> {
         failures,
         original_message_id: original,
     })
+}
+
+/// Whether the whole body is one encrypted OpenPGP message: the
+/// `application/octet-stream` part of `multipart/encrypted;
+/// protocol="application/pgp-encrypted"`, or a single text part that is an
+/// armored PGP message and nothing else.
+fn pgp_encrypted(message: &Message<'_>) -> bool {
+    let encrypted = |bytes: &[u8]| kutup_crypto::mail_key::pgp_message_key_ids(bytes).is_ok();
+    let Some(top) = message.content_type() else {
+        return message.parts.len() == 1 && inline_pgp(message.parts[0].contents(), encrypted);
+    };
+    let is = |ctype: &str, subtype: &str| {
+        top.ctype().eq_ignore_ascii_case(ctype)
+            && top
+                .subtype()
+                .is_some_and(|s| s.eq_ignore_ascii_case(subtype))
+    };
+    if is("multipart", "encrypted") {
+        if !top
+            .attribute("protocol")
+            .is_some_and(|p| p.eq_ignore_ascii_case("application/pgp-encrypted"))
+        {
+            return false;
+        }
+        return message.parts.iter().skip(1).any(|part| {
+            part.content_type().is_some_and(|kind| {
+                kind.ctype().eq_ignore_ascii_case("application")
+                    && kind
+                        .subtype()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("octet-stream"))
+            }) && encrypted(part.contents())
+        });
+    }
+    is("text", "plain")
+        && message.parts.len() == 1
+        && inline_pgp(message.parts[0].contents(), encrypted)
+}
+
+fn inline_pgp(body: &[u8], encrypted: impl Fn(&[u8]) -> bool) -> bool {
+    let body = body.trim_ascii();
+    body.starts_with(b"-----BEGIN PGP MESSAGE-----")
+        && body.ends_with(b"-----END PGP MESSAGE-----")
+        && encrypted(body)
 }
 
 fn mailboxes(address: &Address<'_>) -> Vec<Mailbox> {
@@ -367,5 +415,41 @@ Message-ID: <sent-1@kutup.dev>\r\n\
     #[test]
     fn unreadable_mail_still_arrives_empty() {
         assert_eq!(Readable::parse(b""), Readable::default());
+    }
+
+    #[test]
+    fn pgp_encrypted_bodies_are_recognised() {
+        use kutup_crypto::mail_key::{encrypt_armored_signed, generate_address_key};
+        let alice = generate_address_key("alice@kutup.dev", 1_790_000_000).unwrap();
+        let armored = encrypt_armored_signed(
+            &[&alice.public_key],
+            &alice.secret_key,
+            b"Content-Type: text/plain\r\n\r\nhi\r\n",
+            1_790_000_100,
+        )
+        .unwrap()
+        .replace('\n', "\r\n");
+        let pgp_mime = format!(
+            "From: dave@example.org\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"b\"\r\n\r\n\
+             --b\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n\
+             --b\r\nContent-Type: application/octet-stream; name=\"encrypted.asc\"\r\n\r\n{armored}\r\n--b--\r\n"
+        );
+        assert!(Readable::parse(pgp_mime.as_bytes()).pgp_encrypted);
+        // The wrong protocol, or plaintext labelled as encrypted, is not.
+        let wrong = pgp_mime.replace("application/pgp-encrypted\"", "application/pkcs7-mime\"");
+        assert!(!Readable::parse(wrong.as_bytes()).pgp_encrypted);
+        let fake = pgp_mime.replace(
+            &armored,
+            "-----BEGIN PGP MESSAGE-----\r\n\r\nnot really\r\n-----END PGP MESSAGE-----",
+        );
+        assert!(!Readable::parse(fake.as_bytes()).pgp_encrypted);
+
+        // Inline PGP: the whole text body is the message.
+        let inline = format!("From: dave@example.org\r\nSubject: x\r\n\r\n{armored}\r\n");
+        assert!(Readable::parse(inline.as_bytes()).pgp_encrypted);
+        let quoted = format!("From: dave@example.org\r\n\r\nSee below\r\n{armored}\r\n");
+        assert!(!Readable::parse(quoted.as_bytes()).pgp_encrypted);
+        assert!(!Readable::parse(b"From: a@b.org\r\n\r\nplain\r\n").pgp_encrypted);
     }
 }

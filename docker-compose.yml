@@ -102,6 +102,9 @@ services:
       KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
       KUTUP_CONTACTS_URL: ${KUTUP_CONTACTS_URL:-}
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
+      # Who may send mail to outside addresses: off, admins or on
+      # (docs/self-hosting.md, "Mail").
+      MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-off}
       # The map relay's shared tile cache; its size is set on the admin Maps page.
       MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (email:username:password) — created on first boot; it can

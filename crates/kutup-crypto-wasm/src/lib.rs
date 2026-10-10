@@ -1837,6 +1837,62 @@ pub fn generate_mail_address_key(
     .map_err(|error| js_error(&format!("encode mail address key: {error}")))
 }
 
+/// An address key as an OpenPGP file locked with `passphrase` (armored),
+/// to keep or to use in another OpenPGP program.
+#[wasm_bindgen(js_name = exportMailAddressKey)]
+pub fn export_mail_address_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    passphrase: &str,
+) -> Result<String, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::export_address_secret_key(&secret, passphrase)
+        .map(|armored| armored.to_string())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Imports an address key from an OpenPGP secret key file (unlocked with
+/// `passphrase`), sealed under the master key like a generated one. Errors
+/// with `wrong passphrase` when the passphrase does not open it.
+#[wasm_bindgen(js_name = importMailAddressKey)]
+pub fn import_mail_address_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    file: &[u8],
+    passphrase: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::mail_key::import_address_secret_key(file, passphrase, address)
+        .map_err(|error| match error {
+            kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
+            error => js_error(&error.to_string()),
+        })?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key,
+        login_email,
+        address,
+        &key.secret_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&MailAddressKeyView {
+        public_key: STANDARD.encode(&key.public_key),
+        envelope: STANDARD.encode(envelope),
+        fingerprint: hex::encode(key.fingerprint),
+        sha256_fingerprint: hex::encode(key.sha256_fingerprint),
+    })
+    .map_err(|error| js_error(&format!("encode mail address key: {error}")))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailPublicKeyView {
@@ -2005,6 +2061,121 @@ pub fn encrypt_mail_message(
             .collect(),
         data_packet: split.data_packet,
     })
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn date_now() -> f64;
+}
+
+/// The browser's clock, for key expiry checks.
+fn now_secs() -> u64 {
+    (date_now() / 1000.0) as u64
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalMailKeyView {
+    /// The key, binary, base64.
+    public_key: String,
+    fingerprint: String,
+    created_at: u32,
+}
+
+/// Checks an outside correspondent's key for `address` (docs/plans/mail.md,
+/// C3): self-signed, not revoked or expired, a user ID for the address and
+/// an encryption subkey. Armored or binary (base64) in.
+#[wasm_bindgen(js_name = inspectExternalMailKey)]
+pub fn inspect_external_mail_key(public_key: &[u8], address: &str) -> Result<JsValue, JsValue> {
+    let info = kutup_crypto::mail_key::inspect_external_public_key(public_key, address, now_secs())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ExternalMailKeyView {
+        public_key: STANDARD.encode(&info.public_key),
+        fingerprint: info.fingerprint,
+        created_at: info.created_at_secs,
+    })
+    .map_err(|error| js_error(&format!("encode key: {error}")))
+}
+
+/// An outside key as it is, unchecked (a contact's pinned key, perhaps
+/// expired): binary base64, fingerprint and creation time.
+#[wasm_bindgen(js_name = describeExternalMailKey)]
+pub fn describe_external_mail_key(public_key: &[u8]) -> Result<JsValue, JsValue> {
+    let info = kutup_crypto::mail_key::describe_external_public_key(public_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ExternalMailKeyView {
+        public_key: STANDARD.encode(&info.public_key),
+        fingerprint: info.fingerprint,
+        created_at: info.created_at_secs,
+    })
+    .map_err(|error| js_error(&format!("encode key: {error}")))
+}
+
+/// Encrypts `plaintext` to outside keys and the sender's own (base64),
+/// signed inside with the address key sealed in `envelope`: the armored
+/// message for a PGP/MIME `multipart/encrypted` part.
+#[wasm_bindgen(js_name = encryptMailPgp)]
+#[allow(clippy::too_many_arguments)]
+pub fn encrypt_mail_pgp(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<String, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| decode_canonical_base64(key, "recipient public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    kutup_crypto::mail_key::encrypt_armored_signed(&refs, &secret, plaintext, now_secs())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Whether a `multipart/signed` signature (armored or binary) signs
+/// `content` with `signer_public_key` (base64).
+#[wasm_bindgen(js_name = verifyMailDetachedSignature)]
+pub fn verify_mail_detached_signature(
+    signature: &[u8],
+    content: &[u8],
+    signer_public_key_base64: &str,
+) -> Result<bool, JsValue> {
+    let signer = decode_canonical_base64(signer_public_key_base64, "signer public key")?;
+    kutup_crypto::mail_key::verify_detached(signature, content, &signer)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CleartextView {
+    text: String,
+    verified: bool,
+}
+
+/// A cleartext-signed message's text, and whether it verifies against the
+/// signer's key (base64) when given.
+#[wasm_bindgen(js_name = verifyMailCleartext)]
+pub fn verify_mail_cleartext(
+    message: &str,
+    signer_public_key_base64: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let signer = signer_public_key_base64
+        .map(|key| decode_canonical_base64(&key, "signer public key"))
+        .transpose()?;
+    let (text, verified) = kutup_crypto::mail_key::verify_cleartext(message, signer.as_deref())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&CleartextView { text, verified })
+        .map_err(|error| js_error(&format!("encode cleartext: {error}")))
 }
 
 /// An ASCII-armored public key, for "Download public key".

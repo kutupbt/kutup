@@ -14,7 +14,7 @@
 //! rebinding), redirects followed by hand and checked again, strict size and
 //! time limits, and a per-account rate limit.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -241,59 +241,13 @@ async fn resolve_public(url: &Url) -> AppResult<SocketAddr> {
 }
 
 fn ensure_public(ip: IpAddr) -> AppResult<()> {
-    if is_public(ip) {
+    if crate::ssrf::is_public(ip) {
         Ok(())
     } else {
         Err(AppError::bad_request(
             "only public https links get a preview",
         ))
     }
-}
-
-/// Globally routable unicast: not loopback, private, link-local, shared
-/// (CGNAT), multicast, broadcast, documentation, benchmarking, reserved,
-/// unique-local, or an IPv4 address wrapped in IPv6.
-fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_v4(ip),
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return is_public_v4(mapped);
-            }
-            let segments = ip.segments();
-            !(ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_multicast()
-                // fc00::/7 unique local, fe80::/10 link-local
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                // 2001:db8::/32 documentation
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                // 64:ff9b::/96 NAT64 and ::/96 IPv4-compatible can reach IPv4 space
-                || (segments[0] == 0x0064 && segments[1] == 0xff9b)
-                || segments[..6] == [0, 0, 0, 0, 0, 0])
-        }
-    }
-}
-
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || a == 0
-        // 100.64.0.0/10 shared address space
-        || (a == 100 && (64..128).contains(&b))
-        // 192.0.0.0/24 protocol assignments
-        || (a == 192 && b == 0 && c == 0)
-        // 198.18.0.0/15 benchmarking
-        || (a == 198 && (b == 18 || b == 19))
-        // 240.0.0.0/4 reserved
-        || a >= 240)
 }
 
 #[cfg(test)]
@@ -350,10 +304,13 @@ mod tests {
             "::a00:1",
             "::ffff:10.0.0.1",
         ] {
-            assert!(!is_public(private.parse().unwrap()), "{private}");
+            assert!(
+                !crate::ssrf::is_public(private.parse().unwrap()),
+                "{private}"
+            );
         }
         for public in ["1.1.1.1", "93.184.215.14", "2606:4700:4700::1111"] {
-            assert!(is_public(public.parse().unwrap()), "{public}");
+            assert!(crate::ssrf::is_public(public.parse().unwrap()), "{public}");
         }
     }
 }

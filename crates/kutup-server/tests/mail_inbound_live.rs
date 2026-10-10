@@ -934,3 +934,403 @@ fn sending_safety() {
     assert_eq!(smtp.command(&format!("RCPT TO:<postmaster@{domain}>")), 250);
     assert_eq!(smtp.command("QUIT"), 221);
 }
+
+/// GnuPG in the gate's home for Dave, the outside correspondent
+/// (scripts/test-mail-inbound.sh made his key and serves it by WKD).
+fn gpg(home: &str, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
+    let mut child = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home)
+        .args(["--batch", "--yes", "--quiet", "--trust-model", "always"])
+        .args(["--pinentry-mode", "loopback", "--passphrase", ""])
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("gpg");
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        output.status.success(),
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// RFC 3156 `multipart/encrypted` around `armored`.
+fn pgp_mime(headers: &str, armored: &str) -> Vec<u8> {
+    format!(
+        "{headers}MIME-Version: 1.0\r\n\
+Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"pgp\"\r\n\r\n\
+--pgp\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n\r\n\
+--pgp\r\nContent-Type: application/octet-stream; name=\"encrypted.asc\"\r\n\r\n{}\r\n--pgp--\r\n",
+        armored
+            .replace("\r\n", "\n")
+            .replace('\n', "\r\n")
+            .trim_end()
+    )
+    .into_bytes()
+}
+
+#[test]
+fn pgp_with_a_gnupg_correspondent() {
+    let (Ok(base), Ok(smtp_address), Ok(home)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_GPG_HOME"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP / KUTUP_LIVE_GPG_HOME not set; skipping");
+        return;
+    };
+    let dave = "dave@outside.test";
+    let c = client();
+    let user = register(&c, &base);
+    let alice = set_up_address(&c, &base, &user);
+    let domain = alice.address.split_once('@').unwrap().1.to_string();
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Dave's key is found through his domain's Web Key Directory, the one
+    // GnuPG made; an address without a key is not.
+    let (_, listing, _) = gpg(&home, &["--with-colons", "--list-keys", dave], b"");
+    let fingerprint = String::from_utf8(listing)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("fpr:::::::::")
+                .map(|f| f.trim_end_matches(':').to_lowercase())
+        })
+        .expect("Dave's fingerprint");
+    let found: Value = bearer(
+        c.get(format!("{base}/api/mail/keys/outside?email={dave}")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(found["source"], "wkd", "found: {found}");
+    assert_eq!(found["fingerprint"], fingerprint.as_str());
+    let dave_key = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        found["publicKey"].as_str().unwrap(),
+    )
+    .unwrap();
+    let missing = bearer(
+        c.get(format!(
+            "{base}/api/mail/keys/outside?email=nobody-{tag}@outside.test"
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Alice writes to Dave end to end: PGP/MIME, signed inside; her sent
+    // copy is end to end. Dave trusts her key for the signature check.
+    let (ok, _, err) = gpg(
+        &home,
+        &["--import"],
+        mail_key::armor_public_key(&alice.public_key)
+            .unwrap()
+            .as_bytes(),
+    );
+    assert!(ok, "import Alice: {err}");
+    let message_id = format!("pgp-{tag}@{domain}");
+    let headers = format!(
+        "From: Alice <{}>\r\nTo: {dave}\r\nSubject: PGP test\r\nMessage-ID: <{message_id}>\r\n\
+Date: Sat, 10 Oct 2026 10:00:00 +0000\r\n",
+        alice.address
+    );
+    let inner = format!("Content-Type: text/plain; charset=utf-8\r\n\r\nGizli PGP {tag}\r\n");
+    let armored = mail_key::encrypt_armored_signed(
+        &[&dave_key, &alice.public_key],
+        &alice.secret_key,
+        inner.as_bytes(),
+        now,
+    )
+    .unwrap();
+    let package = pgp_mime(&headers, &armored);
+    let plain = format!("{headers}\r\nGizli PGP {tag}\r\n");
+    let split =
+        mail_key::encrypt_split(&[&alice.public_key], &alice.secret_key, plain.as_bytes()).unwrap();
+    let send = |pgp: Value, parts: Vec<(&str, Vec<u8>)>| {
+        let meta = serde_json::to_vec(&json!({
+            "subject": "PGP test",
+            "to": [{ "address": dave }],
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[0]) },
+            "pgp": pgp,
+        }))
+        .unwrap();
+        let mut all = vec![("meta", meta), ("data", split.data_packet.clone())];
+        all.extend(parts);
+        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(all))
+            .send()
+            .unwrap()
+    };
+    let recipients = json!([{ "recipients": [dave] }]);
+    // Plaintext dressed as PGP/MIME, or plaintext nobody needs, is refused.
+    let fake = pgp_mime(
+        &headers,
+        "-----BEGIN PGP MESSAGE-----\n\nnot encrypted\n-----END PGP MESSAGE-----",
+    );
+    assert_eq!(send(recipients.clone(), vec![("pgp0", fake)]).status(), 400);
+    assert_eq!(
+        send(
+            recipients.clone(),
+            vec![
+                ("pgp0", package.clone()),
+                ("mime", plain.clone().into_bytes())
+            ]
+        )
+        .status(),
+        400
+    );
+    let r = send(recipients, vec![("pgp0", package)]);
+    assert_eq!(r.status(), 200, "send PGP");
+    let sent = send_result(r);
+    assert_eq!(sent["message"]["protection"], "end_to_end", "sent: {sent}");
+    assert_eq!(
+        sent["recipients"],
+        json!([{ "address": dave, "status": "sent" }])
+    );
+    // The gate decrypts what reached the sink with Dave's GnuPG.
+    println!("PGP-MESSAGE-ID {message_id}");
+    println!("PGP-MARKER Gizli PGP {tag}");
+
+    // Dave writes back with GnuPG, signed and encrypted to Alice's key, over
+    // SMTP: it is end to end on arrival and opens twice in the browser.
+    let (ok, encrypted, err) = gpg(
+        &home,
+        &[
+            "--armor",
+            "--sign",
+            "--encrypt",
+            "-r",
+            &alice.address,
+            "-u",
+            dave,
+        ],
+        format!("Content-Type: text/plain; charset=utf-8\r\n\r\nReply {tag}\r\n").as_bytes(),
+    );
+    assert!(ok, "Dave encrypts: {err}");
+    let reply = pgp_mime(
+        &format!(
+            "From: Dave <{dave}>\r\nTo: {}\r\nSubject: Re: PGP test\r\nMessage-ID: <reply-{tag}@outside.test>\r\n\
+In-Reply-To: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:05:00 +0000\r\n",
+            alice.address
+        ),
+        &String::from_utf8(encrypted).unwrap(),
+    );
+    let mut smtp = Smtp::connect(&smtp_address);
+    assert_eq!(smtp.command("EHLO mx.outside.test"), 250);
+    assert_eq!(smtp.command(&format!("MAIL FROM:<{dave}>")), 250);
+    assert_eq!(smtp.command(&format!("RCPT TO:<{}>", alice.address)), 250);
+    assert_eq!(smtp.data(&reply), 250);
+    assert_eq!(smtp.command("QUIT"), 221);
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let row = loop {
+        if let Some(row) = messages(&c, &base, &user.token)
+            .into_iter()
+            .find(|m| m["messageId"] == format!("reply-{tag}@outside.test"))
+        {
+            break row;
+        }
+        assert!(Instant::now() < deadline, "Dave's reply never arrived");
+        std::thread::sleep(Duration::from_secs(1));
+    };
+    assert_eq!(row["protection"], "end_to_end", "reply: {row}");
+    let stored = bearer(
+        c.get(format!(
+            "{base}/api/mail/messages/{}/content",
+            row["id"].as_str().unwrap()
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    let outer = mail_key::decrypt(&alice.secret_key, &stored, None).unwrap();
+    let outer = String::from_utf8(outer.data.to_vec()).unwrap();
+    let start = outer
+        .find("-----BEGIN PGP MESSAGE-----")
+        .expect("armored part");
+    let end = outer
+        .find("-----END PGP MESSAGE-----")
+        .expect("armored end")
+        + "-----END PGP MESSAGE-----".len();
+    let opened = mail_key::decrypt(
+        &alice.secret_key,
+        &outer.as_bytes()[start..end],
+        Some(&dave_key),
+    )
+    .unwrap();
+    assert!(String::from_utf8_lossy(&opened.data).contains(&format!("Reply {tag}")));
+    assert!(
+        opened.signed && opened.verified,
+        "Dave's signature verifies"
+    );
+}
+
+/// The address's current key list, verified.
+fn current_list(c: &Client, base: &str, user: &User) -> (String, mail_key::SignedMailKeyListV1) {
+    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let decode = |field: &str| {
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            addresses[0]["keyList"][field].as_str().unwrap(),
+        )
+        .unwrap()
+    };
+    let signed = mail_key::SignedMailKeyListV1::verify(
+        &decode("data"),
+        &decode("signature"),
+        &user.identity.authority_public_key(),
+    )
+    .unwrap();
+    (addresses[0]["id"].as_str().unwrap().to_string(), signed)
+}
+
+/// The next list after `previous`, with `keys`, signed by the account.
+fn next_list(
+    user: &User,
+    previous: &mail_key::SignedMailKeyListV1,
+    keys: Vec<MailKeyEntryV1>,
+) -> Value {
+    let mut keys = keys;
+    keys.sort_by_key(|key| key.fingerprint);
+    let list = MailKeyListV1 {
+        sequence: previous.list.sequence + 1,
+        previous_hash: Some(previous.hash()),
+        issued_at: "2026-10-10T13:00:00Z".into(),
+        keys,
+        ..previous.list.clone()
+    }
+    .sign(user.identity.authority_signing_key())
+    .unwrap();
+    json!({ "data": b64(&list.data), "signature": b64(&list.signature) })
+}
+
+#[test]
+fn address_keys_rotate_and_change_flags() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let first = set_up_address(&c, &base, &user);
+    let (id, list1) = current_list(&c, &base, &user);
+    let old = list1.list.keys[0].clone();
+
+    // A new key, primary from now on; the old one stays to open old mail.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let new = mail_key::generate_address_key(&first.address, now).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        &user.email,
+        &first.address,
+        &new.secret_key,
+    )
+    .unwrap();
+    let new_entry = MailKeyEntryV1 {
+        fingerprint: new.fingerprint,
+        sha256_fingerprint: new.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let rotated = next_list(
+        &user,
+        &list1,
+        vec![
+            MailKeyEntryV1 {
+                primary: false,
+                ..old.clone()
+            },
+            new_entry.clone(),
+        ],
+    );
+    let r = bearer(c.post(format!("{base}/api/mail/addresses/{id}/keys")), &user.token)
+        .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": rotated }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200, "rotate");
+    let lookup: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email={}", first.address)),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(
+        lookup["keys"][0]["fingerprint"],
+        hex::encode(new.fingerprint),
+        "new key first: {lookup}"
+    );
+    assert_eq!(lookup["keys"][0]["primary"], true);
+    assert_eq!(lookup["keyLists"].as_array().unwrap().len(), 2);
+
+    // The old key marked obsolete and compromised by a list of the same keys.
+    let (_, list2) = current_list(&c, &base, &user);
+    let put = |list: Value| {
+        bearer(
+            c.put(format!("{base}/api/mail/addresses/{id}/key-list")),
+            &user.token,
+        )
+        .json(&json!({ "keyList": list }))
+        .send()
+        .unwrap()
+    };
+    let retired = MailKeyEntryV1 {
+        primary: false,
+        flags: 0,
+        ..old.clone()
+    };
+    // Leaving a key out, or a list that does not follow, is refused.
+    assert_eq!(
+        put(next_list(&user, &list2, vec![new_entry.clone()])).status(),
+        400
+    );
+    assert_eq!(
+        put(next_list(
+            &user,
+            &list1,
+            vec![retired.clone(), new_entry.clone()]
+        ))
+        .status(),
+        409
+    );
+    let r = put(next_list(
+        &user,
+        &list2,
+        vec![retired.clone(), new_entry.clone()],
+    ));
+    assert_eq!(r.status(), 200, "mark the old key");
+    let address: Value = r.json().unwrap();
+    let old_row = address["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["fingerprint"] == hex::encode(old.fingerprint))
+        .unwrap()
+        .clone();
+    assert_eq!(old_row["flags"], 0);
+    assert_eq!(old_row["primary"], false);
+    // Three lists in the chain now.
+    let (_, list3) = current_list(&c, &base, &user);
+    assert_eq!(list3.list.sequence, 3);
+}
