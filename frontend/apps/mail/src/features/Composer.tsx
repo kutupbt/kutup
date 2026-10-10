@@ -195,7 +195,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     ],
     content: start.html,
     autofocus: target.kind === 'new' && !start.draft.to.length ? false : 'start',
-    editorProps: { attributes: { 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none' } },
+    editorProps: { attributes: { role: 'textbox', 'aria-multiline': 'true', 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none' } },
     onUpdate: () => setRevision((r) => r + 1),
   })
 

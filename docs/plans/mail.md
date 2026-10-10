@@ -1,6 +1,7 @@
 # Mail (Phase C)
 
-**Status:** C1 done (2026-10-10); C2 next. Phase C of
+**Status:** C1 done; C2a–C2d done (2026-10-10): crypto, server, the app.
+C2e (gates and docs) in progress; C2f later. Phase C of
 [`../research/17-mail-calendar-contacts.md`](../research/17-mail-calendar-contacts.md),
 after [`mail-address-keys.md`](mail-address-keys.md) (A) and
 [`contacts.md`](contacts.md) (B).
@@ -199,11 +200,11 @@ deletes the draft.
 
 1. **C2a crypto** (done): `encrypt_split`, key packet checks, WASM
    `openMailMessage` and `encryptMailMessage`, vectors.
-2. **C2b server:** the API above, Bcc and draft attachments in migration
+2. **C2b server** (done): the API above, Bcc and draft attachments in migration
    085, Stalwart's submission listener in the plan, sending limits.
-3. **C2c reading:** `@kutup/mail-core` and the app: list, counts, thread,
+3. **C2c reading** (done): `@kutup/mail-core` and the app: list, counts, thread,
    MIME, safe HTML, attachments, actions, search, shortcuts.
-4. **C2d writing:** composer, drafts, send, reply and forward, "Add to
+4. **C2d writing** (done): composer, drafts, send, reply and forward, "Add to
    contacts" for new correspondents.
 5. **C2e gates and docs:** browser specs (two Kutup users, end to end), the
    mail gate extended to sending outside, docs.

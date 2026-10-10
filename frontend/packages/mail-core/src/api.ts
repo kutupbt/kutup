@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteD
 import { encryptMailMessage, openMailMessage, toBase64, type SealedMailKey } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
+import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, NoKutupAddress } from './keys'
 import { buildMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
 
@@ -80,9 +81,14 @@ export function useMailAccount() {
     retry: (count, error) => !(error instanceof NoAddressKey) && count < 1,
     queryFn: async (): Promise<MailAccount> => {
       const { data } = await api.get<
-        { address: string; keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[] }[]
+        { id: string; address: string; keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[] }[]
       >('/mail/addresses')
-      const address = data[0]
+      let address = data[0]
+      if (address && address.keys.length === 0) {
+        // Not made at sign-in yet (or that failed): make it now.
+        await addFirstAddressKey(session, address).catch(() => undefined)
+        address = (await api.get<typeof data>('/mail/addresses')).data[0]
+      }
       const primary = address?.keys.find((k) => k.primary)
       if (!address || !primary) throw new NoAddressKey()
       return {

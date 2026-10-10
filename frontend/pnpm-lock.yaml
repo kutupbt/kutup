@@ -95,6 +95,9 @@ importers:
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@kutup/mail-core':
+        specifier: workspace:*
+        version: link:../../packages/mail-core
       '@kutup/map':
         specifier: workspace:*
         version: link:../../packages/map

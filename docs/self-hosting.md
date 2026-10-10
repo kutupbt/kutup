@@ -886,6 +886,14 @@ uses the map settings above.
 
 ## Mail
 
+The Mail app (`KUTUP_MAIL_URL`, e.g. `mail.example.org`, the same frontend
+image) reads and writes mail in the browser: messages between Kutup users are
+end-to-end encrypted, and the server stores every message encrypted to its
+address key. A deployment that names its apps one by one must add
+`KUTUP_MAIL_URL` (or set `KUTUP_BASE_DOMAIN`); with `docker-compose.acme.yml`
+the name is on the certificate automatically. The same `mail.` name can serve
+the web app (port 443) and Stalwart (port 25).
+
 Kutup receives mail for `<username>@CHAT_SERVER_NAME` through
 [Stalwart](https://stalw.art), which runs unmodified beside it
 (`docker-compose.mail.yml`, `docs/plans/mail.md`). Stalwart answers on port
@@ -899,8 +907,8 @@ has signed in to the Account app once, which creates its address key.
    `openssl rand -hex 32`). With `docker-compose.acme.yml`, add
    `MAIL_HOSTNAME` to `KUTUP_ACME_EXTRA_DOMAINS` so port 25 offers a trusted
    certificate.
-2. Open TCP port 25 inbound. Many hosting providers block outbound port 25
-   until asked; sending (Mail, C2) needs it.
+2. Open TCP port 25 inbound and outbound. Many hosting providers block
+   outbound port 25 until asked; mail to people outside Kutup needs it.
 3. Start with the mail file added:
    `docker compose -f docker-compose.yml -f docker-compose.acme.yml -f docker-compose.mail.yml up -d --wait`.
    The `stalwart-setup` service applies Kutup's settings to Stalwart
