@@ -26,7 +26,8 @@
     "devicesSessions": "Cihazlar ve oturumlar",
     "maps": "Haritalar",
     "adminMaps": "Haritalar",
-    "storage": "Depolama alanı"
+    "storage": "Depolama alanı",
+    "keys": "Şifreleme anahtarları"
   },
   "auth": {
     "fields": {
@@ -346,6 +347,27 @@
         "deleteAllVersionsDescription_other": "{{count}} önceki sürüm ({{size}}) dosyalarınızın sürüm geçmişinden silinecek."
       },
       "kindsNote": "Dosya türleri bu tarayıcının çözdüğü adlardan gelir; sunucu yalnızca boyutları görür. Sohbet dahil, tuttuğunuz her kopya sayılır."
+    },
+    "keys": {
+      "title": "Şifreleme anahtarları",
+      "description": "E-posta adresiniz ve ona gelen ve ondan giden postayı koruyan anahtarlar. Bunları hesabınız imzalar; sizi Sohbet'te ya da Drive'da doğrulamış kişiler bu anahtarlara da güvenebilir.",
+      "addressHint": "Kutup kullanıcıları bu anahtarları hesabınız üzerinden, diğer herkes Web Key Directory üzerinden bulur.",
+      "noAddress": "Hesabınızın henüz bir e-posta adresi yok: adres kullanıcı adınızla gelir.",
+      "creating": "Anahtarınız oluşturuluyor…",
+      "none": "Henüz anahtar yok. Bir sonraki girişinizde oluşturulacak.",
+      "createFailed": "Anahtarınız oluşturulamadı. Bir sonraki girişinizde yeniden denenecek.",
+      "signedByAccount": "Hesabınız tarafından imzalandı (anahtar listesi {{sequence}})",
+      "notSigned": "Bu anahtar listesi hesabınız tarafından imzalanmamış. Bu anahtarlara güvenmeyin ve yöneticinize başvurun.",
+      "algorithm": "Curve25519 (Ed25519 ve X25519)",
+      "primary": "Birincil",
+      "obsolete": "Yalnızca şifre çözme",
+      "compromised": "Güvenliği aşılmış",
+      "fingerprint": "Parmak izi",
+      "created": "Oluşturulma: {{when}}",
+      "usage": "Şifreler, şifre çözer ve imzalar",
+      "usageDecryptOnly": "Eski postaların şifresini çözmek için saklanıyor",
+      "download": "Açık anahtarı indir",
+      "downloadFailed": "Açık anahtar indirilemedi."
     }
   },
   "admin": {

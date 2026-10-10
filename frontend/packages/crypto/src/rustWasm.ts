@@ -39,6 +39,28 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
+  generateMailAddressKey(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    createdAtSecs: number,
+  ): import('./mailKey').GeneratedMailAddressKey
+  inspectMailAddressPublicKey(
+    publicKeyBase64: string,
+    address: string,
+  ): { fingerprint: string; sha256Fingerprint: string; createdAt: number }
+  armorMailPublicKey(publicKeyBase64: string): string
+  signMailKeyList(
+    masterKeyBase64: string,
+    list: import('./mailKey').MailKeyListInput,
+  ): import('./mailKey').SignedMailKeyList
+  verifyMailKeyList(
+    dataBase64: string,
+    signatureBase64: string,
+    authorityPublicKeyBase64: string,
+    previousDataBase64?: string,
+    previousSignatureBase64?: string,
+  ): import('./mailKey').SignedMailKeyList
   sealAccountEnvelope(
     plaintextBase64: string,
     keyBase64: string,

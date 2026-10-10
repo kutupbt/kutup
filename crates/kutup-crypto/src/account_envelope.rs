@@ -53,6 +53,8 @@ pub enum AccountEnvelopePurpose {
     RecoveryMasterKey = 2,
     DriveHpkePrivateKey = 3,
     ChatBackupRoot = 4,
+    /// A mail address's OpenPGP secret key (`mail_key`).
+    MailAddressPrivateKey = 5,
 }
 
 impl AccountEnvelopePurpose {
@@ -70,6 +72,7 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
             2 => Ok(Self::RecoveryMasterKey),
             3 => Ok(Self::DriveHpkePrivateKey),
             4 => Ok(Self::ChatBackupRoot),
+            5 => Ok(Self::MailAddressPrivateKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-envelope purpose {value}"
             ))),

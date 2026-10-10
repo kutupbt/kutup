@@ -28,6 +28,7 @@
 //! - [`asset`] — whiteboard asset envelopes under the file key.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
+//! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
 
 pub mod account_envelope;
 pub mod asset;
@@ -48,6 +49,8 @@ pub mod identity;
 pub mod kdf;
 pub mod live_location;
 pub mod local_state;
+#[cfg(feature = "mail")]
+pub mod mail_key;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;

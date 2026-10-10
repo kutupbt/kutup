@@ -602,8 +602,7 @@ pub fn seal_account_envelope(
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let key = decode_canonical_base64(key_base64, "key")?;
-    let purpose =
-        AccountEnvelopePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))?;
+    let purpose = generic_account_purpose(purpose)?;
     account_envelope::seal_b64(&plaintext, &key, purpose, login_email)
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -617,11 +616,21 @@ pub fn open_account_envelope(
     login_email: &str,
 ) -> Result<String, JsValue> {
     let key = decode_canonical_base64(key_base64, "key")?;
-    let purpose = AccountEnvelopePurpose::try_from(expected_purpose)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let purpose = generic_account_purpose(expected_purpose)?;
     let plaintext = account_envelope::open_b64(envelope_base64, &key, purpose, login_email)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
+}
+
+/// Mail address keys have typed exports (`generateMailAddressKey`), so the
+/// generic account-envelope path cannot hand their secret key to JavaScript.
+fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {
+    match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
+        AccountEnvelopePurpose::MailAddressPrivateKey => Err(js_error(
+            "this account envelope purpose has its own typed export",
+        )),
+        purpose => Ok(purpose),
+    }
 }
 
 /// The purposes whose context is two plain UUIDs. Whiteboard assets and
@@ -1779,4 +1788,228 @@ pub fn inspect_photos_library(envelope_base64: &str) -> Result<JsValue, JsValue>
             .then(|| hex::encode(header.previous_envelope_digest)),
     })
     .map_err(|_| js_error("encode header"))
+}
+
+// --- mail address keys (docs/plans/mail-address-keys.md) ---------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailAddressKeyView {
+    /// Binary OpenPGP public key, base64.
+    public_key: String,
+    /// The secret key sealed under the master key, base64. The secret key
+    /// itself never leaves WASM.
+    envelope: String,
+    fingerprint: String,
+    sha256_fingerprint: String,
+}
+
+fn master_key_32(master_key_base64: &str) -> Result<[u8; 32], JsValue> {
+    decode_canonical_base64(master_key_base64, "master key")?
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))
+}
+
+/// Generates an address key and seals its secret part under the master key.
+#[wasm_bindgen(js_name = generateMailAddressKey)]
+pub fn generate_mail_address_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    created_at_secs: u32,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::mail_key::generate_address_key(address, created_at_secs)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key,
+        login_email,
+        address,
+        &key.secret_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&MailAddressKeyView {
+        public_key: STANDARD.encode(&key.public_key),
+        envelope: STANDARD.encode(envelope),
+        fingerprint: hex::encode(key.fingerprint),
+        sha256_fingerprint: hex::encode(key.sha256_fingerprint),
+    })
+    .map_err(|error| js_error(&format!("encode mail address key: {error}")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailPublicKeyView {
+    fingerprint: String,
+    sha256_fingerprint: String,
+    created_at: u32,
+}
+
+/// Checks that a public key is a Kutup address key for `address`.
+#[wasm_bindgen(js_name = inspectMailAddressPublicKey)]
+pub fn inspect_mail_address_public_key(
+    public_key_base64: &str,
+    address: &str,
+) -> Result<JsValue, JsValue> {
+    let public_key = decode_canonical_base64(public_key_base64, "public key")?;
+    let info = kutup_crypto::mail_key::inspect_address_public_key(&public_key, address)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&MailPublicKeyView {
+        fingerprint: hex::encode(info.fingerprint),
+        sha256_fingerprint: hex::encode(info.sha256_fingerprint),
+        created_at: info.created_at_secs,
+    })
+    .map_err(|error| js_error(&format!("encode public key: {error}")))
+}
+
+/// An ASCII-armored public key, for "Download public key".
+#[wasm_bindgen(js_name = armorMailPublicKey)]
+pub fn armor_mail_public_key(public_key_base64: &str) -> Result<String, JsValue> {
+    let public_key = decode_canonical_base64(public_key_base64, "public key")?;
+    kutup_crypto::mail_key::armor_public_key(&public_key)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailKeyEntryView {
+    fingerprint: String,
+    sha256_fingerprint: String,
+    primary: bool,
+    flags: u32,
+}
+
+#[derive(serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailKeyListInput {
+    account: String,
+    address: String,
+    sequence: u64,
+    #[serde(default)]
+    previous_hash: Option<String>,
+    issued_at: String,
+    keys: Vec<MailKeyEntryView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignedMailKeyListView {
+    data: String,
+    signature: String,
+    hash: String,
+    account: String,
+    address: String,
+    sequence: u64,
+    previous_hash: Option<String>,
+    issued_at: String,
+    keys: Vec<MailKeyEntryView>,
+}
+
+fn hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], JsValue> {
+    let decoded =
+        hex::decode(value).map_err(|_| js_error(&format!("{field} must be lowercase hex")))?;
+    if hex::encode(&decoded) != value {
+        return Err(js_error(&format!("{field} must be lowercase hex")));
+    }
+    decoded
+        .try_into()
+        .map_err(|_| js_error(&format!("{field} has the wrong length")))
+}
+
+fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> SignedMailKeyListView {
+    let list = &signed.list;
+    SignedMailKeyListView {
+        data: STANDARD.encode(&signed.data),
+        signature: STANDARD.encode(signed.signature),
+        hash: hex::encode(signed.hash()),
+        account: list.account.clone(),
+        address: list.address.clone(),
+        sequence: list.sequence,
+        previous_hash: list.previous_hash.map(hex::encode),
+        issued_at: list.issued_at.clone(),
+        keys: list
+            .keys
+            .iter()
+            .map(|key| MailKeyEntryView {
+                fingerprint: hex::encode(key.fingerprint),
+                sha256_fingerprint: hex::encode(key.sha256_fingerprint),
+                primary: key.primary,
+                flags: key.flags,
+            })
+            .collect(),
+    }
+}
+
+/// Signs an address's key list with the account authority derived from the
+/// master key; the authority and incarnation ids are filled in here.
+#[wasm_bindgen(js_name = signMailKeyList)]
+pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let mut keys = Vec::with_capacity(input.keys.len());
+    for key in &input.keys {
+        keys.push(kutup_crypto::mail_key::MailKeyEntryV1 {
+            fingerprint: hex_array(&key.fingerprint, "fingerprint")?,
+            sha256_fingerprint: hex_array(&key.sha256_fingerprint, "sha256Fingerprint")?,
+            primary: key.primary,
+            flags: key.flags,
+        });
+    }
+    let list = kutup_crypto::mail_key::MailKeyListV1 {
+        account: input.account,
+        incarnation_id: hex_array(&identity.incarnation_id(), "incarnation")?,
+        authority_key_id: hex_array(&identity.authority_key_id(), "authority key id")?,
+        address: input.address,
+        sequence: input.sequence,
+        previous_hash: match &input.previous_hash {
+            Some(hash) => Some(hex_array(hash, "previousHash")?),
+            None => None,
+        },
+        issued_at: input.issued_at,
+        keys,
+    };
+    let signed = list
+        .sign(identity.authority_signing_key())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&signed_list_view(&signed))
+        .map_err(|error| js_error(&format!("encode key list: {error}")))
+}
+
+/// Verifies a signed key list against the account authority (from the
+/// account's verified manifest) and, when given, that it directly follows
+/// `previous`.
+#[wasm_bindgen(js_name = verifyMailKeyList)]
+pub fn verify_mail_key_list(
+    data_base64: &str,
+    signature_base64: &str,
+    authority_public_key_base64: &str,
+    previous_data_base64: Option<String>,
+    previous_signature_base64: Option<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_key::SignedMailKeyListV1;
+    let authority: [u8; 32] =
+        decode_canonical_base64(authority_public_key_base64, "authority key")?
+            .try_into()
+            .map_err(|_| js_error("authority key must be 32 bytes"))?;
+    let verify = |data: &str, signature: &str| -> Result<SignedMailKeyListV1, JsValue> {
+        SignedMailKeyListV1::verify(
+            &decode_canonical_base64(data, "key list")?,
+            &decode_canonical_base64(signature, "key list signature")?,
+            &authority,
+        )
+        .map_err(|error| js_error(&error.to_string()))
+    };
+    let signed = verify(data_base64, signature_base64)?;
+    match (previous_data_base64, previous_signature_base64) {
+        (Some(data), Some(signature)) => verify(&data, &signature)?
+            .check_successor(&signed)
+            .map_err(|error| js_error(&error.to_string()))?,
+        (None, None) => {}
+        _ => return Err(js_error("previous key list needs both data and signature")),
+    }
+    serde_wasm_bindgen::to_value(&signed_list_view(&signed))
+        .map_err(|error| js_error(&format!("encode key list: {error}")))
 }

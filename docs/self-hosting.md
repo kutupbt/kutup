@@ -288,6 +288,14 @@ Policy, which only Drive may embed. Point all seven names at the server, cover
 them with the certificate, and keep the `Host` header when proxying; the
 bundled `nginx` does.
 
+**Email addresses and their keys.** Every account with a username has the
+address `username@<CHAT_SERVER_NAME>` and an OpenPGP key, created in the
+browser after sign-in (Account → Settings → Encryption keys). Outside OpenPGP
+clients find the key through Web Key Directory at
+`https://<CHAT_SERVER_NAME>/.well-known/openpgpkey/hu/…`; the bundled `nginx`
+routes `/.well-known/openpgpkey/` to the backend, so the server name must reach
+this server over HTTPS. Mail itself (sending and receiving) is not built yet.
+
 ---
 
 ## Step 3: First Login

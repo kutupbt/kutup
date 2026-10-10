@@ -917,6 +917,80 @@ no share between you; `400` for an envelope that does not match.
 
 ---
 
+## Mail address keys
+
+Each account's email address is `username@<server name>`, with OpenPGP keys
+as Proton keeps address keys (`docs/plans/mail-address-keys.md`). The server
+never holds a private key: it stores the public key, the secret key sealed in
+an `AccountEnvelopeV1` under the master key (purpose `MailAddressPrivateKey`,
+binding the address and fingerprint), and each address's signed key list
+(`MailKeyListV1`, signed by the account authority and hash-chained). Key flags
+use Proton's bits: `1` may verify, `2` may encrypt to, `4` mail not end-to-end
+encrypted, `8` mail not expected to be signed.
+
+### GET /api/mail/addresses
+
+The caller's addresses; the address row is created on first use. An account
+without a username has none.
+
+**Auth:** Bearer JWT
+
+**Response:**
+```json
+[{
+  "id": "uuid",
+  "address": "alice@kutup.dev",
+  "keys": [{
+    "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
+    "publicKey": "base64 binary OpenPGP certificate",
+    "privateKeyEnvelope": "base64 AccountEnvelopeV1",
+    "primary": true, "flags": 3, "createdAt": "RFC 3339"
+  }],
+  "keyList": { "data": "base64 canonical MailKeyListV1", "signature": "base64 Ed25519" }
+}]
+```
+
+`keyList` is null until the first key is added.
+
+### POST /api/mail/addresses/:id/keys
+
+Add a key to one of the caller's addresses together with the next signed key
+list. The server checks: the public key is a v4 Ed25519 + Curve25519 key whose
+only user ID is this address, with valid self-signatures; the envelope has the
+mail-key purpose and this account's login email; the key list verifies against
+the account's authority key, names this account and address, follows the
+current list (sequence + 1, previous hash) or is sequence 1, and lists exactly
+the stored keys plus the new one. Primary and flags then follow the list. All
+in one transaction.
+
+**Auth:** Bearer JWT
+
+**Body:** `{ "publicKey": "base64", "privateKeyEnvelope": "base64", "keyList": { "data": "base64", "signature": "base64" } }`
+
+**Response:** the address, as in `GET /api/mail/addresses`. `400` for an
+invalid key, envelope or list; `409` when the list does not follow the current
+one (another device changed it; reload and retry) or the key is in use.
+
+### GET /api/mail/keys?email=
+
+A Kutup address's public keys (primary first) and every signed key list, oldest
+first. Clients verify the chain against the authority of `account`'s verified
+manifest. Rate-limited like user lookup.
+
+**Auth:** Bearer JWT
+
+**Response:** `{ "address": "...", "account": "username@server", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
+
+### GET /.well-known/openpgpkey/hu/:hash?l=:local
+
+Web Key Directory, direct method, outside `/api`: the binary public keys of
+`local@<server name>` that may be encrypted to, primary first,
+`application/octet-stream`. `hash` is the z-base-32 SHA-1 of the lowercased
+local part and must match `l`; anything else is `404`. No authentication;
+rate-limited. `GET /.well-known/openpgpkey/policy` returns an empty policy.
+
+---
+
 ## Maps
 
 Kutup stores no map data (docs/plans/maps.md). The administrator chooses the

@@ -601,4 +601,46 @@ assert.equal(
   '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
 )
 
+// Mail address keys (docs/plans/mail-address-keys.md).
+const mailVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-address-key-v1.json`, 'utf8'),
+)
+const mailIdentity = crypto.deriveAccountIdentityKeys(mailVectors.masterKey)
+assert.deepEqual(crypto.inspectMailAddressPublicKey(mailVectors.publicKey, mailVectors.address), {
+  fingerprint: mailVectors.fingerprint,
+  sha256Fingerprint: mailVectors.sha256Fingerprint,
+  createdAt: mailVectors.createdAt,
+})
+assert.throws(() => crypto.inspectMailAddressPublicKey(mailVectors.publicKey, 'bob@kutup.dev'))
+assert.match(crypto.armorMailPublicKey(mailVectors.publicKey), /^-----BEGIN PGP PUBLIC KEY BLOCK-----/)
+const [firstList, secondList] = mailVectors.keyLists
+const verifiedFirst = crypto.verifyMailKeyList(firstList.data, firstList.signature, mailIdentity.authorityPublicKey)
+assert.equal(verifiedFirst.hash, firstList.hash)
+assert.equal(verifiedFirst.sequence, 1)
+const verifiedSecond = crypto.verifyMailKeyList(
+  secondList.data, secondList.signature, mailIdentity.authorityPublicKey, firstList.data, firstList.signature,
+)
+assert.equal(verifiedSecond.hash, secondList.hash)
+assert.equal(verifiedSecond.keys.filter((key) => key.primary).length, 1)
+assert.throws(() => crypto.verifyMailKeyList(firstList.data, firstList.signature, mailIdentity.authorityPublicKey, secondList.data, secondList.signature))
+const otherIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x07).toString('base64'))
+assert.throws(() => crypto.verifyMailKeyList(firstList.data, firstList.signature, otherIdentity.authorityPublicKey))
+// The same list signed again from the browser is byte-identical.
+const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
+  account: verifiedFirst.account,
+  address: verifiedFirst.address,
+  sequence: 1,
+  issuedAt: verifiedFirst.issuedAt,
+  keys: verifiedFirst.keys,
+})
+assert.equal(resigned.data, firstList.data)
+assert.equal(resigned.signature, firstList.signature)
+// A fresh key: sealed in WASM, never returned in clear.
+const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, 'carol@kutup.dev', 1_790_000_000)
+assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
+assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
+// The generic account-envelope path refuses the mail-key purpose.
+assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
+assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
+
 console.log('crypto WASM canonical vectors passed')
