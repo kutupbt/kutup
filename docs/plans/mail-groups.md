@@ -1,6 +1,6 @@
 # Mail groups
 
-**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a done; G1b–G1d next. Follows Mail C1–C3
+**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a and G1b done; G1c–G1d next. Follows Mail C1–C3
 ([`mail.md`](mail.md)); its own pull request after #87 → #88 → #90.
 
 ## Goal
@@ -257,7 +257,23 @@ log.
    post policy, a full group, release on delete, the role fallback and
    security.txt.
 2. **G1b shared mailboxes:** group keys, shares, server-signed lists, WKD,
-   delivery, shared rows, sending as the group, key rotation on removal.
+   delivery, shared rows, sending as the group, key rotation on removal. Done: the
+   group key is the address key shape for the group's address, its shares
+   OpenPGP messages to members' address keys (`seal_group_key_share`,
+   `open_group_key_share`; WASM `generateMailGroupKey`,
+   `reshareMailGroupKey`, `openMailGroupMessage`,
+   `encryptMailMessageAsGroup`, `encryptMailPgpAsGroup`, the secret never in
+   JS); key lists signed by a server key of their own
+   (`server_generated_keys` `mail-group-authority`), so groups do not
+   depend on federation being on; `mail_messages.owner` (the account, or the
+   group for a shared mailbox's rows) scopes every read, filing and delete;
+   `sent_by` and `sender_account` keep the sending limits on the member who
+   sent as the group; delivery from outside encrypted to the group key,
+   from Kutup with a key packet for it; deleting a shared mailbox deletes its
+   messages. The gate covers creation with a key, the signed list, shared
+   read state, joining with shares, sending as the mailbox (and the right
+   to), writing to it from Kutup, leaving with a new key the leaver never
+   gets, and deletion.
 3. **G1c apps:** the administration page, Mail's shared mailboxes, From
    picker and group settings, Contacts suggestions.
 4. **G1d gates:** the mail gate (a list with three members from outside and

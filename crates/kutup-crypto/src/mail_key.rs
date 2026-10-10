@@ -324,6 +324,30 @@ pub fn open_address_key(
     Ok(Zeroizing::new(secret.to_vec()))
 }
 
+/// A shared mailbox's key for one member (docs/plans/mail-groups.md, G1b):
+/// the group's secret key encrypted to the member's address key, an OpenPGP
+/// message only that member opens. The group key itself has the address
+/// key's shape ([`generate_address_key`] for the group's address).
+pub fn seal_group_key_share(member_public_key: &[u8], group_secret_key: &[u8]) -> Result<Vec<u8>> {
+    secret_key_fingerprint(group_secret_key)?;
+    encrypt_binary(member_public_key, group_secret_key)
+}
+
+/// Opens a member's share of a group key with the member's own address key,
+/// checking it is the group key with `group_fingerprint`.
+pub fn open_group_key_share(
+    member_secret_key: &[u8],
+    share: &[u8],
+    group_fingerprint: &[u8; FINGERPRINT_LEN],
+) -> Result<Zeroizing<Vec<u8>>> {
+    let opened = decrypt(member_secret_key, share, None)?;
+    let secret = Zeroizing::new(opened.data.to_vec());
+    if secret_key_fingerprint(&secret)? != *group_fingerprint {
+        return Err(CryptoError::AuthFailed);
+    }
+    Ok(secret)
+}
+
 /// Shortest passphrase an exported key may be locked with.
 pub const MIN_EXPORT_PASSPHRASE_CHARS: usize = 8;
 

@@ -1185,9 +1185,34 @@ active administrator.
   key packet is missing (look the group up again) and gives the group one
   status (`delivered` or `full`); members who get the message directly and
   the sender get it once.
+- Shared mailboxes (`kind: "shared"`): one mailbox with shared read state and
+  its own address key, made in a browser; each member holds a share (the
+  key's secret encrypted to their address key). `GET /api/mail/keys` answers
+  a shared mailbox like an address, with key lists signed by the server's
+  mail-group authority (`accountAuthorityPublicKey`), and WKD serves its key.
+  Its messages are read and filed with `?group={id}` on `GET
+  /api/mail/messages`, `/counts`, `/threads/:id` and `/messages/:id/content`,
+  and `"group"` in the bodies of `PATCH /api/mail/messages` and `POST
+  /api/mail/messages/delete` (members only; anything else is `404`).
+  `POST /api/mail/send` with `fromGroup` sends as it (owners, managers and
+  members with `canSendAs`; `403` `notAllowedToSendAs` otherwise): From is its
+  address, `keyPackets.self` is for its key, the copy lands in its Sent with
+  `sentBy`, and the sender's limits count it.
+  - `GET /api/mail/groups/:id/keys` — its keys, primary first, with the
+    caller's `share`.
+  - `POST /api/mail/groups/:id/keys` — `{ "key": { "publicKey", "shares":
+    [{ "userId", "share", "memberFingerprint" }] } }`, a new primary key with
+    a share for every member (owners and managers).
+  - `PUT /api/mail/groups/:id/members` also takes `keyShares` (`[{
+    "groupFingerprint", "userId", "share", "memberFingerprint" }]`, every
+    existing key for each joining member; `400` `sharesNeeded`) and `newKey`
+    (required when anyone leaves; `400` `newKeyNeeded`). Each share must be
+    encrypted to the member's current primary address key (`409`
+    `keyChanged`).
 - Administrators: `GET /api/admin/mail/groups`, `POST /api/admin/mail/groups`
-  (`name`, `displayName`, `description`, `kind: "list"`, `postPolicy`,
-  `storageQuotaBytes`, `owners`; `409` `nameTaken` when the name is an
+  (`name`, `displayName`, `description`, `kind: "list" | "shared"`,
+  `postPolicy`, `storageQuotaBytes`, `owners`, and for a shared mailbox
+  `groupKey` with a share for each owner; `409` `nameTaken` when the name is an
   account's, a group's or reserved), `PATCH /api/admin/mail/groups/:id`
   (quota, names, policy), `DELETE /api/admin/mail/groups/:id` (not a role
   address; members keep their copies). Each change is in the audit log.

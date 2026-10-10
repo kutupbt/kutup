@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use kutup_crypto::mail_key::{
     decrypt, encrypt_split, encrypt_split_unsigned, encryption_key_id, generate_address_key,
-    key_packet_key_id,
+    key_packet_key_id, open_group_key_share, seal_group_key_share,
 };
 
 const KEYS: &str = concat!(
@@ -174,4 +174,24 @@ fn unsigned_split_opens_for_each_member() {
         assert!(!opened.signed);
     }
     assert!(encrypt_split_unsigned(&[], MESSAGE).is_err());
+}
+
+#[test]
+fn group_key_shares_open_only_for_their_member() {
+    // A shared mailbox's key, sealed to two members' address keys.
+    let group = generate_address_key("hr@kutup.dev", 1_790_000_000).unwrap();
+    let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+    let carol = generate_address_key("carol@kutup.dev", 1_790_000_000).unwrap();
+    let share = seal_group_key_share(&bob.public_key, &group.secret_key).unwrap();
+    let opened = open_group_key_share(&bob.secret_key, &share, &group.fingerprint).unwrap();
+    assert_eq!(&*opened, &*group.secret_key);
+    // Mail to the group opens with the opened key.
+    let split = encrypt_split_unsigned(&[&group.public_key], MESSAGE).unwrap();
+    let message = join(&split.key_packets[0], &split.data_packet);
+    assert_eq!(&*decrypt(&opened, &message, None).unwrap().data, MESSAGE);
+    // Not for Carol, and not for another group fingerprint.
+    assert!(open_group_key_share(&carol.secret_key, &share, &group.fingerprint).is_err());
+    assert!(open_group_key_share(&bob.secret_key, &share, &bob.fingerprint).is_err());
+    // Only a secret key is sealed.
+    assert!(seal_group_key_share(&bob.public_key, b"not a key").is_err());
 }

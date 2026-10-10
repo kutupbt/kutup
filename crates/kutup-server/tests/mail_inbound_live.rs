@@ -1748,3 +1748,380 @@ fn distribution_lists_and_role_groups() {
     );
     assert_eq!(create(&name).status(), 200);
 }
+
+/// The hex fingerprint of an address's key.
+fn fingerprint_of(address: &Address) -> String {
+    hex::encode(
+        mail_key::inspect_address_public_key(&address.public_key, &address.address)
+            .unwrap()
+            .fingerprint,
+    )
+}
+
+/// A shared mailbox key share for `member`, as a browser makes it.
+fn share_for(group_secret: &[u8], member_user: &User, member: &Address) -> Value {
+    json!({
+        "userId": member_user.id,
+        "share": b64(&mail_key::seal_group_key_share(&member.public_key, group_secret).unwrap()),
+        "memberFingerprint": fingerprint_of(member),
+    })
+}
+
+#[test]
+fn shared_mailboxes() {
+    let (Ok(base), Ok(smtp_address), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut parts = admin.splitn(3, ':');
+    let (email, username, password) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let admin = common::admin_token(&c, &base, email, password, username);
+    let (alice_user, bob_user, carol_user) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let alice = set_up_address(&c, &base, &alice_user);
+    let bob = set_up_address(&c, &base, &bob_user);
+    let carol = set_up_address(&c, &base, &carol_user);
+    let domain = alice.address.split_once('@').unwrap().1.to_string();
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let name = format!("hr-{}", &tag[..8]);
+    let hr = format!("{name}@{domain}");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+
+    // Made with its key, a share for its owner; without one it is refused.
+    let first = mail_key::generate_address_key(&hr, now).unwrap();
+    let create = |group_key: Value| {
+        bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
+            .json(&json!({
+                "name": name, "displayName": "HR", "kind": "shared", "postPolicy": "anyone",
+                "storageQuotaBytes": 10_000_000, "owners": [alice_user.id], "groupKey": group_key,
+            }))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(create(Value::Null).status(), 400);
+    let r = create(json!({
+        "publicKey": b64(&first.public_key),
+        "shares": [share_for(&first.secret_key, &alice_user, &alice)],
+    }));
+    assert_eq!(r.status(), 200, "create shared mailbox");
+    let id = r.json::<Value>().unwrap()["group"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Its key is published with a list the server signs.
+    let lookup: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email={hr}")),
+        &bob_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(lookup["account"], hr.as_str());
+    assert_eq!(
+        lookup["keys"][0]["fingerprint"],
+        hex::encode(first.fingerprint)
+    );
+    let authority: [u8; 32] = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        lookup["accountAuthorityPublicKey"].as_str().unwrap(),
+    )
+    .unwrap()
+    .try_into()
+    .unwrap();
+    let list_data = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        lookup["keyLists"][0]["data"].as_str().unwrap(),
+    )
+    .unwrap();
+    let list_signature = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        lookup["keyLists"][0]["signature"].as_str().unwrap(),
+    )
+    .unwrap();
+    let list =
+        mail_key::SignedMailKeyListV1::verify(&list_data, &list_signature, &authority).unwrap();
+    assert_eq!(list.list.address, hr);
+
+    // Mail from outside: one copy, owned by the mailbox.
+    let message_id = format!("hr-{tag}@sender.test");
+    let message = format!(
+        "From: applicant@sender.test\r\nTo: {hr}\r\nSubject: Application\r\nMessage-ID: <{message_id}>\r\n\r\nMy CV {tag}\r\n"
+    );
+    assert_eq!(smtp_send(&smtp_address, &hr, &message), (250, 250));
+    // Received mail may be filed under Spam (no SPF or DKIM in the gate).
+    let in_group = |user: &User, folder_name: &str| -> Vec<Value> {
+        let folders: &[&str] = if folder_name == "inbox" {
+            &["inbox", "spam"]
+        } else {
+            &[folder_name]
+        };
+        folders
+            .iter()
+            .flat_map(|folder_name| {
+                let page: Value = bearer(
+                    c.get(format!(
+                        "{base}/api/mail/messages?folder={folder_name}&group={id}"
+                    )),
+                    &user.token,
+                )
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
+                page["messages"].as_array().cloned().unwrap_or_default()
+            })
+            .collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let row = loop {
+        if let Some(row) = in_group(&alice_user, "inbox")
+            .into_iter()
+            .find(|m| m["messageId"] == message_id.as_str())
+        {
+            break row;
+        }
+        assert!(Instant::now() < deadline, "the application never arrived");
+        std::thread::sleep(Duration::from_secs(1));
+    };
+    let content = |user: &User, row: &Value| {
+        bearer(
+            c.get(format!(
+                "{base}/api/mail/messages/{}/content?group={id}",
+                row["id"].as_str().unwrap()
+            )),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+    };
+    let stored = content(&alice_user, &row).bytes().unwrap();
+    let opened = mail_key::decrypt(&first.secret_key, &stored, None).unwrap();
+    assert!(String::from_utf8_lossy(&opened.data).contains(&format!("My CV {tag}")));
+    // Not for a non-member, nor in anyone's own mailbox.
+    assert_eq!(content(&bob_user, &row).status(), 404);
+    assert!(messages(&c, &base, &alice_user.token)
+        .iter()
+        .all(|m| m["messageId"] != message_id.as_str()));
+
+    // Bob joins with a share of the key; without one he is refused.
+    let set_members = |members: Value, extra: Value| {
+        let mut body = json!({ "members": members });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        bearer(
+            c.put(format!("{base}/api/mail/groups/{id}/members")),
+            &alice_user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    let both = json!([
+        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "userId": bob_user.id, "role": "member" },
+    ]);
+    assert_eq!(code(set_members(both.clone(), json!({}))).1, "sharesNeeded");
+    let bob_share = json!({ "groupFingerprint": hex::encode(first.fingerprint) });
+    let mut bob_share = bob_share.as_object().unwrap().clone();
+    bob_share.extend(
+        share_for(&first.secret_key, &bob_user, &bob)
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert_eq!(
+        set_members(both.clone(), json!({ "keyShares": [bob_share] })).status(),
+        200
+    );
+    let keys: Value = bearer(
+        c.get(format!("{base}/api/mail/groups/{id}/keys")),
+        &bob_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let share = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        keys[0]["share"].as_str().unwrap(),
+    )
+    .unwrap();
+    let bobs_key =
+        mail_key::open_group_key_share(&bob.secret_key, &share, &first.fingerprint).unwrap();
+    assert!(mail_key::decrypt(&bobs_key, &content(&bob_user, &row).bytes().unwrap(), None).is_ok());
+
+    // Shared state: Bob reads it, Alice sees it read.
+    let r = bearer(
+        c.patch(format!("{base}/api/mail/messages")),
+        &bob_user.token,
+    )
+    .json(&json!({ "ids": [row["id"]], "seen": true, "group": id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    let seen = in_group(&alice_user, "inbox")
+        .into_iter()
+        .find(|m| m["messageId"] == message_id.as_str())
+        .unwrap();
+    assert_eq!(seen["seen"], true);
+
+    // Writing as the mailbox needs the right; Carol gets it From hr@.
+    let reply_id = format!("reply-{tag}@{domain}");
+    let reply = format!(
+        "From: HR <{hr}>\r\nTo: {}\r\nSubject: Re: Application\r\nMessage-ID: <{reply_id}>\r\n\r\nThank you {tag}\r\n",
+        carol.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&first.public_key, &carol.public_key],
+        &bobs_key,
+        reply.as_bytes(),
+    )
+    .unwrap();
+    let send_as = |user: &User| {
+        let meta = serde_json::to_vec(&json!({
+            "subject": "Re: Application",
+            "fromName": "HR",
+            "to": [{ "address": carol.address }],
+            "messageId": reply_id,
+            "fromGroup": id,
+            "keyPackets": { "self": b64(&split.key_packets[0]), carol.address.clone(): b64(&split.key_packets[1]) },
+        }))
+        .unwrap();
+        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(vec![
+                ("meta", meta),
+                ("data", split.data_packet.clone()),
+            ]))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(code(send_as(&bob_user)), (403, "notAllowedToSendAs".into()));
+    let with_right = json!([
+        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "userId": bob_user.id, "role": "member", "canSendAs": true },
+    ]);
+    assert_eq!(set_members(with_right.clone(), json!({})).status(), 200);
+    let r = send_as(&bob_user);
+    assert_eq!(r.status(), 200, "send as the mailbox");
+    let sent = send_result(r);
+    assert_eq!(sent["message"]["folder"], "sent");
+    assert!(in_group(&alice_user, "sent")
+        .iter()
+        .any(|m| m["messageId"] == reply_id.as_str()));
+    let carols = wait_for(&c, &base, &carol_user, &reply_id);
+    assert_eq!(carols["from"]["address"], hr.as_str());
+    assert!(open_row(&c, &base, &carol_user, &carol, &carols).contains(&format!("Thank you {tag}")));
+
+    // Carol writes to the mailbox, end to end with its key.
+    let carol_id = format!("carol-{tag}@{domain}");
+    let to_hr = format!(
+        "From: {}\r\nTo: {hr}\r\nSubject: Thanks\r\nMessage-ID: <{carol_id}>\r\n\r\nThanks back {tag}\r\n",
+        carol.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&carol.public_key, &first.public_key],
+        &carol.secret_key,
+        to_hr.as_bytes(),
+    )
+    .unwrap();
+    let meta = serde_json::to_vec(&json!({
+        "subject": "Thanks",
+        "to": [{ "address": hr }],
+        "messageId": carol_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]), hr.clone(): b64(&split.key_packets[1]) },
+    }))
+    .unwrap();
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &carol_user.token)
+        .multipart(form(vec![
+            ("meta", meta),
+            ("data", split.data_packet.clone()),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200, "send to the mailbox");
+    let thanks = in_group(&alice_user, "inbox")
+        .into_iter()
+        .find(|m| m["messageId"] == carol_id.as_str())
+        .expect("Carol's mail in the mailbox");
+    assert_eq!(thanks["protection"], "end_to_end");
+
+    // Bob leaves: only with a new key, which he never gets.
+    let alice_only = json!([{ "userId": alice_user.id, "role": "owner", "canSendAs": true }]);
+    assert_eq!(
+        code(set_members(alice_only.clone(), json!({}))).1,
+        "newKeyNeeded"
+    );
+    let second = mail_key::generate_address_key(&hr, now + 1).unwrap();
+    let r = set_members(
+        alice_only,
+        json!({ "newKey": {
+            "publicKey": b64(&second.public_key),
+            "shares": [share_for(&second.secret_key, &alice_user, &alice)],
+        } }),
+    );
+    assert_eq!(r.status(), 200, "remove with a new key");
+    assert_eq!(
+        bearer(
+            c.get(format!("{base}/api/mail/groups/{id}/keys")),
+            &bob_user.token
+        )
+        .send()
+        .unwrap()
+        .status(),
+        404
+    );
+    let new_id = format!("hr2-{tag}@sender.test");
+    let later = message.replace(&message_id, &new_id);
+    assert_eq!(smtp_send(&smtp_address, &hr, &later), (250, 250));
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let row = loop {
+        if let Some(row) = in_group(&alice_user, "inbox")
+            .into_iter()
+            .find(|m| m["messageId"] == new_id.as_str())
+        {
+            break row;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the second application never arrived"
+        );
+        std::thread::sleep(Duration::from_secs(1));
+    };
+    let stored = content(&alice_user, &row).bytes().unwrap();
+    assert!(mail_key::decrypt(&second.secret_key, &stored, None).is_ok());
+    assert!(
+        mail_key::decrypt(&first.secret_key, &stored, None).is_err(),
+        "the old key cannot read new mail"
+    );
+
+    // Deleting the mailbox takes its mail with it.
+    assert_eq!(
+        bearer(
+            c.delete(format!("{base}/api/admin/mail/groups/{id}")),
+            &admin
+        )
+        .send()
+        .unwrap()
+        .status(),
+        204
+    );
+    assert_eq!(content(&alice_user, &row).status(), 404);
+}

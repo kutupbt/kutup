@@ -719,6 +719,10 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/groups/:id/members",
             put(handlers::mail_groups::set_members),
         )
+        .route(
+            "/api/mail/groups/:id/keys",
+            get(handlers::mail_groups::group_keys).post(handlers::mail_groups::rotate_group_key),
+        )
         // --- Collections (authenticated). ---
         .route(
             "/api/collections",

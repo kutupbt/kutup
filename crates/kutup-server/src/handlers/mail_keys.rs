@@ -568,12 +568,17 @@ pub async fn lookup_keys(
     if let Some(lookup) = lookup_address(&state, &address).await? {
         return Ok(Json(lookup));
     }
-    // A group's mail is encrypted to its members: the browser asks
-    // `GET /api/mail/groups/recipients` for them.
-    if crate::mail::groups::find(&state.pool, &address)
-        .await?
-        .is_some()
-    {
+    if let Some(group) = crate::mail::groups::find(&state.pool, &address).await? {
+        // A shared mailbox is written to with its own key, like a person.
+        if group.kind == "shared" {
+            if let Some(lookup) =
+                crate::mail::group_keys::lookup(&state.pool, group.id, &address).await?
+            {
+                return Ok(Json(lookup));
+            }
+        }
+        // A list's mail is encrypted to its members: the browser asks
+        // `GET /api/mail/groups/recipients` for them.
         return Err(AppError::not_found("this address is a group")
             .with_details(serde_json::json!({ "code": "group" })));
     }
@@ -662,19 +667,26 @@ pub async fn wkd_key(
     let address =
         mail_key::canonical_address(&format!("{local}@{}", state.config.chat_server_name))
             .map_err(|_| AppError::not_found("not found"))?;
-    let Some((_, _, keys)) = public_keys(&state, &address).await? else {
-        return Err(AppError::not_found("not found"));
-    };
     let mut body = Vec::new();
-    for key in keys
-        .iter()
-        .filter(|key| key.flags as u32 & FLAG_NOT_OBSOLETE != 0)
-    {
-        body.extend(
-            STANDARD
-                .decode(&key.public_key)
-                .map_err(|_| AppError::internal("stored key"))?,
-        );
+    match public_keys(&state, &address).await? {
+        Some((_, _, keys)) => {
+            for key in keys
+                .iter()
+                .filter(|key| key.flags as u32 & FLAG_NOT_OBSOLETE != 0)
+            {
+                body.extend(
+                    STANDARD
+                        .decode(&key.public_key)
+                        .map_err(|_| AppError::internal("stored key"))?,
+                );
+            }
+        }
+        // A shared mailbox publishes its group key too.
+        None => {
+            for key in crate::mail::group_keys::wkd_keys(&state.pool, &address).await? {
+                body.extend(key);
+            }
+        }
     }
     if body.is_empty() {
         return Err(AppError::not_found("not found"));

@@ -84,6 +84,8 @@ pub struct MailListQuery {
     /// The `next` of the previous page.
     pub before: Option<String>,
     pub limit: Option<i64>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -146,6 +148,55 @@ impl From<Row> for MailMessage {
     }
 }
 
+/// Whose mailbox a request is about: the caller's own, or a shared mailbox
+/// (docs/plans/mail-groups.md) they are a member of. Rows are scoped by
+/// `mail_messages.owner`, the account or the group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mailbox {
+    Own(Uuid),
+    Shared(Uuid),
+}
+
+impl Mailbox {
+    pub(crate) fn owner(self) -> Uuid {
+        match self {
+            Mailbox::Own(id) | Mailbox::Shared(id) => id,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxQuery {
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// The mailbox `group` names for `user_id`; not a member (or not a shared
+/// mailbox) is "not found", as for someone else's message.
+pub(crate) async fn mailbox(
+    state: &AppState,
+    user_id: Uuid,
+    group: Option<&str>,
+) -> AppResult<Mailbox> {
+    let Some(group) = group else {
+        return Ok(Mailbox::Own(user_id));
+    };
+    let group = Uuid::parse_str(group).map_err(|_| AppError::not_found("not found"))?;
+    let member: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_group_members m JOIN mail_groups g ON g.id = m.group_id
+                         WHERE m.group_id = $1 AND m.user_id = $2 AND g.kind = 'shared')",
+    )
+    .bind(group)
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !member {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(Mailbox::Shared(group))
+}
+
 /// A page cursor: the last message's arrival time and id.
 fn cursor(received_at: OffsetDateTime, id: Uuid) -> String {
     format!("{}_{id}", received_at.unix_timestamp_nanos())
@@ -180,6 +231,9 @@ pub async fn list_messages(
     Query(query): Query<MailListQuery>,
 ) -> AppResult<Json<MailMessagePage>> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, query.group.as_deref())
+        .await?
+        .owner();
     let folder = query.folder.as_str();
     if !FOLDERS.contains(&folder) && folder != "starred" && folder != "all" {
         return Err(AppError::bad_request("unknown folder"));
@@ -205,7 +259,7 @@ pub async fn list_messages(
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS}
            FROM mail_messages
-          WHERE user_id = $1
+          WHERE owner = $1
             AND CASE $2
                   WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
                   WHEN 'all' THEN folder NOT IN ('spam', 'trash')
@@ -217,7 +271,7 @@ pub async fn list_messages(
           ORDER BY received_at DESC, id DESC
           LIMIT $5"
     ))
-    .bind(user_id)
+    .bind(owner)
     .bind(folder)
     .bind(before.map(|(at, _)| at))
     .bind(before.map(|(_, id)| id))
@@ -245,7 +299,7 @@ pub async fn list_messages(
     path = "/api/mail/messages/{id}/content",
     tag = "mail",
     security(("BearerAuth" = [])),
-    params(("id" = String, Path, description = "Message id")),
+    params(("id" = String, Path, description = "Message id"), MailboxQuery),
     responses(
         (status = 200, description = "The encrypted message", content_type = "application/octet-stream"),
         (status = 404, description = "No such message of yours"),
@@ -255,16 +309,20 @@ pub async fn message_content(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, scope.group.as_deref())
+        .await?
+        .owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     // Each message is written once under its own key, so the plain key is
     // always the stored version.
     let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT object_key, key_packet FROM mail_messages WHERE id = $1 AND user_id = $2",
+        "SELECT object_key, key_packet FROM mail_messages WHERE id = $1 AND owner = $2",
     )
     .bind(id)
-    .bind(user_id)
+    .bind(owner)
     .fetch_optional(&state.pool)
     .await?;
     let (key, key_packet) = row.ok_or_else(|| AppError::not_found("not found"))?;
@@ -309,6 +367,8 @@ pub struct UpdateMailMessages {
     /// inbox, archive, spam or trash for received mail; sent, archive or
     /// trash for sent mail. Drafts stay in Drafts.
     pub folder: Option<String>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -338,6 +398,9 @@ pub async fn update_messages(
     Json(request): Json<UpdateMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
     let ids = parse_ids(&request.ids)?;
     if request.seen.is_none() && request.starred.is_none() && request.folder.is_none() {
         return Err(AppError::bad_request("nothing to change"));
@@ -352,13 +415,13 @@ pub async fn update_messages(
              seen = CASE WHEN $5::text = 'trash' THEN true ELSE COALESCE($3, seen) END,
              starred = COALESCE($4, starred),
              folder = COALESCE($5, folder)
-          WHERE user_id = $1 AND id = ANY($2)
+          WHERE owner = $1 AND id = ANY($2)
             AND ($5::text IS NULL OR (
                   folder <> 'drafts' AND (
                     (direction = 'inbound' AND $5 IN ('inbox', 'archive', 'spam', 'trash'))
                  OR (direction = 'outbound' AND $5 IN ('sent', 'archive', 'trash')))))",
     )
-    .bind(user_id)
+    .bind(owner)
     .bind(&ids)
     .bind(request.seen)
     .bind(request.starred)
@@ -373,6 +436,8 @@ pub async fn update_messages(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeleteMailMessages {
     pub ids: Vec<String>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
 }
 
 /// `POST /api/mail/messages/delete` — deletes messages for good, only from
@@ -393,26 +458,36 @@ pub async fn delete_messages(
 ) -> AppResult<Json<UpdatedMailMessages>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let ids = parse_ids(&request.ids)?;
-    let deleted = delete_for_good(&state, user_id, &ids, &["trash", "spam", "drafts"]).await?;
+    let mailbox = mailbox(&state, user_id, request.group.as_deref()).await?;
+    let deleted = delete_for_good(&state, mailbox, &ids, &["trash", "spam", "drafts"]).await?;
     Ok(Json(UpdatedMailMessages { updated: deleted }))
 }
 
-/// Deletes `ids` of `user_id` that sit in one of `folders`, with their draft
-/// attachments, refunds the pool and then removes the objects.
+/// Deletes `ids` of a mailbox that sit in one of `folders`, with their draft
+/// attachments, refunds its storage (the account's, or a shared mailbox's
+/// group) and then removes the objects.
 pub(crate) async fn delete_for_good(
     state: &AppState,
-    user_id: Uuid,
+    mailbox: Mailbox,
     ids: &[Uuid],
     folders: &[&str],
 ) -> AppResult<u64> {
+    let owner = mailbox.owner();
     let mut tx = state.pool.begin().await?;
-    crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
+    match mailbox {
+        Mailbox::Own(user_id) => {
+            crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
+        }
+        Mailbox::Shared(group_id) => {
+            crate::mail::groups::lock(&mut tx, group_id).await?;
+        }
+    }
     let attachments: Vec<(String, i64)> = sqlx::query_as(
         "SELECT a.object_key, a.size_bytes FROM mail_draft_attachments a
            JOIN mail_messages m ON m.id = a.message_id
-          WHERE m.user_id = $1 AND m.id = ANY($2) AND m.folder = ANY($3)",
+          WHERE m.owner = $1 AND m.id = ANY($2) AND m.folder = ANY($3)",
     )
-    .bind(user_id)
+    .bind(owner)
     .bind(ids)
     .bind(folders)
     .fetch_all(&mut *tx)
@@ -420,10 +495,10 @@ pub(crate) async fn delete_for_good(
     // A distribution-list copy only drops the member's row: the shared data
     // packet is the group's, released once nobody holds it.
     let deleted: Vec<(String, String, i64, bool)> = sqlx::query_as(
-        "DELETE FROM mail_messages WHERE user_id = $1 AND id = ANY($2) AND folder = ANY($3)
+        "DELETE FROM mail_messages WHERE owner = $1 AND id = ANY($2) AND folder = ANY($3)
          RETURNING object_key, object_version, size_bytes, key_packet IS NOT NULL",
     )
-    .bind(user_id)
+    .bind(owner)
     .bind(ids)
     .bind(folders)
     .fetch_all(&mut *tx)
@@ -436,10 +511,15 @@ pub(crate) async fn delete_for_good(
         .collect();
     let freed: i64 = messages.iter().map(|(_, _, size)| size).sum::<i64>()
         + attachments.iter().map(|(_, size)| size).sum::<i64>();
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1",
-    )
-    .bind(user_id)
+    sqlx::query(match mailbox {
+        Mailbox::Own(_) => {
+            "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1"
+        }
+        Mailbox::Shared(_) => {
+            "UPDATE mail_groups SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1"
+        }
+    })
+    .bind(owner)
     .bind(freed)
     .execute(&mut *tx)
     .await?;
@@ -478,22 +558,27 @@ pub struct MailFolderCount {
     path = "/api/mail/counts",
     tag = "mail",
     security(("BearerAuth" = [])),
+    params(MailboxQuery),
     responses((status = 200, description = "Per folder", body = [MailFolderCount]))
 )]
 pub async fn counts(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Json<Vec<MailFolderCount>>> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, scope.group.as_deref())
+        .await?
+        .owner();
     let rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT folder, COUNT(*) FILTER (WHERE NOT seen), COUNT(*)
-           FROM mail_messages WHERE user_id = $1 GROUP BY folder
+           FROM mail_messages WHERE owner = $1 GROUP BY folder
          UNION ALL
          SELECT 'starred', COUNT(*) FILTER (WHERE NOT seen), COUNT(*)
            FROM mail_messages
-          WHERE user_id = $1 AND starred AND folder NOT IN ('spam', 'trash')",
+          WHERE owner = $1 AND starred AND folder NOT IN ('spam', 'trash')",
     )
-    .bind(user_id)
+    .bind(owner)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(
@@ -514,7 +599,7 @@ pub async fn counts(
     path = "/api/mail/threads/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
-    params(("id" = String, Path, description = "Thread id")),
+    params(("id" = String, Path, description = "Thread id"), MailboxQuery),
     responses(
         (status = 200, description = "The thread", body = [MailMessage]),
         (status = 404, description = "No such thread of yours"),
@@ -524,16 +609,20 @@ pub async fn thread(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Json<Vec<MailMessage>>> {
     let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, scope.group.as_deref())
+        .await?
+        .owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
-          WHERE user_id = $1 AND thread_id = $2
+          WHERE owner = $1 AND thread_id = $2
           ORDER BY received_at, id
           LIMIT 500"
     ))
-    .bind(user_id)
+    .bind(owner)
     .bind(id)
     .fetch_all(&state.pool)
     .await?;

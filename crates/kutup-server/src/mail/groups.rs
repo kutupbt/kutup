@@ -250,7 +250,7 @@ pub async fn store_list(
                 tx,
                 NewMessage {
                     id: Uuid::new_v4(),
-                    user_id: receiver.user_id,
+                    user_id: Some(receiver.user_id),
                     address_id: receiver.address_id,
                     thread_id: None,
                     direction: row.direction,
@@ -265,6 +265,7 @@ pub async fn store_list(
                     external_recipients: 0,
                     group_id: Some(group.id),
                     key_packet: Some(packet),
+                    sent_by: None,
                 },
             )
             .await?;
@@ -387,6 +388,125 @@ async fn store_from_outside_inner(
     drop(tx);
     written.remove(state).await;
     Ok(reply)
+}
+
+/// Stores mail from outside for a shared mailbox: encrypted on arrival to the
+/// group's key, one row owned by the group, charged to it.
+pub async fn store_shared(state: &AppState, group: &Group, key: &[u8], raw: &[u8]) -> Reply {
+    match store_shared_inner(state, group, key, raw).await {
+        Ok(reply) => reply,
+        Err(error) => {
+            tracing::warn!(group = %group.id, error = %error, "mail: storing for a shared mailbox failed");
+            Reply::new(451, "4.3.0", "temporary failure, try again later")
+        }
+    }
+}
+
+async fn store_shared_inner(
+    state: &AppState,
+    group: &Group,
+    key: &[u8],
+    raw: &[u8],
+) -> anyhow::Result<Reply> {
+    let (owned, key) = (raw.to_vec(), key.to_vec());
+    let (readable, ciphertext) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let readable = Readable::parse(&owned);
+        Ok((
+            readable,
+            kutup_crypto::mail_key::encrypt_binary(&key, &owned)?,
+        ))
+    })
+    .await??;
+    let row = ListRow {
+        direction: "inbound",
+        protection: if readable.pgp_encrypted {
+            "end_to_end"
+        } else {
+            "zero_access"
+        },
+        folder: if readable.spam { "spam" } else { "inbox" },
+        readable: &readable,
+    };
+    let mut written = Written::default();
+    let mut tx = state.pool.begin().await?;
+    let stored = store_shared_copy(state, &mut tx, group, ciphertext, &row, &mut written).await;
+    match stored {
+        Ok(Stored::Delivered(_)) => {
+            tx.commit().await?;
+            Ok(Reply::new(250, "2.0.0", "stored"))
+        }
+        Ok(other) => {
+            drop(tx);
+            written.remove(state).await;
+            Ok(if other == Stored::Full {
+                super::full()
+            } else {
+                Reply::new(250, "2.0.0", "already delivered")
+            })
+        }
+        Err(error) => {
+            drop(tx);
+            written.remove(state).await;
+            Err(error)
+        }
+    }
+}
+
+/// Stores one message for a shared mailbox inside `tx`: its row owned by the
+/// group (no account), charged to the group. The object is pushed to
+/// `written` for the caller to remove when the outcome is not delivered.
+pub async fn store_shared_copy(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    group: &Group,
+    message: Vec<u8>,
+    row: &ListRow<'_>,
+    written: &mut Written,
+) -> anyhow::Result<Stored> {
+    let id = Uuid::new_v4();
+    let key = object_key(group.id, id);
+    let size = i64::try_from(message.len())?;
+    let version = state
+        .storage
+        .put_object_versioned(&key, ByteStream::from(message), size)
+        .await?;
+    written.0.push((key.clone(), version.clone()));
+    let pool = lock(tx, group.id).await?;
+    if !pool.fits(size, 0) {
+        return Ok(Stored::Full);
+    }
+    let address_id: Uuid = sqlx::query_scalar("SELECT id FROM mail_addresses WHERE group_id = $1")
+        .bind(group.id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let inserted = insert_message(
+        tx,
+        NewMessage {
+            id,
+            user_id: None,
+            address_id,
+            thread_id: None,
+            direction: row.direction,
+            folder: row.folder,
+            protection: row.protection,
+            seen: row.direction == "outbound",
+            object_key: &key,
+            object_version: &version,
+            size,
+            readable: row.readable,
+            bcc: &[],
+            external_recipients: 0,
+            group_id: Some(group.id),
+            key_packet: None,
+            sent_by: None,
+        },
+    )
+    .await?;
+    Ok(if inserted {
+        Stored::Delivered(1)
+    } else {
+        Stored::AlreadyThere
+    })
 }
 
 /// Removes list objects no row points at any more (every member deleted

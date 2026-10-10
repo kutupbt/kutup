@@ -5,6 +5,7 @@
 //! stored in S3 with its readable fields in `mail_messages`, charged to the
 //! account's one storage pool.
 
+pub mod group_keys;
 pub mod groups;
 pub mod headers;
 pub mod lmtp;
@@ -136,6 +137,8 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
 pub enum Target {
     Person(Recipient),
     Group(groups::Group, Vec<groups::Receiver>),
+    /// A shared mailbox: its mail is encrypted to the group's key.
+    Shared(groups::Group, Vec<u8>),
 }
 
 /// [`resolve`], groups included: a group that takes `sender`'s mail, has
@@ -171,6 +174,13 @@ pub async fn resolve_target(
         .map_err(lookup_failed)?
     {
         return Err(full());
+    }
+    if group.kind == "shared" {
+        let key = group_keys::primary_public_key(&state.pool, group.id)
+            .await
+            .map_err(lookup_failed)?
+            .ok_or_else(|| Reply::new(451, "4.3.0", "this mailbox has no key yet"))?;
+        return Ok(Target::Shared(group, key));
     }
     let receivers = groups::receivers(&state.pool, &group)
         .await
@@ -290,7 +300,7 @@ async fn record(
         &mut tx,
         NewMessage {
             id,
-            user_id: recipient.user_id,
+            user_id: Some(recipient.user_id),
             address_id: recipient.address_id,
             thread_id: None,
             direction: "inbound",
@@ -311,6 +321,7 @@ async fn record(
             external_recipients: 0,
             group_id: None,
             key_packet: None,
+            sent_by: None,
         },
     )
     .await?;
@@ -324,7 +335,9 @@ async fn record(
 /// A message row to write (migration 085).
 pub(crate) struct NewMessage<'a> {
     pub id: Uuid,
-    pub user_id: Uuid,
+    /// The account whose mailbox it is; none for a shared mailbox's message
+    /// (then `group_id` is the mailbox).
+    pub user_id: Option<Uuid>,
     pub address_id: Uuid,
     /// The thread, when the caller knows it; otherwise the thread of an
     /// ancestor named in In-Reply-To or References, else a new one.
@@ -344,12 +357,15 @@ pub(crate) struct NewMessage<'a> {
     /// A list member's own key packet: the object is the list's shared data
     /// packet, charged to the group, not to this account.
     pub key_packet: Option<&'a [u8]>,
+    /// The member who sent it as a shared mailbox.
+    pub sent_by: Option<Uuid>,
 }
 
-/// The thread of the newest message of `user_id` that `readable` replies to.
+/// The thread of the newest message in the mailbox of `owner` (an account,
+/// or a shared mailbox's group) that `readable` replies to.
 pub(crate) async fn ancestor_thread(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
+    owner: Uuid,
     readable: &Readable,
 ) -> sqlx::Result<Option<Uuid>> {
     let ancestors: Vec<&str> = readable
@@ -363,10 +379,10 @@ pub(crate) async fn ancestor_thread(
     }
     sqlx::query_scalar(
         "SELECT thread_id FROM mail_messages
-          WHERE user_id = $1 AND message_id = ANY($2)
+          WHERE owner = $1 AND message_id = ANY($2)
           ORDER BY received_at DESC LIMIT 1",
     )
-    .bind(user_id)
+    .bind(owner)
     .bind(&ancestors)
     .fetch_optional(&mut **tx)
     .await
@@ -381,9 +397,13 @@ pub(crate) async fn insert_message(
     message: NewMessage<'_>,
 ) -> sqlx::Result<bool> {
     let readable = message.readable;
+    let owner = message
+        .user_id
+        .or(message.group_id)
+        .expect("a message belongs to an account or a group");
     let thread = match message.thread_id {
         Some(thread) => Some(thread),
-        None => ancestor_thread(tx, message.user_id, readable).await?,
+        None => ancestor_thread(tx, owner, readable).await?,
     };
     let sent_at = readable
         .sent_at
@@ -398,9 +418,9 @@ pub(crate) async fn insert_message(
             (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
              object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
              cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
-             attachment_count, external_recipients, group_id, key_packet)
+             attachment_count, external_recipients, group_id, key_packet, sent_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24, $25, $26)
+                 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
          ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
          DO NOTHING
          RETURNING id",
@@ -431,6 +451,7 @@ pub(crate) async fn insert_message(
     .bind(message.external_recipients)
     .bind(message.group_id)
     .bind(message.key_packet)
+    .bind(message.sent_by)
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {
@@ -439,8 +460,13 @@ pub(crate) async fn insert_message(
     if message.key_packet.is_some() {
         return Ok(true);
     }
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1")
-        .bind(message.user_id)
+    // A shared mailbox's message is charged to its group.
+    let charge = match message.user_id {
+        Some(_) => "UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+        None => "UPDATE mail_groups SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+    };
+    sqlx::query(charge)
+        .bind(owner)
         .bind(message.size)
         .execute(&mut **tx)
         .await?;
@@ -463,6 +489,7 @@ impl lmtp::Delivery for Receiver {
             Target::Group(group, receivers) => {
                 groups::store_from_outside(&self.0, group, receivers, message).await
             }
+            Target::Shared(group, key) => groups::store_shared(&self.0, group, key, message).await,
         }
     }
 }

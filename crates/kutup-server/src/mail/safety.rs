@@ -53,10 +53,10 @@ pub async fn standing(state: &AppState, user_id: Uuid) -> AppResult<Standing> {
     ) = sqlx::query_as(
         "SELECT u.created_at, p.per_hour, p.per_day, p.paused_reason,
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE user_id = u.id AND external_recipients > 0
+                           WHERE sender_account = u.id AND external_recipients > 0
                              AND received_at > now() - interval '1 hour'), 0)::bigint,
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE user_id = u.id AND external_recipients > 0
+                           WHERE sender_account = u.id AND external_recipients > 0
                              AND received_at > now() - interval '1 day'), 0)::bigint
            FROM users u LEFT JOIN mail_sending_policies p ON p.user_id = u.id
           WHERE u.id = $1",
@@ -153,7 +153,7 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
         "SELECT (SELECT COUNT(*) FROM mail_sending_events
                   WHERE user_id = $1 AND kind = $2 AND created_at > now() - interval '1 day'),
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE user_id = $1 AND external_recipients > 0
+                           WHERE sender_account = $1 AND external_recipients > 0
                              AND received_at > now() - interval '1 day'), 0)::bigint",
     )
     .bind(user_id)
@@ -207,7 +207,7 @@ pub async fn record_bounce(
 ) -> sqlx::Result<bool> {
     let ours: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_messages
-                         WHERE user_id = $1 AND message_id = $2 AND direction = 'outbound'
+                         WHERE sender_account = $1 AND message_id = $2 AND direction = 'outbound'
                            AND external_recipients > 0)",
     )
     .bind(user_id)

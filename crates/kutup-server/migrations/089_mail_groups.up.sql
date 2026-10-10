@@ -65,3 +65,58 @@ ALTER TABLE mail_messages ADD COLUMN key_packet BYTEA CHECK (octet_length(key_pa
 ALTER TABLE mail_messages DROP CONSTRAINT mail_messages_object_key_key;
 CREATE UNIQUE INDEX idx_mail_messages_object_once ON mail_messages(object_key) WHERE key_packet IS NULL;
 CREATE INDEX idx_mail_messages_shared_object ON mail_messages(object_key) WHERE key_packet IS NOT NULL;
+
+-- Shared mailboxes (G1b): one mailbox the members work in together, with its
+-- own address key. Each member holds a share: the group key's secret
+-- encrypted to the member's address key. The group's key lists are signed
+-- by the server (a group has no account authority), with a key of its own.
+CREATE TABLE mail_group_keys (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id            UUID NOT NULL REFERENCES mail_groups(id) ON DELETE CASCADE,
+    fingerprint         CHAR(40) NOT NULL UNIQUE CHECK (fingerprint ~ '^[0-9a-f]{40}$'),
+    sha256_fingerprint  CHAR(64) NOT NULL CHECK (sha256_fingerprint ~ '^[0-9a-f]{64}$'),
+    public_key          BYTEA NOT NULL CHECK (octet_length(public_key) BETWEEN 1 AND 16384),
+    is_primary          BOOLEAN NOT NULL DEFAULT false,
+    flags               INTEGER NOT NULL DEFAULT 3 CHECK (flags BETWEEN 0 AND 15),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_mail_group_keys_primary ON mail_group_keys(group_id) WHERE is_primary;
+
+CREATE TABLE mail_group_key_shares (
+    group_key_id        UUID NOT NULL REFERENCES mail_group_keys(id) ON DELETE CASCADE,
+    user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    share               BYTEA NOT NULL CHECK (octet_length(share) BETWEEN 1 AND 16384),
+    -- The member's address key the share is encrypted to.
+    member_fingerprint  CHAR(40) NOT NULL CHECK (member_fingerprint ~ '^[0-9a-f]{40}$'),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (group_key_id, user_id)
+);
+CREATE INDEX idx_mail_group_key_shares_user ON mail_group_key_shares(user_id);
+
+CREATE TABLE mail_group_key_lists (
+    group_id    UUID NOT NULL REFERENCES mail_groups(id) ON DELETE CASCADE,
+    sequence    BIGINT NOT NULL CHECK (sequence >= 1),
+    data        BYTEA NOT NULL,
+    signature   BYTEA NOT NULL CHECK (octet_length(signature) = 64),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (group_id, sequence)
+);
+
+ALTER TABLE server_generated_keys DROP CONSTRAINT server_generated_keys_purpose_check;
+ALTER TABLE server_generated_keys ADD CONSTRAINT server_generated_keys_purpose_check
+    CHECK (purpose IN ('federation-identity', 'mls-control', 'mail-group-authority'));
+
+-- A shared mailbox's message belongs to the group (no user); a list copy and
+-- personal mail to their account. `owner` is whose mailbox a row is in.
+ALTER TABLE mail_messages ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE mail_messages ADD CONSTRAINT mail_messages_owner CHECK (user_id IS NOT NULL OR group_id IS NOT NULL);
+ALTER TABLE mail_messages ADD COLUMN owner UUID GENERATED ALWAYS AS (COALESCE(user_id, group_id)) STORED;
+CREATE INDEX idx_mail_messages_owner_folder ON mail_messages(owner, folder, received_at DESC, id);
+CREATE INDEX idx_mail_messages_owner_thread ON mail_messages(owner, thread_id, received_at);
+
+-- Mail a member sent as a shared mailbox: who sent it, shown to the other
+-- members and counted against that member's sending limits.
+ALTER TABLE mail_messages ADD COLUMN sent_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE mail_messages ADD COLUMN sender_account UUID GENERATED ALWAYS AS (COALESCE(sent_by, user_id)) STORED;
+CREATE INDEX idx_mail_messages_sender_recently ON mail_messages(sender_account, received_at)
+    WHERE external_recipients > 0;

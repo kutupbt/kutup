@@ -99,6 +99,10 @@ pub struct SendMeta {
     /// Base64 key packets: `self` for the sender's copy, and one per Kutup
     /// recipient address.
     pub key_packets: BTreeMap<String, String>,
+    /// Send as this shared mailbox (a group id): From is its address, the
+    /// sent copy is in its Sent, signed by its key; `self` is for its key.
+    #[serde(default)]
+    pub from_group: Option<String>,
     /// Ready-made PGP/MIME messages for outside recipients with keys
     /// (docs/plans/mail.md, C3), in parts `pgp0`, `pgp1`, …: To and Cc in
     /// one, each Bcc recipient in their own. Outside recipients in none get
@@ -119,6 +123,53 @@ struct Sender {
     address_id: Uuid,
     address: String,
     key_id: [u8; 8],
+}
+
+/// Sending as a shared mailbox (docs/plans/mail-groups.md, G1b): the group's
+/// address and primary key, for a member allowed to write as it.
+async fn group_sender(
+    state: &AppState,
+    user_id: Uuid,
+    group: &str,
+) -> AppResult<(Sender, crate::mail::groups::Group)> {
+    let group_id = Uuid::parse_str(group)
+        .map_err(|_| AppError::bad_request("fromGroup must be a group id"))?;
+    let row: Option<(String, bool, String)> = sqlx::query_as(
+        "SELECT g.address, m.can_send_as, m.role FROM mail_groups g
+           JOIN mail_group_members m ON m.group_id = g.id AND m.user_id = $2
+          WHERE g.id = $1 AND g.kind = 'shared'",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((address, can_send_as, role)) = row else {
+        return Err(AppError::not_found("no such shared mailbox of yours"));
+    };
+    if !can_send_as && role == "member" {
+        return Err(AppError::forbidden("you may not send as this mailbox")
+            .with_details(json!({ "code": "notAllowedToSendAs" })));
+    }
+    let group = crate::mail::groups::find(&state.pool, &address)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such shared mailbox of yours"))?;
+    let address_id: Uuid = sqlx::query_scalar("SELECT id FROM mail_addresses WHERE group_id = $1")
+        .bind(group_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let public_key = crate::mail::group_keys::primary_public_key(&state.pool, group_id)
+        .await?
+        .ok_or_else(|| AppError::conflict("this mailbox has no key yet"))?;
+    let key_id = mail_key::encryption_key_id(&public_key)
+        .map_err(|_| AppError::internal("stored group key does not parse"))?;
+    Ok((
+        Sender {
+            address_id,
+            address,
+            key_id,
+        },
+        group,
+    ))
 }
 
 async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
@@ -241,7 +292,7 @@ async fn own_thread(
         return Ok(None);
     };
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE user_id = $1 AND thread_id = $2)",
+        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE owner = $1 AND thread_id = $2)",
     )
     .bind(user_id)
     .bind(thread)
@@ -322,7 +373,7 @@ async fn remove_objects(state: &AppState, objects: &[(String, String)]) {
 
 async fn row(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<MailMessage> {
     let row: Row = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE user_id = $1 AND id = $2"
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = $2"
     ))
     .bind(user_id)
     .bind(id)
@@ -379,7 +430,7 @@ pub async fn create_draft(
             &mut tx,
             NewMessage {
                 id,
-                user_id,
+                user_id: Some(user_id),
                 address_id: sender.address_id,
                 thread_id: thread,
                 direction: "outbound",
@@ -394,6 +445,7 @@ pub async fn create_draft(
                 external_recipients: 0,
                 group_id: None,
                 key_packet: None,
+                sent_by: None,
             },
         )
         .await?;
@@ -794,7 +846,15 @@ pub async fn send(
     let data = parts
         .get("data")
         .ok_or_else(|| AppError::bad_request("missing data"))?;
-    let sender = sender(&state, user_id).await?;
+    let (sender, from_group) = match meta.from_group.as_deref() {
+        Some(group) => {
+            let (sender, group) = group_sender(&state, user_id, group).await?;
+            (sender, Some(group))
+        }
+        None => (sender(&state, user_id).await?, None),
+    };
+    // Whose mailbox the sent copy goes to: the account's, or the group's.
+    let owner = from_group.as_ref().map_or(user_id, |group| group.id);
     let server_name = state.config.chat_server_name.as_str();
     let checked = check_meta(&meta.mail, &sender, server_name)?;
     let readable = &checked.readable;
@@ -887,6 +947,7 @@ pub async fn send(
         .collect();
     reached.insert(user_id);
     let mut list_sends = Vec::new();
+    let mut shared_sends = Vec::new();
     for group in group_targets {
         if !crate::mail::groups::may_post(
             &state.pool,
@@ -899,6 +960,24 @@ pub async fn send(
                 AppError::forbidden("this group does not take mail from you")
                     .with_details(json!({ "code": "notAllowed", "address": group.address })),
             );
+        }
+        if group.kind == "shared" {
+            // Written to like a person: a key packet for its primary key.
+            if from_group.as_ref().is_some_and(|from| from.id == group.id) {
+                continue;
+            }
+            let packet = key_packet(&group.address)?;
+            let key = crate::mail::group_keys::primary_public_key(&state.pool, group.id)
+                .await?
+                .ok_or_else(|| AppError::conflict("this mailbox has no key yet"))?;
+            let expected = mail_key::encryption_key_id(&key)
+                .map_err(|_| AppError::internal("stored group key does not parse"))?;
+            if mail_key::key_packet_key_id(&packet).ok() != Some(expected) {
+                return Err(AppError::conflict("a recipient's key changed; try again")
+                    .with_details(json!({ "code": "keyChanged", "address": group.address })));
+            }
+            shared_sends.push((group, packet));
+            continue;
         }
         let mut members = Vec::new();
         for receiver in crate::mail::groups::receivers(&state.pool, &group).await? {
@@ -968,7 +1047,10 @@ pub async fn send(
     }
 
     // Store every copy, then record them under the pool locks.
-    let own_key = crate::mail::object_key(user_id, Uuid::new_v4());
+    let own_key = match &from_group {
+        Some(group) => crate::mail::groups::object_key(group.id, Uuid::new_v4()),
+        None => crate::mail::object_key(user_id, Uuid::new_v4()),
+    };
     let own_copy = [own_packet.as_slice(), data].concat();
     let own_size = own_copy.len() as i64;
     let own_version = put(&state, &own_key, own_copy).await?;
@@ -1004,7 +1086,7 @@ pub async fn send(
     }
 
     let id = Uuid::new_v4();
-    let thread = own_thread(&state, user_id, meta.mail.thread_id.as_deref()).await?;
+    let thread = own_thread(&state, owner, meta.mail.thread_id.as_deref()).await?;
     let mut spam_refused = false;
     // Group objects: kept when recorded, removed when the send fails or a
     // group took nothing.
@@ -1024,14 +1106,21 @@ pub async fn send(
                 crate::storage_pool::lock(&mut tx, account, Default::default()).await?,
             );
         }
-        if !pools[&user_id].fits(own_size, 0) {
+        // The sent copy is charged to the account, or to the shared mailbox.
+        let fits = match &from_group {
+            Some(group) => crate::mail::groups::lock(&mut tx, group.id)
+                .await?
+                .fits(own_size, 0),
+            None => pools[&user_id].fits(own_size, 0),
+        };
+        if !fits {
             return Err(quota_exceeded());
         }
         insert_message(
             &mut tx,
             NewMessage {
                 id,
-                user_id,
+                user_id: from_group.is_none().then_some(user_id),
                 address_id: sender.address_id,
                 thread_id: thread,
                 direction: "outbound",
@@ -1049,8 +1138,9 @@ pub async fn send(
                 readable,
                 bcc: &checked.bcc,
                 external_recipients: external.len() as i32,
-                group_id: None,
+                group_id: from_group.as_ref().map(|group| group.id),
                 key_packet: None,
+                sent_by: from_group.is_some().then_some(user_id),
             },
         )
         .await?;
@@ -1068,7 +1158,7 @@ pub async fn send(
                 &mut tx,
                 NewMessage {
                     id: Uuid::new_v4(),
-                    user_id: copy.recipient.user_id,
+                    user_id: Some(copy.recipient.user_id),
                     address_id: copy.recipient.address_id,
                     thread_id: None,
                     direction: "inbound",
@@ -1083,6 +1173,7 @@ pub async fn send(
                     external_recipients: 0,
                     group_id: None,
                     key_packet: None,
+                    sent_by: None,
                 },
             )
             .await?;
@@ -1091,6 +1182,53 @@ pub async fn send(
                 address: copy.address.clone(),
                 status: "delivered".into(),
             });
+        }
+        // Shared mailboxes: one copy each, charged to the group.
+        for (group, packet) in &shared_sends {
+            let mut written = crate::mail::groups::Written::default();
+            let stored = crate::mail::groups::store_shared_copy(
+                &state,
+                &mut tx,
+                group,
+                [packet.as_slice(), data].concat(),
+                &crate::mail::groups::ListRow {
+                    direction: "inbound",
+                    protection: "end_to_end",
+                    readable,
+                    folder: "inbox",
+                },
+                &mut written,
+            )
+            .await;
+            let address = group.address.clone();
+            match stored {
+                Ok(crate::mail::groups::Stored::Delivered(_)) => {
+                    group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "delivered".into(),
+                    });
+                }
+                Ok(crate::mail::groups::Stored::Full) => {
+                    unused_group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "full".into(),
+                    });
+                }
+                Ok(crate::mail::groups::Stored::AlreadyThere) => {
+                    unused_group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "delivered".into(),
+                    });
+                }
+                Err(error) => {
+                    unused_group_objects.extend(written.0);
+                    tracing::warn!(error = %error, "mail: storing for a shared mailbox failed");
+                    return Err(AppError::internal("storing for a shared mailbox failed"));
+                }
+            }
         }
         // Distribution lists, each charged to its group.
         for (group, members) in &list_sends {
@@ -1235,11 +1373,17 @@ pub async fn send(
         .as_deref()
         .and_then(|d| Uuid::parse_str(d).ok())
     {
-        delete_for_good(&state, user_id, &[draft], &["drafts"]).await?;
+        delete_for_good(
+            &state,
+            crate::handlers::mail::Mailbox::Own(user_id),
+            &[draft],
+            &["drafts"],
+        )
+        .await?;
     }
     statuses.extend(results);
     Ok(Json(SendResult {
-        message: row(&state, user_id, id).await?,
+        message: row(&state, owner, id).await?,
         recipients: statuses,
     }))
 }
