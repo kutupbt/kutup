@@ -679,6 +679,11 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail_keys::lookup_keys)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
+        .route(
+            "/api/mail/keys/outside",
+            get(handlers::mail_keys::outside_keys)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
         // --- Collections (authenticated). ---
         .route(
             "/api/collections",

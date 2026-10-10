@@ -424,24 +424,87 @@ fn email_of(user_id: &[u8]) -> Option<String> {
     (address.contains('@') && !address.contains(char::is_whitespace)).then_some(address)
 }
 
-/// The usable encryption subkey of an outside key: bound, not revoked, not
-/// expired at `now_secs`, newest first.
+/// Whether `signature` was issued by `key`'s primary key (by key ID or
+/// fingerprint); certifications by others are not self-signatures.
+fn self_issued(signature: &pgp::packet::Signature, key: &SignedPublicKey) -> bool {
+    let id = key.primary_key.legacy_key_id();
+    let fingerprint = key.primary_key.fingerprint();
+    signature
+        .issuer_key_id()
+        .iter()
+        .any(|issuer| **issuer == id)
+        || signature
+            .issuer_fingerprint()
+            .iter()
+            .any(|issuer| **issuer == fingerprint)
+}
+
+/// The usable encryption subkey of an outside key: bound by a valid binding
+/// signature, not revoked, not expired at `now_secs`; the newest wins.
 fn usable_encryption_subkey(key: &SignedPublicKey, now_secs: u64) -> Option<&SignedPublicSubKey> {
     key.public_subkeys
         .iter()
         .filter(|sub| sub.algorithm().can_encrypt())
         .filter(|sub| {
-            !sub.signatures
+            let bindings: Vec<_> = sub
+                .signatures
                 .iter()
-                .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation))
+                .filter(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyBinding))
+                .filter(|sig| {
+                    sig.verify_subkey_binding(&key.primary_key, &sub.key)
+                        .is_ok()
+                })
+                .cloned()
+                .collect();
+            let revoked = sub.signatures.iter().any(|sig| {
+                sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation)
+                    && sig
+                        .verify_subkey_binding(&key.primary_key, &sub.key)
+                        .is_ok()
+            });
+            !bindings.is_empty()
+                && !revoked
+                && !expired(sub.created_at().as_secs(), &bindings, now_secs)
         })
-        .filter(|sub| !expired(sub.created_at().as_secs(), &sub.signatures, now_secs))
         .max_by_key(|sub| sub.created_at().as_secs())
 }
 
-/// Checks an outside key for `address` at `now_secs`: version 4, every
-/// binding self-signed, not revoked or expired, a user ID for the address,
-/// and an encryption subkey Kutup can use. Armored or binary in.
+/// Every key in a key server's answer (armored or binary; WKD and HKP may
+/// serve several), each checked by [`inspect_external_public_key`]; the
+/// newest valid one wins.
+pub fn inspect_external_public_keys(
+    keys: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<ExternalKeyInfo> {
+    if keys.is_empty() || keys.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let parsed: Vec<SignedPublicKey> = if keys.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----")
+    {
+        SignedPublicKey::from_armor_many(keys)
+            .map(|(iter, _)| iter.filter_map(|key| key.ok()).collect())
+            .map_err(|_| CryptoError::InvalidInput("public keys do not parse".into()))?
+    } else {
+        SignedPublicKey::from_bytes_many(keys)
+            .map(|iter| iter.filter_map(|key| key.ok()).collect())
+            .map_err(|_| CryptoError::InvalidInput("public keys do not parse".into()))?
+    };
+    parsed
+        .iter()
+        .filter_map(|key| key.to_bytes().ok())
+        .filter_map(|bytes| inspect_external_public_key(&bytes, address, now_secs).ok())
+        .max_by_key(|info| info.created_at_secs)
+        .ok_or_else(|| CryptoError::InvalidInput("no usable key for the address".into()))
+}
+
+/// Checks an outside key for `address` at `now_secs`: version 4, not
+/// revoked, a user ID for the address with a valid self-signature that has
+/// not expired or been revoked, and a bound encryption subkey Kutup can use.
+/// Certifications by other keys (Proton adds one) are ignored, as OpenPGP
+/// implementations do. Armored or binary in.
 pub fn inspect_external_public_key(
     public_key: &[u8],
     address: &str,
@@ -453,32 +516,60 @@ pub fn inspect_external_public_key(
         ));
     }
     let key = parse_public_key(public_key)?;
-    key.verify_bindings()
-        .map_err(|_| CryptoError::InvalidInput("public key is not self-signed".into()))?;
     if key.primary_key.version() != pgp::types::KeyVersion::V4 {
         return Err(CryptoError::InvalidInput(
             "only version 4 keys are supported".into(),
         ));
     }
-    if !key.details.revocation_signatures.is_empty() {
+    // A revocation counts when the key itself issued it and it verifies
+    // (designated revokers are not honoured).
+    if key
+        .details
+        .revocation_signatures
+        .iter()
+        .any(|sig| self_issued(sig, &key) && sig.verify_key(&key.primary_key).is_ok())
+    {
         return Err(CryptoError::InvalidInput("public key is revoked".into()));
     }
     let created = key.primary_key.created_at().as_secs();
     let address = address.trim().to_lowercase();
-    let user = key
+    // The user ID for the address, with its valid self-signatures; other
+    // people's certifications (Proton adds its own) do not count either way.
+    let (_, own) = key
         .details
         .users
         .iter()
-        .find(|user| email_of(user.id.id()).as_deref() == Some(address.as_str()))
-        .ok_or_else(|| CryptoError::InvalidInput("public key is for another address".into()))?;
-    if user
-        .signatures
+        .filter(|user| email_of(user.id.id()).as_deref() == Some(address.as_str()))
+        .find_map(|user| {
+            let own: Vec<_> = user
+                .signatures
+                .iter()
+                .filter(|sig| self_issued(sig, &key))
+                .filter(|sig| {
+                    sig.verify_certification(&key.primary_key, pgp::types::Tag::UserId, &user.id)
+                        .is_ok()
+                })
+                .cloned()
+                .collect();
+            (!own.is_empty()).then_some((user, own))
+        })
+        .ok_or_else(|| {
+            CryptoError::InvalidInput(
+                "public key has no self-signed user ID for the address".into(),
+            )
+        })?;
+    if own
         .iter()
         .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::CertRevocation))
     {
         return Err(CryptoError::InvalidInput("user ID is revoked".into()));
     }
-    if expired(created, &user.signatures, now_secs) {
+    let certifications: Vec<_> = own
+        .iter()
+        .filter(|sig| sig.typ() != Some(pgp::packet::SignatureType::CertRevocation))
+        .cloned()
+        .collect();
+    if certifications.is_empty() || expired(created, &certifications, now_secs) {
         return Err(CryptoError::InvalidInput("public key has expired".into()));
     }
     if usable_encryption_subkey(&key, now_secs).is_none() {

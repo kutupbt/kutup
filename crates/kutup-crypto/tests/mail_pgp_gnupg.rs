@@ -120,6 +120,33 @@ fn kutup_and_gnupg_exchange_signed_encrypted_mail() {
         info.public_key
     );
     assert!(inspect_external_public_key(&dave_public, "eve@example.org", now()).is_err());
+    // A key server's answer with several keys: the usable one for the
+    // address is picked out of them.
+    let else_fpr = make_key(&dave_home, "Someone Else <else@example.org>", "1y");
+    // Another key's certification on Dave's user ID (Proton certifies its
+    // users' keys so) does not make the key unusable.
+    let (ok, _, err) = gpg(
+        &dave_home,
+        &["-u", &else_fpr, "--quick-sign-key", &dave_fpr],
+        b"",
+    );
+    assert!(ok, "certify: {err}");
+    let certified = export(&dave_home, &dave_fpr);
+    assert_eq!(
+        inspect_external_public_key(&certified, "dave@example.org", now())
+            .unwrap()
+            .fingerprint,
+        info.fingerprint
+    );
+    let (_, both, _) = gpg(&dave_home, &["--export"], b"");
+    let picked =
+        kutup_crypto::mail_key::inspect_external_public_keys(&both, "dave@example.org", now())
+            .unwrap();
+    assert_eq!(picked.fingerprint, info.fingerprint);
+    assert!(
+        kutup_crypto::mail_key::inspect_external_public_keys(&both, "eve@example.org", now())
+            .is_err()
+    );
     // A year on, it has expired.
     assert!(
         inspect_external_public_key(&dave_public, "dave@example.org", now() + 400 * DAY).is_err()

@@ -604,3 +604,54 @@ mod tests {
         assert_eq!(wkd_hash("Joe.Doe"), "iy9q119eutrkn8s1mk4r39qejnbu3n5q");
     }
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OutsideMailKey {
+    pub address: String,
+    pub source: crate::mail::outside_keys::KeySource,
+    /// Binary OpenPGP public key, base64, checked: self-signed, not revoked
+    /// or expired, a user ID for the address, an encryption subkey.
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: u32,
+}
+
+/// `GET /api/mail/keys/outside?email=` — an outside address's OpenPGP key,
+/// from its Web Key Directory, Proton's key server or keys.openpgp.org
+/// (docs/plans/mail.md, C3). Kutup addresses use `GET /api/mail/keys`.
+#[utoipa::path(
+    get,
+    path = "/api/mail/keys/outside",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("email" = String, Query, description = "The outside address")),
+    responses(
+        (status = 200, description = "Its key", body = OutsideMailKey),
+        (status = 400, description = "Not an outside address"),
+        (status = 404, description = "No usable key found"),
+    )
+)]
+pub async fn outside_keys(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(query): Query<KeyLookupQuery>,
+) -> AppResult<Json<OutsideMailKey>> {
+    let Some((local, domain)) = crate::mail::outside_keys::split(&query.email) else {
+        return Err(AppError::bad_request("not an email address"));
+    };
+    if domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
+        return Err(AppError::bad_request("a Kutup address: use /api/mail/keys"));
+    }
+    let address = format!("{local}@{domain}");
+    let found = crate::mail::outside_keys::lookup(&state, &address)
+        .await
+        .ok_or_else(|| AppError::not_found("no key found"))?;
+    Ok(Json(OutsideMailKey {
+        address,
+        source: found.source,
+        public_key: STANDARD.encode(&found.key.public_key),
+        fingerprint: found.key.fingerprint,
+        created_at: found.key.created_at_secs,
+    }))
+}

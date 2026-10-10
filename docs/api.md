@@ -985,6 +985,22 @@ manifest. Rate-limited like user lookup.
 
 **Response:** `{ "address": "...", "account": "username@server", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
 
+### GET /api/mail/keys/outside?email=
+
+An outside address's OpenPGP key (docs/plans/mail.md, C3), looked up by the
+server in order: its Web Key Directory (advanced, then direct), Proton's key
+server for Proton's own domains, keys.openpgp.org (verified addresses). The
+key is checked before it is returned: version 4, not revoked, a user ID for
+the address with a valid self-signature (other keys' certifications are
+ignored), not expired, a bound encryption subkey. Cached for an hour.
+Rate-limited like user lookup.
+
+**Auth:** Bearer JWT
+
+**Response:** `{ "address", "source": "wkd" | "proton" | "keysOpenpgp", "publicKey", "fingerprint", "createdAt" }`;
+`404` when no source has a usable key; `400` for a Kutup address (use
+`GET /api/mail/keys`).
+
 ### GET /.well-known/openpgpkey/hu/:hash?l=:local
 
 Web Key Directory, direct method, outside `/api`: the binary public keys of
