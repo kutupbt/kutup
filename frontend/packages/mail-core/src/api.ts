@@ -398,4 +398,3 @@ export function useMailRefresh() {
     void queryClient.invalidateQueries({ queryKey: ['storage'] })
   }
 }
-
