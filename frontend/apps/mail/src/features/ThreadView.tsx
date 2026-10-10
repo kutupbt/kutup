@@ -10,6 +10,7 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Skeleton } from '@kutup/ui/components/skeleton'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { useMailActions, type MoveTarget } from './mailActions'
 import { MessageView } from './MessageView'
 
 function Action({ label, onClick, children, disabled }: { label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
@@ -37,6 +38,7 @@ export function ThreadView({
   const { t } = useTranslation()
   const thread = useThread(threadId)
   const update = useUpdateMessages()
+  const actions = useMailActions()
   const remove = useDeleteMessages()
   const [confirming, setConfirming] = useState(false)
   const messages = useMemo(() => thread.data ?? [], [thread.data])
@@ -66,6 +68,11 @@ export function ThreadView({
   const inbound = shown.some((m) => m.direction === 'inbound')
   const subject = shown[shown.length - 1]?.subject || t('list.noSubject')
 
+  /** Files the whole conversation; the toast can undo it. */
+  function move(target: MoveTarget) {
+    actions.move(shown, target, onClose)
+  }
+
   function apply(change: Omit<MessageChange, 'ids'>, done?: string, close = true) {
     update.mutate(
       { ids, ...change },
@@ -76,22 +83,6 @@ export function ThreadView({
         },
         onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
       },
-    )
-  }
-
-  /** Back where each message belongs: received mail to the Inbox, sent mail to Sent. */
-  function moveHome(done: string) {
-    const received = shown.filter((m) => m.direction === 'inbound').map((m) => m.id)
-    const sent = shown.filter((m) => m.direction === 'outbound').map((m) => m.id)
-    void Promise.all([
-      received.length ? update.mutateAsync({ ids: received, folder: 'inbox' }) : null,
-      sent.length ? update.mutateAsync({ ids: sent, folder: 'sent' }) : null,
-    ]).then(
-      () => {
-        toast.success(done)
-        onClose()
-      },
-      (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
     )
   }
 
@@ -121,7 +112,7 @@ export function ThreadView({
         </Button>
         {folder === 'trash' || folder === 'spam' ? (
           <>
-            <Action label={t('actions.restore')} onClick={() => moveHome(t('toasts.restored'))}>
+            <Action label={t('actions.restore')} onClick={() => move('inbox')}>
               <Undo2 />
             </Action>
             <Action label={t('actions.deleteForever')} onClick={() => setConfirming(true)}>
@@ -131,20 +122,20 @@ export function ThreadView({
         ) : folder !== 'drafts' ? (
           <>
             {folder === 'archive' ? (
-              <Action label={t('actions.moveToInbox')} onClick={() => moveHome(t('toasts.movedToInbox'))}>
+              <Action label={t('actions.moveToInbox')} onClick={() => move('inbox')}>
                 <Inbox />
               </Action>
             ) : (
-              <Action label={t('actions.archive')} onClick={() => apply({ folder: 'archive' }, t('toasts.archived'))}>
+              <Action label={t('actions.archive')} onClick={() => move('archive')}>
                 <Archive />
               </Action>
             )}
             {inbound ? (
-              <Action label={t('actions.spam')} onClick={() => apply({ folder: 'spam' }, t('toasts.spam'))}>
+              <Action label={t('actions.spam')} onClick={() => move('spam')}>
                 <OctagonAlert />
               </Action>
             ) : null}
-            <Action label={t('actions.trash')} onClick={() => apply({ folder: 'trash' }, t('toasts.trashed'))}>
+            <Action label={t('actions.trash')} onClick={() => move('trash')}>
               <Trash2 />
             </Action>
           </>

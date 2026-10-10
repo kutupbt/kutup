@@ -5,7 +5,6 @@ import { Bold, Italic, List, ListOrdered, Loader2, Maximize2, Minimize2, Papercl
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { offerAddToContacts } from '@kutup/contacts-core/addToContacts'
 import {
   addDraftAttachment,
   draftAttachmentPart,
@@ -376,8 +375,6 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       if (!full.length && !failed.length) toast.success(t('compose.sent'))
       refresh()
       closeComposer()
-      const first = to[0]?.address
-      if (first) void offerAddToContacts(first, { message: t('compose.addContactOffer', { address: first }), action: t('compose.addContact') })
     } catch (error) {
       closed.current = false
       setSending(false)
@@ -403,17 +400,39 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
 
   const title = subject.trim() || t('compose.newMessage')
   return (
+    <>
+    {maximised && !minimised ? (
+      // Maximised, the composer is the thing to look at (Gmail's full-screen
+      // compose): the app behind it dims, and a click there docks it again.
+      <div aria-hidden className="fixed inset-0 z-40 hidden bg-foreground/40 backdrop-blur-[1px] md:block" onClick={() => setMaximised(false)} />
+    ) : null}
     <section
       role="dialog"
       aria-label={title}
-      aria-modal={false}
+      aria-modal={maximised && !minimised}
       onKeyDown={(e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        if (e.key === 'Tab' && maximised && !minimised) {
+          // Maximised, Tab stays in the composer, as in a dialog.
+          const focusable = [...e.currentTarget.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), textarea, [contenteditable="true"], [tabindex]:not([tabindex="-1"])')].filter(
+            (el) => el.offsetParent !== null,
+          )
+          const first = focusable[0]
+          const last = focusable[focusable.length - 1]
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault()
+            last?.focus()
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault()
+            first?.focus()
+          }
+        } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
           e.preventDefault()
           void send()
         } else if (e.key === 'Escape') {
           e.preventDefault()
-          void close()
+          // Escape first docks a maximised composer, then closes it.
+          if (maximised && !minimised) setMaximised(false)
+          else void close()
         }
       }}
       className={cn(
@@ -535,5 +554,6 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
         </>
       )}
     </section>
+    </>
   )
 }
