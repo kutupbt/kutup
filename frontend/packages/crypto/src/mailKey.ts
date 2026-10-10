@@ -54,6 +54,41 @@ export async function generateMailAddressKey(
   return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, loginEmail, address, seconds)
 }
 
+/** Shortest passphrase an exported key may be locked with (kutup-crypto `MIN_EXPORT_PASSPHRASE_CHARS`). */
+export const MIN_MAIL_KEY_PASSPHRASE = 8
+
+/** An address key as an armored OpenPGP secret key file locked with `passphrase`. */
+export async function exportMailAddressKey(key: SealedMailKey, passphrase: string): Promise<string> {
+  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, passphrase)
+}
+
+/** The passphrase does not open the key file. */
+export class WrongKeyPassphrase extends Error {
+  constructor() {
+    super('wrong passphrase')
+  }
+}
+
+/**
+ * Reads an address key from an OpenPGP secret key file (Kutup's export,
+ * Proton's or GnuPG's) for `address`, sealed under the master key.
+ */
+export async function importMailAddressKey(
+  masterKeyBase64: string,
+  loginEmail: string,
+  address: string,
+  file: Uint8Array,
+  passphrase: string,
+): Promise<GeneratedMailAddressKey> {
+  try {
+    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, loginEmail, address, file, passphrase)
+  } catch (error) {
+    // WASM throws its messages as strings.
+    if (error === 'wrong passphrase' || (error instanceof Error && error.message === 'wrong passphrase')) throw new WrongKeyPassphrase()
+    throw error
+  }
+}
+
 export async function inspectMailAddressPublicKey(
   publicKeyBase64: string,
   address: string,

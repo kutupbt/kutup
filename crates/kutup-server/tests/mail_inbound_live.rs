@@ -1177,3 +1177,160 @@ In-Reply-To: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:05:00 +0000\r\n",
         "Dave's signature verifies"
     );
 }
+
+/// The address's current key list, verified.
+fn current_list(c: &Client, base: &str, user: &User) -> (String, mail_key::SignedMailKeyListV1) {
+    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let decode = |field: &str| {
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            addresses[0]["keyList"][field].as_str().unwrap(),
+        )
+        .unwrap()
+    };
+    let signed = mail_key::SignedMailKeyListV1::verify(
+        &decode("data"),
+        &decode("signature"),
+        &user.identity.authority_public_key(),
+    )
+    .unwrap();
+    (addresses[0]["id"].as_str().unwrap().to_string(), signed)
+}
+
+/// The next list after `previous`, with `keys`, signed by the account.
+fn next_list(
+    user: &User,
+    previous: &mail_key::SignedMailKeyListV1,
+    keys: Vec<MailKeyEntryV1>,
+) -> Value {
+    let mut keys = keys;
+    keys.sort_by_key(|key| key.fingerprint);
+    let list = MailKeyListV1 {
+        sequence: previous.list.sequence + 1,
+        previous_hash: Some(previous.hash()),
+        issued_at: "2026-10-10T13:00:00Z".into(),
+        keys,
+        ..previous.list.clone()
+    }
+    .sign(user.identity.authority_signing_key())
+    .unwrap();
+    json!({ "data": b64(&list.data), "signature": b64(&list.signature) })
+}
+
+#[test]
+fn address_keys_rotate_and_change_flags() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let first = set_up_address(&c, &base, &user);
+    let (id, list1) = current_list(&c, &base, &user);
+    let old = list1.list.keys[0].clone();
+
+    // A new key, primary from now on; the old one stays to open old mail.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let new = mail_key::generate_address_key(&first.address, now).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        &user.email,
+        &first.address,
+        &new.secret_key,
+    )
+    .unwrap();
+    let new_entry = MailKeyEntryV1 {
+        fingerprint: new.fingerprint,
+        sha256_fingerprint: new.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let rotated = next_list(
+        &user,
+        &list1,
+        vec![
+            MailKeyEntryV1 {
+                primary: false,
+                ..old.clone()
+            },
+            new_entry.clone(),
+        ],
+    );
+    let r = bearer(c.post(format!("{base}/api/mail/addresses/{id}/keys")), &user.token)
+        .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": rotated }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200, "rotate");
+    let lookup: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email={}", first.address)),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(
+        lookup["keys"][0]["fingerprint"],
+        hex::encode(new.fingerprint),
+        "new key first: {lookup}"
+    );
+    assert_eq!(lookup["keys"][0]["primary"], true);
+    assert_eq!(lookup["keyLists"].as_array().unwrap().len(), 2);
+
+    // The old key marked obsolete and compromised by a list of the same keys.
+    let (_, list2) = current_list(&c, &base, &user);
+    let put = |list: Value| {
+        bearer(
+            c.put(format!("{base}/api/mail/addresses/{id}/key-list")),
+            &user.token,
+        )
+        .json(&json!({ "keyList": list }))
+        .send()
+        .unwrap()
+    };
+    let retired = MailKeyEntryV1 {
+        primary: false,
+        flags: 0,
+        ..old.clone()
+    };
+    // Leaving a key out, or a list that does not follow, is refused.
+    assert_eq!(
+        put(next_list(&user, &list2, vec![new_entry.clone()])).status(),
+        400
+    );
+    assert_eq!(
+        put(next_list(
+            &user,
+            &list1,
+            vec![retired.clone(), new_entry.clone()]
+        ))
+        .status(),
+        409
+    );
+    let r = put(next_list(
+        &user,
+        &list2,
+        vec![retired.clone(), new_entry.clone()],
+    ));
+    assert_eq!(r.status(), 200, "mark the old key");
+    let address: Value = r.json().unwrap();
+    let old_row = address["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["fingerprint"] == hex::encode(old.fingerprint))
+        .unwrap()
+        .clone();
+    assert_eq!(old_row["flags"], 0);
+    assert_eq!(old_row["primary"], false);
+    // Three lists in the chain now.
+    let (_, list3) = current_list(&c, &base, &user);
+    assert_eq!(list3.list.sequence, 3);
+}

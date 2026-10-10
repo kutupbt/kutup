@@ -1837,6 +1837,62 @@ pub fn generate_mail_address_key(
     .map_err(|error| js_error(&format!("encode mail address key: {error}")))
 }
 
+/// An address key as an OpenPGP file locked with `passphrase` (armored),
+/// to keep or to use in another OpenPGP program.
+#[wasm_bindgen(js_name = exportMailAddressKey)]
+pub fn export_mail_address_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    passphrase: &str,
+) -> Result<String, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::export_address_secret_key(&secret, passphrase)
+        .map(|armored| armored.to_string())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Imports an address key from an OpenPGP secret key file (unlocked with
+/// `passphrase`), sealed under the master key like a generated one. Errors
+/// with `wrong passphrase` when the passphrase does not open it.
+#[wasm_bindgen(js_name = importMailAddressKey)]
+pub fn import_mail_address_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    file: &[u8],
+    passphrase: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::mail_key::import_address_secret_key(file, passphrase, address)
+        .map_err(|error| match error {
+            kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
+            error => js_error(&error.to_string()),
+        })?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key,
+        login_email,
+        address,
+        &key.secret_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&MailAddressKeyView {
+        public_key: STANDARD.encode(&key.public_key),
+        envelope: STANDARD.encode(envelope),
+        fingerprint: hex::encode(key.fingerprint),
+        sha256_fingerprint: hex::encode(key.sha256_fingerprint),
+    })
+    .map_err(|error| js_error(&format!("encode mail address key: {error}")))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailPublicKeyView {

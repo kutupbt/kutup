@@ -965,7 +965,10 @@ mail-key purpose and this account's login email; the key list verifies against
 the account's authority key, names this account and address, follows the
 current list (sequence + 1, previous hash) or is sequence 1, and lists exactly
 the stored keys plus the new one. Primary and flags then follow the list. All
-in one transaction.
+in one transaction. The same call adds a new key (rotation: the list makes it
+primary and keeps the others to open older mail) and a key imported from an
+OpenPGP secret key file (the browser unlocks the file and seals the key like a
+generated one; the server cannot tell them apart).
 
 **Auth:** Bearer JWT
 
@@ -974,6 +977,22 @@ in one transaction.
 **Response:** the address, as in `GET /api/mail/addresses`. `400` for an
 invalid key, envelope or list; `409` when the list does not follow the current
 one (another device changed it; reload and retry) or the key is in use.
+
+### PUT /api/mail/addresses/:id/key-list
+
+Publish the next signed key list for the same keys: another key made primary,
+or a key marked obsolete (flag `NOT_OBSOLETE` cleared: not encrypted to, still
+opens older mail) or compromised (both flags cleared: its signatures are no
+longer trusted either). The list is checked as for adding a key and must list
+exactly the stored keys; its primary must keep both flags.
+
+**Auth:** Bearer JWT
+
+**Body:** `{ "keyList": { "data": "base64", "signature": "base64" } }`
+
+**Response:** the address, as in `GET /api/mail/addresses`. `400` for an
+invalid list or one that adds or leaves out a key; `409` when it does not
+follow the current one.
 
 ### GET /api/mail/keys?email=
 
@@ -1008,6 +1027,10 @@ Web Key Directory, direct method, outside `/api`: the binary public keys of
 `application/octet-stream`. `hash` is the z-base-32 SHA-1 of the lowercased
 local part and must match `l`; anything else is `404`. No authentication;
 rate-limited. `GET /.well-known/openpgpkey/policy` returns an empty policy.
+The advanced method answers the same at
+`/.well-known/openpgpkey/:domain/hu/:hash?l=` and
+`/.well-known/openpgpkey/:domain/policy`, for `domain` equal to the server
+name (served on `openpgpkey.<server name>`); any other domain is `404`.
 
 ---
 

@@ -1,4 +1,4 @@
-import { fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
+import { fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
 import api from '@kutup/session/client'
 
 // A Kutup address's public keys (docs/plans/mail-address-keys.md), checked
@@ -29,7 +29,7 @@ export interface AddressKeys {
   authorityPublicKey: string
   /** The key to encrypt to (base64). */
   primary: string
-  /** Every key the newest list keeps, primary first, to check signatures. */
+  /** Every key the newest list trusts for signatures (not marked compromised), primary first. */
   all: string[]
 }
 
@@ -72,11 +72,11 @@ async function load(address: string): Promise<AddressKeys> {
   if (!newest || newest.address !== lookup.address || newest.account !== lookup.account) {
     throw new UnverifiedKeys(address)
   }
-  const kept: { publicKey: string; primary: boolean }[] = []
+  const kept: { publicKey: string; primary: boolean; flags: number }[] = []
   for (const row of lookup.keys) {
     const info = await inspectMailAddressPublicKey(row.publicKey, lookup.address)
     const listed = newest.keys.find((k) => k.fingerprint === info.fingerprint && k.sha256Fingerprint === info.sha256Fingerprint)
-    if (listed) kept.push({ publicKey: row.publicKey, primary: listed.primary })
+    if (listed) kept.push({ publicKey: row.publicKey, primary: listed.primary, flags: listed.flags })
   }
   const primary = kept.find((k) => k.primary)
   if (!primary) throw new UnverifiedKeys(address)
@@ -85,7 +85,8 @@ async function load(address: string): Promise<AddressKeys> {
     account: lookup.account,
     authorityPublicKey: lookup.accountAuthorityPublicKey,
     primary: primary.publicKey,
-    all: [primary.publicKey, ...kept.filter((k) => k !== primary).map((k) => k.publicKey)],
+    // A key its owner marked compromised no longer vouches for anything.
+    all: [primary, ...kept.filter((k) => k !== primary)].filter((k) => k.flags & MAIL_KEY_FLAGS.notCompromised).map((k) => k.publicKey),
   }
 }
 

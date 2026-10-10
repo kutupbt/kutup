@@ -2,20 +2,28 @@
 //! playing an outside correspondent, Dave: his key passes Kutup's checks,
 //! Kutup's armored, signed messages open in GnuPG with a good signature,
 //! his open in Kutup verified, and his detached and cleartext signatures
-//! check. Skipped where `gpg` is not installed.
+//! check; an exported address key opens in GnuPG with its passphrase, and
+//! GnuPG keys made for a Kutup address import. Skipped where `gpg` is not
+//! installed.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use kutup_crypto::mail_key::{
-    armor_public_key, decrypt, encrypt_armored_signed, encryption_key_id, generate_address_key,
+    armor_public_key, decrypt, encrypt, encrypt_armored_signed, encryption_key_id,
+    export_address_secret_key, generate_address_key, import_address_secret_key,
     inspect_external_public_key, pgp_message_key_ids, verify_cleartext, verify_detached,
 };
 
 const DAY: u64 = 86_400;
 
 fn gpg(home: &Path, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
+    gpg_with(home, "", args, input)
+}
+
+/// `gpg` with `passphrase` for every key it unlocks or protects.
+fn gpg_with(home: &Path, passphrase: &str, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
     let mut child = Command::new("gpg")
         .env("GNUPGHOME", home)
         .args([
@@ -26,7 +34,7 @@ fn gpg(home: &Path, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
             "--pinentry-mode",
             "loopback",
             "--passphrase",
-            "",
+            passphrase,
         ])
         .args(args)
         .stdin(Stdio::piped())
@@ -297,4 +305,128 @@ fn kutup_and_gnupg_exchange_signed_encrypted_mail() {
     assert!(inspect_external_public_key(&revoked, "dave@example.org", now()).is_err());
 
     let _ = std::fs::remove_dir_all(&dave_home);
+}
+
+#[test]
+fn address_keys_export_and_import() {
+    if Command::new("gpg").arg("--version").output().is_err() {
+        eprintln!("gpg not installed; skipping");
+        return;
+    }
+    let alice = generate_address_key("alice@kutup.dev", 1_790_000_000).unwrap();
+    assert!(export_address_secret_key(&alice.secret_key, "short").is_err());
+    let exported = export_address_secret_key(&alice.secret_key, "doğru parola 123").unwrap();
+    assert!(exported.starts_with("-----BEGIN PGP PRIVATE KEY BLOCK-----"));
+
+    // GnuPG imports it and needs the passphrase to decrypt with it.
+    let export_home = home("export");
+    let (ok, _, err) = gpg(&export_home, &["--import"], exported.as_bytes());
+    assert!(ok, "import: {err}");
+    let message = encrypt(&alice.public_key, None, b"for alice").unwrap();
+    let (ok, _, _) = gpg_with(
+        &export_home,
+        "wrong passphrase",
+        &["--decrypt"],
+        message.as_bytes(),
+    );
+    assert!(!ok, "a wrong passphrase must not open it");
+    let (ok, plaintext, err) = gpg_with(
+        &export_home,
+        "doğru parola 123",
+        &["--decrypt"],
+        message.as_bytes(),
+    );
+    assert!(ok, "decrypt: {err}");
+    assert_eq!(plaintext, b"for alice");
+
+    // Back into Kutup: the same key, unlocked; a wrong passphrase or another
+    // address is refused.
+    assert!(matches!(
+        import_address_secret_key(exported.as_bytes(), "wrong passphrase", "alice@kutup.dev"),
+        Err(kutup_crypto::CryptoError::AuthFailed)
+    ));
+    assert!(
+        import_address_secret_key(exported.as_bytes(), "doğru parola 123", "bob@kutup.dev")
+            .is_err()
+    );
+    let imported =
+        import_address_secret_key(exported.as_bytes(), "doğru parola 123", "alice@kutup.dev")
+            .unwrap();
+    assert_eq!(imported.fingerprint, alice.fingerprint);
+    assert_eq!(imported.public_key, alice.public_key);
+    assert_eq!(
+        &*decrypt(&imported.secret_key, message.as_bytes(), None)
+            .unwrap()
+            .data,
+        b"for alice"
+    );
+
+    // A key GnuPG made for the address, locked with a passphrase, imports;
+    // one with a second user ID, or in another shape, does not.
+    let gnupg = home("import");
+    let uid = "Alice Example <alice@kutup.dev>";
+    let (ok, _, err) = gpg_with(
+        &gnupg,
+        "gnupg parola",
+        &["--quick-gen-key", uid, "ed25519", "cert,sign", "1y"],
+        b"",
+    );
+    assert!(ok, "gen-key: {err}");
+    let (_, listing, _) = gpg(&gnupg, &["--with-colons", "--list-keys", uid], b"");
+    let fingerprint = String::from_utf8(listing)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("fpr:::::::::")
+                .map(|f| f.trim_end_matches(':').to_string())
+        })
+        .unwrap();
+    let (ok, _, err) = gpg_with(
+        &gnupg,
+        "gnupg parola",
+        &["--quick-add-key", &fingerprint, "cv25519", "encr", "1y"],
+        b"",
+    );
+    assert!(ok, "add-key: {err}");
+    let (ok, secret, err) = gpg_with(
+        &gnupg,
+        "gnupg parola",
+        &["--armor", "--export-secret-keys", uid],
+        b"",
+    );
+    assert!(ok, "export-secret-keys: {err}");
+    let from_gnupg = import_address_secret_key(&secret, "gnupg parola", "alice@kutup.dev").unwrap();
+    assert_eq!(
+        hex::encode(from_gnupg.fingerprint),
+        fingerprint.to_lowercase()
+    );
+    let (ok, _, err) = gpg_with(
+        &gnupg,
+        "gnupg parola",
+        &["--quick-add-uid", &fingerprint, "Alice <alice@example.org>"],
+        b"",
+    );
+    assert!(ok, "add-uid: {err}");
+    let (_, two_uids, _) = gpg_with(
+        &gnupg,
+        "gnupg parola",
+        &["--armor", "--export-secret-keys", &fingerprint],
+        b"",
+    );
+    assert!(import_address_secret_key(&two_uids, "gnupg parola", "alice@kutup.dev").is_err());
+    let (ok, _, err) = gpg_with(
+        &gnupg,
+        "x",
+        &[
+            "--quick-gen-key",
+            "Rsa <rsa@kutup.dev>",
+            "rsa2048",
+            "default",
+            "1y",
+        ],
+        b"",
+    );
+    assert!(ok, "rsa: {err}");
+    let (_, rsa, _) = gpg_with(&gnupg, "x", &["--export-secret-keys", "rsa@kutup.dev"], b"");
+    assert!(import_address_secret_key(&rsa, "x", "rsa@kutup.dev").is_err());
 }

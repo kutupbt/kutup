@@ -520,7 +520,7 @@ fn build_router(state: AppState) -> Router {
             get(crate::federation::public_identity_document)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
-        // Web Key Directory (direct method) for name@<server name>.
+        // Web Key Directory for name@<server name>: the direct method.
         .route(
             "/.well-known/openpgpkey/hu/:hash",
             get(handlers::mail_keys::wkd_key)
@@ -529,6 +529,16 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/.well-known/openpgpkey/policy",
             get(handlers::mail_keys::wkd_policy),
+        )
+        // The advanced method, on openpgpkey.<server name>.
+        .route(
+            "/.well-known/openpgpkey/:domain/hu/:hash",
+            get(handlers::mail_keys::wkd_advanced_key)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/.well-known/openpgpkey/:domain/policy",
+            get(handlers::mail_keys::wkd_advanced_policy),
         )
         // Stalwart's RCPT hook (docs/plans/mail.md); nginx does not route
         // /internal, and the hook authenticates with a bearer token.
@@ -659,6 +669,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/addresses/:id/keys",
             post(handlers::mail_keys::add_key),
+        )
+        .route(
+            "/api/mail/addresses/:id/key-list",
+            put(handlers::mail_keys::update_key_list),
         )
         .route(
             "/api/user/storage/versions",

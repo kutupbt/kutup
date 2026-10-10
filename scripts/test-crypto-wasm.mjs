@@ -686,6 +686,22 @@ assert.equal(outside.publicKey, splitVectors.bobPublicKey)
 assert.match(outside.fingerprint, /^[0-9a-f]{40}$/)
 assert.throws(() => crypto.inspectExternalMailKey(bobKey, 'eve@kutup.dev'))
 assert.equal(crypto.describeExternalMailKey(bobKey).fingerprint, outside.fingerprint)
+// An address key leaves only locked with a passphrase, and comes back the same.
+const exportedKey = crypto.exportMailAddressKey(
+  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',
+)
+assert.match(exportedKey, /^-----BEGIN PGP PRIVATE KEY BLOCK-----/)
+assert.throws(() => crypto.exportMailAddressKey(
+  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
+))
+assert.throws(
+  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
+  (error) => error === 'wrong passphrase',
+)
+const reimported = crypto.importMailAddressKey(
+  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
+)
+assert.equal(reimported.fingerprint, mailVectors.fingerprint)
 const armoredPgp = crypto.encryptMailPgp(
   mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),

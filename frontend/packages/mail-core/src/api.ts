@@ -68,7 +68,26 @@ export interface MailAccount {
   /** The display name outgoing mail carries. */
   name: string
   publicKey: string
+  /** The primary key: it signs, and new mail is encrypted to it. */
   key: SealedMailKey
+  /** The address's other keys, which still open mail encrypted to them before a new key took over. */
+  olderKeys: SealedMailKey[]
+}
+
+/** Opens a message with the primary key, else with an older key (mail from before a new key). */
+async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey?: string) {
+  try {
+    return await openMailMessage(account.key, message, signerKey)
+  } catch (error) {
+    for (const key of account.olderKeys) {
+      try {
+        return await openMailMessage(key, message, signerKey)
+      } catch {
+        // Not this key either.
+      }
+    }
+    throw error
+  }
 }
 
 export const mailKey = ['mail'] as const
@@ -105,18 +124,20 @@ export function useMailAccount() {
       }
       const primary = address?.keys.find((k) => k.primary)
       if (!address || !primary) throw new NoAddressKey()
+      const sealed = (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
+        masterKeyBase64: toBase64(session.masterKey),
+        loginEmail: session.email,
+        address: address.address,
+        envelope: key.privateKeyEnvelope,
+        fingerprint: key.fingerprint,
+      })
       return {
         address: address.address,
         domain: address.address.split('@')[1] ?? '',
         name: session.username ?? '',
         publicKey: primary.publicKey,
-        key: {
-          masterKeyBase64: toBase64(session.masterKey),
-          loginEmail: session.email,
-          address: address.address,
-          envelope: primary.privateKeyEnvelope,
-          fingerprint: primary.fingerprint,
-        },
+        key: sealed(primary),
+        olderKeys: address.keys.filter((k) => k !== primary).map(sealed),
       }
     },
   })
@@ -237,10 +258,10 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
       .then((keys) => keys.all)
       .catch(() => [])
   }
-  let opened = await openMailMessage(account.key, stored, candidates[0])
+  let opened = await openWithKeys(account, stored, candidates[0])
   for (const candidate of candidates.slice(1)) {
     if (!opened.signed || opened.verified) break
-    opened = await openMailMessage(account.key, stored, candidate)
+    opened = await openWithKeys(account, stored, candidate)
   }
   const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
   if (!outside) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
@@ -250,7 +271,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   const pgp = await openPgp(
     opened.data,
     {
-      decrypt: (bytes, signerKey) => openMailMessage(account.key, bytes, signerKey),
+      decrypt: (bytes, signerKey) => openWithKeys(account, bytes, signerKey),
       verifyDetached: (signature, content, key) => verifyMailDetachedSignature(signature, content, key),
       verifyCleartext: (text, key) => verifyMailCleartext(text, key),
     },
@@ -417,7 +438,7 @@ export async function removeDraftAttachment(draftId: string, attachmentId: strin
 /** A draft attachment's part, opened. */
 export async function draftAttachmentPart(account: MailAccount, draftId: string, attachmentId: string): Promise<Uint8Array> {
   const { data } = await api.get<ArrayBuffer>(`/mail/drafts/${draftId}/attachments/${attachmentId}`, { responseType: 'arraybuffer' })
-  return (await openMailMessage(account.key, new Uint8Array(data))).data
+  return (await openWithKeys(account, new Uint8Array(data))).data
 }
 
 export interface SendRecipient {

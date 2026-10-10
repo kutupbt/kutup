@@ -324,6 +324,83 @@ pub fn open_address_key(
     Ok(Zeroizing::new(secret.to_vec()))
 }
 
+/// Shortest passphrase an exported key may be locked with.
+pub const MIN_EXPORT_PASSPHRASE_CHARS: usize = 8;
+
+/// An address's secret key as a file to keep or move to another OpenPGP
+/// program (Proton's "Export private key"): ASCII-armored, every secret part
+/// locked with `passphrase` (OpenPGP's iterated and salted S2K, AES-256).
+pub fn export_address_secret_key(secret_key: &[u8], passphrase: &str) -> Result<Zeroizing<String>> {
+    if passphrase.chars().count() < MIN_EXPORT_PASSPHRASE_CHARS {
+        return Err(CryptoError::InvalidInput(
+            "the passphrase is too short".into(),
+        ));
+    }
+    let mut key = SignedSecretKey::from_bytes(secret_key)
+        .map_err(|_| CryptoError::InvalidInput("address secret key does not parse".into()))?;
+    let password = Password::from(passphrase);
+    key.primary_key
+        .set_password(rand::rngs::OsRng, &password)
+        .map_err(backend)?;
+    for subkey in &mut key.secret_subkeys {
+        subkey
+            .key
+            .set_password(rand::rngs::OsRng, &password)
+            .map_err(backend)?;
+    }
+    key.to_armored_string(ArmorOptions::default())
+        .map(Zeroizing::new)
+        .map_err(backend)
+}
+
+/// Reads an address key from an OpenPGP secret key file (armored or binary,
+/// locked with `passphrase` or not), as exported by Kutup, Proton or GnuPG:
+/// it must be a key Kutup can use for `address` (the shape
+/// [`inspect_address_public_key`] checks: Ed25519 primary, one Curve25519
+/// encryption subkey, one user ID for the address). Returns it unlocked, to
+/// be sealed at once. A wrong passphrase is [`CryptoError::AuthFailed`].
+pub fn import_address_secret_key(
+    file: &[u8],
+    passphrase: &str,
+    address: &str,
+) -> Result<GeneratedAddressKey> {
+    if file.is_empty() || file.len() > 64 * 1024 {
+        return Err(CryptoError::InvalidInput("key file size is invalid".into()));
+    }
+    let trimmed = file.trim_ascii_start();
+    let mut key = if trimmed.starts_with(b"-----BEGIN PGP PRIVATE KEY BLOCK-----") {
+        SignedSecretKey::from_armor_single(trimmed).map(|(key, _)| key)
+    } else {
+        SignedSecretKey::from_bytes(file)
+    }
+    .map_err(|_| CryptoError::InvalidInput("not an OpenPGP secret key".into()))?;
+    let password = Password::from(passphrase);
+    key.primary_key
+        .remove_password(&password)
+        .map_err(|_| CryptoError::AuthFailed)?;
+    for subkey in &mut key.secret_subkeys {
+        subkey
+            .key
+            .remove_password(&password)
+            .map_err(|_| CryptoError::AuthFailed)?;
+    }
+    let public = SignedPublicKey::from(key.clone());
+    let public_key = public.to_bytes().map_err(backend)?;
+    let info = inspect_address_public_key(&public_key, address)?;
+    let secret_key = Zeroizing::new(key.to_bytes().map_err(backend)?);
+    if secret_key.len() > MAX_SECRET_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "address secret key size is invalid".into(),
+        ));
+    }
+    Ok(GeneratedAddressKey {
+        secret_key,
+        public_key,
+        fingerprint: info.fingerprint,
+        sha256_fingerprint: info.sha256_fingerprint,
+    })
+}
+
 /// Encrypts `plaintext` to `recipient_public_key` (SEIPDv1, AES-256, the
 /// form every OpenPGP client reads), signed by `signer_secret_key` when given.
 /// Returns an ASCII-armored message.

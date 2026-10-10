@@ -290,11 +290,25 @@ bundled `nginx` does.
 
 **Email addresses and their keys.** Every account with a username has the
 address `username@<CHAT_SERVER_NAME>` and an OpenPGP key, created in the
-browser after sign-in (Account → Settings → Encryption keys). Outside OpenPGP
-clients find the key through Web Key Directory at
-`https://<CHAT_SERVER_NAME>/.well-known/openpgpkey/hu/…`; the bundled `nginx`
-routes `/.well-known/openpgpkey/` to the backend, so the server name must reach
-this server over HTTPS. Mail itself (sending and receiving) is not built yet.
+browser after sign-in (Account → Settings → Encryption keys, where keys can
+also be replaced by a new one, imported, exported locked with a passphrase,
+and marked obsolete or compromised). Outside OpenPGP clients (GnuPG,
+Thunderbird, Proton) find the key through Web Key Directory, in one of two
+places:
+
+- the direct method, `https://<CHAT_SERVER_NAME>/.well-known/openpgpkey/hu/…`:
+  the server name must reach this server over HTTPS (or a proxy in front of
+  it must pass `/.well-known/openpgpkey/` through, as for
+  `/.well-known/kutup/`);
+- the advanced method, `https://openpgpkey.<CHAT_SERVER_NAME>/.well-known/openpgpkey/<CHAT_SERVER_NAME>/hu/…`.
+  Clients ask here first whenever the name resolves, and a wildcard DNS
+  record makes it resolve. Then it must answer: point it at this server and
+  add it to the certificate (`KUTUP_ACME_EXTRA_DOMAINS=openpgpkey.<domain>`).
+  Without a wildcard and without this record, the direct method alone is
+  used.
+
+The bundled `nginx` routes `/.well-known/openpgpkey/` to the backend on every
+hostname. Mail itself is set up in "Mail" below.
 
 ---
 
@@ -940,6 +954,37 @@ administrator: read them. Before the MX switch, register the domain with
 complaints and reputation reach you. Stalwart's spam filter does not score
 outgoing mail: its rules judge the connection more than the content, and
 refused ordinary mail in tests.
+
+**Moving MX to Kutup.** Mail starts arriving at Kutup only when the domain's MX
+record points at it, so this is the last step, done once the rest works.
+Mail between Kutup users and mail Kutup sends out work before it; inbound
+mail from outside does not. Check, in order:
+
+1. `mail.example.org` resolves to the server's IPv4 address and its PTR is
+   `mail.example.org` (`dig +short -x <address>`).
+2. SPF, DKIM and DMARC are published (the table above), and any SPF include
+   left by an earlier mail service is gone: Cloudflare Email Routing adds
+   `include:_spf.mx.cloudflare.net`, so replace the record with Kutup's.
+3. Port 25 answers from outside with a trusted certificate:
+   `openssl s_client -starttls smtp -connect mail.example.org:25 -servername mail.example.org`.
+4. WKD answers in both places above (`curl -sS -o /dev/null -w '%{http_code}'`
+   on each `policy` URL gives `200`), so OpenPGP users write to Kutup users
+   encrypted from the first message.
+5. Every person who should receive mail has signed in once (that creates
+   their key; mail to an account without one is refused), and
+   `postmaster@` and `abuse@` reach an administrator who reads them.
+6. The domain is registered with Google Postmaster Tools and Microsoft
+   SNDS.
+
+Then lower the MX record's TTL (300 seconds) a day ahead, remove the earlier
+service's MX records (with Cloudflare Email Routing, disable it, which removes
+its `route*.mx.cloudflare.net` records and its forwarding rules), and add
+`MX 10 mail.example.org`. Send a message from an outside account (Gmail,
+Proton) and see it arrive in Kutup Mail; `docker compose logs stalwart` shows
+each delivery. To go back, restore the earlier MX records: mail queued at
+senders is retried, and nothing already stored in Kutup is lost.
+[`test/mail-proton.md`](test/mail-proton.md) is the end-to-end check with
+Proton once mail flows.
 
 Stalwart keeps its queue (mail not yet handed over) and its DKIM keys in the
 `stalwart_data` volume. Back it up with the rest; losing it means

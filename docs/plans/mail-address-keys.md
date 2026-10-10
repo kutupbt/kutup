@@ -148,8 +148,8 @@ manifest, signed with Ed25519 by the account authority:
 - **Account → Settings → Addresses and keys** (Proton's "Encryption and
   keys"): the address, its keys with fingerprint, algorithm, created date,
   primary and flags, a QR-free fingerprint display for out-of-band checks,
-  and "Download public key" (armored). Key import, rotation, and marking
-  obsolete or compromised come with Mail (C3), not as unwired buttons now.
+  and "Download public key" (armored). Key import, export, rotation, and
+  marking obsolete or compromised came with Mail (docs/plans/mail.md, C3e).
 - The fork list gains `mail`, `calendar` and `contacts` with their app
   origins when those apps exist, not before.
 

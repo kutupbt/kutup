@@ -205,54 +205,34 @@ fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `POST /api/mail/addresses/{id}/keys` — adds a key to one of the caller's
-/// addresses together with the next signed key list, in one transaction.
-#[utoipa::path(
-    post,
-    path = "/api/mail/addresses/{id}/keys",
-    tag = "mail",
-    security(("BearerAuth" = [])),
-    params(("id" = String, Path, description = "Address id")),
-    request_body = AddMailKeyRequest,
-    responses(
-        (status = 200, description = "The address with its keys", body = OwnMailAddress),
-        (status = 400, description = "The key, envelope or key list is not valid for this address"),
-        (status = 409, description = "The key list does not follow the current one (another device changed it)"),
-    )
-)]
-pub async fn add_key(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(id): Path<String>,
-    Json(req): Json<AddMailKeyRequest>,
-) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let address_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let Some((account, address)) = account_and_address(&state, user_id).await? else {
+/// A key list change in progress: the address locked, the new list checked
+/// as the direct successor of the current one.
+struct ListChange {
+    tx: sqlx::Transaction<'static, sqlx::Postgres>,
+    address_id: Uuid,
+    address: String,
+    signed: SignedMailKeyListV1,
+}
+
+/// Verifies `key_list` as the next signed list of the caller's address
+/// `id`, against the account authority, and locks the address.
+async fn begin_list_change(
+    state: &AppState,
+    user_id: Uuid,
+    id: &str,
+    key_list: &SignedKeyList,
+) -> AppResult<ListChange> {
+    let address_id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
+    let Some((account, address)) = account_and_address(state, user_id).await? else {
         return Err(AppError::not_found("not found"));
     };
-    let public_key = decode(&req.public_key, "publicKey")?;
-    let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
-    let data = decode(&req.key_list.data, "keyList.data")?;
-    let signature = decode(&req.key_list.signature, "keyList.signature")?;
-
-    let info = mail_key::inspect_address_public_key(&public_key, &address)
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let (login_email, authority): (String, String) =
-        sqlx::query_as("SELECT email, account_authority_public_key FROM users WHERE id = $1")
+    let data = decode(&key_list.data, "keyList.data")?;
+    let signature = decode(&key_list.signature, "keyList.signature")?;
+    let authority: String =
+        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
-    let header = account_envelope::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
-    if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey
-        || Some(header.canonical_login_email)
-            != account_envelope::canonical_login_email(&login_email).ok()
-    {
-        return Err(AppError::bad_request(
-            "privateKeyEnvelope is not this account's mail key",
-        ));
-    }
     let authority: [u8; 32] = STANDARD
         .decode(&authority)
         .ok()
@@ -260,8 +240,7 @@ pub async fn add_key(
         .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
     let signed = SignedMailKeyListV1::verify(&data, &signature, &authority)
         .map_err(|error| AppError::bad_request(format!("keyList: {error}")))?;
-    let list = &signed.list;
-    if list.account != account || list.address != address {
+    if signed.list.account != account || signed.list.address != address {
         return Err(AppError::bad_request(
             "keyList is for another account or address",
         ));
@@ -292,97 +271,204 @@ pub async fn add_key(
                 .check_successor(&signed)
                 .map_err(|_| AppError::conflict("keyList does not follow the current one"))?;
         }
-        None if list.sequence == 1 => {}
+        None if signed.list.sequence == 1 => {}
         None => {
             return Err(AppError::conflict(
                 "keyList does not follow the current one",
             ))
         }
     }
-    // It must list exactly the stored keys plus this one.
-    let stored: Vec<(String, String)> = sqlx::query_as(
-        "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys WHERE address_id = $1",
+    Ok(ListChange {
+        tx,
+        address_id,
+        address,
+        signed,
+    })
+}
+
+impl ListChange {
+    /// The stored keys' fingerprints, with `extra`.
+    async fn check_lists_exactly(&mut self, extra: Option<(String, String)>) -> AppResult<()> {
+        let stored: Vec<(String, String)> = sqlx::query_as(
+            "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys WHERE address_id = $1",
+        )
+        .bind(self.address_id)
+        .fetch_all(&mut *self.tx)
+        .await?;
+        let mut expected: Vec<(String, String)> = stored.into_iter().chain(extra).collect();
+        expected.sort();
+        let mut listed: Vec<(String, String)> = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .map(|key: &MailKeyEntryV1| {
+                (
+                    hex::encode(key.fingerprint),
+                    hex::encode(key.sha256_fingerprint),
+                )
+            })
+            .collect();
+        listed.sort();
+        if listed != expected {
+            return Err(AppError::bad_request(
+                "keyList must list exactly the address's keys",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Primary and flags follow the list; the list is recorded.
+    async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+        sqlx::query("UPDATE mail_address_keys SET is_primary = false WHERE address_id = $1")
+            .bind(self.address_id)
+            .execute(&mut *self.tx)
+            .await?;
+        for key in &self.signed.list.keys {
+            sqlx::query("UPDATE mail_address_keys SET is_primary = $3, flags = $4 WHERE address_id = $1 AND fingerprint = $2")
+                .bind(self.address_id)
+                .bind(hex::encode(key.fingerprint))
+                .bind(key.primary)
+                .bind(key.flags as i32)
+                .execute(&mut *self.tx)
+                .await?;
+        }
+        sqlx::query("INSERT INTO mail_key_lists (address_id, sequence, data, signature) VALUES ($1, $2, $3, $4)")
+            .bind(self.address_id)
+            .bind(self.signed.list.sequence as i64)
+            .bind(&self.signed.data)
+            .bind(self.signed.signature.as_slice())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(|error| match error {
+                sqlx::Error::Database(db) if db.is_unique_violation() => {
+                    AppError::conflict("keyList does not follow the current one")
+                }
+                other => other.into(),
+            })?;
+        self.tx.commit().await?;
+        own_address(state, self.address_id, self.address).await
+    }
+}
+
+/// `POST /api/mail/addresses/{id}/keys` — adds a key (generated, or
+/// imported from a key file) to one of the caller's addresses together with
+/// the next signed key list, in one transaction. The list may make it the
+/// primary key (a new key replacing the old for new mail).
+#[utoipa::path(
+    post,
+    path = "/api/mail/addresses/{id}/keys",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Address id")),
+    request_body = AddMailKeyRequest,
+    responses(
+        (status = 200, description = "The address with its keys", body = OwnMailAddress),
+        (status = 400, description = "The key, envelope or key list is not valid for this address"),
+        (status = 409, description = "The key list does not follow the current one (another device changed it), or the key is already in use"),
     )
-    .bind(address_id)
-    .fetch_all(&mut *tx)
-    .await?;
+)]
+pub async fn add_key(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<AddMailKeyRequest>,
+) -> AppResult<Json<OwnMailAddress>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let Some((_, address)) = account_and_address(&state, user_id).await? else {
+        return Err(AppError::not_found("not found"));
+    };
+    let public_key = decode(&req.public_key, "publicKey")?;
+    let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
+    let info = mail_key::inspect_address_public_key(&public_key, &address)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let login_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let header = account_envelope::inspect(&envelope)
+        .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
+    if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey
+        || Some(header.canonical_login_email)
+            != account_envelope::canonical_login_email(&login_email).ok()
+    {
+        return Err(AppError::bad_request(
+            "privateKeyEnvelope is not this account's mail key",
+        ));
+    }
+
+    let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
     let new_entry = (
         hex::encode(info.fingerprint),
         hex::encode(info.sha256_fingerprint),
     );
-    let mut expected: Vec<(String, String)> =
-        stored.into_iter().chain([new_entry.clone()]).collect();
-    expected.sort();
-    let mut listed: Vec<(String, String)> = list
+    change.check_lists_exactly(Some(new_entry.clone())).await?;
+    let flags = change
+        .signed
+        .list
         .keys
         .iter()
-        .map(|key: &MailKeyEntryV1| {
-            (
-                hex::encode(key.fingerprint),
-                hex::encode(key.sha256_fingerprint),
-            )
-        })
-        .collect();
-    listed.sort();
-    if listed != expected {
-        return Err(AppError::bad_request(
-            "keyList must list the address's keys and the new one",
-        ));
-    }
-
-    // Primary and flags follow the list; the new primary takes over.
-    sqlx::query("UPDATE mail_address_keys SET is_primary = false WHERE address_id = $1")
-        .bind(address_id)
-        .execute(&mut *tx)
-        .await?;
-    let entry_of = |fingerprint: &str| {
-        list.keys
-            .iter()
-            .find(|key| hex::encode(key.fingerprint) == fingerprint)
-            .expect("listed")
-    };
-    let new = entry_of(&new_entry.0);
+        .find(|key| hex::encode(key.fingerprint) == new_entry.0)
+        .expect("listed")
+        .flags;
     let inserted = sqlx::query(
         "INSERT INTO mail_address_keys
            (address_id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags)
          VALUES ($1, $2, $3, $4, $5, false, $6)
          ON CONFLICT (fingerprint) DO NOTHING",
     )
-    .bind(address_id)
+    .bind(change.address_id)
     .bind(&new_entry.0)
     .bind(&new_entry.1)
     .bind(&public_key)
     .bind(&envelope)
-    .bind(new.flags as i32)
-    .execute(&mut *tx)
+    .bind(flags as i32)
+    .execute(&mut *change.tx)
     .await?;
     if inserted.rows_affected() != 1 {
         return Err(AppError::conflict("this key is already in use"));
     }
-    for key in &list.keys {
-        sqlx::query("UPDATE mail_address_keys SET is_primary = $3, flags = $4 WHERE address_id = $1 AND fingerprint = $2")
-            .bind(address_id)
-            .bind(hex::encode(key.fingerprint))
-            .bind(key.primary)
-            .bind(key.flags as i32)
-            .execute(&mut *tx)
-            .await?;
+    Ok(Json(change.finish(&state).await?))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateKeyListRequest {
+    /// The address's next signed key list, listing exactly its keys.
+    pub key_list: SignedKeyList,
+}
+
+/// `PUT /api/mail/addresses/{id}/key-list` — publishes the next signed key
+/// list for the same keys: another key made primary, or keys marked
+/// obsolete (not encrypted to) or compromised (signatures not trusted).
+#[utoipa::path(
+    put,
+    path = "/api/mail/addresses/{id}/key-list",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Address id")),
+    request_body = UpdateKeyListRequest,
+    responses(
+        (status = 200, description = "The address with its keys", body = OwnMailAddress),
+        (status = 400, description = "The key list is not valid, or does not list exactly the address's keys"),
+        (status = 409, description = "The key list does not follow the current one (another device changed it)"),
+    )
+)]
+pub async fn update_key_list(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateKeyListRequest>,
+) -> AppResult<Json<OwnMailAddress>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
+    if change.signed.list.sequence == 1 {
+        return Err(AppError::bad_request(
+            "an address's first key list comes with its first key",
+        ));
     }
-    sqlx::query("INSERT INTO mail_key_lists (address_id, sequence, data, signature) VALUES ($1, $2, $3, $4)")
-        .bind(address_id)
-        .bind(list.sequence as i64)
-        .bind(&signed.data)
-        .bind(signed.signature.as_slice())
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| match error {
-            sqlx::Error::Database(db) if db.is_unique_violation() => {
-                AppError::conflict("keyList does not follow the current one")
-            }
-            other => other.into(),
-        })?;
-    tx.commit().await?;
-    Ok(Json(own_address(&state, address_id, address).await?))
+    change.check_lists_exactly(None).await?;
+    Ok(Json(change.finish(&state).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -592,6 +678,33 @@ pub async fn wkd_key(
 /// know this domain publishes keys.
 pub async fn wkd_policy() -> Response {
     ([(header::CONTENT_TYPE, "text/plain")], "").into_response()
+}
+
+/// `GET /.well-known/openpgpkey/{domain}/hu/{hash}?l=` — WKD, advanced
+/// method, served on `openpgpkey.<server name>`. GnuPG and Proton ask here
+/// first whenever that name resolves (a wildcard record makes it), so it
+/// answers the same as the direct method, for the server name only.
+pub async fn wkd_advanced_key(
+    state: State<AppState>,
+    Path((domain, hash)): Path<(String, String)>,
+    query: Query<WkdQuery>,
+) -> AppResult<Response> {
+    if !domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
+        return Err(AppError::not_found("not found"));
+    }
+    wkd_key(state, Path(hash), query).await
+}
+
+/// `GET /.well-known/openpgpkey/{domain}/policy` — the advanced method's
+/// policy file, for the server name only.
+pub async fn wkd_advanced_policy(
+    State(state): State<AppState>,
+    Path(domain): Path<String>,
+) -> AppResult<Response> {
+    if !domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(wkd_policy().await)
 }
 
 #[cfg(test)]

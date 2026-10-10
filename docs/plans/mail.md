@@ -306,7 +306,22 @@ help pages (checked 2026-10-10):
    plaintext, and that GnuPG opens it with a good signature. The Proton
    check is [`docs/test/mail-proton.md`](../test/mail-proton.md).
 5. **C3e:** key import and export; then the MX switch from Cloudflare
-   (DNS, done by the operator).
+   (DNS, done by the operator). Done: Account → Settings → Encryption keys
+   creates a new key (it becomes primary; older keys stay to open older
+   mail, which Mail now tries them for), imports one from an OpenPGP secret
+   key file (Kutup's export, Proton's, GnuPG's; Curve25519 with one user ID
+   for the address, unlocked in the browser and sealed like a generated
+   key), exports one locked with a passphrase (iterated and salted S2K,
+   AES-256; Proton's file name), and marks keys obsolete or compromised
+   through `PUT /api/mail/addresses/{id}/key-list`; Mail no longer trusts
+   signatures by a key its owner marked compromised. WKD gains the advanced
+   method on `openpgpkey.<server name>`, which GnuPG and Proton ask first
+   whenever the name resolves. The MX switch checklist is in
+   [`../self-hosting.md`](../self-hosting.md) ("Moving MX to Kutup"). For
+   kutup.dev (checked 2026-10-10): the website Worker on `kutup.dev` must
+   pass `/.well-known/openpgpkey/` through (it answers 404 today), and
+   `openpgpkey.kutup.dev` (resolved by the wildcard record) needs the
+   certificate; MX is still Cloudflare Email Routing, with its SPF include.
 
 ## Sending safety
 
