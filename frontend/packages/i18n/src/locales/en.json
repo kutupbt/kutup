@@ -304,6 +304,35 @@
     },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
-    "shareAnyway": "Share anyway"
+    "shareAnyway": "Share anyway",
+    "verified": "{{name}} is verified",
+    "verify": "Verify {{name}}",
+    "verifyInPerson": "Verify in person",
+    "cannotVerifyTitle": "Nothing to verify yet",
+    "cannotVerify": "{{account}} has not signed their Drive keys yet. They do at their next sign-in."
+  },
+  "safetyNumber": {
+    "cameraUnavailable": "Camera access was unavailable. Paste the QR value instead.",
+    "candidateAuthority": "Candidate authority fingerprint",
+    "copied": "Safety number copied",
+    "copyFailed": "Couldn’t copy the safety number.",
+    "description": "Meet in person and scan the QR code shown on the other person's device. Both devices must show the same complete safety number.",
+    "mismatch": "That QR code does not match this conversation. Nothing was verified.",
+    "numberLabel": "Complete safety number",
+    "pasteLabel": "Or paste their QR value",
+    "qrLabel": "Your verification QR code",
+    "retainedAuthority": "Retained authority fingerprint",
+    "scan": "Scan their QR code",
+    "scanUnsupported": "This browser cannot scan QR codes. Paste the QR value instead.",
+    "scanning": "Scanning…",
+    "stateBlocked": "The pinned identity changed or contradicted its history. Sending remains blocked until you verify this exact replacement.",
+    "stateUnverified": "Encrypted with a valid pinned identity, but not verified face to face.",
+    "stateVerified": "Verified face to face on this device.",
+    "title": "Verify {{peer}}",
+    "triggerVerified": "{{peer}} is verified",
+    "triggerVerify": "Verify {{peer}}",
+    "triggerWarning": "Security warning for {{peer}}",
+    "verifiedToast": "{{peer}} is now verified on this device",
+    "verify": "Verify exact match"
   }
 }

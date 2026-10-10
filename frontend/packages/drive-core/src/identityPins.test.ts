@@ -8,6 +8,13 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     Promise.resolve(binding === `bound-by-${authority}`),
   ),
   incarnationIdOfAuthority: vi.fn((authority: string) => Promise.resolve(`inc-${authority}`)),
+  // The pair's number names both authorities; a scan matches only the current pair.
+  deriveSafetyNumber: vi.fn((local: string, la: string, peer: string, pa: string) =>
+    Promise.resolve({ fingerprint: `${la}-${pa}`, qrPayload: `qr:${local}:${la}:${peer}:${pa}` }),
+  ),
+  safetyQrMatches: vi.fn((local: string, la: string, peer: string, pa: string, scanned: string) =>
+    Promise.resolve(scanned === `qr:${local}:${la}:${peer}:${pa}`),
+  ),
   sealIdentityPins: vi.fn((_m: string, _o: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ revision, list }))),
   openIdentityPins: vi.fn((_m: string, _o: string, revision: number, sealed: string) => {
     const parsed = JSON.parse(sealed) as { revision: number; list: unknown }
@@ -51,7 +58,7 @@ vi.mock('@kutup/session/client', () => {
   }
 })
 
-import { acceptIdentity, checkIdentity, PinsRolledBack, resetIdentityPinsForTesting } from './identityPins'
+import { acceptIdentity, checkIdentity, personSafetyNumber, PinsRolledBack, resetIdentityPinsForTesting, SafetyNumberMismatch, verifyPerson } from './identityPins'
 import type { DriveIdentity } from './identity'
 
 const me: DriveIdentity = {
@@ -159,5 +166,34 @@ describe('checkIdentity', () => {
 
   it('trusts the account itself', async () => {
     expect(await checkIdentity(me, me.account)).toEqual({ kind: 'ok', verified: true })
+  })
+})
+
+describe('verifyPerson', () => {
+  it('marks a person verified with their scanned safety QR, for every app', async () => {
+    publish('bob@kutup.dev', 'B')
+    const number = await personSafetyNumber(me, 'bob@kutup.dev')
+    await expect(verifyPerson(me, 'bob@kutup.dev', 'qr:somebody-else')).rejects.toBeInstanceOf(SafetyNumberMismatch)
+    await verifyPerson(me, 'bob@kutup.dev', number.qrPayload)
+    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev', authorityPublicKey: 'B', state: 'verified' }])
+    resetIdentityPinsForTesting()
+    publish('bob@kutup.dev', 'B')
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: true })
+  })
+
+  it('accepts a changed identity once it is compared in person', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    resetIdentityPinsForTesting()
+    publish('bob@kutup.dev', 'B2')
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'changed' })
+    const number = await personSafetyNumber(me, 'bob@kutup.dev')
+    await verifyPerson(me, 'bob@kutup.dev', number.qrPayload)
+    expect(storedPins()).toMatchObject([{ authorityPublicKey: 'B2', state: 'verified', replaced: ['inc-B'] }])
+  })
+
+  it('has nothing to compare for someone whose keys are not signed', async () => {
+    publish('old@kutup.dev', 'O', { bound: false })
+    await expect(personSafetyNumber(me, 'old@kutup.dev')).rejects.toThrow(/binding/)
   })
 })

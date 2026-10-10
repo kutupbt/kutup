@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDriveIdentity } from './identity'
-import { acceptIdentity, checkIdentity, type ClaimedKeys } from './identityPins'
+import { acceptIdentity, checkIdentity, personSafetyNumber, verifyPerson, type ClaimedKeys } from './identityPins'
 import type { Folder } from './model'
 
 const statusKey = ['identity-status'] as const
@@ -47,4 +47,29 @@ export function folderOwnerClaim(folder: Pick<Folder, 'ownerSigningPublicKey' | 
     incarnationId: folder.ownerIncarnationId || undefined,
     authorityPublicKey: folder.ownerAuthorityPublicKey || undefined,
   }
+}
+
+/** The safety number to compare with `account` in person. */
+export function usePersonSafetyNumber(account: string | null, enabled = true) {
+  const identity = useDriveIdentity()
+  return useQuery({
+    queryKey: ['safety-number', account ?? ''],
+    enabled: Boolean(enabled && account && identity.data),
+    staleTime: Infinity,
+    retry: false,
+    queryFn: () => personSafetyNumber(identity.data!, account!),
+  })
+}
+
+/** Verify `account` with the safety QR scanned from their device. */
+export function useVerifyPerson() {
+  const identity = useDriveIdentity()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ account, scanned }: { account: string; scanned: string }) => {
+      if (!identity.data) throw new Error('not signed in')
+      await verifyPerson(identity.data, account, scanned)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: statusKey }),
+  })
 }

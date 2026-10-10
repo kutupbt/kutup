@@ -16,7 +16,7 @@ import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
 import { useRemoveAlbumAccess, type Album } from './albums'
 import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
-import { IdentityShareWarning } from '@kutup/drive-ui/IdentityWarning'
+import { IdentityShareWarning, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 
 /**
  * Share an album (docs/plans/photos.md): its key sealed to each person's
@@ -140,6 +140,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                   <p className="truncate text-sm">{m.account}</p>
                   <p className="text-xs text-muted-foreground">{m.canUpload ? t('share.canAddShort') : t('share.viewOnly')}</p>
                 </div>
+                <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                 <Button
                   variant="ghost"
                   size="icon"

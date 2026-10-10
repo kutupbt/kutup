@@ -28,7 +28,7 @@ import { useRenameFile } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
 import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
-import { IdentityBanner } from '@kutup/drive-ui/IdentityWarning'
+import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } from './paths'
 import { contentAt, currentContent } from './content'
@@ -604,7 +604,12 @@ function Workspace({
         ) : (
           <span className="min-w-0 truncate px-1.5 text-sm font-medium">{name}</span>
         )}
-        {sharedBy ? <SharedBy sharer={sharedBy.sharer} owner={sharedBy.owner} /> : null}
+        {sharedBy ? (
+          <>
+            <SharedBy sharer={sharedBy.sharer} owner={sharedBy.owner} />
+            <VerifyPersonButton account={sharedBy.sharer} claimed={sharedBy.sharerClaim} />
+          </>
+        ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {notice ? (
             <span className="hidden rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground sm:inline" title={notice}>

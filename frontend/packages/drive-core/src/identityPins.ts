@@ -14,8 +14,10 @@
 
 import { isAxiosError } from 'axios'
 import {
+  deriveSafetyNumber,
   incarnationIdOfAuthority,
   openIdentityPins,
+  safetyQrMatches,
   sealIdentityPins,
   verifyDriveKeyBinding,
   type IdentityPin,
@@ -289,6 +291,72 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
       account,
       authorityPublicKey: person.accountAuthorityPublicKey,
       state: 'seen',
+      since: now(),
+      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
+    })
+    return true
+  })
+}
+
+/** A person's published identity, once their binding is checked; throws otherwise. */
+async function boundIdentity(me: DriveIdentity, account: string): Promise<PublishedIdentity> {
+  const person = await publishedIdentity(me, account)
+  const bound =
+    Boolean(person.driveKeyBinding) &&
+    (await verifyDriveKeyBinding(
+      account,
+      person.accountAuthorityPublicKey,
+      person.driveHpkePublicKey,
+      person.driveSigningPublicKey,
+      person.driveKeyBinding!,
+    ).catch(() => false))
+  if (!bound) throw new IdentityUnproven(account)
+  return person
+}
+
+/** Someone whose keys their account has not (validly) signed: nothing to compare. */
+export class IdentityUnproven extends Error {
+  constructor(readonly account: string) {
+    super(`${account} has no valid Drive key binding`)
+  }
+}
+
+/**
+ * The safety number this account and `account` compare in person (the same
+ * one Chat shows), for their current identity.
+ */
+export async function personSafetyNumber(me: DriveIdentity, account: string): Promise<{ fingerprint: string; qrPayload: string }> {
+  const person = await boundIdentity(me, account)
+  return deriveSafetyNumber(me.account, me.authorityPublicKey, account, person.accountAuthorityPublicKey)
+}
+
+/** The scanned safety QR did not come from `account`'s current identity. */
+export class SafetyNumberMismatch extends Error {
+  constructor() {
+    super('the scanned safety number is not this pair of accounts')
+  }
+}
+
+/**
+ * Mark `account` verified: the user scanned their safety QR (or pasted it)
+ * and it is exactly the expected one for both accounts. A changed identity
+ * verified in person is accepted with it. Every app of the account sees it.
+ */
+export async function verifyPerson(me: DriveIdentity, account: string, scanned: string): Promise<void> {
+  const person = await boundIdentity(me, account)
+  const matches = await safetyQrMatches(me.account, me.authorityPublicKey, account, person.accountAuthorityPublicKey, scanned)
+  if (!matches) throw new SafetyNumberMismatch()
+  await updatePins(me, async (next) => {
+    const previous = next.get(account)
+    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey && previous.state === 'verified') return false
+    const replaced = [...(previous?.replaced ?? [])]
+    if (previous && previous.authorityPublicKey !== person.accountAuthorityPublicKey) {
+      replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
+    }
+    next.set(account, {
+      account,
+      authorityPublicKey: person.accountAuthorityPublicKey,
+      state: 'verified',
       since: now(),
       ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
     })

@@ -54,3 +54,24 @@ export async function sealIdentityPins(masterKeyBase64: string, owner: string, r
 export async function openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealed: string): Promise<IdentityPins> {
   return JSON.parse((await getCryptoWasm()).openIdentityPins(masterKeyBase64, owner, revision, sealed)) as IdentityPins
 }
+
+/** The safety number two accounts compare in person: the same in Chat, Drive and the CLI. */
+export async function deriveSafetyNumber(
+  localAccount: string,
+  localAuthority: string,
+  peerAccount: string,
+  peerAuthority: string,
+): Promise<{ fingerprint: string; qrPayload: string }> {
+  return (await getCryptoWasm()).deriveSafetyNumber(localAccount, localAuthority, peerAccount, peerAuthority)
+}
+
+/** Whether a scanned safety QR is exactly the one for these two accounts (compared in Rust). */
+export async function safetyQrMatches(
+  localAccount: string,
+  localAuthority: string,
+  peerAccount: string,
+  peerAuthority: string,
+  scanned: string,
+): Promise<boolean> {
+  return (await getCryptoWasm()).safetyQrMatches(localAccount, localAuthority, peerAccount, peerAuthority, scanned)
+}

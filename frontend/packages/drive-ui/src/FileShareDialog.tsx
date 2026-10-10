@@ -23,7 +23,7 @@ import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
-import { IdentityShareWarning } from './IdentityWarning'
+import { IdentityShareWarning, VerifyPersonButton } from './IdentityWarning'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
@@ -238,15 +238,18 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 name={person.name}
                 detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
                 control={
-                  owner ? (
-                    <RoleMenu
-                      name={person.name}
-                      canEdit={m.canEdit}
-                      busy={busy}
-                      onRole={(canEdit) => changeRole(m, person.name, canEdit)}
-                      onRemove={() => setPending({ userId: m.userId, name: person.name })}
-                    />
-                  ) : null
+                  <>
+                    <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                    {owner ? (
+                      <RoleMenu
+                        name={person.name}
+                        canEdit={m.canEdit}
+                        busy={busy}
+                        onRole={(canEdit) => changeRole(m, person.name, canEdit)}
+                        onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                      />
+                    ) : null}
+                  </>
                 }
               />
             )
