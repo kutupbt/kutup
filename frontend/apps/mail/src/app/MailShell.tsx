@@ -32,6 +32,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
+import { SaveContactHost } from '../features/SaveContactHost'
 
 // The composer and its editor load the first time someone writes.
 const Composer = lazy(() => import('../features/Composer').then((m) => ({ default: m.Composer })))
@@ -167,6 +168,7 @@ export function MailShell() {
       }
     >
       <Outlet />
+      <SaveContactHost />
       {composing ? (
         <Suspense fallback={null}>
           <Composer />

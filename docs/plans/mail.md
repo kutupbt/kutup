@@ -188,6 +188,21 @@ deletes the draft.
   until the reader allows them for that message (Proton proxies them; Kutup
   has no proxy yet, so blocking is the safe default); links open with
   `noopener noreferrer`. MIME is parsed with postal-mime.
+- **People:** senders and recipients are named as in Contacts, with an
+  avatar (photo or initials) in the list and the header. A name opens a card
+  on hover or click (Proton's recipient dropdown): the address to copy, New
+  message, View contact or Save to contacts, and their other mail. A message
+  from (or, in Sent, to) someone not in Contacts shows a banner with Save to
+  contacts, dismissable per address on the device. Saving opens a dialog in
+  Mail, not a new tab: a new contact named as their mail named them, or the
+  address added to someone already there; "Add more details in Contacts"
+  opens the full editor.
+- **Dark theme and quotes:** plain text, and HTML that sets no background and
+  no dark text colour (most personal mail, and Kutup's own), take the
+  theme's colours; HTML that paints itself stays on white, as Proton shows
+  it. The quoted earlier message at the end of a reply (`>` lines, Gmail,
+  Proton, Apple and Outlook quotes, a closing blockquote) is folded behind a
+  "…" button, with no script (`<details>`).
 - The composer, docked like Proton's: From, To, Cc, Bcc with contact
   suggestions, subject, a rich-text editor (Tiptap) sent as HTML with a plain
   text alternative, attachments, autosave, and Proton's shortcuts

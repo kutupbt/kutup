@@ -86,7 +86,6 @@
     "forward": "Forward",
     "editDraft": "Edit draft",
     "downloadOriginal": "Download the original (.eml)",
-    "addSender": "Add sender to contacts",
     "trustKeyTitle": "{{address}} sent their public key",
     "trustKeyDescription": "Trust it to check that their messages are from them. Mail to them is then encrypted to this key. Fingerprint: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} sent a different public key",
@@ -94,7 +93,13 @@
     "trustKey": "Trust key",
     "keyTrusted": "Key trusted for {{address}}.",
     "trustFailed": "The key could not be saved to Contacts.",
-    "pgpSignatureFailed": "This message's signature does not match the key you trust for its sender. It may not be from them."
+    "pgpSignatureFailed": "This message's signature does not match the key you trust for its sender. It may not be from them.",
+    "showQuoted": "Show quoted text",
+    "notInContacts": "{{name}} is not in your contacts.",
+    "saveToContacts": "Save to contacts",
+    "dismiss": "Dismiss",
+    "unknownSender": "Unknown sender",
+    "collapse": "Collapse message"
   },
   "actions": {
     "archive": "Archive",
@@ -174,8 +179,6 @@
     "forwardedFrom": "From: {{from}}",
     "forwardedDate": "Date: {{date}}",
     "forwardedSubject": "Subject: {{subject}}",
-    "addContactOffer": "Add {{address}} to your contacts?",
-    "addContact": "Add",
     "sendingPaused": "Mail to outside addresses is paused for your account. Ask your administrator.",
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
@@ -204,5 +207,15 @@
     "spam": "Mail that looks like spam lands here.",
     "trash": "Deleted mail waits here until you delete it for good.",
     "all": "Every message except Spam and Trash."
+  },
+  "person": {
+    "details": "More about {{name}} <{{address}}>",
+    "copy": "Copy address",
+    "copied": "Address copied.",
+    "newMessage": "New message",
+    "viewContact": "View contact",
+    "saveContact": "Save to contacts",
+    "messagesFrom": "Messages from this sender",
+    "messagesTo": "Messages to this recipient"
   }
 }

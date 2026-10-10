@@ -248,7 +248,7 @@ jobs:
         run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts specs/36-chat-local-groups.spec.ts specs/38-chat-group-device-replaced.spec.ts specs/40-chat-open-failures.spec.ts --project=chromium
       - name: Run the Mail browser specs
         working-directory: tests/e2e
-        run: npm exec -- playwright test specs/54-mail-address-keys.spec.ts specs/57-mail.spec.ts specs/58-mail-sending-safety.spec.ts --project=chromium
+        run: npm exec -- playwright test specs/54-mail-address-keys.spec.ts specs/57-mail.spec.ts specs/58-mail-sending-safety.spec.ts specs/80-mail-people.spec.ts --project=chromium
       - name: Restart the backend with outside sending off
         env:
           MAIL_OUTSIDE_SENDING: "off"

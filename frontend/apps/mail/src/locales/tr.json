@@ -86,7 +86,6 @@
     "forward": "İlet",
     "editDraft": "Taslağı düzenle",
     "downloadOriginal": "Özgün postayı indir (.eml)",
-    "addSender": "Göndereni kişilere ekle",
     "trustKeyTitle": "{{address}} açık anahtarını gönderdi",
     "trustKeyDescription": "İletilerinin ondan geldiğini doğrulamak için bu anahtara güvenin. Ona giden e-postalar da bu anahtarla şifrelenir. Parmak izi: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} farklı bir açık anahtar gönderdi",
@@ -94,7 +93,13 @@
     "trustKey": "Anahtara güven",
     "keyTrusted": "{{address}} için anahtara güvenildi.",
     "trustFailed": "Anahtar Kişiler'e kaydedilemedi.",
-    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir."
+    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir.",
+    "showQuoted": "Alıntılanan metni göster",
+    "notInContacts": "{{name}} kişileriniz arasında değil.",
+    "saveToContacts": "Kişilere kaydet",
+    "dismiss": "Kapat",
+    "unknownSender": "Bilinmeyen gönderici",
+    "collapse": "İletiyi daralt"
   },
   "actions": {
     "archive": "Arşivle",
@@ -174,8 +179,6 @@
     "forwardedFrom": "Gönderen: {{from}}",
     "forwardedDate": "Tarih: {{date}}",
     "forwardedSubject": "Konu: {{subject}}",
-    "addContactOffer": "{{address}} kişilerinize eklensin mi?",
-    "addContact": "Ekle",
     "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
@@ -204,5 +207,15 @@
     "spam": "İstenmeyene benzeyen postalar buraya düşer.",
     "trash": "Silinen postalar, kalıcı olarak silene dek burada bekler.",
     "all": "İstenmeyen ve Çöp dışındaki tüm postalar."
+  },
+  "person": {
+    "details": "{{name}} <{{address}}> hakkında",
+    "copy": "Adresi kopyala",
+    "copied": "Adres kopyalandı.",
+    "newMessage": "Yeni ileti",
+    "viewContact": "Kişiyi görüntüle",
+    "saveContact": "Kişilere kaydet",
+    "messagesFrom": "Bu göndericiden gelen iletiler",
+    "messagesTo": "Bu alıcıya giden iletiler"
   }
 }

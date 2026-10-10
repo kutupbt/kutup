@@ -5,7 +5,6 @@ import { Bold, Italic, List, ListOrdered, Loader2, Maximize2, Minimize2, Papercl
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { offerAddToContacts } from '@kutup/contacts-core/addToContacts'
 import {
   addDraftAttachment,
   draftAttachmentPart,
@@ -376,8 +375,6 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       if (!full.length && !failed.length) toast.success(t('compose.sent'))
       refresh()
       closeComposer()
-      const first = to[0]?.address
-      if (first) void offerAddToContacts(first, { message: t('compose.addContactOffer', { address: first }), action: t('compose.addContact') })
     } catch (error) {
       closed.current = false
       setSending(false)

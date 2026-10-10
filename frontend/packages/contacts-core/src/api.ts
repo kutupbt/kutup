@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useMemo } from 'react'
 import {
   deriveAccountIdentityKeys,
   describeExternalMailKey,
@@ -267,4 +268,50 @@ export function usePinKey() {
   )
 }
 
+/**
+ * Finds the contact that has an address, from the opened address book
+ * (undefined while it loads or when nobody has it). Mail uses it to name
+ * senders and to offer saving the ones who are not there yet.
+ */
+export function useContactLookup(): { ready: boolean; find: (address: string | undefined | null) => Contact | undefined } {
+  const contacts = useContacts()
+  const byAddress = useMemo(() => {
+    const map = new Map<string, Contact>()
+    for (const contact of contacts.data?.contacts ?? []) {
+      for (const email of contact.draft.emails) {
+        const address = email.address.trim().toLowerCase()
+        if (address && !map.has(address)) map.set(address, contact)
+      }
+    }
+    return map
+  }, [contacts.data])
+  const find = useCallback((address: string | undefined | null) => (address ? byAddress.get(address.trim().toLowerCase()) : undefined), [byAddress])
+  return { ready: contacts.isSuccess, find }
+}
+
+/**
+ * Adds an address to a contact that is already in the address book (Proton's
+ * "add to existing contact"), giving it a name when it had none. Read fresh,
+ * so the edit lands on the contact as it is now.
+ */
+export function useAddEmailToContact() {
+  const queryClient = useQueryClient()
+  return useContactMutation(async (input: { contactId: string; address: string; name?: string }, session, account) => {
+    const address = input.address.trim().toLowerCase()
+    const { contacts } = await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session, account) })
+    const existing = contacts.find((c) => c.id === input.contactId)
+    if (!existing) throw new Error('this contact no longer exists')
+    if (existing.draft.emails.some((e) => e.address.trim().toLowerCase() === address)) return existing.id
+    const draft: ContactDraft = {
+      ...existing.draft,
+      name: existing.draft.name.trim() || existing.draft.givenName || existing.draft.familyName ? existing.draft.name : (input.name?.trim() ?? ''),
+      emails: [...existing.draft.emails, { address }],
+    }
+    const body = await prepare(session, account, existing.uid, draft)
+    await api.put(`/contacts/${existing.id}`, { ...body, revision: existing.revision })
+    return existing.id
+  })
+}
+
 export { useContactEmailSearch, type ContactEmailMatch } from './search'
+

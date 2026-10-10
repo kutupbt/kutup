@@ -14,6 +14,7 @@ import {
   type MailMessage,
   type MessageChange,
 } from '@kutup/mail-core/api'
+import { useContactLookup } from '@kutup/contacts-core/api'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -27,17 +28,24 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openComposer } from './composerState'
 import { Padlock } from './Padlock'
+import { PersonAvatar } from './Person'
+import { nameFor } from './personName'
 import { ThreadView } from './ThreadView'
 
 const KNOWN = new Set<string>([...FOLDERS, 'all'])
 
-/** Who a row names: the sender for received mail, the recipients for sent mail and drafts. */
-function correspondent(message: MailMessage, t: (key: string) => string): string {
+/** Who a row names: the sender for received mail, the recipients for sent mail and drafts; by their contact names. */
+function correspondent(message: MailMessage, t: (key: string) => string, contacts: ReturnType<typeof useContactLookup>): string {
   if (message.direction === 'outbound') {
-    const names = [...message.to, ...message.cc].map((m) => m.name || m.address)
+    const names = [...message.to, ...message.cc].map((m) => nameFor(m, contacts.find(m.address)))
     return names.length ? `${t('list.to')} ${names.join(', ')}` : t('list.noRecipients')
   }
-  return message.from ? message.from.name || message.from.address : t('list.unknownSender')
+  return message.from ? nameFor(message.from, contacts.find(message.from.address)) : t('list.unknownSender')
+}
+
+/** Whom a row's avatar shows: the sender, or the first recipient of sent mail. */
+function avatarOf(message: MailMessage) {
+  return message.direction === 'outbound' ? (message.to[0] ?? message.cc[0] ?? null) : message.from
 }
 
 function ToolbarButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -58,6 +66,7 @@ export function MailboxPage() {
   const q = params.get('q') ?? ''
   const navigate = useNavigate()
   const account = useMailAccount()
+  const contacts = useContactLookup()
   const folder = (KNOWN.has(folderParam) ? folderParam : 'inbox') as FolderId
   const list = useFolder(folder, q)
   const update = useUpdateMessages()
@@ -206,8 +215,13 @@ export function MailboxPage() {
             return (
               <li key={message.id} className={cn('group border-b border-border/60', open && 'bg-accent', !message.seen && !open && 'bg-primary/5')}>
                 <div className="flex items-start gap-2 px-2 py-2">
-                  <Checkbox
-                    className="m-2"
+                  {/* The avatar turns into the checkbox on hover, or once anything is chosen (Proton's list). */}
+                  <span className="relative m-1 flex size-8 shrink-0 items-center justify-center">
+                    <span className={cn('transition-opacity', chosen.length > 0 ? 'opacity-0' : 'group-hover:opacity-0')}>
+                      <PersonAvatar mailbox={avatarOf(message)} contact={contacts.find(avatarOf(message)?.address)} size={32} />
+                    </span>
+                    <Checkbox
+                    className={cn('absolute', chosen.length > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
                     checked={selected.has(message.id)}
                     onCheckedChange={(on) =>
                       setSelected((now) => {
@@ -219,10 +233,11 @@ export function MailboxPage() {
                     }
                     aria-label={t('list.select', { subject: message.subject || t('list.noSubject') })}
                   />
+                  </span>
                   <Link to={`/${folder}/${message.threadId}${search}`} className="min-w-0 flex-1 py-1" aria-current={open ? 'true' : undefined}>
                     <span className="flex items-center gap-2">
                       <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>
-                        {correspondent(message, t)}
+                        {correspondent(message, t, contacts)}
                       </span>
                       {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
                       <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
