@@ -29,6 +29,7 @@
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
 //! - [`contact_card`] — signed contact summaries and sealed contact cards.
+//! - [`mail_names`] — sealed names of mail folders, labels and filters.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
 
 pub mod account_envelope;
@@ -53,6 +54,7 @@ pub mod live_location;
 pub mod local_state;
 #[cfg(feature = "mail")]
 pub mod mail_key;
+pub mod mail_names;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;

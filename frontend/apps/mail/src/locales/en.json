@@ -35,7 +35,9 @@
     "archive": "Nothing archived",
     "spam": "No spam",
     "trash": "Trash is empty",
-    "all": "No mail yet"
+    "all": "No mail yet",
+    "folder": "This folder is empty",
+    "label": "No mail with this label"
   },
   "padlock": {
     "verified": "End-to-end encrypted, from a verified sender",
@@ -210,7 +212,9 @@
     "archive": "Archive keeps mail out of the inbox without deleting it.",
     "spam": "Mail that looks like spam lands here.",
     "trash": "Deleted mail waits here until you delete it for good.",
-    "all": "Every message except Spam and Trash."
+    "all": "Every message except Spam and Trash.",
+    "folder": "Drag mail here, or use Move to.",
+    "label": "Add it to mail with Label as."
   },
   "person": {
     "details": "More about {{name}} <{{address}}>",
@@ -233,7 +237,9 @@
     "spam_other": "{{count}} messages marked as spam.",
     "trash_one": "Moved to Trash.",
     "trash_other": "{{count}} messages moved to Trash.",
-    "undo": "Undo"
+    "undo": "Undo",
+    "folder_one": "Moved to {{name}}.",
+    "folder_other": "{{count}} messages moved to {{name}}."
   },
   "shortcuts": {
     "title": "Keyboard shortcuts",
@@ -267,12 +273,73 @@
       "deleteForever": "Delete for good (Trash, Spam, Drafts)",
       "drag": "Drop on a folder to move",
       "send": "Send",
-      "closeComposer": "Close the composer"
+      "closeComposer": "Close the composer",
+      "moveTo": "Move to…",
+      "labelAs": "Label as…"
     },
     "mouse": {
       "click": "Click",
       "rightClick": "Right click",
       "drag": "Drag"
     }
+  },
+  "places": {
+    "folders": "Folders",
+    "labels": "Labels",
+    "manage": "Manage folders and labels",
+    "newFolder": "New folder",
+    "newLabel": "New label",
+    "newSubfolder": "New folder inside",
+    "editFolder": "Edit folder",
+    "editLabel": "Edit label",
+    "deleteFolder": "Delete folder",
+    "deleteLabel": "Delete label",
+    "folderOptions": "Options for {{name}}",
+    "labelOptions": "Options for {{name}}",
+    "expand": "Show the folders in {{name}}",
+    "collapse": "Hide the folders in {{name}}",
+    "noFolders": "No folders",
+    "noLabels": "No labels",
+    "noFoldersHint": "Make folders to file mail by project, person or anything you like.",
+    "noLabelsHint": "Labels are coloured tags; a message can have several and keeps them wherever it is filed.",
+    "folderName": "Folder name",
+    "labelName": "Label name",
+    "location": "Folder location",
+    "topLevel": "Top level",
+    "color": "Colour",
+    "newFolderHint": "Name your new folder and choose the folder to put it in. Without one, it is made at the top level.",
+    "nameRequired": "A name is required.",
+    "nameTooLong": "A name is 100 characters at most.",
+    "folderNameTaken": "A folder with this name is already there.",
+    "labelNameTaken": "A label with this name already exists.",
+    "created": "{{name}} created.",
+    "updated": "{{name}} saved.",
+    "removed": "{{name}} removed.",
+    "deleteFolderTitle": "Delete folder?",
+    "deleteLabelTitle": "Delete label?",
+    "deleteFolderDescription": "{{name}} and the folders in it are deleted. Their mail is not: it moves to Archive.",
+    "deleteLabelDescription": "{{name}} is removed from your mail. The mail itself stays where it is.",
+    "delete": "Delete",
+    "moveTo": "Move to",
+    "labelAs": "Label as",
+    "filterFolders": "Filter folders",
+    "filterLabels": "Filter labels",
+    "createFolderNamed": "Create folder \"{{name}}\"",
+    "createLabelNamed": "Create label \"{{name}}\"",
+    "alsoArchive": "Also archive",
+    "apply": "Apply",
+    "removeLabel": "Remove the label {{name}}",
+    "settingsTitle": "Folders and labels",
+    "settingsDescription": "Their names are encrypted in your browser: the server only knows them by number.",
+    "foldersHint": "Drag a folder onto another to put it inside, or above or below one to reorder. Folders go three deep.",
+    "labelsHint": "Drag labels to reorder them.",
+    "sort": "Sort A–Z",
+    "sortTitle": "Sort alphabetically?",
+    "sortFoldersDescription": "Your folders, and the folders inside each, are put in alphabetical order.",
+    "sortLabelsDescription": "Your labels are put in alphabetical order.",
+    "foldersSorted": "Folders sorted.",
+    "labelsSorted": "Labels sorted.",
+    "unreadable_one": "{{count}} name could not be opened with your account key.",
+    "unreadable_other": "{{count}} names could not be opened with your account key."
   }
 }

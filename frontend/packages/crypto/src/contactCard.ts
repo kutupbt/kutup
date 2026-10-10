@@ -39,3 +39,15 @@ export async function sealContactCard(masterKeyBase64: string, account: string, 
 export async function openContactCard(masterKeyBase64: string, account: string, uid: string, sealed: string): Promise<string> {
   return (await getCryptoWasm()).openContactCard(masterKeyBase64, account, uid, sealed)
 }
+
+/** What a sealed mail name names (docs/plans/mail-filters.md). */
+export type MailNameKind = 'folder' | 'label' | 'filter'
+
+/** Seals a mail folder, label or filter name, bound to the account, its kind and its id (a UUID). */
+export async function sealMailName(masterKeyBase64: string, account: string, kind: MailNameKind, id: string, name: string): Promise<string> {
+  return (await getCryptoWasm()).sealMailName(masterKeyBase64, account, kind, id, name)
+}
+
+export async function openMailName(masterKeyBase64: string, account: string, kind: MailNameKind, id: string, sealed: string): Promise<string> {
+  return (await getCryptoWasm()).openMailName(masterKeyBase64, account, kind, id, sealed)
+}
