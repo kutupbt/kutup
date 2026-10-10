@@ -1,7 +1,9 @@
 import { Archive, Check, Folder, FolderInput, Inbox, Minus, OctagonAlert, Plus, Search, Tag, Trash2 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import type { FolderId, MailMessage } from '@kutup/mail-core/api'
+import { useCreateFilter, useDeleteFilter, type FilterActions } from '@kutup/mail-core/filters'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -9,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@kutup/ui/comp
 import { Input } from '@kutup/ui/components/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@kutup/ui/components/popover'
 import { Tooltip } from '@kutup/ui/components/tooltip'
+import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { movesFor, useMailActions, type MoveTarget } from './mailActions'
 import { openPlacesDialog } from './placesState'
@@ -51,6 +54,32 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
   const actions = useMailActions()
   const [query, setQuery] = useState('')
   const [alsoArchive, setAlsoArchive] = useState(false)
+  // Proton's "Always move/label sender's emails": a filter for these senders.
+  const [always, setAlways] = useState(false)
+  const createFilter = useCreateFilter()
+  const deleteFilter = useDeleteFilter()
+  const senders = [...new Set(rows.filter((m) => m.direction === 'inbound' && m.from).map((m) => m.from!.address.toLowerCase()))]
+
+  function rememberSenders(actions: FilterActions, place: string) {
+    if (!always || senders.length === 0) return
+    const who = senders.length === 1 ? senders[0] : t('filters.sendersCount', { count: senders.length })
+    // The picker closes at once; mutateAsync still reports after it is gone.
+    createFilter
+      .mutateAsync({
+        name: t(mode === 'move' ? 'filters.senderMoveName' : 'filters.senderLabelName', { who, place }),
+        match: 'any',
+        conditions: senders.map((address) => ({ field: 'sender', op: 'is', negate: false, value: address })),
+        actions,
+        source: 'sender',
+      })
+      .then(
+        (id) =>
+          toast.success(t(mode === 'move' ? 'filters.senderMoved' : 'filters.senderLabelled', { who, place }), {
+            action: { label: t('moved.undo'), onClick: () => void deleteFilter.mutateAsync(id).catch(() => undefined) },
+          }),
+        (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+      )
+  }
   // A label's wanted state, once changed: true (all), false (none).
   const [changed, setChanged] = useState<Map<string, boolean>>(new Map())
   const q = query.trim().toLocaleLowerCase()
@@ -77,6 +106,9 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
     const add = [...changed].filter(([, on]) => on).map(([id]) => id)
     const remove = [...changed].filter(([, on]) => !on).map(([id]) => id)
     if (add.length || remove.length) actions.mark(rows, { addLabels: add, removeLabels: remove })
+    if (add.length) {
+      rememberSenders({ labels: add, ...(alsoArchive ? { folder: 'archive' } : {}) }, add.map((id) => places.data?.labelsById.get(id)?.name ?? '').join(', '))
+    }
     if (alsoArchive) actions.move(rows, 'archive')
     onDone(alsoArchive)
   }
@@ -114,6 +146,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
             {fixed.map((target) => (
               <Row key={target} onClick={() => {
                   actions.move(rows, target)
+                  rememberSenders({ folder: target }, t(`folders.${target}`))
                   onDone(true)
                 }}>
                 {MOVE_ICON[target]}
@@ -123,6 +156,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
             {shownFolders.map((f) => (
               <Row key={f.id} onClick={() => {
                   actions.move(rows, { folder: f.id, name: f.name })
+                  rememberSenders({ folder: `custom:${f.id}` }, f.name)
                   onDone(true)
                 }}>
                 <span style={{ width: `${(f.depth - 1) * 0.75}rem` }} />
@@ -155,6 +189,12 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
           <li className="px-2 py-1.5 text-xs text-muted-foreground">{t(mode === 'move' ? 'places.noFolders' : 'places.noLabels')}</li>
         ) : null}
       </ul>
+      {senders.length ? (
+        <label className="flex items-center gap-2 border-t border-border pt-2 text-sm">
+          <Checkbox checked={always} onCheckedChange={(on) => setAlways(on === true)} />
+          {t(mode === 'move' ? 'filters.alwaysMove' : 'filters.alwaysLabel')}
+        </label>
+      ) : null}
       {mode === 'label' ? (
         <div className="flex items-center gap-2 border-t border-border pt-2">
           <label className="flex flex-1 items-center gap-2 text-sm">

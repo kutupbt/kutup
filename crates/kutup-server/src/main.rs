@@ -621,6 +621,26 @@ fn build_router(state: AppState) -> Router {
                 .delete(handlers::mail_folders::delete_folder),
         )
         .route(
+            "/api/mail/filters",
+            get(handlers::mail_filters::list).post(handlers::mail_filters::create),
+        )
+        .route(
+            "/api/mail/filters/order",
+            put(handlers::mail_filters::order),
+        )
+        .route(
+            "/api/mail/filters/apply",
+            post(handlers::mail_filters::apply),
+        )
+        .route(
+            "/api/mail/filters/runs/:id",
+            get(handlers::mail_filters::run_status),
+        )
+        .route(
+            "/api/mail/filters/:id",
+            patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
+        )
+        .route(
             "/api/mail/labels",
             post(handlers::mail_folders::create_label),
         )

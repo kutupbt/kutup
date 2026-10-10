@@ -88,7 +88,8 @@ export function useMailActions() {
 
   function mark(messages: Pick<MailMessage, 'id'>[], change: Omit<MessageChange, 'ids' | 'folder' | 'customFolder'>, after?: () => void) {
     if (messages.length === 0) return
-    update.mutate({ ids: messages.map((m) => m.id), ...change }, { onSuccess: () => after?.(), onError: failed })
+    // mutateAsync: callers such as a picker may close before this settles.
+    update.mutateAsync({ ids: messages.map((m) => m.id), ...change }).then(() => after?.(), failed)
   }
 
   return { move, mark, pending: update.isPending }
