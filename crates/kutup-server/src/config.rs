@@ -143,7 +143,7 @@ pub struct AppOrigins {
     /// The Office home: a person's documents, spreadsheets and presentations,
     /// which are Drive files.
     pub office: String,
-    /// The keyless OnlyOffice sandbox; embedded by Office and Drive, holds no session.
+    /// The keyless OnlyOffice sandbox; embedded by Office, holds no session.
     pub editor: String,
     /// The Maps app (docs/plans/maps.md).
     pub maps: String,

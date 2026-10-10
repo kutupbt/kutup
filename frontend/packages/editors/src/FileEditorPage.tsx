@@ -369,9 +369,13 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   )
 }
 
-/** The editor files worth fetching ahead for `file`: an office document here (not on another server). */
+/**
+ * The editor files worth fetching ahead for `file`: an office document here
+ * (not on another server), on the Office site — elsewhere it is about to
+ * move there, and only Office may frame the sandbox.
+ */
 function officeWarmType(file: DriveFile | undefined, folder: Folder | undefined): 'docx' | 'xlsx' | 'pptx' | null {
-  if (!file?.name || !folder || fileLocation(folder).kind !== 'local') return null
+  if (!file?.name || !folder || fileLocation(folder).kind !== 'local' || currentApp() !== 'office') return null
   const ext = file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase()
   return ext === 'docx' || ext === 'xlsx' || ext === 'pptx' ? ext : null
 }

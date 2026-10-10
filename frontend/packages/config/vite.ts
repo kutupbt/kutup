@@ -130,15 +130,15 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
 /**
  * The OnlyOffice sandbox (editor.<domain>): static files only — the bridge
  * page, x2t and the OnlyOffice client — with no API, no session and no
- * cookies, embedded by Office (documents, PDFs) and Drive and nothing else.
+ * cookies, embedded by Office (where documents and PDFs open) and nothing else.
  *
  * The CSP here is the dev server's; in production the frontend container
- * sends the same policy with the configured origins (KUTUP_OFFICE_URL,
- * KUTUP_DRIVE_URL; frontend/docker/40-kutup-hosts.sh).
+ * sends the same policy with the configured Office origin (KUTUP_OFFICE_URL;
+ * frontend/docker/40-kutup-hosts.sh).
  * OnlyOffice needs eval and inline script, which is exactly why it gets an
  * origin that holds nothing worth stealing.
  */
-export function editorSandboxCsp(embedders: string[]): string {
+export function editorSandboxCsp(officeOrigin: string): string {
   return [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
@@ -151,7 +151,7 @@ export function editorSandboxCsp(embedders: string[]): string {
     "frame-src 'self' blob:",
     // 'self': OnlyOffice nests its own editor frame inside the bridge, and
     // frame-ancestors is checked against every ancestor, not just the top.
-    `frame-ancestors 'self' ${embedders.join(' ')}`,
+    `frame-ancestors 'self' ${officeOrigin}`,
     "base-uri 'none'",
     "form-action 'none'",
   ].join('; ')
@@ -159,9 +159,8 @@ export function editorSandboxCsp(embedders: string[]): string {
 
 export function kutupEditorSandbox(): UserConfig {
   const office = process.env.KUTUP_OFFICE_URL ?? `http://office.localhost:${DEV_PORTS.office}`
-  const drive = process.env.KUTUP_DRIVE_URL ?? `http://drive.localhost:${DEV_PORTS.drive}`
   const headers = {
-    'Content-Security-Policy': editorSandboxCsp([new URL(office).origin, new URL(drive).origin]),
+    'Content-Security-Policy': editorSandboxCsp(new URL(office).origin),
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
   }

@@ -32,7 +32,7 @@ Normal Docker builds consume the immutable package produced by the
 `frontend/packages/editors/src/office/`; only the third-party
 static assets land here. They are served from the office sandbox origin
 (`editor.<domain>`, `pnpm -C frontend dev:editor` in development), which
-holds no session or keys; Drive embeds `inner.html` from there.
+holds no session or keys; Office embeds `inner.html` from there.
 
 [kutupbt/onlyoffice-editor]: https://github.com/kutupbt/onlyoffice-editor
 [kutupbt/onlyoffice-x2t-wasm]: https://github.com/kutupbt/onlyoffice-x2t-wasm
