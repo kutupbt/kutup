@@ -50,6 +50,8 @@ export interface CryptoWasmModule {
   ): import('./contactCard').ContactSummary
   sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
   openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
+  sealMailName(masterKeyBase64: string, account: string, kind: string, id: string, name: string): string
+  openMailName(masterKeyBase64: string, account: string, kind: string, id: string, sealedBase64: string): string
   exportMailAddressKey(
     masterKeyBase64: string,
     loginEmail: string,

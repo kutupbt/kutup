@@ -84,8 +84,8 @@ export type {
   SealedMailKey,
   SignedMailKeyList,
 } from './mailKey'
-export { openContactCard, sealContactCard, signContactSummary, verifyContactSummary } from './contactCard'
-export type { ContactSummary } from './contactCard'
+export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
+export type { ContactSummary, MailNameKind } from './contactCard'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,

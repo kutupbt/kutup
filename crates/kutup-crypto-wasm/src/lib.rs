@@ -2407,6 +2407,57 @@ pub fn seal_contact_card(
     Ok(STANDARD.encode(sealed))
 }
 
+type MailNameParts = (
+    zeroize::Zeroizing<[u8; 32]>,
+    kutup_crypto::mail_names::MailNameKind,
+    [u8; 16],
+);
+
+fn mail_name_parts(
+    master_key_base64: &str,
+    kind: &str,
+    id: &str,
+) -> Result<MailNameParts, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::mail_names::derive_names_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let kind = kutup_crypto::mail_names::MailNameKind::parse(kind)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let id = Uuid::parse_str(id).map_err(|_| js_error("mail name id is not a UUID"))?;
+    Ok((key, kind, *id.as_bytes()))
+}
+
+/// Seals the name of a mail folder, label or filter (`kind`) with id `id`
+/// (a UUID) for `account` (docs/plans/mail-filters.md).
+#[wasm_bindgen(js_name = sealMailName)]
+pub fn seal_mail_name(
+    master_key_base64: &str,
+    account: &str,
+    kind: &str,
+    id: &str,
+    name: &str,
+) -> Result<String, JsValue> {
+    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let sealed = kutup_crypto::mail_names::seal_name(&key, account, kind, &id, name)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens a sealed mail folder, label or filter name.
+#[wasm_bindgen(js_name = openMailName)]
+pub fn open_mail_name(
+    master_key_base64: &str,
+    account: &str,
+    kind: &str,
+    id: &str,
+    sealed_base64: &str,
+) -> Result<String, JsValue> {
+    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let sealed = decode_canonical_base64(sealed_base64, "name")?;
+    kutup_crypto::mail_names::open_name(&key, account, kind, &id, &sealed)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// Opens a sealed contact card and returns its vCard text.
 #[wasm_bindgen(js_name = openContactCard)]
 pub fn open_contact_card(

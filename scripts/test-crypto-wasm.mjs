@@ -737,4 +737,12 @@ const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVec
 assert.equal(crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, resealedCard), contactVectors.vcard)
 assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.account, 'another-uid', resealedCard))
 
+// Sealed mail names (docs/plans/mail-filters.md).
+const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v1.json`, 'utf8'))
+assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, nameVectors.kind, nameVectors.id, nameVectors.sealed), nameVectors.name)
+const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, nameVectors.name)
+assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, resealedName), nameVectors.name)
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'folder', nameVectors.id, resealedName))
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
+
 console.log('crypto WASM canonical vectors passed')
