@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDriveIdentity } from './identity'
-import { acceptIdentity, checkIdentity, personSafetyNumber, verifyPerson, type ClaimedKeys } from './identityPins'
+import { acceptIdentity, checkIdentity, IdentityUnproven, personSafetyNumber, verifyPerson, type ClaimedKeys } from './identityPins'
 import type { Folder } from './model'
 
 const statusKey = ['identity-status'] as const
@@ -56,7 +56,9 @@ export function usePersonSafetyNumber(account: string | null, enabled = true) {
     queryKey: ['safety-number', account ?? ''],
     enabled: Boolean(enabled && account && identity.data),
     staleTime: Infinity,
-    retry: false,
+    // A passing failure (the lookup limit, the network) is tried again; an
+    // account without a binding is not.
+    retry: (failures, error) => !(error instanceof IdentityUnproven) && failures < 2,
     queryFn: () => personSafetyNumber(identity.data!, account!),
   })
 }

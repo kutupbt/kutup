@@ -309,7 +309,9 @@
     "verify": "Verify {{name}}",
     "verifyInPerson": "Verify in person",
     "cannotVerifyTitle": "Nothing to verify yet",
-    "cannotVerify": "{{account}} has not signed their Drive keys yet. They do at their next sign-in."
+    "cannotVerify": "{{account}} has not signed their Drive keys yet. They do at their next sign-in.",
+    "lookupFailedTitle": "Couldn't look them up",
+    "lookupFailed": "Their identity could not be fetched right now. Try again in a moment."
   },
   "safetyNumber": {
     "cameraUnavailable": "Camera access was unavailable. Paste the QR value instead.",

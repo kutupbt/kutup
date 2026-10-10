@@ -2,10 +2,12 @@ import { Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAcceptIdentity, useIdentityStatus, usePersonSafetyNumber, useVerifyPerson } from '@kutup/drive-core/identityStatus'
-import type { ClaimedKeys, IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import { IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { LoadingPanel } from '@kutup/ui/components/states'
 import { SafetyVerificationDialog } from '@kutup/ui/components/safety-verification'
 
 // What Drive says when it cannot vouch for who someone is
@@ -59,14 +61,33 @@ export function VerifyPersonDialog({
   const number = usePersonSafetyNumber(account, open)
   const verify = useVerifyPerson()
   if (!open) return null
-  if (number.isError) {
+  if (!number.data) {
+    // Still looking the person up, or the lookup failed: said inside a
+    // dialog, never silently.
+    const unproven = number.error instanceof IdentityUnproven
     return (
-      <Alert variant="error" title={t('identityCheck.cannotVerifyTitle')}>
-        {t('identityCheck.cannotVerify', { account })}
-      </Alert>
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md" data-testid="drive-safety-pending">
+          <DialogHeader>
+            <DialogTitle className="break-all">{t('safetyNumber.title', { peer: account })}</DialogTitle>
+            <DialogDescription>{t('safetyNumber.description')}</DialogDescription>
+          </DialogHeader>
+          {number.isError ? (
+            <Alert variant="error" title={unproven ? t('identityCheck.cannotVerifyTitle') : t('identityCheck.lookupFailedTitle')}>
+              <p>{unproven ? t('identityCheck.cannotVerify', { account }) : t('identityCheck.lookupFailed')}</p>
+              {unproven ? null : (
+                <Button className="mt-2" size="sm" variant="outline" onClick={() => void number.refetch()}>
+                  {t('common.retry')}
+                </Button>
+              )}
+            </Alert>
+          ) : (
+            <LoadingPanel label={t('common.loading')} />
+          )}
+        </DialogContent>
+      </Dialog>
     )
   }
-  if (!number.data) return null
   const kind = status.data?.kind
   return (
     <SafetyVerificationDialog
