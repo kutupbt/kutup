@@ -53,8 +53,8 @@ outside MTA --25--> Stalwart --hook (HTTP, bearer)--> kutup /internal/mail/rcpt 
                         '--LMTP :2424 (AUTH PLAIN)--> kutup receiver --> encrypt to address key --> S3 + Postgres
 ```
 
-- **Stalwart** runs unmodified under compose profile `mail`, image pinned,
-  data in a volume. Its plan, `infra/stalwart/plan.ndjson`, sets:
+- **Stalwart** runs unmodified from `docker-compose.mail.yml`, image pinned,
+  data in a volume. Its plan, `stalwart/plan.ndjson`, sets:
   - a `Domain` for the server name with `allowRelaying` (no Stalwart
     accounts: the hook alone decides who exists) and sub-addressing off
     (Kutup handles `name+tag@` itself);
@@ -64,14 +64,17 @@ outside MTA --25--> Stalwart --hook (HTTP, bearer)--> kutup /internal/mail/rcpt 
   - an `MtaHook` for the `rcpt` stage with a bearer token, failing
     temporarily (4xx) when Kutup does not answer;
   - listeners: SMTP on 25 and the management HTTP on 8080 (internal only);
-    IMAP, POP3, submission, Sieve and the web admin removed;
+    IMAP, POP3, submission, Sieve and HTTPS removed;
   - logging to stdout; message size limit 50 MB (Proton's is 25 MB for
     attachments);
   - the `mx` route IPv4 only (`ipLookupStrategy: v4Only`) and the HELO name
     `mail.<domain>`, for C2's sending.
-- A one-shot `stalwart-setup` service (the CLI image) applies the plan and
-  then the reload on every `up`. Stalwart's management port is never
-  published.
+- A `stalwart-setup` service applies the plan and then the reload on every
+  start (`stalwart/setup.sh`). Its image is Alpine with the CLI's static
+  binary, since the CLI image has no shell to fill the plan's domain and
+  host name in. It also gives Stalwart (uid 2000) a readable copy of the
+  ACME certificate, which certbot leaves root-only, and checks daily for a
+  renewed one. Stalwart's management port is never published.
 - **The hook** (`POST /internal/mail/rcpt`, not routed by nginx, bearer
   token compared in constant time) accepts a recipient when its address,
   after lower-casing and dropping a `+tag`, is a Kutup address on this
@@ -133,9 +136,18 @@ snippets from the client's decrypted cache, as Proton does).
 |---|---|
 | `MAIL_INBOUND_TOKEN` | the hook's bearer token and the LMTP password; mail is off without it |
 | `MAIL_LMTP_BIND` | the receiver's address, default `0.0.0.0:2424` when mail is on |
+| `MAIL_HOSTNAME` | Stalwart's name (`mail.<domain>`), matching the IPv4 PTR |
 | `STALWART_ADMIN_SECRET` | the setup service's administrator password |
+| `MAIL_SMTP_PORT` | where port 25 is published, default `25` (the gate uses a loopback port) |
 
 The backend publishes nothing new; Stalwart publishes port 25 only.
+
+## Reading (for C2)
+
+`GET /api/mail/messages?folder=` lists a folder's readable fields, newest
+first, and `GET /api/mail/messages/{id}/content` returns the stored OpenPGP
+message (`docs/api.md`, "Mail"). C2 adds moving, flags, deletion and
+sending.
 
 ## DNS (except MX)
 
@@ -149,11 +161,10 @@ MTA-STS and TLS-RPT. The MX switch waits for C3.
 1. **C1a crypto and data:** `encrypt_binary` with vectors; migration 085;
    the pool, reconcile and Storage page entries; account deletion.
 2. **C1b receiver:** the hook endpoint and the LMTP server with
-   encrypt-on-arrival, threads, spam and duplicates; unit tests for the
-   protocol and an integration test over real Postgres and S3.
-3. **C1c Stalwart:** compose profile, plan, setup service, `.env.example`,
-   self-hosting DNS; a gate script that sends mail through Stalwart and
-   checks it arrives encrypted (`scripts/test-mail-inbound.sh`).
+   encrypt-on-arrival, threads, spam and duplicates, and the two read
+   endpoints; unit tests for the protocol and the headers.
+3. **C1c Stalwart:** `docker-compose.mail.yml`, plan, setup service,
+   `.env.example`, self-hosting DNS; the gate below.
 
 ## Tests and gates
 
@@ -161,6 +172,11 @@ MTA-STS and TLS-RPT. The MX switch waits for C3.
 - Server: LMTP state machine (pipelining, dot-stuffing, per-recipient
   replies, AUTH required, size limit), header extraction (encoded words,
   Turkish, missing fields), hook decisions, duplicates, threads, spam.
-- `scripts/test-mail-inbound.sh`: the `mail` profile, mail to a real
-  account through port 25, decrypted with the account's key; an unknown
-  address refused; a full pool deferred.
+- `scripts/test-mail-inbound.sh` (`tests/mail_inbound_live.rs`): a real
+  Stalwart and backend; mail to an account through port 25 with a `+tag`
+  and capitals, an unknown address refused at RCPT, a duplicate not stored
+  twice, a reply joining its thread, the stored message decrypting with the
+  account's key to the bytes sent, another account refused, the pool
+  charged; then, as administrator, a full pool deferring (452), a disabled
+  account refusing (550) and a deleted account leaving no mail rows or
+  objects.

@@ -378,6 +378,7 @@ pub async fn delete_user(
     super::chat_backup::purge_for_account(&state, target).await?;
     purge_chat_media(&state, target).await?;
     purge_owned_drive(&state, target).await?;
+    purge_mail(&state, target).await?;
     hand_over_contributions(&state.pool, target).await?;
 
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
@@ -401,6 +402,15 @@ pub async fn delete_user(
         }
         _ => Err(AppError::not_found("not found")),
     }
+}
+
+/// Removes a user's stored mail; the rows go with the account.
+async fn purge_mail(state: &AppState, target: Uuid) -> AppResult<()> {
+    state
+        .storage
+        .delete_prefix(&crate::mail::object_prefix(target))
+        .await
+        .map_err(|_| AppError::internal("failed to delete stored mail"))
 }
 
 /// Removes a user's Chat media: aborts their open uploads, drops their

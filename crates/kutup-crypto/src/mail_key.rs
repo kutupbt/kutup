@@ -17,7 +17,8 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use pgp::{
     composed::{
         ArmorOptions, Deserializable, EncryptionCaps, KeyType, Message, MessageBuilder,
-        SecretKeyParamsBuilder, SignedPublicKey, SignedSecretKey, SubkeyParamsBuilder,
+        SecretKeyParamsBuilder, SignedPublicKey, SignedPublicSubKey, SignedSecretKey,
+        SubkeyParamsBuilder,
     },
     crypto::{
         aead::AeadAlgorithm, ecc_curve::ECCCurve, hash::HashAlgorithm,
@@ -331,13 +332,8 @@ pub fn encrypt(
     signer_secret_key: Option<&[u8]>,
     plaintext: &[u8],
 ) -> Result<String> {
-    let recipient = SignedPublicKey::from_bytes(recipient_public_key)
-        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))?;
-    let subkey = recipient
-        .public_subkeys
-        .iter()
-        .find(|subkey| subkey.algorithm().can_encrypt())
-        .ok_or_else(|| CryptoError::InvalidInput("recipient key cannot encrypt".into()))?;
+    let recipient = parse_recipient(recipient_public_key)?;
+    let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     builder
@@ -360,6 +356,34 @@ pub fn encrypt(
     builder
         .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
         .map_err(backend)
+}
+
+/// Encrypts `plaintext` to `recipient_public_key` as a binary, unsigned
+/// OpenPGP message (SEIPDv1, AES-256): how mail from outside is stored when
+/// it arrives, encrypted before it is written anywhere. Unsigned because the
+/// server holds no key worth vouching with; binary to spare armor's third.
+pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let recipient = parse_recipient(recipient_public_key)?;
+    let subkey = encryption_subkey(&recipient)?;
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+    builder
+        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .map_err(backend)?;
+    builder.to_vec(rand::rngs::OsRng).map_err(backend)
+}
+
+fn parse_recipient(public_key: &[u8]) -> Result<SignedPublicKey> {
+    SignedPublicKey::from_bytes(public_key)
+        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))
+}
+
+fn encryption_subkey(recipient: &SignedPublicKey) -> Result<&SignedPublicSubKey> {
+    recipient
+        .public_subkeys
+        .iter()
+        .find(|subkey| subkey.algorithm().can_encrypt())
+        .ok_or_else(|| CryptoError::InvalidInput("recipient key cannot encrypt".into()))
 }
 
 /// A decrypted message.

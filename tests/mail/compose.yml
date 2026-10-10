@@ -1,0 +1,11 @@
+# The mail gate (scripts/test-mail-inbound.sh): the backend's API and
+# Stalwart's port 25 on loopback ports, and the setup run once, in the
+# foreground, without the certificate watch.
+services:
+  backend:
+    ports:
+      - "127.0.0.1:${KUTUP_MAIL_TEST_PORT:-39086}:3000"
+  stalwart-setup:
+    restart: "no"
+    environment:
+      STALWART_WATCH_CERTIFICATES: "0"

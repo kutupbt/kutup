@@ -49,6 +49,11 @@ pub struct Config {
     /// Stable canonical DNS suffix used by every local Chat account. This is
     /// required even when inter-server federation is disabled.
     pub chat_server_name: String,
+    /// Mail from outside (docs/plans/mail.md): Stalwart's bearer token for
+    /// the RCPT hook and its LMTP password. Empty keeps mail off.
+    pub mail_inbound_token: String,
+    /// Where the LMTP receiver listens (internal network only).
+    pub mail_lmtp_bind: String,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -280,6 +285,8 @@ impl Config {
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
             chat_server_name,
+            mail_inbound_token: get_env("MAIL_INBOUND_TOKEN", ""),
+            mail_lmtp_bind: get_env("MAIL_LMTP_BIND", "0.0.0.0:2424"),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
@@ -312,6 +319,9 @@ impl Config {
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
+        }
+        if !cfg.mail_inbound_token.is_empty() && cfg.mail_inbound_token.len() < 32 {
+            panic!("MAIL_INBOUND_TOKEN must be at least 32 characters long");
         }
         cfg
     }

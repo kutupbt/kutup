@@ -29,6 +29,7 @@ mod hub;
 mod jobs;
 mod jwt;
 mod live_locations;
+mod mail;
 mod maps;
 mod middleware;
 mod models;
@@ -374,6 +375,7 @@ async fn main() -> anyhow::Result<()> {
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
+    mail::spawn_receiver(state.clone()).await?;
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -528,6 +530,9 @@ fn build_router(state: AppState) -> Router {
             "/.well-known/openpgpkey/policy",
             get(handlers::mail_keys::wkd_policy),
         )
+        // Stalwart's RCPT hook (docs/plans/mail.md); nginx does not route
+        // /internal, and the hook authenticates with a bearer token.
+        .route("/internal/mail/rcpt", post(crate::mail::rcpt_hook))
         .route(
             "/api/federation/policies/:feature",
             get(crate::federation::get_local_feature_policy),
@@ -585,6 +590,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/addresses",
             get(handlers::mail_keys::list_addresses),
+        )
+        .route("/api/mail/messages", get(handlers::mail::list_messages))
+        .route(
+            "/api/mail/messages/:id/content",
+            get(handlers::mail::message_content),
         )
         .route(
             "/api/contacts",

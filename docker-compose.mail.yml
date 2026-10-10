@@ -1,0 +1,66 @@
+# Mail from outside (docs/plans/mail.md): Stalwart, unmodified, receives on
+# port 25, asks the backend whether each recipient exists, and hands accepted
+# mail to the backend's LMTP receiver, which encrypts it to the address key
+# before storing it. Add it to the other compose files:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mail.yml up -d --wait
+#
+# Needs in .env: MAIL_INBOUND_TOKEN and STALWART_ADMIN_SECRET (each at least
+# 32 random characters), MAIL_HOSTNAME (mail.<domain>, the name the address's
+# PTR record gives) and CHAT_SERVER_NAME (the domain after the @). With
+# docker-compose.acme.yml, add MAIL_HOSTNAME to KUTUP_ACME_EXTRA_DOMAINS so
+# port 25 offers a trusted certificate. docs/self-hosting.md, "Mail".
+
+services:
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16.23
+    restart: unless-stopped
+    environment:
+      # The administrator stalwart-setup applies the plan as. Stalwart's
+      # management port (8080) is never published.
+      STALWART_RECOVERY_ADMIN: kutup-setup:${STALWART_ADMIN_SECRET:?set STALWART_ADMIN_SECRET}
+      STALWART_HOSTNAME: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME to mail.<domain>}
+      # Read by the plan: the RCPT hook's bearer token and the LMTP password.
+      MAIL_INBOUND_TOKEN: ${MAIL_INBOUND_TOKEN:?set MAIL_INBOUND_TOKEN}
+    ports:
+      - "${MAIL_SMTP_PORT:-25}:25"
+    volumes:
+      - ./stalwart/config.json:/etc/stalwart/config.json:ro
+      - stalwart_data:/var/lib/stalwart
+      - stalwart_certs:/stalwart-certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      backend:
+        condition: service_started
+
+  # Applies stalwart/plan.ndjson, then keeps Stalwart's copy of the TLS
+  # certificate current (stalwart/setup.sh).
+  stalwart-setup:
+    build: ./stalwart
+    image: kutup-stalwart-setup:local
+    restart: unless-stopped
+    environment:
+      STALWART_URL: http://stalwart:8080
+      STALWART_USER: kutup-setup
+      STALWART_PASSWORD: ${STALWART_ADMIN_SECRET:?set STALWART_ADMIN_SECRET}
+      MAIL_DOMAIN: ${CHAT_SERVER_NAME:-kutup.local}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME to mail.<domain>}
+      STALWART_WATCH_CERTIFICATES: "1"
+    volumes:
+      - ./nginx/certs:/certs:ro
+      - stalwart_certs:/stalwart-certs
+    depends_on:
+      stalwart:
+        condition: service_healthy
+
+  backend:
+    environment:
+      MAIL_INBOUND_TOKEN: ${MAIL_INBOUND_TOKEN:?set MAIL_INBOUND_TOKEN}
+
+volumes:
+  stalwart_data:
+  stalwart_certs:

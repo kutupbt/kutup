@@ -650,6 +650,7 @@ The complete recovery set spans these locations in the checked-in topology:
 | SeaweedFS master metadata | `./data/seaweedfs-master` |
 | SeaweedFS file chunks | `./data/seaweedfs-volume` |
 | SeaweedFS filer/S3 namespace metadata | `/filerldb2` inside the `seaweedfs-filer` container unless you configure a durable filer store |
+| Stalwart queue and DKIM keys (with Mail) | `stalwart_data` (Docker named volume) |
 
 PostgreSQL contains the object references and encrypted key envelopes while
 SeaweedFS contains the corresponding ciphertext. Back them up as one recovery
@@ -874,6 +875,46 @@ a "Photos" folder in My files), so they share the Drive storage quota and
 need nothing more on the server. Dates, places and the rest are read on the
 device and sealed inside each file's encrypted metadata; the Places map
 uses the map settings above.
+
+---
+
+## Mail
+
+Kutup receives mail for `<username>@CHAT_SERVER_NAME` through
+[Stalwart](https://stalw.art), which runs unmodified beside it
+(`docker-compose.mail.yml`, `docs/plans/mail.md`). Stalwart answers on port
+25, asks Kutup whether each recipient exists and has room, and hands accepted
+mail to Kutup, which encrypts it to the address key before storing it. Mail
+counts against the account's storage. An account can receive mail once it
+has signed in to the Account app once, which creates its address key.
+
+1. In `.env`, set `MAIL_HOSTNAME` (e.g. `mail.example.org`),
+   `MAIL_INBOUND_TOKEN` and `STALWART_ADMIN_SECRET` (each
+   `openssl rand -hex 32`). With `docker-compose.acme.yml`, add
+   `MAIL_HOSTNAME` to `KUTUP_ACME_EXTRA_DOMAINS` so port 25 offers a trusted
+   certificate.
+2. Open TCP port 25 inbound. Many hosting providers block outbound port 25
+   until asked; sending (Mail, C2) needs it.
+3. Start with the mail file added:
+   `docker compose -f docker-compose.yml -f docker-compose.acme.yml -f docker-compose.mail.yml up -d --wait`.
+   The `stalwart-setup` service applies Kutup's settings to Stalwart
+   (`stalwart/plan.ndjson`) on every start and reloads its certificate daily.
+   Stalwart's own management port is never published.
+4. DNS, for the domain after the `@` (`example.org`) unless noted:
+
+   | Record | Value |
+   |---|---|
+   | `mail.example.org` A | the server's IPv4 address; its PTR (set at the hosting provider) must be `mail.example.org` |
+   | SPF: TXT on `example.org` | `v=spf1 ip4:<the IPv4 address> -all` |
+   | DKIM: TXT records | the ones Stalwart generated: `docker compose exec stalwart-setup stalwart-cli get Domain <id>` shows its `dnsZoneFile` (find the id with `stalwart-cli query Domain`) |
+   | DMARC: TXT on `_dmarc.example.org` | `v=DMARC1; p=none; rua=mailto:postmaster@example.org`, tightened to `quarantine` and `reject` once reports look clean |
+   | MX on `example.org` | `10 mail.example.org`, **last**, once everything above is in place |
+
+   Stalwart sends over IPv4 only, so no IPv6 PTR is needed.
+
+Stalwart keeps its queue (mail not yet handed over) and its DKIM keys in the
+`stalwart_data` volume. Back it up with the rest; losing it means
+publishing new DKIM records.
 
 ---
 

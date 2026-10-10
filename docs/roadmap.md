@@ -455,9 +455,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
   import and export, storage-pool accounting; suggestions in Drive, Photos
   and Chat pickers with "Add to contacts". Mail and Calendar use it when
   they arrive.
-- **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,
-  encrypt on arrival, DNS), C2 the app, C3 PGP to outside users and the MX
-  switch from Cloudflare.
+- **C. Mail** ([`plans/mail.md`](plans/mail.md)): C1 infrastructure,
+  done: Stalwart 0.16 beside Kutup (`docker-compose.mail.yml`, its settings
+  applied by `stalwart-setup`), the RCPT hook, the LMTP receiver, encryption
+  on arrival, storage in the one pool, the self-hosting DNS guide and the
+  `scripts/test-mail-inbound.sh` gate. Next: C2 the app (and sending), C3 PGP
+  to outside users and the MX switch from Cloudflare.
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.

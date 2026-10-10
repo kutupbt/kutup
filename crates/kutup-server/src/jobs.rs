@@ -519,7 +519,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
         "SELECT u.id FROM users u, LATERAL ({}) e
-         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes",
+         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes + e.mail_bytes",
         reconcile_sums("u.id")
     ))
     .fetch_all(pool)
@@ -533,17 +533,21 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     };
     let mut corrected = 0;
     for uid in drifted {
-        let fixed: anyhow::Result<Option<(i64, i64, i64, i64)>> = async {
+        let fixed: anyhow::Result<Option<Reconciled>> = async {
             let mut tx = pool.begin().await?;
             sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
                 .bind(uid)
                 .execute(&mut *tx)
                 .await?;
-            let (drive, chat, contacts): (i64, i64, i64) = sqlx::query_as(&reconcile_sums("$1"))
-                .bind(uid)
-                .fetch_one(&mut *tx)
-                .await?;
-            let total = drive.saturating_add(chat).saturating_add(contacts);
+            let (drive, chat, contacts, mail): (i64, i64, i64, i64) =
+                sqlx::query_as(&reconcile_sums("$1"))
+                    .bind(uid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let total = drive
+                .saturating_add(chat)
+                .saturating_add(contacts)
+                .saturating_add(mail);
             let row: Option<i64> = sqlx::query_scalar(
                 "UPDATE users SET storage_used_bytes = $2
                  WHERE id = $1 AND storage_used_bytes <> $2
@@ -554,14 +558,14 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
             .fetch_optional(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok(row.map(|used| (used, drive, chat, contacts)))
+            Ok(row.map(|used| (used, drive, chat, contacts, mail)))
         }
         .await;
         match fixed {
-            Ok(Some((used, drive, chat, contacts))) => {
+            Ok(Some((used, drive, chat, contacts, mail))) => {
                 corrected += 1;
                 tracing::info!(
-                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}, contacts {contacts}; drift corrected)"
+                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}, contacts {contacts}, mail {mail}; drift corrected)"
                 );
             }
             Ok(None) => {}
@@ -577,8 +581,9 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 /// What the user `user` (an SQL expression) is charged for, summed from the
 /// rows, as `drive_bytes` (files less pruned originals, assets, thumbnails,
 /// versions), `chat_bytes` (media references and the history backup) and
-/// `contacts_bytes` (summaries and sealed cards, `contacts_charge`); their
-/// sum is the account's storage counter.
+/// `contacts_bytes` (summaries and sealed cards, `contacts_charge`) and
+/// `mail_bytes` (stored messages); their sum is the account's storage
+/// counter.
 fn reconcile_sums(user: &str) -> String {
     format!(
         r#"SELECT
@@ -590,9 +595,14 @@ fn reconcile_sums(user: &str) -> String {
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
-    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes"#
+    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
+    COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user}), 0)::bigint AS mail_bytes"#
     )
 }
+
+/// A corrected account: its new counter, then the Drive, Chat, Contacts and
+/// Mail bytes it adds up from.
+type Reconciled = (i64, i64, i64, i64, i64);
 
 /// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
 /// multipart, then drops the row (freeing soft-reserved quota) — mirrors
@@ -690,6 +700,9 @@ pub async fn uploads_sweep_once(
     }
     if let Err(error) = sweep_chat_backup_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat backup orphan sweep failed");
+    }
+    if let Err(error) = sweep_mail_orphans(pool, storage).await {
+        tracing::warn!(error = %error, "mail orphan sweep failed");
     }
     let media_delivery_retention_days = crate::site_settings::chat_delivery_retention_days(
         pool,
@@ -824,6 +837,47 @@ pub async fn sweep_chat_delivery_media_before(
         references = expired.len(),
         "expired Chat-media delivery references"
     );
+    Ok(())
+}
+
+/// Remove stored mail whose row never committed (the receiver stores the
+/// object first and removes it when the insert fails; a crash in between
+/// leaves it). Keys are absent from logs.
+async fn sweep_mail_orphans(pool: &PgPool, storage: &StorageService) -> anyhow::Result<()> {
+    let cutoff = OffsetDateTime::now_utc() - Duration::from_secs(UPLOADS_STALE_AFTER_SECS as u64);
+    let mut token = None;
+    let mut removed = 0_u64;
+    loop {
+        let (objects, next) = storage.list_objects_page("mail/", token.take()).await?;
+        let candidates: Vec<String> = objects
+            .into_iter()
+            .filter(|object| object.last_modified <= cutoff)
+            .map(|object| object.key)
+            .collect();
+        if !candidates.is_empty() {
+            let alive: std::collections::HashSet<String> = sqlx::query_scalar(
+                "SELECT object_key FROM mail_messages WHERE object_key = ANY($1)",
+            )
+            .bind(&candidates)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
+            let orphaned: Vec<String> = candidates
+                .into_iter()
+                .filter(|key| !alive.contains(key))
+                .collect();
+            storage.delete_objects_batch(&orphaned).await?;
+            removed = removed.saturating_add(orphaned.len() as u64);
+        }
+        match next {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, "removed orphaned mail objects");
+    }
     Ok(())
 }
 

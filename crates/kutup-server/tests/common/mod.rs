@@ -29,6 +29,7 @@ pub fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
 
 pub struct User {
     pub id: String,
+    pub email: String,
     pub username: String,
     pub token: String,
     pub identity: AccountIdentityKeysV1,
@@ -102,6 +103,7 @@ pub fn register(c: &Client, base: &str) -> User {
         .to_string();
     User {
         id,
+        email,
         username,
         token,
         identity,
@@ -327,4 +329,95 @@ pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> Strin
         .unwrap(),
     )
     .unwrap()
+}
+
+/// Signs in as the bootstrap admin (`ADMIN_ACCOUNT`), completing its
+/// first-login setup on a fresh server.
+pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username: &str) -> String {
+    let preflight: Value = c
+        .get(format!("{base}/api/auth/login/preflight?email={email}"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    if preflight["accountProtectionSuite"] == 0 {
+        let bootstrap: Value = c
+            .post(format!("{base}/api/auth/login"))
+            .header("x-kutup-client", "cli")
+            .json(&json!({ "email": email, "loginKey": b64(password.as_bytes()) }))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let setup_token = bootstrap["setupToken"]
+            .as_str()
+            .unwrap_or_else(|| panic!("admin first login: {bootstrap}"));
+        let mut rng = rand::thread_rng();
+        let mut master_key = [0u8; 32];
+        let mut recovery_entropy = [0u8; 32];
+        let mut salt = [0u8; 16];
+        rng.fill_bytes(&mut master_key);
+        rng.fill_bytes(&mut recovery_entropy);
+        rng.fill_bytes(&mut salt);
+        let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
+        let keys =
+            kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+        let recovery_proof =
+            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
+        let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
+        use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+        let seal = |plain: &[u8], key: &[u8], purpose| {
+            account_envelope::seal_b64(plain, key, purpose, email).unwrap()
+        };
+        let completed = c
+            .post(format!("{base}/api/auth/complete-setup"))
+            .header("x-kutup-client", "cli")
+            .bearer_auth(setup_token)
+            .json(&json!({
+                "email": email, "username": username,
+                "loginKey": b64(keys.login_key.as_slice()),
+                "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
+                "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
+                "drivePrivateKeyEnvelope": seal(identity.drive_hpke_private_key(), &master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
+                "publicKey": b64(&identity.drive_hpke_public_key()),
+                "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
+                "accountAuthorityKeyId": identity.authority_key_id(),
+                "accountIncarnationId": identity.incarnation_id(),
+                "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
+                "accountProtectionSuite": 1,
+                "accountProtectionSalt": b64(&salt),
+                "argonMemoryKib": parameters.memory_kib,
+                "argonIterations": parameters.iterations,
+                "argonParallelism": parameters.parallelism,
+                "recoveryProof": b64(recovery_proof.as_slice()),
+            }))
+            .send()
+            .unwrap();
+        let status = completed.status();
+        let body: Value = completed.json().unwrap();
+        assert_eq!(status, StatusCode::OK, "admin setup: {body}");
+        return body["accessToken"].as_str().unwrap().to_string();
+    }
+    let parameters = kutup_crypto::kdf::AccountProtectionParameters {
+        memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
+        iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
+        parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
+    };
+    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
+        password,
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+        parameters,
+    )
+    .unwrap();
+    let response = c
+        .post(format!("{base}/api/auth/login"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "admin login");
+    response.json::<Value>().unwrap()["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }

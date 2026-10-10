@@ -5,7 +5,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use kutup_crypto::mail_key::{armor_public_key, decrypt, encrypt, generate_address_key};
+use kutup_crypto::mail_key::{
+    armor_public_key, decrypt, encrypt, encrypt_binary, generate_address_key,
+};
 
 fn gpg(home: &PathBuf, args: &[&str], input: &[u8]) -> (bool, Vec<u8>, String) {
     let mut child = Command::new("gpg")
@@ -73,6 +75,13 @@ fn gnupg_reads_kutup_keys_and_kutup_reads_gnupg() {
         err.contains("Good signature from \"alice <alice@kutup.dev>\""),
         "verify: {err}"
     );
+
+    // Mail stored on arrival (binary, unsigned) opens in GnuPG too, so an
+    // exported mailbox stays readable with standard tools.
+    let stored = encrypt_binary(&bob.public_key, b"stored on arrival").unwrap();
+    let (ok, plaintext, err) = gpg(&home, &["--decrypt"], &stored);
+    assert!(ok, "decrypt stored: {err}");
+    assert_eq!(plaintext, b"stored on arrival");
 
     let _ = std::fs::remove_dir_all(&home);
 }

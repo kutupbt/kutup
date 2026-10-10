@@ -1,0 +1,9 @@
+{"@type":"reconcile","object":"Tracer","matchOn":"*","value":{"stdout":{"@type":"Stdout","enable":true,"level":"info","ansi":false,"multiline":false,"buffered":false,"lossy":false}}}
+{"@type":"reconcile","object":"NetworkListener","matchOn":["name"],"value":{"smtp":{"name":"smtp","protocol":"smtp","bind":{"[::]:25":true},"useTls":true,"tlsImplicit":false},"http":{"name":"http","protocol":"http","bind":{"[::]:8080":true},"useTls":false,"tlsImplicit":false}}}
+{"@type":"upsert","object":"Domain","matchOn":["name"],"value":{"domain":{"name":"@MAIL_DOMAIN@","allowRelaying":true,"subAddressing":{"@type":"Disabled"},"reportAddressUri":null}}}
+{"@type":"upsert","object":"MtaRoute","matchOn":["name"],"value":{"kutup":{"@type":"Relay","name":"kutup","description":"Kutup's LMTP receiver","address":"backend","port":2424,"protocol":"lmtp","implicitTls":false,"allowInvalidCerts":false,"authUsername":"kutup","authSecret":{"@type":"EnvironmentVariable","variableName":"MAIL_INBOUND_TOKEN"}}}}
+{"@type":"upsert","object":"MtaRoute","matchOn":["name"],"value":{"mx":{"@type":"Mx","name":"mx","description":"MX delivery route, IPv4 only","ipLookupStrategy":"v4Only","maxMxHosts":2,"maxMultihomed":2}}}
+{"@type":"update","object":"MtaOutboundStrategy","value":{"route":{"else":"'mx'","match":{"0":{"if":"is_local_domain(rcpt_domain)","then":"'kutup'"}}}}}
+{"@type":"upsert","object":"MtaConnectionStrategy","matchOn":["name"],"value":{"default":{"name":"default","description":"Default connection strategy","ehloHostname":"@MAIL_HOSTNAME@"}}}
+{"@type":"reconcile","object":"MtaHook","matchOn":["url"],"value":{"kutup":{"url":"http://backend:3000/internal/mail/rcpt","stages":{"rcpt":true},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"EnvironmentVariable","variableName":"MAIL_INBOUND_TOKEN"}},"timeout":10000,"tempFailOnError":true,"allowInvalidCerts":false}}}
+{"@type":"update","object":"MtaStageData","value":{"maxMessageSize":{"else":"52428800","match":{}}}}

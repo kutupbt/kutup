@@ -1,0 +1,1 @@
+{"@type":"create","object":"Certificate","value":{"acme":{"certificate":{"@type":"File","filePath":"/stalwart-certs/fullchain.pem"},"privateKey":{"@type":"File","filePath":"/stalwart-certs/privkey.pem"}}}}

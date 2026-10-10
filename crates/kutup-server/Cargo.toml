@@ -14,6 +14,8 @@ path = "src/main.rs"
 kutup-chat-proto = { path = "../kutup-chat-proto", features = ["openapi"] }
 kutup-federation-proto = { path = "../kutup-federation-proto", features = ["openapi"] }
 kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
+# Readable headers of incoming mail (Stalwart's own parser), docs/plans/mail.md.
+mail-parser = { version = "=0.11.9", default-features = false }
 axum.workspace = true
 tokio.workspace = true
 sqlx.workspace = true

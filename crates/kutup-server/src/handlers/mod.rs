@@ -17,6 +17,7 @@ pub mod file_thumbnails;
 pub mod file_versions;
 pub mod files;
 pub mod folder_access;
+pub mod mail;
 pub mod mail_keys;
 pub mod name_hashes;
 pub mod sessions;
