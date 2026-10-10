@@ -71,6 +71,10 @@ pub struct Config {
     /// send to in them (most abuse comes from new accounts).
     pub mail_new_account_days: i64,
     pub mail_new_account_per_day: i64,
+    /// Folders and labels an account may make (`MAIL_FOLDERS_PER_ACCOUNT`,
+    /// `MAIL_LABELS_PER_ACCOUNT`), the levers a priced plan would use.
+    pub mail_folders_per_account: i64,
+    pub mail_labels_per_account: i64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -316,6 +320,8 @@ impl Config {
             mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
+            mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
+            mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),

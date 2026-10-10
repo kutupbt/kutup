@@ -1334,3 +1334,202 @@ fn address_keys_rotate_and_change_flags() {
     let (_, list3) = current_list(&c, &base, &user);
     assert_eq!(list3.list.sequence, 3);
 }
+
+/// A name sealed the way Mail seals it in the browser.
+fn sealed_name(
+    user: &User,
+    account: &str,
+    kind: kutup_crypto::mail_names::MailNameKind,
+    id: &str,
+    name: &str,
+) -> String {
+    let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
+    let id = *uuid::Uuid::parse_str(id).unwrap().as_bytes();
+    b64(&kutup_crypto::mail_names::seal_name(&key, account, kind, &id, name).unwrap())
+}
+
+#[test]
+fn folders_and_labels() {
+    use kutup_crypto::mail_names::MailNameKind::{Folder, Label};
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let account = address.address.clone();
+    // A message to yourself: one copy in the Inbox, one in Sent.
+    let r = send_plain(
+        &c,
+        &base,
+        &user,
+        &address,
+        std::slice::from_ref(&account),
+        "filed",
+    );
+    assert!(r.status().is_success(), "send: {}", r.status());
+    let inbox = folder(&c, &base, &user.token, "inbox");
+    let message = inbox[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(inbox[0]["customFolder"], Value::Null);
+    assert_eq!(inbox[0]["labels"], json!([]));
+
+    // Three folders, each inside the one before; a fourth level is refused.
+    let new_folder = |parent: Option<&str>, name: &str| {
+        let id = uuid::Uuid::new_v4().to_string();
+        let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+            .json(&json!({ "id": id, "parentId": parent, "name": sealed_name(&user, &account, Folder, &id, name), "color": "#3366cc" }))
+            .send()
+            .unwrap();
+        (id, r.status().as_u16())
+    };
+    let (work, status) = new_folder(None, "İş");
+    assert_eq!(status, 201);
+    let (clients, status) = new_folder(Some(&work), "Müşteriler");
+    assert_eq!(status, 201);
+    let (acme, status) = new_folder(Some(&clients), "Acme");
+    assert_eq!(status, 201);
+    assert_eq!(new_folder(Some(&acme), "Too deep").1, 400);
+    // A name that is not sealed is refused.
+    let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+        .json(&json!({ "id": uuid::Uuid::new_v4().to_string(), "name": b64(b"Plain name"), "color": "#3366cc" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    // No cycles: Work cannot go inside Acme.
+    let r = bearer(
+        c.patch(format!("{base}/api/mail/folders/{work}")),
+        &user.token,
+    )
+    .json(&json!({ "parentId": acme }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    // Clients moves to the top; it brings Acme along.
+    let r = bearer(
+        c.patch(format!("{base}/api/mail/folders/{clients}")),
+        &user.token,
+    )
+    .json(&json!({ "parentId": null, "color": "#cc3366" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let places: Value = bearer(c.get(format!("{base}/api/mail/places")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let find = |id: &str| {
+        places["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find(&clients)["parentId"], Value::Null);
+    assert_eq!(find(&clients)["color"], "#cc3366");
+    assert_eq!(find(&acme)["parentId"], clients.as_str());
+    // The name comes back sealed, and opens only as this folder's.
+    let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
+    let sealed = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        find(&acme)["name"].as_str().unwrap(),
+    )
+    .unwrap();
+    let acme_bytes = *uuid::Uuid::parse_str(&acme).unwrap().as_bytes();
+    assert_eq!(
+        kutup_crypto::mail_names::open_name(&key, &account, Folder, &acme_bytes, &sealed).unwrap(),
+        "Acme"
+    );
+
+    // The message goes into Acme; it is listed and counted there.
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [message], "folder": "custom", "customFolder": acme }))
+        .send()
+        .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    assert!(folder(&c, &base, &user.token, "inbox")
+        .iter()
+        .all(|m| m["id"] != message.as_str()));
+    let in_acme = folder(&c, &base, &user.token, &format!("folder:{acme}"));
+    assert_eq!(in_acme.len(), 1);
+    assert_eq!(in_acme[0]["folder"], "custom");
+    assert_eq!(in_acme[0]["customFolder"], acme.as_str());
+    let counts: Value = bearer(c.get(format!("{base}/api/mail/counts")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let count = |key: String| {
+        counts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["folder"] == key.as_str())
+            .map(|row| row["total"].as_i64().unwrap())
+    };
+    assert_eq!(count(format!("folder:{acme}")), Some(1));
+    // Someone else's folder id, or a folder that is not there, is refused.
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [message], "folder": "custom", "customFolder": uuid::Uuid::new_v4().to_string() }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+
+    // A label on the message: listed and counted, kept through a move.
+    let label = uuid::Uuid::new_v4().to_string();
+    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+        .json(&json!({ "id": label, "name": sealed_name(&user, &account, Label, &label, "Faturalar"), "color": "#22aa55" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201);
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [message], "addLabels": [label] }))
+        .send()
+        .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    let labelled = folder(&c, &base, &user.token, &format!("label:{label}"));
+    assert_eq!(labelled.len(), 1);
+    assert_eq!(labelled[0]["labels"], json!([label]));
+
+    // Deleting Clients (and Acme in it) moves the message to Archive, label kept.
+    let r = bearer(
+        c.delete(format!("{base}/api/mail/folders/{clients}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    let deleted: Value = r.json().unwrap();
+    assert_eq!(deleted, json!({ "folders": 2, "moved": 1 }));
+    let archived = folder(&c, &base, &user.token, "archive");
+    let moved = archived
+        .iter()
+        .find(|m| m["id"] == message.as_str())
+        .expect("in Archive");
+    assert_eq!(moved["labels"], json!([label]));
+    // Deleting the label leaves the message where it is.
+    let r = bearer(
+        c.delete(format!("{base}/api/mail/labels/{label}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let archived = folder(&c, &base, &user.token, "archive");
+    assert_eq!(
+        archived
+            .iter()
+            .find(|m| m["id"] == message.as_str())
+            .unwrap()["labels"],
+        json!([])
+    );
+    let places: Value = bearer(c.get(format!("{base}/api/mail/places")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(places["folders"].as_array().unwrap().len(), 1);
+    assert_eq!(places["labels"], json!([]));
+}
