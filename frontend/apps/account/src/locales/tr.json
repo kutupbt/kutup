@@ -29,7 +29,8 @@
     "adminMaps": "Haritalar",
     "storage": "Depolama alanı",
     "keys": "Şifreleme anahtarları",
-    "mailSending": "Posta gönderimi"
+    "mailSending": "Posta gönderimi",
+    "mailGroups": "Posta grupları"
   },
   "auth": {
     "fields": {
@@ -796,6 +797,44 @@
       "serverLimit": "Sunucunun sınırı",
       "saved": "Kaydedildi",
       "cardHint": "Bu hesabın dış adreslere gönderdikleri. Buradan duraklatın ya da kendi sınırlarını verin."
+    },
+    "mailGroups": {
+      "title": "Posta grupları",
+      "description": "Her biri kendi depolama alanına sahip dağıtım listeleri ve paylaşılan posta kutuları. Rol adresleri hep buradadır: onları okuyacak kişileri ekleyin.",
+      "create": "Yeni grup",
+      "emptyTitle": "Grup yok",
+      "emptyDescription": "Bir dağıtım listesi ya da paylaşılan posta kutusu oluşturun.",
+      "address": "Adres",
+      "kind": "Tür",
+      "members": "Üyeler",
+      "storage": "Depolama",
+      "quota": "Depolama",
+      "deleteOne": "{{address}} sil",
+      "role": {
+        "postmaster": "teslim sorunları",
+        "abuse": "spam ve kötüye kullanım şikâyetleri",
+        "security": "güvenlik açığı bildirimleri",
+        "hostmaster": "DNS"
+      },
+      "deleteTitle": "{{address}} silinsin mi?",
+      "deleteShared": "Paylaşılan posta kutusu tüm e-postalarıyla silinir ve adresi boşa çıkar. Bu geri alınamaz.",
+      "deleteList": "Liste silinir ve adresi boşa çıkar. Üyeler daha önce aldıkları e-postaları tutar.",
+      "delete": "Grubu sil",
+      "quotaTitle": "{{address}} depolama alanı",
+      "quotaDescription": "Grubun e-postaları burada sayılır, üyelerinin alanından asla düşülmez.",
+      "quotaGib": "Depolama (GB)",
+      "createTitle": "Yeni grup",
+      "createDescription": "Bu sunucuda bir ekip için bir adres.",
+      "name": "@ işaretinden önceki ad",
+      "nameHint": "Adresi: {{address}}",
+      "kindHint": {
+        "list": "Her üye e-postayı kendi gelen kutusunda alır ve kendi başına yönetir.",
+        "shared": "Üyelerin birlikte okuyup yanıtladığı tek bir posta kutusu; biri bir iletiyi okuduğunda herkes için okunmuş olur. Anahtarı şimdi, bu tarayıcıda oluşturulur."
+      },
+      "owners": "Sahipler",
+      "addOwner": "Sahip ekle",
+      "created": "Grup oluşturuldu.",
+      "createFailed": "Grup oluşturulamadı."
     }
   }
 }

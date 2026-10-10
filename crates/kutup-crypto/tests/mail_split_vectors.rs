@@ -10,7 +10,8 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use kutup_crypto::mail_key::{
-    decrypt, encrypt_split, encryption_key_id, generate_address_key, key_packet_key_id,
+    decrypt, encrypt_split, encrypt_split_unsigned, encryption_key_id, generate_address_key,
+    key_packet_key_id, open_group_key_share, seal_group_key_share,
 };
 
 const KEYS: &str = concat!(
@@ -156,4 +157,41 @@ fn fresh_split_keeps_recipients_apart() {
     let mut doubled = split.key_packets[0].clone();
     doubled.extend_from_slice(&split.key_packets[1]);
     assert!(key_packet_key_id(&doubled).is_err());
+}
+
+#[test]
+fn unsigned_split_opens_for_each_member() {
+    // A distribution list's copy, encrypted on arrival: no signature.
+    let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+    let carol = generate_address_key("carol@kutup.dev", 1_790_000_000).unwrap();
+    let split = encrypt_split_unsigned(&[&bob.public_key, &carol.public_key], MESSAGE).unwrap();
+    for (key, packet) in [
+        (&bob, &split.key_packets[0]),
+        (&carol, &split.key_packets[1]),
+    ] {
+        let opened = decrypt(&key.secret_key, &join(packet, &split.data_packet), None).unwrap();
+        assert_eq!(&*opened.data, MESSAGE);
+        assert!(!opened.signed);
+    }
+    assert!(encrypt_split_unsigned(&[], MESSAGE).is_err());
+}
+
+#[test]
+fn group_key_shares_open_only_for_their_member() {
+    // A shared mailbox's key, sealed to two members' address keys.
+    let group = generate_address_key("hr@kutup.dev", 1_790_000_000).unwrap();
+    let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+    let carol = generate_address_key("carol@kutup.dev", 1_790_000_000).unwrap();
+    let share = seal_group_key_share(&bob.public_key, &group.secret_key).unwrap();
+    let opened = open_group_key_share(&bob.secret_key, &share, &group.fingerprint).unwrap();
+    assert_eq!(&*opened, &*group.secret_key);
+    // Mail to the group opens with the opened key.
+    let split = encrypt_split_unsigned(&[&group.public_key], MESSAGE).unwrap();
+    let message = join(&split.key_packets[0], &split.data_packet);
+    assert_eq!(&*decrypt(&opened, &message, None).unwrap().data, MESSAGE);
+    // Not for Carol, and not for another group fingerprint.
+    assert!(open_group_key_share(&carol.secret_key, &share, &group.fingerprint).is_err());
+    assert!(open_group_key_share(&bob.secret_key, &share, &bob.fingerprint).is_err());
+    // Only a secret key is sealed.
+    assert!(seal_group_key_share(&bob.public_key, b"not a key").is_err());
 }

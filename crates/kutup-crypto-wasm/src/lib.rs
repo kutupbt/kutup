@@ -2063,6 +2063,224 @@ pub fn encrypt_mail_message(
     })
 }
 
+// --- Shared mailboxes (docs/plans/mail-groups.md, G1b) ---------------------
+//
+// A shared mailbox has its own address key. Its secret part reaches each
+// member as a share: an OpenPGP message encrypted to the member's address
+// key. Like address keys, it is opened only here and never handed to JS.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailGroupKeyView {
+    public_key: String,
+    fingerprint: String,
+    sha256_fingerprint: String,
+    /// One share per member public key, in the order given.
+    shares: Vec<String>,
+}
+
+fn group_fingerprint(fingerprint_hex: &str) -> Result<[u8; 20], JsValue> {
+    hex::decode(fingerprint_hex)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| js_error("group fingerprint must be 40 hex digits"))
+}
+
+fn seal_shares(group_secret: &[u8], member_public_keys: &[String]) -> Result<Vec<String>, JsValue> {
+    member_public_keys
+        .iter()
+        .map(|key| {
+            let key = decode_canonical_base64(key, "member public key")?;
+            kutup_crypto::mail_key::seal_group_key_share(&key, group_secret)
+                .map(|share| STANDARD.encode(share))
+                .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect()
+}
+
+/// The group key's secret, opened from the caller's share with their own
+/// address key (sealed in `envelope`).
+#[allow(clippy::too_many_arguments)]
+fn open_group_secret(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
+    let member = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let share = decode_canonical_base64(share_base64, "share")?;
+    kutup_crypto::mail_key::open_group_key_share(
+        &member,
+        &share,
+        &group_fingerprint(group_fingerprint_hex)?,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Makes a shared mailbox's key for `group_address`, with a share for each
+/// member public key (base64).
+#[wasm_bindgen(js_name = generateMailGroupKey)]
+pub fn generate_mail_group_key(
+    group_address: &str,
+    created_at_secs: u32,
+    member_public_keys: Vec<String>,
+) -> Result<JsValue, JsValue> {
+    let key = kutup_crypto::mail_key::generate_address_key(group_address, created_at_secs)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let shares = seal_shares(&key.secret_key, &member_public_keys)?;
+    serde_wasm_bindgen::to_value(&MailGroupKeyView {
+        public_key: STANDARD.encode(&key.public_key),
+        fingerprint: hex::encode(key.fingerprint),
+        sha256_fingerprint: hex::encode(key.sha256_fingerprint),
+        shares,
+    })
+    .map_err(|error| js_error(&format!("encode group key: {error}")))
+}
+
+/// Shares a group key the caller holds with more members (one share per
+/// member public key, in order).
+#[wasm_bindgen(js_name = reshareMailGroupKey)]
+#[allow(clippy::too_many_arguments)]
+pub fn reshare_mail_group_key(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    member_public_keys: Vec<String>,
+) -> Result<Vec<String>, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    seal_shares(&secret, &member_public_keys)
+}
+
+/// Opens a message of a shared mailbox with the group key, checking its
+/// signature with `sender_public_key_base64` when given.
+#[wasm_bindgen(js_name = openMailGroupMessage)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_mail_group_message(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    message: &[u8],
+    sender_public_key_base64: Option<String>,
+) -> Result<OpenedMailJs, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    let sender = sender_public_key_base64
+        .map(|key| decode_canonical_base64(&key, "sender public key"))
+        .transpose()?;
+    let opened = kutup_crypto::mail_key::decrypt(&secret, message, sender.as_deref())
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(OpenedMailJs {
+        data: opened.data.to_vec(),
+        signed: opened.signed,
+        verified: opened.verified,
+    })
+}
+
+/// [`encrypt_mail_message`] signed by a shared mailbox's key: a member
+/// writing as the group.
+#[wasm_bindgen(js_name = encryptMailMessageAsGroup)]
+#[allow(clippy::too_many_arguments)]
+pub fn encrypt_mail_message_as_group(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<SealedMailJs, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| decode_canonical_base64(key, "recipient public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    let split = kutup_crypto::mail_key::encrypt_split(&refs, &secret, plaintext)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(SealedMailJs {
+        key_packets: split
+            .key_packets
+            .iter()
+            .map(|p| STANDARD.encode(p))
+            .collect(),
+        data_packet: split.data_packet,
+    })
+}
+
+/// [`encrypt_mail_pgp`] signed by a shared mailbox's key.
+#[wasm_bindgen(js_name = encryptMailPgpAsGroup)]
+#[allow(clippy::too_many_arguments)]
+pub fn encrypt_mail_pgp_as_group(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<String, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| decode_canonical_base64(key, "recipient public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    kutup_crypto::mail_key::encrypt_armored_signed(&refs, &secret, plaintext, now_secs())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = Date, js_name = now)]

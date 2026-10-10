@@ -19,6 +19,7 @@ pub mod files;
 pub mod folder_access;
 pub mod link_reports;
 pub mod mail;
+pub mod mail_groups;
 pub mod mail_keys;
 pub mod mail_send;
 pub mod mail_sending;

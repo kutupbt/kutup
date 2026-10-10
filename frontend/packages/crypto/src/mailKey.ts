@@ -236,3 +236,92 @@ export async function verifyMailDetachedSignature(signature: Uint8Array, content
 export async function verifyMailCleartext(message: string, signerPublicKey?: string): Promise<{ text: string; verified: boolean }> {
   return (await getCryptoWasm()).verifyMailCleartext(message, signerPublicKey)
 }
+
+// --- Shared mailboxes (docs/plans/mail-groups.md, G1b) ---------------------
+
+/** A shared mailbox's key as a member holds it: their share, opened only inside WASM with their own address key. */
+export interface GroupMailKey {
+  /** The member's own address key, which opens the share. */
+  member: SealedMailKey
+  /** The group key's secret, encrypted to the member's address key (base64). */
+  share: string
+  /** The group key's fingerprint. */
+  fingerprint: string
+}
+
+export interface GeneratedMailGroupKey {
+  publicKey: string
+  fingerprint: string
+  sha256Fingerprint: string
+  /** One per member public key, in the order given. */
+  shares: string[]
+}
+
+/** Makes a shared mailbox's key, with a share for each member's address key (base64). */
+export async function generateMailGroupKey(groupAddress: string, memberPublicKeys: string[], createdAt: Date = new Date()): Promise<GeneratedMailGroupKey> {
+  return (await getCryptoWasm()).generateMailGroupKey(groupAddress, Math.floor(createdAt.getTime() / 1000), memberPublicKeys)
+}
+
+/** Shares a group key the caller holds with more members, one share per public key. */
+export async function reshareMailGroupKey(key: GroupMailKey, memberPublicKeys: string[]): Promise<string[]> {
+  const m = key.member
+  return (await getCryptoWasm()).reshareMailGroupKey(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, memberPublicKeys)
+}
+
+/** Opens a shared mailbox's message with its group key; with `senderPublicKey`, checks the signature too. */
+export async function openMailGroupMessage(key: GroupMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
+  const m = key.member
+  const opened = (await getCryptoWasm()).openMailGroupMessage(
+    m.masterKeyBase64,
+    m.loginEmail,
+    m.address,
+    m.envelope,
+    m.fingerprint,
+    key.share,
+    key.fingerprint,
+    message,
+    senderPublicKey,
+  )
+  try {
+    return { data: opened.data, signed: opened.signed, verified: opened.verified }
+  } finally {
+    opened.free()
+  }
+}
+
+/** `encryptMailMessage` signed by the group key: a member writing as the shared mailbox. */
+export async function encryptMailMessageAsGroup(key: GroupMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
+  const m = key.member
+  const sealed = (await getCryptoWasm()).encryptMailMessageAsGroup(
+    m.masterKeyBase64,
+    m.loginEmail,
+    m.address,
+    m.envelope,
+    m.fingerprint,
+    key.share,
+    key.fingerprint,
+    recipientPublicKeys,
+    plaintext,
+  )
+  try {
+    return { keyPackets: sealed.keyPackets, dataPacket: sealed.dataPacket }
+  } finally {
+    sealed.free()
+  }
+}
+
+/** `encryptMailPgp` signed by the group key. */
+export async function encryptMailPgpAsGroup(key: GroupMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
+  const m = key.member
+  return (await getCryptoWasm()).encryptMailPgpAsGroup(
+    m.masterKeyBase64,
+    m.loginEmail,
+    m.address,
+    m.envelope,
+    m.fingerprint,
+    key.share,
+    key.fingerprint,
+    recipientPublicKeys,
+    plaintext,
+  )
+}

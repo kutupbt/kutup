@@ -152,12 +152,12 @@ impl From<SenderRow> for MailSender {
 async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResult<Vec<SenderRow>> {
     Ok(sqlx::query_as(
         "WITH sent AS (
-             SELECT user_id,
+             SELECT sender_account AS user_id,
                     SUM(external_recipients) FILTER (WHERE received_at > now() - interval '1 day')::bigint AS day,
                     SUM(external_recipients)::bigint AS week
                FROM mail_messages
               WHERE external_recipients > 0 AND received_at > now() - interval '7 days'
-              GROUP BY user_id),
+              GROUP BY sender_account),
          events AS (
              SELECT user_id,
                     COUNT(*) FILTER (WHERE kind = 'bounce') AS bounces,

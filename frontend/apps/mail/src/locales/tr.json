@@ -62,7 +62,9 @@
     "more": "Daha eski postaları göster",
     "searchResults": "“{{q}}” için sonuçlar",
     "noMatches": "Eşleşme yok",
-    "noMatchesHint": "Arama konulara, gönderenlere ve alıcılara bakar."
+    "noMatchesHint": "Arama konulara, gönderenlere ve alıcılara bakar.",
+    "viaGroup": "{{address}} üzerinden",
+    "sentBy": "{{name}} gönderdi"
   },
   "read": {
     "pick": "Okumak için bir posta seçin.",
@@ -94,7 +96,8 @@
     "trustKey": "Anahtara güven",
     "keyTrusted": "{{address}} için anahtara güvenildi.",
     "trustFailed": "Anahtar Kişiler'e kaydedilemedi.",
-    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir."
+    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir.",
+    "sentBy": "{{name}} gönderdi"
   },
   "actions": {
     "archive": "Arşivle",
@@ -193,7 +196,9 @@
       }
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
-    "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın."
+    "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
+    "groupNotAllowed": "{{address}} yalnızca üyelerinden ya da yöneticilerinden e-posta alıyor.",
+    "noGroupShare": "Bu posta kutusunun güncel anahtarının bir kopyası sizde yok. Yöneticilerinden birinden sizi yeniden eklemesini isteyin."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",

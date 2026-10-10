@@ -3,10 +3,18 @@ import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import type { PinnedKeys } from '@kutup/mail-core/api'
+import { groupDirectory } from '@kutup/mail-core/groups'
 import type { Mailbox } from '@kutup/mail-core/mime'
 import { cn } from '@kutup/ui/lib/cn'
 import { isAddress, parseRecipients } from './recipients'
 import { RecipientLock } from './RecipientLock'
+
+/** Groups the writer may send to, after the contacts in the suggestions. */
+const GROUP_SUGGESTIONS = {
+  key: 'mail-groups',
+  search: async (query: string) =>
+    (await groupDirectory(query)).map((group) => ({ contactId: '', name: group.displayName, address: group.address, label: null })),
+}
 
 /**
  * To, Cc or Bcc: chips for the people added, and a field that suggests from
@@ -80,6 +88,7 @@ export function RecipientField({
           else setText(next)
         }}
         onPick={(match) => add([{ address: match.address, name: match.name }])}
+        extraSuggestions={GROUP_SUGGESTIONS}
         onKeyDown={(e) => {
           // A suggestion was picked: that added it already.
           if (e.defaultPrevented) return
