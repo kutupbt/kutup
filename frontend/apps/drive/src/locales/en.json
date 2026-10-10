@@ -323,6 +323,10 @@
         "title": "This link has expired",
         "description": "Ask the person who shared it for a new one."
       },
+      "removed": {
+        "title": "This link was removed",
+        "description": "The server's administrators took it down. What it showed is no longer available here."
+      },
       "badKey": {
         "title": "This link's key does not fit",
         "description": "The link was changed or copied incompletely. Ask for the whole link again."

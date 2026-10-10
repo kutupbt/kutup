@@ -242,6 +242,8 @@ pub async fn get_public_share(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
+    // Taken down, or its owner's account disabled: the link is gone.
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
     type ShareRow = (
         Uuid,
         String,
@@ -338,6 +340,8 @@ pub async fn public_share_epochs(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
+    // Taken down, or its owner's account disabled: the link is gone.
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
     let meta: Option<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, expires_at FROM public_shares WHERE token = $1 AND share_type = 'collection'",
     )
@@ -392,6 +396,8 @@ pub async fn list_public_share_files(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
+    // Taken down, or its owner's account disabled: the link is gone.
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
     )
@@ -490,6 +496,7 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
 /// The file `file_id`, when the link `token` reaches it (its folder's file,
 /// or the one file it links to) and is live and unexpired.
 async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult<Uuid> {
+    crate::handlers::link_reports::ensure_link_up(&state.pool, token).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
     )
@@ -677,6 +684,8 @@ pub async fn public_album_items(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
+    // Taken down, or its owner's account disabled: the link is gone.
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
     )
@@ -767,6 +776,8 @@ pub async fn public_thumbnail(
     State(state): State<AppState>,
     Path((token, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
+    // Taken down, or its owner's account disabled: the link is gone.
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
     let fid = link_reaches(&state, &token, &file_id).await?;
     crate::handlers::file_thumbnails::serve_thumbnail(&state, fid, &variant).await
 }

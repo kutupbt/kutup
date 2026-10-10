@@ -323,6 +323,10 @@
         "title": "Bu bağlantının süresi doldu",
         "description": "Paylaşan kişiden yenisini isteyin."
       },
+      "removed": {
+        "title": "Bu bağlantı kaldırıldı",
+        "description": "Sunucunun yöneticileri onu kaldırdı. Gösterdikleri artık burada yok."
+      },
       "badKey": {
         "title": "Bu bağlantının anahtarı uymuyor",
         "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."

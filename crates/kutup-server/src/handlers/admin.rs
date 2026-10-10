@@ -315,6 +315,16 @@ pub async fn update_user(
             .map_err(|_| AppError::internal("internal error"))?; // A disabled account keeps no live sign-in anywhere.
         if !a {
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
+            // Their public links are down with them (link_reports::ensure_link_up):
+            // reports on those links are answered.
+            if let Ok(admin_uuid) = Uuid::parse_str(&admin.user_id) {
+                crate::handlers::link_reports::resolve_reports_of_owner(
+                    &state.pool,
+                    target,
+                    admin_uuid,
+                )
+                .await?;
+            }
         }
     }
     if let Some(a) = req.is_admin {

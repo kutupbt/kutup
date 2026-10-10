@@ -211,3 +211,49 @@ export function usePeerEvidence(domain: string | null) {
     enabled: domain !== null,
   })
 }
+
+// --- reports on public links ---------------------------------------------
+
+export type ReportReason = 'phishing' | 'malware' | 'illegal' | 'abuse' | 'other'
+
+/** One report on a public link (`GET /api/admin/reports`). */
+export interface LinkReport {
+  id: string
+  reason: ReportReason
+  details: string
+  /** The whole link, key included, when the reporter gave it; open reports only. */
+  link: string | null
+  createdAt: string
+  resolvedAt: string | null
+  resolution: 'dismissed' | 'removed' | 'disabled' | null
+  shareId: string
+  shareType: 'collection' | 'file'
+  shareCreatedAt: string
+  shareRemovedAt: string | null
+  ownerUserId: string
+  ownerEmail: string
+  ownerUsername: string
+  ownerIsActive: boolean
+  openReportsOnLink: number
+}
+
+export const reportsKey = [...adminKey, 'reports'] as const
+
+export function useLinkReports(status: 'open' | 'resolved') {
+  return useQuery({
+    queryKey: [...reportsKey, status],
+    queryFn: async () => (await api.get<LinkReport[]>('/admin/reports', { params: { status } })).data,
+  })
+}
+
+export function useDismissReport() {
+  return useAdminMutation(async (id: string) => {
+    await api.post(`/admin/reports/${encodeURIComponent(id)}/dismiss`)
+  })
+}
+
+export function useRemoveReportedLink() {
+  return useAdminMutation(async (id: string) => {
+    await api.post(`/admin/reports/${encodeURIComponent(id)}/remove-link`)
+  })
+}

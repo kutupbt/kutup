@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appOrigin, appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { appOrigin, appUrl, newAccount, openDrive, registerAccount, signInAsAdmin } from '../fixtures/apps'
 import { createFolder, createNote, item, itemAction, noteLive, openItem, typeAtEnd } from '../fixtures/drive'
 import { createOffice, editorCanvases, openOffice } from '../fixtures/office'
 
@@ -122,4 +122,52 @@ test("a folder's link lists in Drive and opens its documents on Office", async (
 
   await visitor.close()
   await owner.close()
+})
+
+test('anyone reports a link; an administrator takes it down', async ({ browser }) => {
+  test.slow()
+  const alice = newAccount('pubreport', PASSWORD)
+  const owner = await browser.newContext()
+  await registerAccount(owner, alice)
+  const drive = await openDrive(owner)
+  await createNote(drive)
+  await noteLive(drive)
+  const link = await makeFileLink(drive)
+  await owner.close()
+
+  // A visitor, without an account, reports it with the whole link.
+  const visitor = await browser.newContext()
+  const page = await visitor.newPage()
+  await page.goto(link)
+  await expectSharedBy(page, alice.username)
+  await page.getByTestId('public-notice').getByRole('button', { name: 'Report' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByTestId('report-reason').click()
+  await page.getByRole('option', { name: /^Phishing/ }).click()
+  await dialog.getByLabel('Details').fill('Asks for my bank password')
+  await expect(dialog.getByLabel('Let the administrators open this link')).toBeChecked()
+  await dialog.getByRole('button', { name: 'Send report' }).click()
+  await expect(dialog.getByText('Report sent')).toBeVisible({ timeout: 30_000 })
+  await dialog.getByRole('button', { name: 'Close' }).first().click()
+
+  // The administrator sees it, with the link, and takes the link down.
+  const admin = await browser.newContext()
+  await signInAsAdmin(admin)
+  const reports = await admin.newPage()
+  await reports.goto(appUrl('account', '/admin/reports'))
+  const card = reports.getByTestId('link-report').filter({ hasText: 'Asks for my bank password' })
+  await expect(card).toBeVisible({ timeout: 60_000 })
+  await expect(card).toContainText(alice.email)
+  await expect(card.getByRole('link', { name: 'Open the link' })).toHaveAttribute('href', link)
+  await card.getByRole('button', { name: 'Take link down' }).click()
+  await reports.getByRole('alertdialog').getByRole('button', { name: 'Take link down' }).click()
+  await expect(card).toBeHidden({ timeout: 30_000 })
+  await reports.getByRole('tab', { name: 'Resolved' }).click()
+  await expect(reports.getByTestId('link-report').filter({ hasText: 'Asks for my bank password' })).toContainText('Link taken down')
+  await admin.close()
+
+  // The visitor's link now says it was removed.
+  await page.reload()
+  await expect(page.getByText('This link was removed')).toBeVisible({ timeout: 60_000 })
+  await visitor.close()
 })

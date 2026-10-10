@@ -65,7 +65,7 @@ export interface PublicShare {
   files: PublicFile[]
 }
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'badKey' | 'waiting' | 'other'
+export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'waiting' | 'other'
 
 export class PublicLinkError extends Error {
   constructor(readonly failure: PublicFailure) {
@@ -89,6 +89,17 @@ export function linkKey(): Uint8Array | null {
   }
 }
 
+/**
+ * Why the server refused a link: unknown, expired, or taken down (by an
+ * administrator, or with its owner's account: `410` `link_removed`).
+ */
+export function linkFailure(error: unknown): PublicFailure {
+  if (apiErrorCode(error) === 'not_found') return 'notFound'
+  const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
+  if (response?.status !== 410) return 'other'
+  return response.data?.code === 'link_removed' ? 'removed' : 'expired'
+}
+
 const shareBase = (token: string) => `/share/${encodeURIComponent(token)}`
 
 export async function loadShare(token: string): Promise<PublicShare> {
@@ -98,8 +109,7 @@ export async function loadShare(token: string): Promise<PublicShare> {
   try {
     share = (await api.get<ShareInfo>(shareBase(token))).data
   } catch (error) {
-    const code = apiErrorCode(error)
-    throw new PublicLinkError(code === 'not_found' ? 'notFound' : (error as { response?: { status?: number } }).response?.status === 410 ? 'expired' : 'other')
+    throw new PublicLinkError(linkFailure(error))
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
   const files = share.shareType === 'file' ? [await loadFile(share, key)] : await loadFolder(token, share, key)

@@ -178,7 +178,7 @@ function PublicDocument({ token, share, file }: { token: string; share: PublicSh
           <ThemeToggle onChrome={false} />
         </div>
       </header>
-      <PublicNotice owner={share.ownerAccount} />
+      <PublicNotice owner={share.ownerAccount} token={token} />
       <main className="min-h-0 flex-1">
         <Suspense fallback={<LoadingPanel label={t('file.opening')} />}>{body}</Suspense>
       </main>

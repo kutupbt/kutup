@@ -316,6 +316,7 @@
       "missingKey": "Bağlantı eksik: anahtarı yok. Bağlantının tamamını isteyin.",
       "notFound": "Bağlantı yok ya da albüm silinmiş veya bağlantı kaldırılmış.",
       "expired": "Bağlantının süresi dolmuş.",
+      "removed": "Sunucunun yöneticileri bu bağlantıyı kaldırdı.",
       "badKey": "Bağlantının anahtarı bu albümü açmıyor. Bağlantının tamamını isteyin.",
       "notAlbum": "Bu bağlantı bir albüme değil.",
       "other": "Bir şeyler ters gitti. Yeniden deneyin."

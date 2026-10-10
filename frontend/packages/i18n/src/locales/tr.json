@@ -204,5 +204,27 @@
   "publicNotice": {
     "sharedBy": "{{owner}} tarafından herkese açık paylaşıldı.",
     "unchecked": "Kutup, bağlantıyla paylaşılanları göremez ve denetleyemez. Paylaşılan bir dosya istedi diye asla parola veya ödeme bilgisi girmeyin."
+  },
+  "reportLink": {
+    "button": "Bildir",
+    "title": "Bu bağlantıyı bildir",
+    "description": "İnsanları kandıran, zararlı yazılım yayan ya da yasaya aykırı bir bağlantıyı bu sunucunun yöneticilerine bildirin. Hesap gerekmez ve sizinle ilgili hiçbir şey saklanmaz.",
+    "reason": "Sorun ne?",
+    "choose": "Bir neden seçin",
+    "reasons": {
+      "phishing": "Oltalama ya da dolandırıcılık (parola, ödeme istiyor)",
+      "malware": "Zararlı yazılım ya da zararlı bir dosya",
+      "illegal": "Yasa dışı içerik",
+      "abuse": "Taciz ya da kötüye kullanım",
+      "other": "Başka bir şey"
+    },
+    "details": "Ayrıntılar",
+    "detailsHint": "İsteğe bağlı. Yöneticiler neye bakmalı?",
+    "shareLink": "Yöneticilerin bu bağlantıyı açmasına izin ver",
+    "shareLinkHint": "Bağlantıyla paylaşılan dosyalar uçtan uca şifrelidir: sunucu onları göremez. Bu, yöneticilerin bakabilmesi için bağlantının tamamını, anahtarıyla birlikte gönderir. Bildiriminizle ilgilendiklerinde silinir.",
+    "send": "Bildirimi gönder",
+    "sentTitle": "Bildirim gönderildi",
+    "sent": "Teşekkürler. Yöneticiler inceleyecek.",
+    "failed": "Bildirim gönderilemedi. Biraz sonra yeniden deneyin."
   }
 }

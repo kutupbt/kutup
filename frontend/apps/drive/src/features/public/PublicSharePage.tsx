@@ -102,7 +102,7 @@ export function PublicSharePage() {
       ) : null}
       {share.data && !moved ? (
         <>
-          <PublicNotice owner={share.data.ownerAccount} />
+          <PublicNotice owner={share.data.ownerAccount} token={token} />
           <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 md:px-6">
             <p className="min-w-0 flex-1 text-sm text-muted-foreground">{t('public.description', { count: items.length })}</p>
             <Toolbar prefs={prefs} update={updatePrefs} />

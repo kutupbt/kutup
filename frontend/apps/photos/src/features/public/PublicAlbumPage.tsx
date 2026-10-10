@@ -194,7 +194,7 @@ export function PublicAlbumPage() {
           <ThemeToggle onChrome={false} />
         </div>
       </header>
-      {album.data ? <PublicNotice owner={album.data.owner} /> : null}
+      {album.data ? <PublicNotice owner={album.data.owner} token={token} /> : null}
       <main className="mx-auto max-w-6xl px-2 py-6 md:px-8">
         {album.isPending ? <LoadingPanel label={t('public.loading')} /> : null}
         {failure ? (
