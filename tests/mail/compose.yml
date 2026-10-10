@@ -1,11 +1,15 @@
 # The mail gate (scripts/test-mail-inbound.sh): the backend's API and
 # Stalwart's port 25 on loopback ports, the setup run once in the foreground
 # without the certificate watch, and a sink standing in for the outside
-# world (mail for outside.test goes there, tests/mail/plan.ndjson).
+# world (mail for outside.test goes there, tests/mail/plan.ndjson). Key
+# lookups go to mail-keys, which serves the GnuPG correspondent's key by WKD
+# (the backend's test override, APP_ENV=test and MAIL_TEST_KEY_ORIGIN).
 services:
   backend:
     ports:
       - "127.0.0.1:${KUTUP_MAIL_TEST_PORT:-39086}:3000"
+    environment:
+      MAIL_TEST_KEY_ORIGIN: http://mail-keys:8080
   stalwart-setup:
     restart: "no"
     environment:
@@ -18,3 +22,8 @@ services:
     command: ["python", "-u", "/sink.py"]
     volumes:
       - ./tests/mail/sink.py:/sink.py:ro
+  mail-keys:
+    image: python:3.12-alpine
+    command: ["python", "-u", "-m", "http.server", "8080", "--directory", "/keys"]
+    volumes:
+      - ${KUTUP_MAIL_KEYS_DIR:?the gate sets KUTUP_MAIL_KEYS_DIR}:/keys:ro

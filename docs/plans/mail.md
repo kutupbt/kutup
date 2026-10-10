@@ -297,7 +297,14 @@ help pages (checked 2026-10-10):
    would replace it).
 4. **C3d gates:** the mail gate with a GnuPG correspondent (a WKD server and
    a sink that decrypts with `gpg`), both ways; a manual check against a real
-   Proton account, documented.
+   Proton account, documented. Done: `scripts/test-mail-inbound.sh` makes
+   Dave's key with GnuPG and serves it from a WKD stand-in (the backend's
+   `MAIL_TEST_KEY_ORIGIN` on a test stack); the live test finds it, sends
+   PGP/MIME (refusing plaintext dressed as PGP and plaintext nobody needs),
+   and receives Dave's GnuPG reply as `end_to_end`, opening and verifying
+   it; the gate checks the copy at the sink is PGP/MIME, DKIM-signed, has no
+   plaintext, and that GnuPG opens it with a good signature. The Proton
+   check is [`docs/test/mail-proton.md`](../test/mail-proton.md).
 5. **C3e:** key import and export; then the MX switch from Cloudflare
    (DNS, done by the operator).
 
