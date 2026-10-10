@@ -1,5 +1,7 @@
-import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { folderFilesKey, loadFolderFiles } from '@kutup/drive-core/files'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { allFilesKey, loadAllFiles, loadFolderFiles } from '@kutup/drive-core/files'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
 import { uploadUnderFreeName } from '@kutup/drive-core/names'
@@ -37,19 +39,42 @@ export function editorUrl(folder: Pick<Folder, 'id' | 'source'>, fileId: string)
 export function useDocuments() {
   const folders = useFolders()
   const sharedFiles = useSharedFiles()
-  const readable = (folders.data?.all ?? []).filter((f) => f.key && f.source !== 'remote')
-  const listings = useQueries({
-    queries: readable.map((folder) => ({
-      queryKey: folderFilesKey(folder),
-      queryFn: () => loadFolderFiles(folder),
-    })),
+  const identity = useDriveIdentity()
+  const queryClient = useQueryClient()
+  // Every folder's files in one request (one per folder before;
+  // docs/research/18-web-performance.md), opened once the folders are.
+  const listing = useQuery({
+    queryKey: [...allFilesKey, identity.data?.userId],
+    enabled: Boolean(folders.data),
+    queryFn: () => loadAllFiles(folders.data!.all, queryClient),
   })
+  const documents = useMemo(
+    () => collectDocuments(folders.data?.all ?? [], listing.data, sharedFiles.data ?? []),
+    [folders.data, listing.data, sharedFiles.data],
+  )
+  return {
+    root: folders.data?.root,
+    documents,
+    loading: folders.isPending || sharedFiles.isPending || listing.isPending,
+    // Without the folders nothing can be listed; the files failing leaves
+    // only the files shared by themselves.
+    error: folders.error ?? null,
+    incomplete: Boolean(sharedFiles.error) || Boolean(listing.error),
+  }
+}
+
+/** Every document in the folders' files and the files shared by themselves, once each. */
+function collectDocuments(
+  folders: Folder[],
+  listing: Map<string, DriveFile[]> | undefined,
+  sharedFiles: NonNullable<ReturnType<typeof useSharedFiles>['data']>,
+): DocumentEntry[] {
   const documents: DocumentEntry[] = []
   const seen = new Set<string>()
-  listings.forEach((listing, i) => {
-    const folder = readable[i]
-    if (!folder || !listing.data) return
-    for (const file of listing.data) {
+  folders.forEach((folder) => {
+    const files = listing?.get(folder.id)
+    if (!files) return
+    for (const file of files) {
       const kind = documentKindOf(file.name)
       if (!kind || seen.has(file.id)) continue
       seen.add(file.id)
@@ -62,7 +87,7 @@ export function useDocuments() {
       })
     }
   })
-  for (const shared of sharedFiles.data ?? []) {
+  for (const shared of sharedFiles) {
     // A file shared by itself that is also in a shared folder shows once.
     // One on another server, or still waiting for its owner's new key,
     // cannot be opened in the editor from here.
@@ -80,15 +105,7 @@ export function useDocuments() {
       href: editorUrl(shared.container, shared.file.id),
     })
   }
-  return {
-    root: folders.data?.root,
-    documents,
-    loading: folders.isPending || sharedFiles.isPending || listings.some((l) => l.isPending),
-    // Without the folders nothing can be listed; one folder that could not
-    // be read only leaves its documents out.
-    error: folders.error ?? null,
-    incomplete: Boolean(sharedFiles.error) || listings.some((l) => l.error),
-  }
+  return documents
 }
 
 export type DocumentOrder = 'recent' | 'name'

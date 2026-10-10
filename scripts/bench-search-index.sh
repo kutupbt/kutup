@@ -17,10 +17,10 @@ trap 'kill "${server:-0}" 2>/dev/null || true; rm -rf "$work"' EXIT
 
 cargo build --quiet \
   --manifest-path "$root/crates/kutup-chat-core/Cargo.toml" \
-  --release --target wasm32-unknown-unknown \
+  --profile wasm-release --target wasm32-unknown-unknown \
   --no-default-features --features bench
 wasm-bindgen \
-  "$root/crates/kutup-chat-core/target/wasm32-unknown-unknown/release/kutup_chat_core.wasm" \
+  "$root/crates/kutup-chat-core/target/wasm32-unknown-unknown/wasm-release/kutup_chat_core.wasm" \
   --target web --out-dir "$work" --out-name bench
 
 cat > "$work/index.html" <<'HTML'

@@ -6,7 +6,6 @@
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
   ACCOUNT_PROTECTION_DEFAULTS,
-  decodeMnemonic,
   decryptMasterKey,
   decryptPrivateKey,
   deriveRecoveryAuthProof,
@@ -230,6 +229,7 @@ export async function recoverAccount(
   const { data } = await api.get<{ recoveryKeyEnvelope: string }>('/auth/recover/preflight', {
     params: { email },
   })
+  const { decodeMnemonic } = await import('@kutup/crypto/mnemonic')
   const recoveryKey = decodeMnemonic(normalizeMnemonic(mnemonic))
   const masterKey = await openAccountEnvelope(
     data.recoveryKeyEnvelope,

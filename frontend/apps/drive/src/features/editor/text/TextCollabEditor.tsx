@@ -17,7 +17,7 @@ import { search, searchKeymap } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useResolvedTheme } from '../useResolvedTheme'
 
-import { langForExtension } from './lang'
+import { loadLanguage } from './lang'
 import { markdownNoteKeymap } from './markdownCommands'
 import { codeBlockPreview } from './codeBlockPreview'
 import { liveMarkdown } from './liveMarkdown'
@@ -380,6 +380,9 @@ export default function TextCollabEditor({
       // file on another one.
       const thumbnails = readOnly || base ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
       let ytext: Y.Text | null = null
+      // The file's language (its own chunk) loads while the session opens.
+      const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+      const language = loadLanguage(ext).catch(() => null)
       // 1–6: the shared editing session (@kutup/collab/session).
       const session = await openCollabSession({
         fileId,
@@ -505,8 +508,11 @@ export default function TextCollabEditor({
       }
 
       // 7. Build the CodeMirror editor.
-      const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-      const langExt = langForExtension(ext)
+      const langExt = await language
+      if (controller.signal.aborted) {
+        session.close()
+        return
+      }
       // Notes are writing, not code: lines wrap, no line numbers, a hint
       // when empty; Markdown notes also get formatting keys and lists
       // that continue on Enter.

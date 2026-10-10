@@ -4,7 +4,7 @@ import api from './client'
 import type { SessionKeys } from './keys'
 import { setAccessToken, setSession } from './store'
 
-interface MeResponse {
+export interface MeResponse {
   id: string
   email: string
   username: string
@@ -16,14 +16,24 @@ interface MeResponse {
   color: string
 }
 
-/** Loads the profile for `keys` and publishes the session to the app. */
+/** The signed-in account's profile, under `accessToken`. */
+export async function fetchProfile(accessToken: string): Promise<MeResponse> {
+  const { data } = await api.get<MeResponse>('/user/me', { headers: { Authorization: `Bearer ${accessToken}` } })
+  return data
+}
+
+/**
+ * Publishes the session for `keys` to the app, with its profile (`me`, when
+ * already fetched under the same token; loaded otherwise).
+ */
 export async function activateSession(
   keys: SessionKeys,
   accessToken: string,
   sessionId: string,
+  prefetched?: MeResponse,
 ): Promise<void> {
   setAccessToken(accessToken)
-  const { data: me } = await api.get<MeResponse>('/user/me')
+  const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
   if (me.id !== keys.userId) {
     throw new Error('the session belongs to a different account than its keys')
   }

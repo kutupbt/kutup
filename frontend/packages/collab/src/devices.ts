@@ -2,7 +2,7 @@
 // WebSocket relay. Public half registers with the backend on first use; private
 // half lives only in sessionStorage (one device row per browser tab session,
 // per spec §6).
-import _sodium from 'libsodium-wrappers-sumo'
+import { getSodium } from '@kutup/crypto/sodium'
 
 export interface DeviceKeypair {
   publicKey: Uint8Array  // 32 bytes
@@ -10,8 +10,8 @@ export interface DeviceKeypair {
 }
 
 export async function generateDeviceKeypair(): Promise<DeviceKeypair> {
-  await _sodium.ready
-  const { publicKey, privateKey } = _sodium.crypto_sign_keypair()
+  const sodium = await getSodium()
+  const { publicKey, privateKey } = sodium.crypto_sign_keypair()
   return { publicKey, privateKey }
 }
 

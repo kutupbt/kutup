@@ -14,7 +14,7 @@ import { LocalStatePurpose, openLocalState, sealLocalState } from '@kutup/crypto
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import api, { getClientType, refreshAccessToken } from './client'
 import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
-import { activateSession } from './profile'
+import { activateSession, fetchProfile } from './profile'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
 
 function profileFor(sessionId: string): string {
@@ -66,6 +66,11 @@ export async function restoreSession(): Promise<RestoreResult> {
   const persisted = readPersisted()
   if (!persisted) return 'none'
 
+  // The runtime downloads while the session is checked (it is needed below);
+  // a failure surfaces where it is awaited.
+  const runtime = getCryptoWasm()
+  runtime.catch(() => undefined)
+
   let refreshed: Awaited<ReturnType<typeof refreshAccessToken>>
   try {
     refreshed = await refreshAccessToken()
@@ -75,6 +80,11 @@ export async function restoreSession(): Promise<RestoreResult> {
   }
   const { accessToken, sessionId } = refreshed
   if (sessionId !== persisted.sessionId) return ended()
+
+  // The profile comes alongside the local key, under the fresh token;
+  // activateSession checks it belongs to the keys.
+  const profile = fetchProfile(accessToken)
+  profile.catch(() => undefined)
 
   let localKey: Uint8Array
   try {
@@ -88,7 +98,7 @@ export async function restoreSession(): Promise<RestoreResult> {
   }
 
   // Load the runtime first, so a failed load is not mistaken for a bad blob.
-  await getCryptoWasm()
+  await runtime
   let keys: SessionKeys
   try {
     const plaintext = await openLocalState(
@@ -105,6 +115,6 @@ export async function restoreSession(): Promise<RestoreResult> {
     localKey.fill(0)
   }
 
-  await activateSession(keys, accessToken, sessionId)
+  await activateSession(keys, accessToken, sessionId, await profile)
   return 'restored'
 }

@@ -8,6 +8,23 @@
  * rendering "Invalid Date" into the table.
  */
 
+// Intl formatters are costly to make (a list of 300 files made 600 of them
+// per render) and cheap to reuse: kept per locale and options.
+const formatters = new Map<string, Intl.DateTimeFormat | Intl.NumberFormat | Intl.RelativeTimeFormat>()
+
+function cached<T extends Intl.DateTimeFormat | Intl.NumberFormat | Intl.RelativeTimeFormat>(key: string, make: () => T): T {
+  let formatter = formatters.get(key) as T | undefined
+  if (!formatter) {
+    formatter = make()
+    formatters.set(key, formatter)
+  }
+  return formatter
+}
+
+function dateFormat(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  return cached(`d:${locale}:${JSON.stringify(options)}`, () => new Intl.DateTimeFormat(locale, options))
+}
+
 /** Parse an RFC 3339 string, or `null` if it is absent or malformed. */
 export function parseInstant(value: string | null | undefined): Date | null {
   if (!value) return null
@@ -19,7 +36,7 @@ export function parseInstant(value: string | null | undefined): Date | null {
 export function formatInstant(value: string | null | undefined, locale: string): string | null {
   const date = parseInstant(value)
   if (!date) return null
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return dateFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 const MINUTE = 60_000
@@ -39,7 +56,7 @@ export function formatRelative(
   const date = parseInstant(value)
   if (!date) return null
 
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  const rtf = cached(`r:${locale}`, () => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }))
   const delta = date.getTime() - now.getTime()
   const abs = Math.abs(delta)
 
@@ -71,11 +88,11 @@ export function formatFileDate(
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
-  if (sameDay) return new Intl.DateTimeFormat(locale, { timeStyle: 'short' }).format(date)
+  if (sameDay) return dateFormat(locale, { timeStyle: 'short' }).format(date)
   if (date.getFullYear() === now.getFullYear()) {
-    return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(date)
+    return dateFormat(locale, { day: 'numeric', month: 'short' }).format(date)
   }
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date)
+  return dateFormat(locale, { dateStyle: 'medium' }).format(date)
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const
@@ -93,9 +110,8 @@ export function formatBytes(bytes: number, locale: string): string {
     value /= 1024
     unit += 1
   }
-  const number = new Intl.NumberFormat(locale, {
-    maximumFractionDigits: unit === 0 ? 0 : unit < 3 ? 1 : 2,
-  }).format(value)
+  const digits = unit === 0 ? 0 : unit < 3 ? 1 : 2
+  const number = cached(`n:${locale}:${digits}`, () => new Intl.NumberFormat(locale, { maximumFractionDigits: digits })).format(value)
   return `${number} ${BYTE_UNITS[unit]}`
 }
 

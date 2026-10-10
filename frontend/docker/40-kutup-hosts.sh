@@ -64,8 +64,18 @@ server {
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy same-origin always;
 
-    # wasm-bindgen emits stable filenames: revalidate so a deployment never
-    # pairs an old Rust ABI with a new bundle.
+    # The Rust runtimes live in directories named for their content hash
+    # (frontend/packages/config/vite.ts), which the bundle names: a new
+    # build is a new URL, so they are cached for good, like /assets/.
+    location ~ "^/(crypto|chat)-wasm/[0-9a-f]{16}/" {
+        try_files \$uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "$app_csp" always;
+        add_header X-Frame-Options SAMEORIGIN always;
+    }
+
+    # Anything else there (none is expected) is revalidated.
     location ~ ^/(crypto|chat)-wasm/ {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
@@ -108,8 +118,23 @@ server {
     add_header Referrer-Policy no-referrer always;
     add_header X-Content-Type-Options nosniff always;
 
+    # The OnlyOffice client and x2t, in directories named for their
+    # versions (frontend/Dockerfile): cached for good.
+    location ^~ /onlyoffice/dist/ {
+        try_files \$uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Content-Security-Policy "$csp" always;
+        add_header Referrer-Policy no-referrer always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+
+    # The bridge pages and templates, which name those directories.
     location / {
         try_files \$uri \$uri/ =404;
+        add_header Cache-Control "no-cache" always;
+        add_header Content-Security-Policy "$csp" always;
+        add_header Referrer-Policy no-referrer always;
+        add_header X-Content-Type-Options nosniff always;
     }
 }
 NGINX
