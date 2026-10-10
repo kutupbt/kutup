@@ -1,0 +1,275 @@
+// Who other people are (docs/plans/drive-identity-pins.md).
+//
+// Drive seals shares to other people's Drive keys and checks shares against
+// their signing keys; both reach the browser through the server. Each account
+// signs a binding of its Drive keys to its authority, and this account keeps
+// a synced, encrypted list of the authority it first met for every address
+// (a pin). A key the server hands out is trusted only as far as:
+//
+// - a binding by that account's authority covers it, and
+// - that authority is the one pinned for the address (pinned on first use).
+//
+// Like Proton Drive, a failure warns instead of blocking (decided 2026-10-10):
+// callers show the status next to the person and ask before sharing to them.
+
+import { isAxiosError } from 'axios'
+import {
+  incarnationIdOfAuthority,
+  openIdentityPins,
+  sealIdentityPins,
+  verifyDriveKeyBinding,
+  type IdentityPin,
+  type IdentityPins,
+} from '@kutup/crypto/identityPins'
+import { toBase64 } from '@kutup/crypto'
+import api from '@kutup/session/client'
+import type { DriveIdentity } from './identity'
+
+/**
+ * What can be said about a person's keys:
+ * - `ok`: their authority vouches for them and is the one pinned (`verified`
+ *   when compared in person).
+ * - `unproven`: their account has not signed a binding yet (it does at its
+ *   next sign-in); nothing contradicts the keys, nothing confirms them.
+ * - `invalid`: the binding does not cover these keys, or does not verify.
+ * - `changed`: a valid binding by another authority than the pinned one —
+ *   a new account under the same address (after an administrator's wipe), or
+ *   a server handing out keys of its own. Warned until the user accepts it.
+ * - `unknown`: could not be checked (no connection, the lookup failed).
+ */
+export type IdentityStatus =
+  | { kind: 'ok'; verified: boolean }
+  | { kind: 'unproven' }
+  | { kind: 'invalid' }
+  | { kind: 'changed' }
+  | { kind: 'unknown' }
+
+/** The keys a share or a lookup put to this person; what is absent is not compared. */
+export interface ClaimedKeys {
+  driveHpkePublicKey?: string
+  driveSigningPublicKey?: string
+  incarnationId?: string
+}
+
+/** A person as their server describes them. */
+export interface PublishedIdentity {
+  account: string
+  accountAuthorityPublicKey: string
+  driveHpkePublicKey: string
+  driveSigningPublicKey: string
+  driveKeyBinding?: string | null
+}
+
+// ------------------------------------------------------------ lookups
+
+const published = new Map<string, Promise<PublishedIdentity>>()
+
+/** A person's published identity: here, or through their server. Cached for the page. */
+export function publishedIdentity(me: DriveIdentity, account: string): Promise<PublishedIdentity> {
+  let pending = published.get(account)
+  if (!pending) {
+    pending = fetchIdentity(me, account)
+    published.set(account, pending)
+    pending.catch(() => published.delete(account))
+  }
+  return pending
+}
+
+async function fetchIdentity(me: DriveIdentity, account: string): Promise<PublishedIdentity> {
+  const [username, server] = account.split('@')
+  if (!username || !server) throw new Error('not an account address')
+  const local = server === me.account.split('@')[1]
+  const { data } = local
+    ? await api.get<PublishedIdentity>(`/users/by-email/${encodeURIComponent(account)}`)
+    : await api.get<PublishedIdentity>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
+  if (data.account !== account) throw new Error('the lookup answered for another account')
+  return data
+}
+
+// --------------------------------------------------------------- pins
+
+interface PinStore {
+  revision: number
+  pins: Map<string, IdentityPin>
+}
+
+let store: { userId: string; loaded: Promise<PinStore> } | null = null
+let writes: Promise<unknown> = Promise.resolve()
+
+const highestKey = (userId: string) => `kutup-identity-pins-revision:${userId}`
+
+/** The highest revision this browser has seen: a server cannot quietly hand back an older list. */
+function highestSeen(userId: string): number {
+  try {
+    return Number(localStorage.getItem(highestKey(userId)) ?? '0') || 0
+  } catch {
+    return 0
+  }
+}
+
+function remember(userId: string, revision: number) {
+  try {
+    if (revision > highestSeen(userId)) localStorage.setItem(highestKey(userId), String(revision))
+  } catch {
+    // Without storage, only the server's word: still sealed and authenticated.
+  }
+}
+
+export class PinsRolledBack extends Error {
+  constructor() {
+    super('the server returned an older identity pin list than this browser has seen')
+  }
+}
+
+async function fetchPins(me: DriveIdentity): Promise<PinStore> {
+  let data: { revision: number; envelope: string } | null = null
+  try {
+    data = (await api.get<{ revision: number; envelope: string }>('/user/identity-pins')).data
+  } catch (error) {
+    if (!(isAxiosError(error) && error.response?.status === 404)) throw error
+  }
+  const revision = data?.revision ?? 0
+  if (revision < highestSeen(me.userId)) throw new PinsRolledBack()
+  const list: IdentityPins = data ? await openIdentityPins(toBase64(me.masterKey), me.account, data.revision, data.envelope) : { pins: [] }
+  remember(me.userId, revision)
+  return { revision, pins: new Map(list.pins.map((pin) => [pin.account, pin])) }
+}
+
+function pinStore(me: DriveIdentity): Promise<PinStore> {
+  if (!store || store.userId !== me.userId) {
+    const loaded = fetchPins(me)
+    store = { userId: me.userId, loaded }
+    loaded.catch(() => {
+      if (store?.loaded === loaded) store = null
+    })
+  }
+  return store.loaded
+}
+
+/**
+ * Applies `change` to the list and stores it as the next revision; when
+ * another app stored one first, starts again from that one. One write at a
+ * time from this page.
+ */
+function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) => boolean | Promise<boolean>): Promise<void> {
+  const run = async () => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const current = await pinStore(me)
+      const next = new Map(current.pins)
+      if (!(await change(next))) return
+      const revision = current.revision + 1
+      const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
+      const envelope = await sealIdentityPins(toBase64(me.masterKey), me.account, revision, list)
+      try {
+        await api.put('/user/identity-pins', { revision, envelope })
+        remember(me.userId, revision)
+        store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: next }) }
+        return
+      } catch (error) {
+        if (!(isAxiosError(error) && error.response?.status === 409)) throw error
+        store = null
+      }
+    }
+    throw new Error('the identity pin list kept changing')
+  }
+  const result = writes.then(run, run)
+  writes = result.catch(() => undefined)
+  return result
+}
+
+function now(): string {
+  return new Date().toISOString()
+}
+
+// -------------------------------------------------------------- checks
+
+/**
+ * How far `account`'s `claimed` keys can be trusted; pins the account's
+ * authority the first time it is met with a valid binding.
+ */
+export async function checkIdentity(me: DriveIdentity, account: string, claimed: ClaimedKeys = {}): Promise<IdentityStatus> {
+  if (account === me.account) return { kind: 'ok', verified: true }
+  let person: PublishedIdentity
+  try {
+    person = await publishedIdentity(me, account)
+  } catch {
+    return { kind: 'unknown' }
+  }
+  // The keys in use must be the ones the person's server publishes...
+  if (
+    (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
+    (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey)
+  ) {
+    return { kind: 'invalid' }
+  }
+  const incarnation = await incarnationIdOfAuthority(person.accountAuthorityPublicKey).catch(() => null)
+  if (!incarnation || (claimed.incarnationId && claimed.incarnationId !== incarnation)) return { kind: 'invalid' }
+  let pins: PinStore
+  try {
+    pins = await pinStore(me)
+  } catch {
+    return { kind: 'unknown' }
+  }
+  const pin = pins.pins.get(account)
+  // ...and those its authority vouches for. A binding is never withdrawn: a
+  // pinned account without one is a server leaving it out.
+  if (!person.driveKeyBinding) return pin ? { kind: 'invalid' } : { kind: 'unproven' }
+  const bound = await verifyDriveKeyBinding(
+    account,
+    person.accountAuthorityPublicKey,
+    person.driveHpkePublicKey,
+    person.driveSigningPublicKey,
+    person.driveKeyBinding,
+  ).catch(() => false)
+  if (!bound) return { kind: 'invalid' }
+  if (pin) {
+    if (pin.authorityPublicKey === person.accountAuthorityPublicKey) return { kind: 'ok', verified: pin.state === 'verified' }
+    return { kind: 'changed' }
+  }
+  // First met: trusted from now on.
+  await updatePins(me, (next) => {
+    if (next.has(account)) return false
+    next.set(account, { account, authorityPublicKey: person.accountAuthorityPublicKey, state: 'seen', since: now() })
+    return true
+  }).catch(() => undefined)
+  return { kind: 'ok', verified: false }
+}
+
+/**
+ * Trust `account`'s current authority from now on: after a change the user
+ * knows about (their account was wiped and set up again). The old identity is
+ * kept in the pin's history.
+ */
+export async function acceptIdentity(me: DriveIdentity, account: string): Promise<void> {
+  const person = await publishedIdentity(me, account)
+  if (!person.driveKeyBinding) throw new Error('this account has not signed its keys yet')
+  const bound = await verifyDriveKeyBinding(
+    account,
+    person.accountAuthorityPublicKey,
+    person.driveHpkePublicKey,
+    person.driveSigningPublicKey,
+    person.driveKeyBinding,
+  )
+  if (!bound) throw new Error('the keys are not signed by this account')
+  await updatePins(me, async (next) => {
+    const previous = next.get(account)
+    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey) return false
+    const replaced = previous ? [...(previous.replaced ?? [])] : []
+    if (previous) replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
+    next.set(account, {
+      account,
+      authorityPublicKey: person.accountAuthorityPublicKey,
+      state: 'seen',
+      since: now(),
+      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
+    })
+    return true
+  })
+}
+
+/** Test seam: forget what this page has looked up and pinned. */
+export function resetIdentityPinsForTesting(): void {
+  published.clear()
+  store = null
+  writes = Promise.resolve()
+}

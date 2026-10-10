@@ -41,6 +41,17 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
+  signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  verifyDriveKeyBinding(
+    account: string,
+    authorityPublicKeyBase64: string,
+    driveHpkePublicKeyBase64: string,
+    driveSigningPublicKeyBase64: string,
+    bindingBase64: string,
+  ): boolean
+  incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
+  sealIdentityPins(masterKeyBase64: string, owner: string, revision: number, pinsJson: string): string
+  openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealedBase64: string): string
   signContactSummary(masterKeyBase64: string, account: string, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
