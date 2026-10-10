@@ -1293,11 +1293,44 @@ export class ChatBackupCoordinator {
       if (page.segments.length !== 256) throw new Error('Chat backup continuation page is incomplete')
     }
     if (!restoreComplete) throw new Error('Chat backup restore exceeds the bounded page limit')
+    // This browser's queued segments the server does not have yet go on top,
+    // as the server will hold them once they are sent. Without them the
+    // mirror would fall back to each record's older state, and the next cycle
+    // would number the same change again: two changes from one device with
+    // one number, a backup that no longer restores.
+    const queued = new Set<BackupDisplayRecord>()
+    if (persist) {
+      const own = this.options.deviceId
+      const head = Math.max(
+        tailDeviceHeads.get(own)?.sequence ?? 0,
+        this.status.deviceHeads?.find(value => value.deviceId === own)?.sequence ?? 0,
+      )
+      const outbox = (await getAll<OutboxEntry>(this.db, 'outbox'))
+        .filter(entry => entry.deviceSequence > head && !tailOperations.has(entry.operationId))
+        .sort((left, right) => left.deviceSequence - right.deviceSequence)
+      for (const entry of outbox) {
+        const plaintext = await this.openObject(
+          entry.ciphertext,
+          SEGMENT_PURPOSE,
+          entry.operationId,
+          own,
+          entry.deviceSequence,
+          entry.previousSegmentDigest,
+        )
+        const decoded = (await getCryptoWasm()).decodeChatBackupPlaintext(
+          toBase64(plaintext), SEGMENT_PURPOSE,
+        ) as { version: number; records: BackupDisplayRecord[] }
+        if (decoded.version !== 1) throw new Error('unsupported Chat backup segment')
+        applyRecords(records, recordSources, decoded.records, own)
+        for (const record of decoded.records) queued.add(record)
+      }
+    }
     const stored = await Promise.all(Array.from(records.values()).map(async record => ({
       id: record.recordId,
       fingerprint: await fingerprint(record),
       record,
-      local: false,
+      // A queued change that stands is this browser's own, as before.
+      local: queued.has(record),
     })))
     if (persist) {
       const media = restoredMedia(stored)

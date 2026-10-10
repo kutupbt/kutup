@@ -169,6 +169,11 @@ client reads and verifies the status again and starts over, up to three times;
 any other inconsistency is an integrity failure and is not retried.
 
 The browser keeps the reduced records as its local mirror of the backup.
+A restore rebuilds the mirror from the server's base and tail plus this
+browser's own queued segments the server does not have yet, as the server
+will hold them once sent. Without the queue the mirror would fall back to a
+record's older state, and the next cycle would number the same change again:
+two changes from one device with one number, which no restore accepts.
 Each is sealed at rest (`{ id, sealed }`, XChaCha20-Poly1305 under a key
 derived from the account master key and bound to the record id, sealed by
 Rust: `sealLocalData`, `docs/research/16-browser-storage-architecture.md`); a
