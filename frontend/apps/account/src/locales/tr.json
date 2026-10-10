@@ -27,7 +27,8 @@
     "maps": "Haritalar",
     "adminMaps": "Haritalar",
     "storage": "Depolama alanı",
-    "keys": "Şifreleme anahtarları"
+    "keys": "Şifreleme anahtarları",
+    "mailSending": "Posta gönderimi"
   },
   "auth": {
     "fields": {
@@ -510,7 +511,8 @@
         "federationIdentityRepin": "{{admin}}, {{domain}} sunucusunu yeniden sabitledi (acil durum)",
         "federationPeerRetry": "{{admin}}, {{domain}} için keşfi yeniden denedi",
         "federationPeerRetryBulk": "{{admin}} birkaç sunucu için keşfi yeniden denedi",
-        "unknown": "{{admin}}: {{action}}"
+        "unknown": "{{admin}}: {{action}}",
+        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi"
       }
     },
     "settings": {
@@ -682,6 +684,42 @@
       "osmPolicy": "Karo kullanım politikası",
       "saved": "Harita ayarları kaydedildi",
       "saveFailed": "Harita ayarları kaydedilemedi."
+    },
+    "mailSending": {
+      "title": "Posta gönderimi",
+      "description": "Dış adreslere kimin posta gönderdiği ve nasıl gittiği. İstenmeyen posta gönderen tek bir hesap sunucunun adresini kara listeye aldırabilir; o zaman kimsenin postası ulaşmaz. Yalnızca sayılar: gönderilenleri hiçbir zaman görmezsiniz.",
+      "attentionOnly": "Yalnızca duraklatılan ve işaretlenen hesaplar",
+      "emptyTitle": "Henüz dışarıya posta yok",
+      "emptyDescription": "Dış adreslere gönderen ya da kendi sınırları olan hesaplar burada görünür.",
+      "account": "Hesap",
+      "sentDay": "Son gün",
+      "sentWeek": "Son 7 gün",
+      "bounces": "Geri dönenler (7 gün)",
+      "limits": "Sınırlar",
+      "state": "Durum",
+      "serverLimits": "Sunucununki",
+      "ownLimits": "Saatte {{hour}}, günde {{day}}",
+      "ok": "Olağan gönderiyor",
+      "paused": {
+        "admin": "Bir yönetici duraklattı",
+        "bounces": "Duraklatıldı: çok fazla geri dönen",
+        "spam": "Duraklatıldı: istenmeyen olarak reddedildi"
+      },
+      "flagged": {
+        "bounces": "İşaretli: geri dönenler",
+        "spam": "İşaretli: istenmeyen"
+      },
+      "pause": "Duraklat",
+      "resume": "Sürdür",
+      "clearFlag": "İşareti kaldır",
+      "editLimits": "Sınırlar",
+      "limitsTitle": "{{name}} için sınırlar",
+      "limitsDescription": "Bu hesabın gönderebileceği dış alıcı sayısı. Sunucunun sınırları için boş bırakın (bir hesabın ilk haftasında daha düşüktür). Kutup kullanıcıları arasındaki postalar hiç sınırlanmaz.",
+      "perHour": "Saatte",
+      "perDay": "Günde",
+      "serverLimit": "Sunucunun sınırı",
+      "saved": "Kaydedildi",
+      "cardHint": "Bu hesabın dış adreslere gönderdikleri. Buradan duraklatın ya da kendi sınırlarını verin."
     }
   }
 }

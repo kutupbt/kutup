@@ -1,2 +1,2 @@
 {"@type":"upsert","object":"MtaRoute","matchOn":["name"],"value":{"sink":{"@type":"Relay","name":"sink","description":"The gate's outside world","address":"mail-sink","port":24,"protocol":"lmtp","implicitTls":false,"allowInvalidCerts":false}}}
-{"@type":"update","object":"MtaOutboundStrategy","value":{"route":{"else":"'mx'","match":{"0":{"if":"is_local_domain(rcpt_domain)","then":"'kutup'"},"1":{"if":"rcpt_domain == 'outside.test'","then":"'sink'"}}}}}
+{"@type":"update","object":"MtaOutboundStrategy","value":{"route":{"else":"'mx'","match":{"0":{"if":"is_local_domain(rcpt_domain)","then":"'kutup'"},"1":{"if":"rcpt_domain == 'outside.test' || rcpt_domain == 'bounce.test'","then":"'sink'"}}}}}

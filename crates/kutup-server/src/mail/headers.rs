@@ -3,7 +3,7 @@
 //! count, Proton's readable fields. Read once on arrival, before the message
 //! is encrypted; nothing from the body is kept.
 
-use mail_parser::{Address, HeaderValue, MessageParser};
+use mail_parser::{Address, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
 use serde::Serialize;
 
 /// Column limits of `mail_messages` (migration 085).
@@ -38,6 +38,16 @@ pub struct Readable {
     pub attachment_count: i32,
     /// Stalwart's spam verdict, from the topmost `X-Spam-Score` header.
     pub spam: bool,
+    /// A delivery report (RFC 3464) for mail this address sent: how many
+    /// recipients failed, and the Message-ID of the message they failed for.
+    pub bounce: Option<Bounce>,
+}
+
+/// A delivery failure report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bounce {
+    pub failures: u32,
+    pub original_message_id: Option<String>,
 }
 
 impl Readable {
@@ -63,8 +73,65 @@ impl Readable {
             references,
             attachment_count: i32::try_from(message.attachment_count()).unwrap_or(i32::MAX),
             spam: spam_verdict(raw),
+            bounce: bounce(&message),
         }
     }
+}
+
+/// A `multipart/report; report-type=delivery-status` message: its failed
+/// recipients and the original message's id, from the returned headers.
+fn bounce(message: &Message<'_>) -> Option<Bounce> {
+    let top = message.content_type()?;
+    if !top.ctype().eq_ignore_ascii_case("multipart")
+        || !top
+            .subtype()
+            .is_some_and(|s| s.eq_ignore_ascii_case("report"))
+        || !top
+            .attribute("report-type")
+            .is_some_and(|t| t.eq_ignore_ascii_case("delivery-status"))
+    {
+        return None;
+    }
+    let mut failures = 0u32;
+    let mut original = None;
+    for part in &message.parts {
+        let Some(kind) = part.content_type() else {
+            continue;
+        };
+        if !kind.ctype().eq_ignore_ascii_case("message") {
+            continue;
+        }
+        match kind.subtype().map(str::to_ascii_lowercase).as_deref() {
+            Some("delivery-status") | Some("global-delivery-status") => {
+                let text = part.text_contents().unwrap_or_default();
+                failures += text
+                    .lines()
+                    .filter(|line| {
+                        let line = line.trim().to_ascii_lowercase();
+                        line.starts_with("action:") && line.contains("failed")
+                    })
+                    .count() as u32;
+            }
+            Some("rfc822") | Some("global") | Some("rfc822-headers") | Some("global-headers") => {
+                original = original.or_else(|| match &part.body {
+                    PartType::Message(returned) => returned.message_id().and_then(message_id),
+                    // Returned headers alone end without a blank line.
+                    _ => {
+                        let mut headers = part.contents().to_vec();
+                        headers.extend_from_slice(b"\r\n\r\n");
+                        MessageParser::default()
+                            .parse_headers(&headers)
+                            .and_then(|parsed| parsed.message_id().and_then(message_id))
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    (failures > 0).then_some(Bounce {
+        failures,
+        original_message_id: original,
+    })
 }
 
 fn mailboxes(address: &Address<'_>) -> Vec<Mailbox> {
@@ -251,6 +318,50 @@ JVBERi0=\r\n\
         assert_eq!(r.to.len(), MAX_ADDRESSES);
         assert_eq!(r.references.len(), MAX_REFERENCES);
         assert_eq!(r.references.last().map(String::as_str), Some("r79@x"));
+    }
+
+    #[test]
+    fn delivery_reports_name_their_failures_and_original() {
+        let report = b"From: MAILER-DAEMON@mail.kutup.dev\r\n\
+To: alice@kutup.dev\r\n\
+Subject: Undelivered Mail Returned to Sender\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/report; report-type=delivery-status; boundary=b\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Could not deliver.\r\n\
+--b\r\n\
+Content-Type: message/delivery-status\r\n\
+\r\n\
+Reporting-MTA: dns; mail.kutup.dev\r\n\
+\r\n\
+Final-Recipient: rfc822; nobody@example.org\r\n\
+Action: failed\r\n\
+Status: 5.1.1\r\n\
+\r\n\
+Final-Recipient: rfc822; other@example.org\r\n\
+Action: failed\r\n\
+Status: 5.1.1\r\n\
+\r\n\
+Final-Recipient: rfc822; fine@example.org\r\n\
+Action: delayed\r\n\
+--b\r\n\
+Content-Type: message/rfc822-headers\r\n\
+\r\n\
+From: alice@kutup.dev\r\n\
+Message-ID: <sent-1@kutup.dev>\r\n\
+--b--\r\n";
+        let r = Readable::parse(report);
+        assert_eq!(
+            r.bounce,
+            Some(Bounce {
+                failures: 2,
+                original_message_id: Some("sent-1@kutup.dev".into())
+            })
+        );
+        assert_eq!(Readable::parse(MESSAGE).bounce, None);
     }
 
     #[test]

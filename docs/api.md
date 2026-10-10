@@ -1095,6 +1095,31 @@ user out of storage; not delivered). Errors: `409` `keyChanged` with
 recipients by default), `413` over 25 MB or quota, `503` when Stalwart is
 unreachable.
 
+### GET /api/mail/sending
+
+Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
+"sentDay", "newAccount", "paused" }`. `paused` is `admin`, `bounces` or `spam`
+while sending outside is paused (mail between Kutup users still goes). New
+accounts may send to 50 outside recipients a day in their first week
+(`MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), then
+`MAIL_SEND_RECIPIENTS_PER_HOUR` and `…_PER_DAY`. `POST /api/mail/send` answers
+`403` with `code: sendingPaused` while paused, and `429` `sendLimit` (with
+`perHour`, `perDay`, `newAccount`) over a limit.
+
+### GET /api/admin/mail/senders?attention= · PUT /api/admin/users/:id/mail-sending
+
+Admin only. The list: accounts that sent outside in the last week, or have
+their own limits, a pause or a flag, paused and flagged first:
+`[{ "userId", "email", "username", "sentDay", "sentWeek", "bouncesWeek",
+"spamRefusedWeek", "perHour", "perDay", "pausedAt", "pausedReason",
+"flaggedAt", "flagReason" }]` (counts only, never content). `attention=true`
+keeps only paused and flagged ones. The update takes `{ "perHour"?, "perDay"?
+(a number or null for the server's), "paused"?, "clearFlag"? }` → `204`, and is
+in the audit log. An account is paused automatically after 10 bounces in a day
+that are also 10 % of what it sent (flagged from 5 and 5 %), counting only
+delivery reports for its own messages; a submission Stalwart refuses as spam
+flags it, and three in a day pause it.
+
 ### POST /internal/mail/rcpt
 
 Stalwart's MTA hook at the RCPT stage, outside `/api` and not routed by
@@ -1102,6 +1127,9 @@ nginx, and only for mail arriving on port 25. `Authorization: Bearer <MAIL_INBOU
 the address (any case, without a `+tag`) is a Kutup address on this server
 with a primary key, on an active account with room in its pool; otherwise
 answers `{ "action": "reject", "response": { "status": 550 | 452, ... } }`.
+`postmaster@` and `abuse@` reach an administrator (the break-glass one first);
+`postmaster`, `abuse`, `hostmaster`, `mailer-daemon` and `security` cannot be
+registered as usernames.
 `404` when mail is off.
 
 ---

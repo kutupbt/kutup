@@ -282,6 +282,32 @@ help pages (checked 2026-10-10):
    Proton account, documented.
 5. **C3e:** key import and export; then the MX switch from Cloudflare
    (DNS, done by the operator).
+## Sending safety
+
+Decided 2026-10-10. One account sending spam can get the server's IPv4
+address blocklisted, and then nobody's mail arrives, so before the MX switch:
+
+1. **Limits** on outside recipients: 100 an hour and 500 a day; 50 a day in an
+   account's first week (most abuse comes from new accounts); per-account
+   overrides by an administrator. Mail between Kutup users is never limited.
+2. **Bounces:** Stalwart's delivery reports come back as ordinary mail; one
+   that names a message the account sent outside counts (a forged report
+   naming someone else's message does not). 10 in a day that are also 10 % of
+   what was sent pause sending; 5 and 5 % flag the account.
+3. **Spam:** a submission Stalwart refuses as spam flags the account; three in
+   a day pause it. Stalwart's filter is not switched on for outgoing mail:
+   tried with a reject score, its rules weighed the connection more than the
+   content (an ordinary message scored like GTUBE, which it does not know) and
+   refused ordinary incoming mail too. Content scoring of outgoing mail needs
+   another filter; recipients' providers judge it meanwhile.
+4. **Administrator:** Administration → Mail sending: counts per account (never
+   content), pause, resume, own limits, flags; in the audit log.
+5. **Role addresses:** `postmaster@` and `abuse@` reach the administrator;
+   those and `hostmaster`, `mailer-daemon` and `security` cannot be registered.
+   Google Postmaster Tools and Microsoft SNDS before the MX switch.
+
+Migration 087: `mail_sending_policies` (overrides, pause, flag) and
+`mail_sending_events` (bounces and spam refusals, kept 30 days).
 
 ## Data (migration 085)
 

@@ -8,6 +8,7 @@
 pub mod headers;
 pub mod lmtp;
 pub mod outside_keys;
+pub mod safety;
 pub mod submit;
 
 use std::sync::Arc;
@@ -66,6 +67,19 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
     .ok()
 }
 
+/// Role addresses (RFC 2142) no account may take: mail to `postmaster@` and
+/// `abuse@` goes to the administrator, where complaints must reach.
+pub const RESERVED_LOCAL_PARTS: [&str; 5] = [
+    "postmaster",
+    "abuse",
+    "hostmaster",
+    "mailer-daemon",
+    "security",
+];
+
+/// The role addresses delivered to the administrator.
+const ADMIN_ROLE_ADDRESSES: [&str; 2] = ["postmaster", "abuse"];
+
 /// An accepted recipient: whose mail it is and the key it is encrypted to.
 #[derive(Debug, Clone)]
 pub struct Recipient {
@@ -90,14 +104,25 @@ fn try_later() -> Reply {
 /// with a primary key, on an active account with room in its pool.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
+    let local = address
+        .split_once('@')
+        .map(|(local, _)| local)
+        .unwrap_or_default();
+    // postmaster@ and abuse@ reach the administrator (the break-glass one
+    // when there is one).
+    let role = ADMIN_ROLE_ADDRESSES.contains(&local);
     let row: Option<(Uuid, Uuid, Vec<u8>, i64, i64)> = sqlx::query_as(
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.address = $1",
+          WHERE CASE WHEN $2 THEN u.is_admin ELSE a.address = $1 END
+          ORDER BY (u.email = $3) DESC, u.created_at
+          LIMIT 1",
     )
     .bind(&address)
+    .bind(role)
+    .bind(&state.config.break_glass_admin_email)
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
@@ -161,7 +186,25 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
         .put_object_versioned(&key, ByteStream::from(ciphertext), size)
         .await?;
     let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
-        Ok(Some(stored)) => return Ok(stored),
+        Ok(Some(stored)) => {
+            // A report of mail this account sent failing: counts towards
+            // pausing its sending (only for its own messages).
+            if let Some(bounce) = &readable.bounce {
+                if let Some(original) = &bounce.original_message_id {
+                    if let Err(error) = safety::record_bounce(
+                        &state.pool,
+                        recipient.user_id,
+                        original,
+                        bounce.failures,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %error, "mail: bounce not recorded");
+                    }
+                }
+            }
+            return Ok(stored);
+        }
         Ok(None) => Ok(Reply::new(250, "2.0.0", "already delivered")),
         Err(Recorded::Full) => Ok(full()),
         Err(Recorded::Failed(error)) => Err(error),

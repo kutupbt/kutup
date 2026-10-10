@@ -1,5 +1,6 @@
 # The mail gate's stand-in for the outside world: an LMTP server that
-# Stalwart's test route hands mail for outside.test to, printing each
+# Stalwart's test route hands mail for outside.test (and bounce.test, whose
+# recipients it refuses) to, printing each
 # message for the gate to inspect (scripts/test-mail-inbound.sh).
 import asyncio
 
@@ -12,8 +13,12 @@ async def session(reader, writer):
         if verb == b"LHLO":
             writer.write(b"250-sink\r\n250-8BITMIME\r\n250 PIPELINING\r\n")
         elif verb == b"RCPT":
-            recipients += 1
-            writer.write(b"250 ok\r\n")
+            # bounce.test stands in for addresses that do not exist.
+            if b"@bounce.test" in line.lower():
+                writer.write(b"550 5.1.1 no such user\r\n")
+            else:
+                recipients += 1
+                writer.write(b"250 ok\r\n")
         elif verb == b"DATA":
             writer.write(b"354 go\r\n")
             await writer.drain()

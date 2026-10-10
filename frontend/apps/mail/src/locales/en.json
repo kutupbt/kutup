@@ -161,7 +161,10 @@
     "forwardedDate": "Date: {{date}}",
     "forwardedSubject": "Subject: {{subject}}",
     "addContactOffer": "Add {{address}} to your contacts?",
-    "addContact": "Add"
+    "addContact": "Add",
+    "sendingPaused": "Mail to outside addresses is paused for your account. Ask your administrator.",
+    "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
+    "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",

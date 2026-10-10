@@ -705,6 +705,9 @@ pub async fn uploads_sweep_once(
     if let Err(error) = sweep_mail_orphans(pool, storage).await {
         tracing::warn!(error = %error, "mail orphan sweep failed");
     }
+    if let Err(error) = crate::mail::safety::sweep(pool).await {
+        tracing::warn!(error = %error, "mail sending-event sweep failed");
+    }
     let media_delivery_retention_days = crate::site_settings::chat_delivery_retention_days(
         pool,
         crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
