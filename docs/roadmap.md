@@ -464,7 +464,9 @@ arrival, and direct sending. Phases, each with its own plan before code:
   recipient), sending outside through Stalwart (DKIM, sending limits),
   drafts, folders, search on readable fields, safe HTML. Later (C2f): body
   search in the browser, labels and custom folders, emptying Trash and Spam
-  after 30 days, web push. C3, PGP with outside users (in progress): the
+  after 30 days, web push. The goal is Proton Mail parity: the gap list and
+  its order are in [`plans/mail-parity.md`](plans/mail-parity.md); folders,
+  labels and filters come first ([`plans/mail-filters.md`](plans/mail-filters.md)). C3, PGP with outside users (in progress): the
   server finds their keys (WKD, Proton, keys.openpgp.org) and accepts
   ready-made PGP/MIME messages; Mail encrypts to found or pinned keys,
   opens and verifies PGP mail, sends an Autocrypt header and offers to
