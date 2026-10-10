@@ -13,11 +13,13 @@ fi
 mkdir -p "$OUT"
 RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build \
   --manifest-path "$WRAPPER/Cargo.toml" \
-  --release \
+  --profile wasm-release \
   --target wasm32-unknown-unknown
 wasm-bindgen \
-  "$ROOT/target/wasm32-unknown-unknown/release/kutup_crypto_wasm.wasm" \
+  "$ROOT/target/wasm32-unknown-unknown/wasm-release/kutup_crypto_wasm.wasm" \
   --target web \
   --typescript \
+  --remove-name-section \
+  --remove-producers-section \
   --out-dir "$OUT" \
   --out-name kutup_crypto_wasm

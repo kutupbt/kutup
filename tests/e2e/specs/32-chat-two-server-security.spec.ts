@@ -66,23 +66,29 @@ function expectNoPageErrors(...pages: Page[]): void {
 }
 
 /**
- * The Rust/WASM runtimes are served with stable names, so a deployment must
- * make browsers revalidate them rather than pair an old ABI with a new page.
+ * The Rust/WASM runtimes live in directories named for their content hash,
+ * so a deployment never pairs an old Rust ABI with a new page: the URLs the
+ * page loaded must be hashed, and may then be cached for good.
  */
-async function expectWasmRuntimeRevalidation(page: Page): Promise<void> {
-  for (const path of [
-    '/chat-wasm/kutup_chat_core.js?runtime=2',
-    '/chat-wasm/kutup_chat_core_bg.wasm?runtime=2',
-    '/crypto-wasm/kutup_crypto_wasm.js?runtime=2',
-    '/crypto-wasm/kutup_crypto_wasm_bg.wasm?runtime=2',
-  ]) {
-    const response = await page.evaluate(async (url) => {
-      const result = await fetch(url, { method: 'HEAD', cache: 'no-store' })
-      return { ok: result.ok, cacheControl: result.headers.get('cache-control') ?? '' }
-    }, path)
-    expect(response.ok, `${path} must be deployed with the page`).toBe(true)
-    expect(response.cacheControl, `${path} must revalidate`).toContain('no-cache')
-    expect(response.cacheControl, `${path} must not be immutable`).not.toContain('immutable')
+async function expectWasmRuntimeCaching(page: Page): Promise<void> {
+  const urls = await page.evaluate(() =>
+    performance
+      .getEntriesByType('resource')
+      .map((entry) => new URL(entry.name).pathname)
+      .filter((path) => /^\/(chat|crypto)-wasm\//.test(path)),
+  )
+  for (const module of ['chat', 'crypto']) {
+    const loaded = urls.filter((path) => path.startsWith(`/${module}-wasm/`))
+    expect(loaded.length, `${module} runtime must be loaded`).toBeGreaterThan(0)
+    for (const path of loaded) {
+      expect(path, `${path} must be in a content-hashed directory`).toMatch(/^\/(chat|crypto)-wasm\/[0-9a-f]{16}\//)
+      const response = await page.evaluate(async (url) => {
+        const result = await fetch(url, { method: 'HEAD', cache: 'no-store' })
+        return { ok: result.ok, cacheControl: result.headers.get('cache-control') ?? '' }
+      }, path)
+      expect(response.ok, `${path} must be deployed with the page`).toBe(true)
+      expect(response.cacheControl, `${path} is cached for good`).toContain('immutable')
+    }
   }
 }
 
@@ -313,8 +319,8 @@ test.describe('two-server secure chat', () => {
     const pageA = await openChat(contextA, 'primary', watchErrors)
     const pageB = await openChat(contextB, 'secondary', watchErrors)
     await enableReadReceipts(pageB)
-    await expectWasmRuntimeRevalidation(pageA)
-    await expectWasmRuntimeRevalidation(pageB)
+    await expectWasmRuntimeCaching(pageA)
+    await expectWasmRuntimeCaching(pageB)
 
     const identifiedToBob: string[] = []
     pageA.on('request', (request) => {

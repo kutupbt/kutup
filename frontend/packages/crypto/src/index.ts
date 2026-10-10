@@ -13,7 +13,6 @@ import {
   sealAccountEnvelope,
 } from './accountEnvelope'
 import { deriveAccountIdentityKeys } from './identity'
-import { encodeMnemonic } from './mnemonic'
 
 export { encryptStream, decryptStream } from './symmetric'
 export {
@@ -43,7 +42,8 @@ export type {
   ChatAttachmentLedgerContextV1,
   ChatMediaStreamEncryptorV1,
 } from './chatMedia'
-export { decodeMnemonic, validateMnemonic } from './mnemonic'
+// The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
+// kept out of this barrel so only the pages that use it load it.
 export {
   ACCOUNT_PROTECTION_DEFAULTS,
   ACCOUNT_PROTECTION_SUITE_V1,
@@ -161,6 +161,7 @@ export async function generateRegistrationKeys(
 
   // 2. Generate recovery key (256-bit random → BIP39 mnemonic, shown once)
   const recoveryKeyEntropy = sodium.randombytes_buf(32)
+  const { encodeMnemonic } = await import('./mnemonic')
   const mnemonic = encodeMnemonic(recoveryKeyEntropy)
 
   // 3. One Argon2id root; Rust expands purpose-separated KEK and login keys.

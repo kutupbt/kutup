@@ -13,13 +13,15 @@ fi
 mkdir -p "$OUT"
 cargo build \
   --manifest-path "$CORE/Cargo.toml" \
-  --release \
+  --profile wasm-release \
   --target wasm32-unknown-unknown \
   --no-default-features \
   --features wasm
 wasm-bindgen \
-  "$CORE/target/wasm32-unknown-unknown/release/kutup_chat_core.wasm" \
+  "$CORE/target/wasm32-unknown-unknown/wasm-release/kutup_chat_core.wasm" \
   --target web \
   --typescript \
+  --remove-name-section \
+  --remove-producers-section \
   --out-dir "$OUT" \
   --out-name kutup_chat_core

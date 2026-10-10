@@ -177,6 +177,7 @@
     "failed": "Ayrıntılar kaydedilemedi. Yeniden deneyin."
   },
   "places": {
+    "loading": "Harita açılıyor…",
     "group_one": "Burada {{count}} fotoğraf",
     "group_other": "Burada {{count}} fotoğraf",
     "mapsOffTitle": "Haritalar kapalı",

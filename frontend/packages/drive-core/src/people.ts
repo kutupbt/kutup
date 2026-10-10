@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } from '@kutup/crypto'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
@@ -140,11 +141,12 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
 }
 
 async function loadPeople(me: DriveIdentity): Promise<Map<string, PersonProfile>> {
-  const [{ data }, own] = await Promise.all([
-    api.get<{ people: DrivePerson[] }>('/drive/people'),
-    ownLookup(me).catch(() => null),
-  ])
+  const { data } = await api.get<{ people: DrivePerson[] }>('/drive/people')
   const profiles = new Map<string, PersonProfile>()
+  // Nobody to exchange with: the Chat runtime (megabytes of WASM) is not
+  // needed at all (docs/research/18-web-performance.md).
+  if (data.people.length === 0) return profiles
+  const own = await ownLookup(me).catch(() => null)
   await Promise.all(
     data.people.map(async (person) => {
       const keys = await keysOf(person)
@@ -170,13 +172,30 @@ async function loadPeople(me: DriveIdentity): Promise<Map<string, PersonProfile>
  */
 export function usePeople() {
   const identity = useDriveIdentity()
+  const idle = useIdle()
   return useQuery({
     queryKey: [...peopleKey, identity.data?.account],
-    enabled: Boolean(identity.data),
+    // After the page's own first work: the exchange can load the Chat
+    // runtime, which should not compete with the first listing.
+    enabled: Boolean(identity.data) && idle,
     staleTime: 2 * 60_000,
     refetchInterval: 5 * 60_000,
     queryFn: () => loadPeople(identity.data!),
   })
+}
+
+/** True once the browser has been idle after the first render (at most 3 s later). */
+function useIdle(): boolean {
+  const [idle, setIdle] = useState(false)
+  useEffect(() => {
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(() => setIdle(true), { timeout: 3000 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const id = window.setTimeout(() => setIdle(true), 1000)
+    return () => window.clearTimeout(id)
+  }, [])
+  return idle
 }
 
 /** How to show someone: their name and picture once they gave you their key, else their address. */

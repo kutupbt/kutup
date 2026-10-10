@@ -53,12 +53,43 @@ RUN o=apps/editor/public/onlyoffice \
     && grep -Fx 'kutup-v9.4.0.131.3' $o/dist/v9/.version \
     && grep -Fx 'kutup-v9.4.0.131.1' $o/dist/x2t/.version \
     && grep -Fx '2025.6.0' $o/templates/.version
+# The OnlyOffice client and x2t move to directories named for their
+# versions, so their files can be cached for good: a new build of either is
+# a new URL (docs/research/18-web-performance.md). Only the bridge pages
+# name those directories.
+RUN o=apps/editor/public/onlyoffice \
+    && client=$(cat $o/dist/v9/.version) && x2t=x2t-$(cat $o/dist/x2t/.version) \
+    && mv $o/dist/v9 "$o/dist/$client" && mv $o/dist/x2t "$o/dist/$x2t" \
+    && sed -i "s#dist/v9/#dist/$client/#g" $o/inner.html \
+    && sed -i "s#dist/x2t/#dist/$x2t/#g" $o/x2t.html $o/inner.html \
+    && ! grep -n 'dist/v9/\|dist/x2t/' $o/inner.html $o/x2t.html \
+    && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat maps photos office contacts editor; do cp -r apps/$app/dist /out/$app; done
+    && for app in account drive chat maps photos office contacts editor; do cp -r apps/$app/dist /out/$app; done \
+    && find /out -name '*.map' -delete
 
-FROM nginx:1.29-alpine
-COPY --from=builder /out /usr/share/nginx/html
-COPY frontend/docker/40-kutup-hosts.sh /docker-entrypoint.d/40-kutup-hosts.sh
-RUN chmod +x /docker-entrypoint.d/40-kutup-hosts.sh && rm /etc/nginx/conf.d/default.conf
+# Every text file and WASM over 1 KB is stored compressed beside itself,
+# gzip and brotli, and nginx serves those as they are (gzip_static,
+# brotli_static): nothing is compressed per request. Brotli copies the
+# OnlyOffice image already ships are kept; its help pages get gzip only.
+FROM node:22-alpine AS compress
+RUN apk add --no-cache brotli
+COPY --from=builder /out /out
+COPY frontend/docker/precompress.sh /precompress.sh
+RUN sh /precompress.sh /out
+
+# Alpine's nginx, for its packaged brotli module (the nginx.org image has
+# none).
+FROM alpine:3.23
+RUN apk add --no-cache nginx nginx-mod-http-brotli \
+    && mkdir -p /run/nginx /etc/nginx/conf.d \
+    && rm -f /etc/nginx/http.d/default.conf
+COPY --from=compress /out /usr/share/nginx/html
+COPY frontend/docker/nginx.conf /etc/nginx/nginx.conf
+COPY frontend/docker/40-kutup-hosts.sh /usr/local/bin/kutup-hosts.sh
+COPY frontend/docker/entrypoint.sh /usr/local/bin/kutup-entrypoint.sh
+RUN chmod +x /usr/local/bin/kutup-hosts.sh /usr/local/bin/kutup-entrypoint.sh && nginx -t
 EXPOSE 80
+STOPSIGNAL SIGQUIT
+ENTRYPOINT ["/usr/local/bin/kutup-entrypoint.sh"]

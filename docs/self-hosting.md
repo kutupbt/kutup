@@ -348,9 +348,10 @@ one up without a restart. It needs:
   `KUTUP_ACME_EXTRA_DOMAINS` adds names beside them, such as the group-call
   SFU's `sfu.<domain>`);
 - each of those hostnames pointing at this machine;
-- ports 80 and 443 reachable from the internet. Let's Encrypt proves
-  ownership by fetching a file over port 80, so no DNS credentials are kept
-  on the server.
+- ports 80 and 443 reachable from the internet, and UDP 443 for HTTP/3
+  (optional: browsers fall back to TCP). Let's Encrypt proves ownership by
+  fetching a file over port 80, so no DNS credentials are kept on the
+  server.
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.acme.yml up -d --wait
@@ -816,20 +817,25 @@ kutup.example.com {
 }
 ```
 
-### Browser WASM cache policy
+### Browser cache policy
 
-Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
-binaries use stable filenames and form one deployment unit with the web bundle
-and API server. They must be revalidated and must never receive an immutable
-cache policy from an outer reverse proxy or CDN. The bundled frontend sends
-`Cache-Control: no-cache` for both paths. Preserve that header
-when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
-and may remain immutable.
+Every static file the apps load has a URL that changes when its content does,
+so the bundled frontend caches them for good (`Cache-Control: public,
+max-age=31536000, immutable`):
 
-Serving stale generated WASM with a newer JavaScript bundle can produce a
-fail-closed Chat or Drive initialization error because the Rust and HTTP DTOs
-no longer agree. Deploy the frontend, its generated WASM directories, and the
-backend from the same release.
+- Vite's `/assets/` bundles (content-hashed file names);
+- the Rust/WASM runtimes under `/crypto-wasm/<hash>/` and `/chat-wasm/<hash>/`,
+  directories named for the files' content hash, which the bundle names;
+- the OnlyOffice client and x2t on the editor host under
+  `/onlyoffice/dist/<version>/`, directories named for their versions.
+
+The pages that name them (`index.html`, the editor's `inner.html` and
+`x2t.html`) are `no-cache`. An outer cache or CDN may keep these policies as
+they are; it must not cache the HTML pages longer.
+
+Files are stored compressed at build time (gzip and brotli, served with
+`Vary: Accept-Encoding`). A reverse proxy in front should pass
+`Accept-Encoding` through and not recompress.
 
 ---
 
@@ -921,7 +927,7 @@ publishing new DKIM records.
 ## Security Hardening
 
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
-- **Firewall:** Only expose ports 80 and 443. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet.
+- **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.

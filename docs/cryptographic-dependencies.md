@@ -26,11 +26,12 @@ least ten times slower through Rust/WASM or cannot complete because of a
 platform memory/runtime failure. Such an adapter never owns a header,
 derivation label, parser, suite decision or persistent format.
 
-Generated Chat and Crypto WASM glue and binaries use stable public filenames.
-They are deployed atomically with their matching frontend and backend and are
-always revalidated (`Cache-Control: no-cache, must-revalidate`); an immutable
-cache may otherwise mix incompatible Rust and transport DTO versions. Ordinary
-content-hashed web assets remain immutable.
+Generated Chat and Crypto WASM glue and binaries are served from directories
+named for their content hash (`/crypto-wasm/<hash>/`, `/chat-wasm/<hash>/`),
+which the bundle names. A new build is a new URL, so a page can never pair an
+old Rust ABI or transport DTO with a new bundle, and the files are cached as
+immutable like every other content-hashed web asset. They are still deployed
+with their matching frontend and backend.
 
 Kutup does not fork or reimplement libsignal or OpenMLS. Their types do not
 cross Kutup's public API boundary; Kutup-owned DTOs make dependency upgrades

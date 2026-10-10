@@ -1326,6 +1326,18 @@ a 17-byte authentication/tag overhead.
 
 ---
 
+### GET /api/drive/files
+
+Every file in the folders the account owns or has been given (not albums,
+not the trash, not folders on other servers), newest first, in one request:
+the rows of `GET /api/collections/:id/files` for all of them. The Office
+home lists documents across all folders with it instead of one request per
+folder.
+
+**Auth:** Bearer JWT
+
+---
+
 ### PUT /api/files/:id
 
 Replace only the authenticated metadata envelope, sealed at the file's current

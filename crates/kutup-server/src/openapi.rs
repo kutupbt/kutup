@@ -134,6 +134,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::tus::delete,
         // --- files ---
         crate::handlers::files::list_files,
+        crate::handlers::files::list_all_files,
         crate::handlers::files::upload,
         crate::handlers::files::download,
         crate::handlers::files::download_original,

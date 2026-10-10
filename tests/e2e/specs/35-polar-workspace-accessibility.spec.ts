@@ -90,12 +90,33 @@ test.describe('Responsive and accessibility gate', () => {
     test.slow()
     const context = await browser.newContext()
     await registerAccount(context, newAccount('a11y', PASSWORD))
+    // Theme and language follow the account, which would switch a page back
+    // while it is checked: this spec sets them per app, so the account says
+    // nothing (account sync has its own spec).
+    await context.route('**/api/account/ui-preferences', (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({ json: { theme: null, language: null } })
+        : route.fulfill({ status: 204 }),
+    )
     const page = await context.newPage()
     for (const { app, path, ready } of WORKSPACES) {
       const where = `${app}${path === '/' ? '' : path.replaceAll('/', '-')}`
       await page.setViewportSize(DESKTOP)
       await page.goto(appUrl(app, path))
-      await expect(ready(page)).toBeVisible({ timeout: 120_000 })
+      // An app opened for the first time signs in through the account app
+      // and comes back: "ready" counts only while the page is on the app
+      // itself, past its sign-in hand-off (the account app's pages have
+      // headings too).
+      const origin = new URL(appUrl(app, path)).origin
+      await expect
+        .poll(
+          async () => {
+            const url = new URL(page.url())
+            return url.origin === origin && !url.pathname.startsWith('/login') && (await ready(page).isVisible())
+          },
+          { timeout: 120_000 },
+        )
+        .toBe(true)
       await setPreferences(page, { theme: 'light' })
       await expect(ready(page)).toBeVisible({ timeout: 60_000 })
       await expectOneMainWithoutPageOverflow(page)

@@ -9,7 +9,11 @@ vi.mock('./client', () => ({
   refreshAccessToken: () => refresh(),
 }))
 const activateSession = vi.fn()
-vi.mock('./profile', () => ({ activateSession: (...a: unknown[]) => activateSession(...a) }))
+const fetchProfile = vi.fn()
+vi.mock('./profile', () => ({
+  activateSession: (...a: unknown[]) => activateSession(...a),
+  fetchProfile: (...a: unknown[]) => fetchProfile(...a),
+}))
 const wasm = vi.fn()
 vi.mock('@kutup/crypto/rustWasm', () => ({ getCryptoWasm: () => wasm() }))
 const open = vi.fn()
@@ -38,6 +42,7 @@ beforeEach(() => {
   refresh.mockResolvedValue({ accessToken: 'AT', sessionId: 'S1' })
   get.mockResolvedValue({ data: { key: 'A'.repeat(43) + '=' } })
   wasm.mockResolvedValue({})
+  fetchProfile.mockResolvedValue({ id: 'u1' })
   open.mockResolvedValue(encodeKeys(keys))
 })
 
@@ -45,7 +50,9 @@ describe('restoreSession', () => {
   it('restores from the blob with the server-held key', async () => {
     expect(await restoreSession()).toBe('restored')
     expect(open).toHaveBeenCalledWith('BLOB', expect.any(Uint8Array), 3, 'web-drive:S1')
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S1')
+    // The profile came alongside the key, under the fresh token.
+    expect(fetchProfile).toHaveBeenCalledWith('AT')
+    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S1', { id: 'u1' })
   })
 
   it('reports none without a blob, touching nothing', async () => {

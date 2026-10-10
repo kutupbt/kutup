@@ -38,6 +38,7 @@ services:
     ports: !override
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     volumes:
       - acme_webroot:/var/www/acme:ro
       - ./nginx/90-reload-on-new-certificate.sh:/docker-entrypoint.d/90-reload-on-new-certificate.sh:ro

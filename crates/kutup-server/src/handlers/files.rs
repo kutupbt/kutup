@@ -143,6 +143,35 @@ pub async fn list_files(
     Ok(Json(out).into_response())
 }
 
+/// `GET /api/drive/files` — every file in the folders this account owns or
+/// has been given (not albums, not the trash), newest first: one request
+/// where listing each folder takes one per folder (the Office home lists
+/// documents across all of them; docs/research/18-web-performance.md).
+/// Rows are those of `GET /api/collections/{id}/files`.
+#[utoipa::path(
+    get,
+    path = "/api/drive/files",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Files in every folder the account can read", body = Vec<FileRow>))
+)]
+pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let out = file_rows(
+        &state.pool,
+        "f.collection_id IN (
+             SELECT c.id FROM collections c
+             WHERE c.deleted_at IS NULL AND c.kind = 'folder'
+               AND (c.owner_user_id = $1
+                    OR EXISTS (SELECT 1 FROM collection_shares cs
+                               WHERE cs.collection_id = c.id AND cs.recipient_user_id = $1)))",
+        user_id,
+        user_id,
+    )
+    .await?;
+    Ok(Json(out).into_response())
+}
+
 /// `POST /api/files/upload` — mirrors `Upload`.
 #[utoipa::path(
     post,
