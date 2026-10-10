@@ -35,7 +35,9 @@
     "archive": "Arşivde bir şey yok",
     "spam": "İstenmeyen posta yok",
     "trash": "Çöp boş",
-    "all": "Henüz posta yok"
+    "all": "Henüz posta yok",
+    "folder": "Bu klasör boş",
+    "label": "Bu etiketi taşıyan posta yok"
   },
   "padlock": {
     "verified": "Uçtan uca şifreli, doğrulanmış bir gönderenden",
@@ -210,7 +212,9 @@
     "archive": "Arşiv, postaları silmeden gelen kutusunun dışında tutar.",
     "spam": "İstenmeyene benzeyen postalar buraya düşer.",
     "trash": "Silinen postalar, kalıcı olarak silene dek burada bekler.",
-    "all": "İstenmeyen ve Çöp dışındaki tüm postalar."
+    "all": "İstenmeyen ve Çöp dışındaki tüm postalar.",
+    "folder": "Postaları buraya sürükleyin ya da Taşı’yı kullanın.",
+    "label": "Etiketle ile postalara ekleyin."
   },
   "person": {
     "details": "{{name}} <{{address}}> hakkında",
@@ -233,7 +237,9 @@
     "spam_other": "{{count}} ileti istenmeyen olarak işaretlendi.",
     "trash_one": "Çöp Kutusuna taşındı.",
     "trash_other": "{{count}} ileti Çöp Kutusuna taşındı.",
-    "undo": "Geri al"
+    "undo": "Geri al",
+    "folder_one": "{{name}} klasörüne taşındı.",
+    "folder_other": "{{count}} ileti {{name}} klasörüne taşındı."
   },
   "shortcuts": {
     "title": "Klavye kısayolları",
@@ -267,12 +273,73 @@
       "deleteForever": "Kalıcı olarak sil (Çöp, İstenmeyen, Taslaklar)",
       "drag": "Taşımak için bir klasöre bırak",
       "send": "Gönder",
-      "closeComposer": "Yazma penceresini kapat"
+      "closeComposer": "Yazma penceresini kapat",
+      "moveTo": "Taşı…",
+      "labelAs": "Etiketle…"
     },
     "mouse": {
       "click": "Tıkla",
       "rightClick": "Sağ tık",
       "drag": "Sürükle"
     }
+  },
+  "places": {
+    "folders": "Klasörler",
+    "labels": "Etiketler",
+    "manage": "Klasörleri ve etiketleri yönet",
+    "newFolder": "Yeni klasör",
+    "newLabel": "Yeni etiket",
+    "newSubfolder": "İçine yeni klasör",
+    "editFolder": "Klasörü düzenle",
+    "editLabel": "Etiketi düzenle",
+    "deleteFolder": "Klasörü sil",
+    "deleteLabel": "Etiketi sil",
+    "folderOptions": "{{name}} seçenekleri",
+    "labelOptions": "{{name}} seçenekleri",
+    "expand": "{{name}} içindeki klasörleri göster",
+    "collapse": "{{name}} içindeki klasörleri gizle",
+    "noFolders": "Klasör yok",
+    "noLabels": "Etiket yok",
+    "noFoldersHint": "Postaları projeye, kişiye ya da istediğiniz şeye göre dosyalamak için klasörler oluşturun.",
+    "noLabelsHint": "Etiketler renkli işaretlerdir; bir iletinin birkaç etiketi olabilir ve nereye taşınırsa taşınsın onları korur.",
+    "folderName": "Klasör adı",
+    "labelName": "Etiket adı",
+    "location": "Klasörün yeri",
+    "topLevel": "En üst düzey",
+    "color": "Renk",
+    "newFolderHint": "Yeni klasörünüze bir ad verin ve hangi klasörün içine konacağını seçin. Seçmezseniz en üst düzeyde oluşturulur.",
+    "nameRequired": "Ad gerekli.",
+    "nameTooLong": "Ad en fazla 100 karakter olabilir.",
+    "folderNameTaken": "Bu adda bir klasör zaten var.",
+    "labelNameTaken": "Bu adda bir etiket zaten var.",
+    "created": "{{name}} oluşturuldu.",
+    "updated": "{{name}} kaydedildi.",
+    "removed": "{{name}} kaldırıldı.",
+    "deleteFolderTitle": "Klasör silinsin mi?",
+    "deleteLabelTitle": "Etiket silinsin mi?",
+    "deleteFolderDescription": "{{name}} ve içindeki klasörler silinir. İçlerindeki postalar silinmez, Arşiv’e taşınır.",
+    "deleteLabelDescription": "{{name}} postalarınızdan kaldırılır. Postalar olduğu yerde kalır.",
+    "delete": "Sil",
+    "moveTo": "Taşı",
+    "labelAs": "Etiketle",
+    "filterFolders": "Klasörlerde ara",
+    "filterLabels": "Etiketlerde ara",
+    "createFolderNamed": "\"{{name}}\" klasörünü oluştur",
+    "createLabelNamed": "\"{{name}}\" etiketini oluştur",
+    "alsoArchive": "Ayrıca arşivle",
+    "apply": "Uygula",
+    "removeLabel": "{{name}} etiketini kaldır",
+    "settingsTitle": "Klasörler ve etiketler",
+    "settingsDescription": "Adları tarayıcınızda şifrelenir: sunucu onları yalnızca numarayla tanır.",
+    "foldersHint": "Bir klasörü içine koymak için başka bir klasörün üstüne, sırasını değiştirmek için üstüne ya da altına sürükleyin. Klasörler üç düzey derinliğe kadar iner.",
+    "labelsHint": "Sırasını değiştirmek için etiketleri sürükleyin.",
+    "sort": "A–Z sırala",
+    "sortTitle": "Alfabetik sıralansın mı?",
+    "sortFoldersDescription": "Klasörleriniz ve her birinin içindeki klasörler alfabetik sıraya konur.",
+    "sortLabelsDescription": "Etiketleriniz alfabetik sıraya konur.",
+    "foldersSorted": "Klasörler sıralandı.",
+    "labelsSorted": "Etiketler sıralandı.",
+    "unreadable_one": "{{count}} ad hesap anahtarınızla açılamadı.",
+    "unreadable_other": "{{count}} ad hesap anahtarınızla açılamadı."
   }
 }

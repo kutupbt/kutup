@@ -78,6 +78,9 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|_| AppError::bad_request("not an id"))
 }
 
+/// id, parent, sealed name, colour, position, expanded, notify.
+type FolderRow = (Uuid, Option<Uuid>, String, String, i32, bool, bool);
+
 /// `GET /api/mail/places` — the account's folders and labels.
 #[utoipa::path(
     get,
@@ -88,7 +91,7 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
 )]
 pub async fn places(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailPlaces>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let folders: Vec<(Uuid, Option<Uuid>, String, String, i32, bool, bool)> = sqlx::query_as(
+    let folders: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, parent_id, name_sealed, color, position, expanded, notify
            FROM mail_folders WHERE user_id = $1 ORDER BY position, created_at",
     )

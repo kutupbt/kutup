@@ -87,9 +87,9 @@ read from the client and its texts):
 - `mail_labels` (colour, order) and `mail_message_labels`. A label stays on
   a message wherever it goes, Trash included; deleting a label removes it
   from messages and filters, never the mail.
-- Shown as coloured chips in the list and the reading pane, as a *Labels*
-  section in the sidebar (each a view of its mail, with unread counts), and
-  in search ("label:").
+- Shown as coloured chips in the list and the reading pane (removable
+  there), and as a *Labels* section in the sidebar, each a view of its mail
+  with unread counts. Search by label comes with advanced search (P6).
 - Starred stays a flag, as now (Proton's Starred is a label; the behaviour
   is the same).
 
@@ -219,8 +219,9 @@ managers, in a later slice; until then its mail uses the fixed folders.
 ## Slices
 
 1. **F1 folders and labels:** migration 112 (folders, labels), the server,
-   sealed names, the sidebar, Move to and Label as, settings, counts and
-   search.
+   sealed names (`kutup-crypto` `mail_names`), the sidebar, Move to and
+   Label as (toolbar, right click, `M`, `L`, dropping), Settings → Folders
+   and labels, counts. Built on `feat/mail-filters`.
 2. **F2 filters:** the matcher in `insert_message`, the builder, order,
    on/off, apply to existing, "Always move/label sender's emails".
 3. **F3 block, spam and allow** lists, with DMARC for allow, and their

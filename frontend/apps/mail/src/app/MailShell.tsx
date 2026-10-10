@@ -33,6 +33,8 @@ import { Input } from '@kutup/ui/components/input'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
+import { PlacesHost } from '../features/PlacesHost'
+import { PlacesNav } from '../features/PlacesNav'
 import { SaveContactHost } from '../features/SaveContactHost'
 
 // The composer and its editor load the first time someone writes.
@@ -144,7 +146,7 @@ export function MailShell() {
           {t('compose.new')}
         </Button>
       }
-      nav={NAV.map(({ id, icon }) => (
+      nav={<>{NAV.map(({ id, icon }) => (
         <SidebarNavLink
           key={id}
           to={`/${id}`}
@@ -177,6 +179,8 @@ export function MailShell() {
           }
         />
       ))}
+      <PlacesNav counts={counts.data} />
+      </>}
       sidebarFooter={<StorageMeter />}
       headerStart={<SearchBox />}
       headerEnd={
@@ -192,6 +196,7 @@ export function MailShell() {
     >
       <Outlet />
       <SaveContactHost />
+      <PlacesHost />
       {composing ? (
         <Suspense fallback={null}>
           <Composer />

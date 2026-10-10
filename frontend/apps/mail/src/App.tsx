@@ -7,6 +7,7 @@ import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
 import { MailShell } from './app/MailShell'
 import { MailboxPage } from './features/MailboxPage'
+import { PlacesSettingsPage } from './features/PlacesSettingsPage'
 import { NotFoundPage } from './NotFoundPage'
 
 /** When the sign-in ends (signed out elsewhere, expired), ask the account app again. */
@@ -28,6 +29,11 @@ export function App() {
               <Route index element={<Navigate to="/inbox" replace />} />
               <Route path="/:folder" element={<MailboxPage />} />
               <Route path="/:folder/:threadId" element={<MailboxPage />} />
+              <Route path="/f/:placeId" element={<MailboxPage />} />
+              <Route path="/f/:placeId/:threadId" element={<MailboxPage />} />
+              <Route path="/l/:placeId" element={<MailboxPage />} />
+              <Route path="/l/:placeId/:threadId" element={<MailboxPage />} />
+              <Route path="/settings/folders" element={<PlacesSettingsPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
