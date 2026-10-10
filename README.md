@@ -229,6 +229,15 @@ kutup versions restore <file-id> <version-id>
 kutup pub get https://your.kutup.host/s/<token>#key=<base64>
 kutup pub download <url> <file-id>
 
+# Who the people you share with are: the identities this account trusts
+# (shared with Drive and Chat) and comparing a safety number in person.
+# Sharing to someone whose identity changed stops unless --share-anyway.
+kutup identity list
+kutup identity show bob@example.org
+kutup identity verify bob@example.org            # compare the digits, then confirm
+kutup identity verify bob@example.org --payload 'kutup://verify/chat/v1/…'
+kutup identity trust bob@example.org             # after their account was reset
+
 # Discover the rest.
 kutup --help
 kutup version

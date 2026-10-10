@@ -1,6 +1,6 @@
 # Drive identity pins
 
-**Status:** built 2026-10-10 on branch `fix/drive-identity-pins` (slices 1–5); the items under "Later" remain.
+**Status:** built 2026-10-10 on branch `fix/drive-identity-pins`, including one verification for every app (section 5).
 
 ## Problem
 
@@ -111,12 +111,28 @@ the file page, a notice and a confirmation in the share dialogs, and
 "Accept new identity" to re-pin after a genuine reset (an administrator's
 wipe).
 
-### 5. Later
+### 5. One verification for every app
 
-- Chat reads and writes the same synced pins instead of its origin's own.
-- Comparing an identity in person (Chat's safety numbers) marks a pin
-  `verified` for Drive too.
-- The CLI checks bindings and uses the synced pins.
+Built after the first slices, on the same list:
+
+- **One safety number.** The number two people compare in person moved from
+  Chat's core to `kutup-crypto::safety_number`, byte for byte (a V1 vector pins
+  it). Drive, Chat and the CLI derive the same digits and QR.
+- **Verify in Drive.** Chat's verification dialog moved to `@kutup/ui`. Drive
+  opens it beside who shared a file, on each person in the share dialogs and
+  from the identity banner; scanning (or pasting) the other person's QR marks
+  them `verified` in the list, which also accepts a changed identity compared
+  in person. A verified person gets a green shield.
+- **Chat on the list.** Chat's engine consults and writes the list
+  (docs/chat-protocol.md, trust states): a contact the list knows by another
+  authority is quarantined, one verified elsewhere is verified in Chat, Chat's
+  verifications reach the list. The list never lifts a Chat quarantine.
+- **The CLI.** `kutup identity list|show|verify|trust`; `kutup share` checks
+  the recipient and stops on a doubt unless `--share-anyway`; the incoming
+  list shows each sender's identity; `kutup login` signs a missing binding.
+- **Lookups in batches.** `POST /api/users/drive-identities` answers for up to
+  100 people of this server at once, so a page of shares from many people is
+  one request under the user lookup limit.
 
 ## Slices
 

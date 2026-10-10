@@ -851,15 +851,13 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
 
 ### Drive · identity pins: what is left
 
-Drive checks other people's keys against their authority's binding and pins
-the authority in a synced list (docs/plans/drive-identity-pins.md). Still to do:
+Drive, Chat and the CLI share one list of trusted identities and one safety
+number (docs/plans/drive-identity-pins.md). Still to do:
 
-- Chat reads and writes the same synced pins instead of its origin's own, so
-  one "trusted" or "changed" holds in every app.
-- Comparing an identity in person (Chat's safety number or QR code) marks the
-  pin `verified` for Drive too; Drive shows a verified mark.
-- The CLI checks bindings and uses the synced pins when it shares and opens
-  shares.
+- Contacts shows each person's state from the list (gray, green, red shield)
+  on their page, as the Contacts plan foresaw.
+- The native apps' own screens for the shield and the verification dialog
+  (their Chat engine already keeps to the list).
 
 ### Drive · share dialogs: what is left
 
