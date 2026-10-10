@@ -191,7 +191,10 @@ deletes the draft.
 - **People:** senders and recipients are named as in Contacts, with an
   avatar (photo or initials) in the list and the header. A name opens a card
   on hover or click (Proton's recipient dropdown): the address to copy, New
-  message, View contact or Save to contacts, and their other mail. A message
+  message, View contact or Save to contacts, and their other mail; for a
+  Kutup user (their key list, which their account signed, names the account,
+  so a forged From does not count) also Chat and Call, which open their
+  conversation in Chat, Call asking before it rings (`?call=audio`). A message
   from (or, in Sent, to) someone not in Contacts shows a banner with Save to
   contacts, dismissable per address on the device. Saving opens a dialog in
   Mail, not a new tab: a new contact named as their mail named them, or the

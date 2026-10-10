@@ -73,6 +73,19 @@ test('saving senders to contacts, person cards, a dark body and folded quotes', 
   const card = aliceMail.getByRole('dialog').filter({ hasText: 'New message' })
   await expect(card.getByRole('button', { name: 'Save to contacts' })).toBeVisible({ timeout: 5_000 })
   await shot(aliceMail, 'card-dark')
+  // Bob is a Kutup user (his key list says so), so the card offers Chat and Call.
+  await expect(card.getByRole('button', { name: 'Chat', exact: true })).toBeVisible({ timeout: 30_000 })
+  const chatTab = aliceContext.waitForEvent('page')
+  await card.getByRole('button', { name: 'Call', exact: true }).click()
+  const chat = await chatTab
+  // Chat asks before it rings.
+  const ask = chat.getByRole('dialog', { name: /^Call .+\?$/ })
+  await expect(ask).toBeVisible({ timeout: 120_000 })
+  await shot(chat, 'call-offer-dark')
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  await chat.close()
+  await aliceMail.getByRole('article').getByRole('button', { name: new RegExp(`More about .*${bob.username}`) }).first().hover()
 
   // Saved as a new contact, with a name; the banner goes and the name shows.
   await card.getByRole('button', { name: 'Save to contacts' }).click()

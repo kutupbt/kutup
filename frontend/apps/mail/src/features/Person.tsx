@@ -1,9 +1,12 @@
-import { BookUser, Copy, PenSquare, Search, UserPlus } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { BookUser, Copy, MessageSquare, PenSquare, Phone, Search, UserPlus } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Contact } from '@kutup/contacts-core/model'
+import { useMailAccount } from '@kutup/mail-core/api'
+import { addressKeys, NoKutupAddress } from '@kutup/mail-core/keys'
 import type { Mailbox } from '@kutup/mail-core/mime'
 import { appUrl } from '@kutup/session/apps'
 import { Avatar } from '@kutup/ui/components/avatar'
@@ -18,6 +21,37 @@ import { useSaveContact } from './saveContactState'
 export function PersonAvatar({ mailbox, contact, size = 32 }: { mailbox: Mailbox | null | undefined; contact?: Contact; size?: 32 | 48 }) {
   const photo = contact?.draft.photo.match(/^data:(image\/[a-z+.-]+);base64,(.+)$/)
   return <Avatar name={nameFor(mailbox, contact) || '?'} image={photo?.[2]} contentType={photo?.[1]} size={size} />
+}
+
+/**
+ * The Kutup account behind an address on this server (`username@server`, the
+ * Chat identity), from its key list, which the account signed: mail from
+ * outside can claim a Kutup address in From, but not this. Null for anyone
+ * else, so Chat and Call show only for real Kutup users.
+ */
+function useKutupAccount(address: string, enabled: boolean) {
+  const account = useMailAccount()
+  const domain = account.data?.domain
+  const local = !!domain && address.toLowerCase().endsWith(`@${domain.toLowerCase()}`)
+  return useQuery({
+    queryKey: ['mail', 'kutup-account', address.toLowerCase()],
+    enabled: enabled && local,
+    staleTime: 15 * 60_000,
+    retry: false,
+    queryFn: () =>
+      addressKeys(address).then(
+        (keys) => keys.account,
+        (error: unknown) => {
+          if (error instanceof NoKutupAddress) return null
+          throw error
+        },
+      ),
+  })
+}
+
+/** Where Chat opens a direct conversation (`apps/chat` `pathForAddress`). */
+function chatUrl(account: string, call?: 'audio') {
+  return appUrl('chat', `/c/${encodeURIComponent(`direct:${account}`)}${call ? `?call=${call}` : ''}`)
 }
 
 function Item({ icon, children, onClick }: { icon: ReactNode; children: ReactNode; onClick: () => void }) {
@@ -62,6 +96,7 @@ export function Person({
   const byHover = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const name = nameFor(mailbox, contact)
+  const kutup = useKutupAccount(mailbox.address, open && !own)
   useEffect(() => () => clearTimeout(timer.current), [])
 
   // Opens after a short hover, stays while the pointer is on the name or the card.
@@ -141,6 +176,16 @@ export function Person({
         <Item icon={<PenSquare />} onClick={() => act(() => openComposer({ kind: 'new', to: mailbox.address }))}>
           {t('person.newMessage')}
         </Item>
+        {kutup.data ? (
+          <>
+            <Item icon={<MessageSquare />} onClick={() => act(() => window.open(chatUrl(kutup.data!), '_blank', 'noopener'))}>
+              {t('person.chat')}
+            </Item>
+            <Item icon={<Phone />} onClick={() => act(() => window.open(chatUrl(kutup.data!, 'audio'), '_blank', 'noopener'))}>
+              {t('person.call')}
+            </Item>
+          </>
+        ) : null}
         {contact ? (
           <Item icon={<BookUser />} onClick={() => act(() => window.open(appUrl('contacts', `/c/${contact.id}`), '_blank', 'noopener'))}>
             {t('person.viewContact')}
