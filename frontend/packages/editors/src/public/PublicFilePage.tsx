@@ -271,4 +271,3 @@ function PdfView({ name, bytes }: { name: string; bytes: Uint8Array }) {
   useEffect(() => () => URL.revokeObjectURL(url), [url])
   return viewer ? <viewer.Component filename={name} blobUrl={url} mimeType={viewer.mimeType} /> : null
 }
-
