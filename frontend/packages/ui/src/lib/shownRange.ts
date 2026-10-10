@@ -11,7 +11,7 @@ export interface ShownRange {
 
 /**
  * Which items a long listing draws (Drive's Explorer, the Office home): only the rows near the screen, the rest
- * stood in for by empty space (docs/research/17-web-performance.md: every
+ * stood in for by empty space (docs/research/18-web-performance.md: every
  * row drawn costs about half a millisecond, two on a slow phone). Always,
  * whatever the count, as Proton Drive's lists do: one code path, and a
  * folder never changes behaviour as it grows. Proton's settings

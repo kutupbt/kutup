@@ -84,7 +84,7 @@
         // and decrypts a document, so the converter and the editor's code
         // (several MB, cached for good) arrive at the same time instead of
         // after it. The page only fetches them into the cache and stays idle
-        // (docs/research/17-web-performance.md).
+        // (docs/research/18-web-performance.md).
         var warmParams = new URLSearchParams(window.location.search)
         if (warmParams.get('warm') === '1') {
           var SDK_DIRS = { docx: 'word', xlsx: 'cell', pptx: 'slide' }
@@ -699,7 +699,7 @@
         // The race shows only once everything has loaded, so the clock runs
         // from when loading goes quiet, not from the mount: on a slow link
         // the SDK alone takes minutes, and mounting again would abort it and
-        // start over (docs/research/17-web-performance.md). Loading counts as
+        // start over (docs/research/18-web-performance.md). Loading counts as
         // going on while a script in this page or its frames has no resource
         // entry yet (still downloading) or one arrived recently.
         var ooAppReady = false
@@ -895,7 +895,7 @@
           // The editor's own code does not depend on the document: on the
           // x2t and PDF paths it loads while the file converts (only the
           // template path keeps the order, as templates are read through a
-          // global define() shim). docs/research/17-web-performance.md.
+          // global define() shim). docs/research/18-web-performance.md.
           var API_JS = '/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js'
           var apiReady = null
           if (t.native || useExisting) {

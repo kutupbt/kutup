@@ -38,9 +38,9 @@ The raw data (JSON results, header dumps, scripts) is in the session scratchpad.
 | File (editor origin) | Raw | brotli (`.br` already in the image) | Notes |
 |---|---:|---:|---|
 | `onlyoffice/dist/x2t/x2t.wasm` | 36.0 MB | 6.8 MB | fetched for every open, PDFs included (they don't need conversion) |
-| `sdkjs/word/sdk-all.js` | 28.7 MB | 3.25 MB | **unminified**: 847,109 lines, license header ×388; fetched **in addition to** `sdk-all-min.js`. cell 32.4 MB, slide 28.3 MB |
+| `sdkjs/word/sdk-all.js` | 28.7 MB | 3.25 MB | **unminified**: 847,109 lines, license header ×388. Not a duplicate: `sdk-all-min.js` is the shared first part and its `loadSdk()` loads and runs this one, the Word editor itself. cell 32.4 MB, slide 28.3 MB |
 | `fonts.wasm` | 3.6 MB | – | |
-| `sdkjs/word/sdk-all-min.js` | 3.5 MB | 0.47 MB | comments kept |
+| `sdkjs/word/sdk-all-min.js` | 3.5 MB | 0.47 MB | the shared first part, despite its name; not minified either |
 | `web-apps/.../code.js`, `app.css`, locale | 2.3 MB + 0.6 MB + 0.3 MB | 0.22 + 0.06 + ~0.05 MB | web-apps is an unbuilt RequireJS layout: hundreds of requests |
 | 18 TTF fonts | 4.9 MB | not precompressed | |
 
@@ -168,7 +168,7 @@ Rough effect assumes 40 Mbps and production's ~85 ms round-trip time.
    - **Effect:** documents open on 5–10 Mbps links at all (today they fail or take 72 s).
 4. **Ship release builds of OnlyOffice in the `kutupbt/onlyoffice-editor` fork.**
    - Run Closure (or esbuild) over `sdk-all.js` for every editor; esbuild alone takes word from 28.7 MB to 14.1 MB / 2.52 MB br.
-   - Stop loading the unminified file alongside `sdk-all-min.js`.
+   - Minify `sdk-all-min.js` too: despite its name it is not minified (esbuild: 3.5 → 2.0 MB). Both files are needed; neither is a duplicate.
    - Build web-apps with grunt/r.js, so hundreds of module requests become a few.
    - Precompress the fonts.
    - **Effect:** about −30 MB raw per open, much less parse time, and fewer requests.
@@ -198,7 +198,7 @@ Rough effect assumes 40 Mbps and production's ~85 ms round-trip time.
    - Split syntax grammars per language in the note editor (−550K).
 10. **Shrink the Rust WASM.**
     - Use `opt-level = "s"` or `"z"`, `lto = true` and `codegen-units = 1` for the WASM crates.
-    - Run `wasm-opt -Oz` and strip the name section in `scripts/build-*-wasm.sh`.
+    - Run `wasm-opt -Oz` and strip the name section in `scripts/build-crypto-wasm.sh` and `scripts/build-chat-wasm.sh`.
     - **Effect:** stripping alone is −1.19 MB on chat-core; likely another 20–30% from the rest.
 11. **Parallelise session restore.**
     - Start `getCryptoWasm()` at module load, with `<link rel="modulepreload">` and a `preload as="fetch"` for the WASM.
@@ -257,7 +257,7 @@ These are estimates scaled from the measured bytes and round trips. Remeasure af
 
 ## 4. Open questions
 
-- **Upstream minifier:** the fork's OnlyOffice build may need upstream's Closure setup; check what `sdk-all-min.js` is produced from, and why the loader fetches both files.
+- **Upstream minifier:** the fork's OnlyOffice build may need upstream's Closure setup; check what produces `sdk-all-min.js`, which ships unminified.
 - **CDN and R2:** a CDN or presigned R2 downloads change what third parties see (client IPs, timing). That needs a product decision, beyond performance.
 - **Hosting split:** a shared static origin and a same-origin editor both affect self-hosters who put apps on separate sites; whichever is chosen needs a fallback.
 

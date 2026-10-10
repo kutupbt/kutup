@@ -25,7 +25,7 @@ import { NotFoundPage } from './NotFoundPage'
 /**
  * Pages most visits never open (administration, account recovery) load
  * when they are opened, keeping them out of the page's start
- * (docs/research/17-web-performance.md).
+ * (docs/research/18-web-performance.md).
  */
 function page(load: () => Promise<{ default: ComponentType }>): ComponentType {
   const Lazy: LazyExoticComponent<ComponentType> = lazy(load)

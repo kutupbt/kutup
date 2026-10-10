@@ -300,7 +300,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
   // An office document: the editor's converter and code download while the
   // file does (hidden, into the cache), instead of after it. First in the
   // tree, so it stays mounted (and its downloads go on) when the editor
-  // opens. docs/research/17-web-performance.md.
+  // opens. docs/research/18-web-performance.md.
   const warmType = officeWarmType(file, folder)
   const warm = warmType ? (
     <iframe

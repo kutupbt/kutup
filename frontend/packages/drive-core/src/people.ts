@@ -144,7 +144,7 @@ async function loadPeople(me: DriveIdentity): Promise<Map<string, PersonProfile>
   const { data } = await api.get<{ people: DrivePerson[] }>('/drive/people')
   const profiles = new Map<string, PersonProfile>()
   // Nobody to exchange with: the Chat runtime (megabytes of WASM) is not
-  // needed at all (docs/research/17-web-performance.md).
+  // needed at all (docs/research/18-web-performance.md).
   if (data.people.length === 0) return profiles
   const own = await ownLookup(me).catch(() => null)
   await Promise.all(

@@ -146,7 +146,7 @@ pub async fn list_files(
 /// `GET /api/drive/files` — every file in the folders this account owns or
 /// has been given (not albums, not the trash), newest first: one request
 /// where listing each folder takes one per folder (the Office home lists
-/// documents across all of them; docs/research/17-web-performance.md).
+/// documents across all of them; docs/research/18-web-performance.md).
 /// Rows are those of `GET /api/collections/{id}/files`.
 #[utoipa::path(
     get,

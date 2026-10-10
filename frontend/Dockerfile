@@ -55,7 +55,7 @@ RUN o=apps/editor/public/onlyoffice \
     && grep -Fx '2025.6.0' $o/templates/.version
 # The OnlyOffice client and x2t move to directories named for their
 # versions, so their files can be cached for good: a new build of either is
-# a new URL (docs/research/17-web-performance.md). Only the bridge pages
+# a new URL (docs/research/18-web-performance.md). Only the bridge pages
 # name those directories.
 RUN o=apps/editor/public/onlyoffice \
     && client=$(cat $o/dist/v9/.version) && x2t=x2t-$(cat $o/dist/x2t/.version) \

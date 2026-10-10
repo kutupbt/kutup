@@ -42,7 +42,7 @@ export function useDocuments() {
   const identity = useDriveIdentity()
   const queryClient = useQueryClient()
   // Every folder's files in one request (one per folder before;
-  // docs/research/17-web-performance.md), opened once the folders are.
+  // docs/research/18-web-performance.md), opened once the folders are.
   const listing = useQuery({
     queryKey: [...allFilesKey, identity.data?.userId],
     enabled: Boolean(folders.data),

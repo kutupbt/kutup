@@ -131,7 +131,7 @@ wasm-bindgen-test = "0.3"
 
 # The browser's WASM build (scripts/build-chat-wasm.sh): whole-program
 # optimisation makes the module smaller and no slower; it is downloaded and
-# compiled on every first visit (docs/research/17-web-performance.md).
+# compiled on every first visit (docs/research/18-web-performance.md).
 [profile.wasm-release]
 inherits = "release"
 opt-level = 3

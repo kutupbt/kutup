@@ -1,7 +1,7 @@
 // Maps file extensions and code-fence names to CodeMirror 6 languages.
 // Markdown (what notes are) is bundled; every other language is its own
 // chunk, loaded when a file or a fenced code block needs it
-// (docs/research/17-web-performance.md). Anything not listed is plain text.
+// (docs/research/18-web-performance.md). Anything not listed is plain text.
 import { type Extension } from '@codemirror/state'
 import { LanguageDescription, LanguageSupport, StreamLanguage, type StreamParser } from '@codemirror/language'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'

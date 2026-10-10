@@ -148,7 +148,7 @@ new URL; the bridge pages themselves are `no-cache`. Every text file and WASM
 is stored compressed (gzip and brotli) at build time and served as it is
 (`frontend/docker/precompress.sh`, `brotli_static`/`gzip_static`): a cold
 document open downloads about 16 MB instead of 89 MB
-(docs/research/17-web-performance.md). In development (`./install-onlyoffice.sh`
+(docs/research/18-web-performance.md). In development (`./install-onlyoffice.sh`
 and Vite) the directories keep their plain names (`dist/v9/`, `dist/x2t/`).
 
 Opening a document overlaps its steps: while Drive downloads and decrypts the

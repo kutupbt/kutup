@@ -3,7 +3,7 @@
 //
 // Loaded on first use, not with the page: it is about a megabyte (its WASM
 // is inlined as base64) and most pages never need it
-// (docs/research/17-web-performance.md).
+// (docs/research/18-web-performance.md).
 type Sodium = typeof import('libsodium-wrappers-sumo')
 
 let pending: Promise<Sodium> | null = null
