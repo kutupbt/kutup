@@ -31,6 +31,7 @@ import {
   useWipeUser,
 } from './api'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
+import { MailSendingCard } from './MailSending'
 import { UserStatus } from './UsersPage'
 
 function ActionRow({ title, description, action }: { title: string; description: string; action: ReactNode }) {
@@ -277,6 +278,10 @@ export function UserPage() {
             }
           />
         </Card>
+      </Section>
+
+      <Section title={t('admin.mailSending.title')} description={t('admin.mailSending.cardHint')}>
+        <MailSendingCard userId={user.id} />
       </Section>
 
       <Section title={t('admin.user.quotas')} description={t('admin.user.quotasHint')}>

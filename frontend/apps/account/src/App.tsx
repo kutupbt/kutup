@@ -42,6 +42,7 @@ function page(load: () => Promise<{ default: ComponentType }>): ComponentType {
 const ActivityPage = page(() => import('./features/admin/ActivityPage').then((m) => ({ default: m.ActivityPage })))
 const FederationPage = page(() => import('./features/admin/FederationPage').then((m) => ({ default: m.FederationPage })))
 const NewUserPage = page(() => import('./features/admin/NewUserPage').then((m) => ({ default: m.NewUserPage })))
+const MailSendingPage = page(() => import('./features/admin/MailSendingPage').then((m) => ({ default: m.MailSendingPage })))
 const MapsSettingsPage = page(() => import('./features/admin/MapsSettingsPage').then((m) => ({ default: m.MapsSettingsPage })))
 const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPage').then((m) => ({ default: m.ServerSettingsPage })))
 const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
@@ -96,6 +97,7 @@ export function App() {
               <Route path="/admin/federation" element={<RequireAdmin><FederationPage /></RequireAdmin>} />
               <Route path="/admin/settings" element={<RequireAdmin><ServerSettingsPage /></RequireAdmin>} />
               <Route path="/admin/maps" element={<RequireAdmin><MapsSettingsPage /></RequireAdmin>} />
+              <Route path="/admin/mail" element={<RequireAdmin><MailSendingPage /></RequireAdmin>} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

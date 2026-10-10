@@ -27,7 +27,8 @@
     "maps": "Maps",
     "adminMaps": "Maps",
     "storage": "Storage",
-    "keys": "Encryption keys"
+    "keys": "Encryption keys",
+    "mailSending": "Mail sending"
   },
   "auth": {
     "fields": {
@@ -510,7 +511,8 @@
         "federationIdentityRepin": "{{admin}} re-pinned {{domain}} (break-glass)",
         "federationPeerRetry": "{{admin}} retried discovery for {{domain}}",
         "federationPeerRetryBulk": "{{admin}} retried discovery for several servers",
-        "unknown": "{{admin}}: {{action}}"
+        "unknown": "{{admin}}: {{action}}",
+        "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail"
       }
     },
     "settings": {
@@ -682,6 +684,42 @@
       "osmPolicy": "Tile usage policy",
       "saved": "Map settings saved",
       "saveFailed": "The map settings could not be saved."
+    },
+    "mailSending": {
+      "title": "Mail sending",
+      "description": "Who sends mail to outside addresses, and how it goes. One account sending spam can get the server's address blocklisted, and then nobody's mail arrives. Counts only: you never see what was sent.",
+      "attentionOnly": "Only paused and flagged accounts",
+      "emptyTitle": "No outside mail yet",
+      "emptyDescription": "Accounts that send to outside addresses, or have their own limits, show here.",
+      "account": "Account",
+      "sentDay": "Last day",
+      "sentWeek": "Last 7 days",
+      "bounces": "Bounces (7 days)",
+      "limits": "Limits",
+      "state": "State",
+      "serverLimits": "Server's",
+      "ownLimits": "{{hour}} an hour, {{day}} a day",
+      "ok": "Sending normally",
+      "paused": {
+        "admin": "Paused by an administrator",
+        "bounces": "Paused: too many bounces",
+        "spam": "Paused: refused as spam"
+      },
+      "flagged": {
+        "bounces": "Flagged: bounces",
+        "spam": "Flagged: spam"
+      },
+      "pause": "Pause",
+      "resume": "Resume",
+      "clearFlag": "Clear flag",
+      "editLimits": "Limits",
+      "limitsTitle": "Limits for {{name}}",
+      "limitsDescription": "Outside recipients this account may send to. Leave empty for the server's limits (lower in an account's first week). Mail between Kutup users is never limited.",
+      "perHour": "Per hour",
+      "perDay": "Per day",
+      "serverLimit": "Server's limit",
+      "saved": "Saved",
+      "cardHint": "What this account sends to outside addresses. Pause it here, or give it its own limits."
     }
   }
 }

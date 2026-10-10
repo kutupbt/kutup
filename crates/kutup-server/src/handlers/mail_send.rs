@@ -206,6 +206,7 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
             references,
             attachment_count: meta.attachment_count,
             spam: false,
+            bounce: None,
         },
         bcc,
     })
@@ -857,7 +858,7 @@ pub async fn send(
                 "mime must be the same message: From you, the same Message-ID, no Bcc header",
             ));
         }
-        check_limits(&state, user_id, external.len() as i64).await?;
+        crate::mail::safety::check_send(&state, user_id, external.len() as i64).await?;
         Some(mime)
     };
 
@@ -899,6 +900,7 @@ pub async fn send(
 
     let id = Uuid::new_v4();
     let thread = own_thread(&state, user_id, meta.mail.thread_id.as_deref()).await?;
+    let mut spam_refused = false;
     let recorded: AppResult<Vec<SendRecipient>> = async {
         let mut tx = state.pool.begin().await?;
         // Lock every account in one order, so two sends cannot deadlock.
@@ -989,7 +991,12 @@ pub async fn send(
                 },
             )
             .await
-            .map_err(submit_error)?;
+            .map_err(|error| {
+                if refused_as_spam(&error) {
+                    spam_refused = true;
+                }
+                submit_error(error)
+            })?;
             results.extend(external.iter().map(|address| SendRecipient {
                 address: address.clone(),
                 status: "sent".into(),
@@ -1003,6 +1010,18 @@ pub async fn send(
         Ok(results) => results,
         Err(error) => {
             remove_objects(&state, &objects).await;
+            if spam_refused {
+                if let Err(error) = crate::mail::safety::record(
+                    &state.pool,
+                    user_id,
+                    crate::mail::safety::Event::SpamRefused,
+                    1,
+                )
+                .await
+                {
+                    tracing::warn!(error = %error, "mail: spam refusal not recorded");
+                }
+            }
             return Err(error);
         }
     };
@@ -1042,29 +1061,19 @@ fn has_bcc_header(message: &[u8]) -> bool {
         .any(|line| line.len() >= 4 && line[..4].eq_ignore_ascii_case(b"bcc:"))
 }
 
-async fn check_limits(state: &AppState, user_id: Uuid, adding: i64) -> AppResult<()> {
-    let (hour, day): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(external_recipients) FILTER (WHERE received_at > now() - interval '1 hour'), 0)::bigint,
-                COALESCE(SUM(external_recipients), 0)::bigint
-           FROM mail_messages
-          WHERE user_id = $1 AND external_recipients > 0 AND received_at > now() - interval '1 day'",
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
-    if hour + adding > state.config.mail_send_per_hour
-        || day + adding > state.config.mail_send_per_day
-    {
-        return Err(
-            AppError::too_many_requests("sending limit reached; try again later")
-                .with_details(json!({ "code": "sendLimit" })),
-        );
-    }
-    Ok(())
+/// Whether Stalwart refused a submission for its spam score ("550 5.7.1
+/// Message rejected due to excessive spam score").
+fn refused_as_spam(error: &crate::mail::submit::SubmitError) -> bool {
+    matches!(error, crate::mail::submit::SubmitError::Refused { code: 550, text, .. }
+        if text.to_ascii_lowercase().contains("spam"))
 }
 
 fn submit_error(error: crate::mail::submit::SubmitError) -> AppError {
     use crate::mail::submit::SubmitError;
+    if refused_as_spam(&error) {
+        return AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "refused as spam")
+            .with_details(json!({ "code": "spam" }));
+    }
     match error {
         SubmitError::Refused {
             code,
@@ -1139,6 +1148,24 @@ mod tests {
             })
             .collect();
         assert!(check_meta(&many, &sender(), "kutup.test").is_err());
+    }
+
+    #[test]
+    fn spam_refusals_are_told_apart() {
+        use crate::mail::submit::SubmitError;
+        let spam = SubmitError::Refused {
+            code: 550,
+            text: "5.7.1 Message rejected due to excessive spam score.".into(),
+            recipient: None,
+        };
+        assert!(refused_as_spam(&spam));
+        let unknown = SubmitError::Refused {
+            code: 550,
+            text: "5.1.1 no such user".into(),
+            recipient: Some("x@y.org".into()),
+        };
+        assert!(!refused_as_spam(&unknown));
+        assert!(!refused_as_spam(&SubmitError::Unavailable("down".into())));
     }
 
     #[test]

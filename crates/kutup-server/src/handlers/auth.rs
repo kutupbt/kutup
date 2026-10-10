@@ -381,6 +381,11 @@ pub async fn register(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
+    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
+        return Err(AppError::bad_request(
+            "this username is reserved for the server",
+        ));
+    }
     validate_account_protection(
         req.account_protection_suite,
         &req.account_protection_salt,

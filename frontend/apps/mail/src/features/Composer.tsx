@@ -16,6 +16,7 @@ import {
   UnknownRecipient,
   useMailAccount,
   useMailRefresh,
+  useSendingStatus,
   type Draft,
   type MailAccount,
 } from '@kutup/mail-core/api'
@@ -171,6 +172,7 @@ export function Composer() {
 function ComposerPanel({ account, target }: { account: MailAccount; target: ComposerTarget }) {
   const { t, i18n } = useTranslation()
   const refresh = useMailRefresh()
+  const sendingStatus = useSendingStatus()
   const start = useMemo(() => initial(account, target, t, i18n.language), [account, target, t, i18n.language])
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
@@ -369,8 +371,16 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
       else {
-        const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-        toast.error(code === 'sendLimit' ? t('compose.sendLimit') : apiErrorMessage(error, t('compose.sendFailed')))
+        const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
+        toast.error(
+          data?.code === 'sendingPaused'
+            ? t('compose.sendingPaused')
+            : data?.code === 'sendLimit'
+              ? data.newAccount
+                ? t('compose.sendLimitNew', { perDay: data.perDay })
+                : t('compose.sendLimit')
+              : apiErrorMessage(error, t('compose.sendFailed')),
+        )
       }
     }
   }
@@ -417,6 +427,11 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       </header>
       {minimised ? null : (
         <>
+          {sendingStatus.data?.paused ? (
+            <p role="status" className="shrink-0 border-b border-border bg-status-warn/20 px-3 py-2 text-xs">
+              {t('compose.pausedNotice')}
+            </p>
+          ) : null}
           <div className="shrink-0">
             <p className="flex min-h-10 items-center border-b border-border px-3 text-sm">
               <span className="w-10 shrink-0 text-muted-foreground">{t('compose.from')}</span>

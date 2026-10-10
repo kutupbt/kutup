@@ -47,7 +47,7 @@ pub struct UpdateFileMetadataRequest {
 
 /// A field that is there, even as `null` (`Some(None)`), apart from one
 /// that is not (`None`, through `default`).
-fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de>,
