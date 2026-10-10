@@ -369,6 +369,9 @@ seconds, and never sees the key.
 
 The account app then redirects to
 `<childOrigin>/login#selector=<selector>&sk=<key>&state=<state>`.
+The child redeems it only when `state` is one its own tab saved when it
+asked for the fork; any other link (someone else's, sent to this browser)
+is ignored without calling `consume`.
 
 ### POST /api/auth/forks/consume
 

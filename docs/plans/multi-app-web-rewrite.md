@@ -112,6 +112,10 @@ rewrite; they go on `docs/roadmap.md` (no stub affordances).
 3. drive reads and immediately clears the fragment
    (`history.replaceState`), `POST /api/auth/forks/consume`, decrypts the
    payload, persists it (below), and navigates to the saved return path.
+   Only a fork whose `state` this tab saved in step 1 is redeemed: a link
+   minted for someone else (login CSRF, signing this browser in to their
+   account) is ignored before the server is asked, and the app starts with
+   its own stored session or asks for a fresh fork.
 
 The fork payload is a new persistent-ish wire format, so per `CLAUDE.md`
 ("Rust owns Kutup cryptographic formats") it is defined in `kutup-crypto`
