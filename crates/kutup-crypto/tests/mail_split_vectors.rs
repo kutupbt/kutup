@@ -10,7 +10,8 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use kutup_crypto::mail_key::{
-    decrypt, encrypt_split, encryption_key_id, generate_address_key, key_packet_key_id,
+    decrypt, encrypt_split, encrypt_split_unsigned, encryption_key_id, generate_address_key,
+    key_packet_key_id,
 };
 
 const KEYS: &str = concat!(
@@ -156,4 +157,21 @@ fn fresh_split_keeps_recipients_apart() {
     let mut doubled = split.key_packets[0].clone();
     doubled.extend_from_slice(&split.key_packets[1]);
     assert!(key_packet_key_id(&doubled).is_err());
+}
+
+#[test]
+fn unsigned_split_opens_for_each_member() {
+    // A distribution list's copy, encrypted on arrival: no signature.
+    let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+    let carol = generate_address_key("carol@kutup.dev", 1_790_000_000).unwrap();
+    let split = encrypt_split_unsigned(&[&bob.public_key, &carol.public_key], MESSAGE).unwrap();
+    for (key, packet) in [
+        (&bob, &split.key_packets[0]),
+        (&carol, &split.key_packets[1]),
+    ] {
+        let opened = decrypt(&key.secret_key, &join(packet, &split.data_packet), None).unwrap();
+        assert_eq!(&*opened.data, MESSAGE);
+        assert!(!opened.signed);
+    }
+    assert!(encrypt_split_unsigned(&[], MESSAGE).is_err());
 }

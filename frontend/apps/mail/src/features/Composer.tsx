@@ -21,6 +21,7 @@ import {
   type Draft,
   type MailAccount,
 } from '@kutup/mail-core/api'
+import { GroupNotAllowed } from '@kutup/mail-core/keys'
 import { attachmentPart, describePart, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
 import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
 import api from '@kutup/session/client'
@@ -382,12 +383,15 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       closed.current = false
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
+      else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
       else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
         toast.error(
-          data?.code === 'outsideSendingOff'
+          data?.code === 'notAllowed'
+            ? t('compose.groupNotAllowed', { address: (data as { address?: string }).address ?? '' })
+            : data?.code === 'outsideSendingOff'
             ? t('compose.outsideOff')
             : data?.code === 'sendingPaused'
             ? t('compose.sendingPaused')

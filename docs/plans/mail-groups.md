@@ -174,7 +174,7 @@ server to fan out from a group key instead; it is not in G1.
   comes from the organisation's pool, and plans limit how many groups there
   are. Self-hosters set quotas freely.
 
-## Data (migration 088)
+## Data (migration 089)
 
 - `mail_groups`: id, address (unique, shared namespace), display name,
   description, kind (`list`, `shared`), post policy (`anyone`, `local`,

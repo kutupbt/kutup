@@ -47,6 +47,20 @@ export class UnverifiedKeys extends Error {
   }
 }
 
+/** The address is a group's: its members' keys come from `groupMembers`. */
+export class GroupAddress extends Error {
+  constructor(readonly address: string) {
+    super(`${address} is a group`)
+  }
+}
+
+/** The group does not take mail from this account. */
+export class GroupNotAllowed extends Error {
+  constructor(readonly address: string) {
+    super(`${address} does not take mail from you`)
+  }
+}
+
 const cache = new Map<string, Promise<AddressKeys>>()
 
 /** Forgets what was looked up, after a key-changed answer. */
@@ -60,9 +74,16 @@ async function load(address: string): Promise<AddressKeys> {
   try {
     lookup = (await api.get<KeyLookup>('/mail/keys', { params: { email: address } })).data
   } catch (error) {
-    if ((error as { response?: { status?: number } }).response?.status === 404) throw new NoKutupAddress(address)
+    const response = (error as { response?: { status?: number; data?: { code?: string } } }).response
+    if (response?.status === 404 && response.data?.code === 'group') throw new GroupAddress(address)
+    if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
+  return verified(address, lookup)
+}
+
+/** A lookup's keys, kept only when the account's signed key lists name them. */
+async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
   let previous: { data: string; signature: string } | undefined
   let newest: SignedMailKeyList | null = null
   for (const list of lookup.keyLists) {
@@ -142,4 +163,22 @@ export function outsideKey(address: string): Promise<OutsideKey | null> {
     outsideCache.set(key, pending)
   }
   return pending
+}
+
+/**
+ * Who receives a group's mail, each with their checked keys (docs/plans/
+ * mail-groups.md): a message to a distribution list is encrypted to every
+ * member. Asked fresh each time, as membership changes.
+ */
+export async function groupMembers(address: string): Promise<AddressKeys[]> {
+  let members: KeyLookup[]
+  try {
+    members = (await api.get<{ members: KeyLookup[] }>('/mail/groups/recipients', { params: { email: address } })).data.members
+  } catch (error) {
+    const response = (error as { response?: { status?: number } }).response
+    if (response?.status === 403) throw new GroupNotAllowed(address)
+    if (response?.status === 404) throw new NoKutupAddress(address)
+    throw error
+  }
+  return Promise.all(members.map((member) => verified(member.address, member)))
 }

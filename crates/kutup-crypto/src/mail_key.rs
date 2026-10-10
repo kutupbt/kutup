@@ -783,17 +783,39 @@ pub fn encrypt_split(
     signer_secret_key: &[u8],
     plaintext: &[u8],
 ) -> Result<SplitMessage> {
-    if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_SPLIT_RECIPIENTS {
+    split(recipient_public_keys, Some(signer_secret_key), plaintext)
+}
+
+/// [`encrypt_split`] without a signature, for mail the server encrypts on
+/// arrival to every member of a distribution list (docs/plans/mail-groups.md):
+/// one data packet stored once, one key packet per member.
+pub fn encrypt_split_unsigned(
+    recipient_public_keys: &[&[u8]],
+    plaintext: &[u8],
+) -> Result<SplitMessage> {
+    split(recipient_public_keys, None, plaintext)
+}
+
+fn split(
+    recipient_public_keys: &[&[u8]],
+    signer_secret_key: Option<&[u8]>,
+    plaintext: &[u8],
+) -> Result<SplitMessage> {
+    if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_LIST_RECIPIENTS {
         return Err(CryptoError::InvalidInput(
-            "a message needs 1 to 100 recipient keys".into(),
+            "a message needs 1 to 1001 recipient keys".into(),
         ));
     }
     let recipients = recipient_public_keys
         .iter()
         .map(|key| parse_recipient(key))
         .collect::<Result<Vec<_>>>()?;
-    let signer = SignedSecretKey::from_bytes(signer_secret_key)
-        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let signer = signer_secret_key
+        .map(|key| {
+            SignedSecretKey::from_bytes(key)
+                .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))
+        })
+        .transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     for recipient in &recipients {
@@ -801,11 +823,13 @@ pub fn encrypt_split(
             .encrypt_to_key(rand::rngs::OsRng, encryption_subkey(recipient)?)
             .map_err(backend)?;
     }
-    builder.sign(
-        &signer.primary_key,
-        Password::empty(),
-        HashAlgorithm::Sha512,
-    );
+    if let Some(signer) = &signer {
+        builder.sign(
+            &signer.primary_key,
+            Password::empty(),
+            HashAlgorithm::Sha512,
+        );
+    }
     let message = builder.to_vec(rand::rngs::OsRng).map_err(backend)?;
     let mut rest = message.as_slice();
     let mut key_packets = Vec::with_capacity(recipients.len());
@@ -888,7 +912,7 @@ pub fn pgp_message_key_ids(message: &[u8]) -> Result<Vec<[u8; 8]>> {
                     ids.push(key_packet_key_id(&rest[..length])?);
                 }
                 key_packets += 1;
-                if key_packets > MAX_SPLIT_RECIPIENTS * 2 {
+                if key_packets > MAX_LIST_RECIPIENTS * 2 {
                     return Err(not_encrypted());
                 }
                 rest = &rest[length..];
@@ -909,6 +933,9 @@ pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
 }
 
 const MAX_SPLIT_RECIPIENTS: usize = 100;
+/// Key packets one split message may carry: every member of a distribution
+/// list (at most 1000, docs/plans/mail-groups.md) and the sender's own.
+const MAX_LIST_RECIPIENTS: usize = 1001;
 const TAG_PKESK: u8 = 1;
 const TAG_SEIPD: u8 = 18;
 const TAG_AEAD: u8 = 20;

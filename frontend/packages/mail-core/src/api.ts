@@ -15,7 +15,7 @@ import type { ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
-import { addressKeys, forgetKeys, NoKutupAddress } from './keys'
+import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { buildBody, buildMessage, buildPgpMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
@@ -521,16 +521,23 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
   )
 
   const attempt = async (): Promise<SendRecipient[]> => {
-    const keys = await Promise.all(
-      local.map((address) =>
-        addressKeys(address).catch((error) => {
-          throw error instanceof NoKutupAddress ? new UnknownRecipient(address) : error
-        }),
-      ),
-    )
-    const sealed = await encryptMailMessage(account.key, [account.publicKey, ...keys.map((k) => k.primary)], message)
+    // Each Kutup address, or each member of a group (once, and not you).
+    const targets = new Map<string, string>()
+    for (const address of local) {
+      try {
+        targets.set(address, (await addressKeys(address)).primary)
+      } catch (error) {
+        if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
+        if (!(error instanceof GroupAddress)) throw error
+        for (const member of await groupMembers(address)) {
+          if (member.address !== account.address && !targets.has(member.address)) targets.set(member.address, member.primary)
+        }
+      }
+    }
+    const addresses = [...targets.keys()]
+    const sealed = await encryptMailMessage(account.key, [account.publicKey, ...addresses.map((a) => targets.get(a)!)], message)
     const keyPackets: Record<string, string> = { self: sealed.keyPackets[0] }
-    local.forEach((address, i) => {
+    addresses.forEach((address, i) => {
       keyPackets[address] = sealed.keyPackets[i + 1]
     })
     const form = new FormData()
@@ -549,9 +556,10 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
     return await attempt()
   } catch (error) {
     const response = (error as { response?: { status?: number; data?: { code?: string; address?: string } } }).response
-    if (response?.status === 409 && response.data?.code === 'keyChanged') {
-      // A recipient rotated their key since it was looked up: once more.
-      forgetKeys(response.data.address)
+    if (response?.status === 409 && (response.data?.code === 'keyChanged' || response.data?.code === 'groupChanged')) {
+      // A recipient rotated their key, or a group's members changed, since
+      // they were looked up: once more.
+      forgetKeys(response.data.code === 'keyChanged' ? response.data.address : undefined)
       return attempt()
     }
     if (response?.status === 422 && response.data?.code === 'unknownRecipient' && response.data.address) {

@@ -392,6 +392,8 @@ pub async fn create_draft(
                 readable: &checked.readable,
                 bcc: &checked.bcc,
                 external_recipients: 0,
+                group_id: None,
+                key_packet: None,
             },
         )
         .await?;
@@ -826,6 +828,7 @@ pub async fn send(
     let mut seen = std::collections::BTreeSet::new();
     let mut local = Vec::new();
     let mut external = Vec::new();
+    let mut group_targets = Vec::new();
     for mailbox in &all {
         if !seen.insert(mailbox.address.clone()) {
             continue;
@@ -837,6 +840,13 @@ pub async fn send(
             .unwrap_or_default();
         if !domain.eq_ignore_ascii_case(server_name) {
             external.push(mailbox.address.clone());
+            continue;
+        }
+        // A distribution list: its members' key packets come below.
+        if let Some(group) =
+            crate::mail::groups::find(&state.pool, &mailbox.address.to_ascii_lowercase()).await?
+        {
+            group_targets.push(group);
             continue;
         }
         let recipient = match crate::mail::resolve(&state, &mailbox.address).await {
@@ -866,6 +876,52 @@ pub async fn send(
                     .with_details(json!({ "code": "keyChanged", "address": address })));
             }
         }
+    }
+
+    // Distribution lists: one copy each, a key packet per member for their
+    // current key. Members who get the message directly, the sender, and
+    // members of two of the lists get it once.
+    let mut reached: std::collections::BTreeSet<Uuid> = local
+        .iter()
+        .filter_map(|(_, recipient, _)| recipient.as_ref().map(|r| r.user_id))
+        .collect();
+    reached.insert(user_id);
+    let mut list_sends = Vec::new();
+    for group in group_targets {
+        if !crate::mail::groups::may_post(
+            &state.pool,
+            &group,
+            crate::mail::groups::Sender::Local(user_id),
+        )
+        .await?
+        {
+            return Err(
+                AppError::forbidden("this group does not take mail from you")
+                    .with_details(json!({ "code": "notAllowed", "address": group.address })),
+            );
+        }
+        let mut members = Vec::new();
+        for receiver in crate::mail::groups::receivers(&state.pool, &group).await? {
+            if !reached.insert(receiver.user_id) {
+                continue;
+            }
+            let Some(encoded) = meta.key_packets.get(&receiver.address) else {
+                // Someone joined since the browser looked the group up.
+                return Err(AppError::conflict("the group's members changed; try again")
+                    .with_details(json!({ "code": "groupChanged", "address": group.address })));
+            };
+            let packet = STANDARD
+                .decode(encoded)
+                .map_err(|_| AppError::bad_request("key packets must be base64"))?;
+            let expected = mail_key::encryption_key_id(&receiver.public_key)
+                .map_err(|_| AppError::internal("stored address key does not parse"))?;
+            if mail_key::key_packet_key_id(&packet).ok() != Some(expected) {
+                return Err(AppError::conflict("a recipient's key changed; try again")
+                    .with_details(json!({ "code": "keyChanged", "address": receiver.address })));
+            }
+            members.push((receiver, packet));
+        }
+        list_sends.push((group, members));
     }
 
     // Outside recipients: PGP messages for those with keys, the plaintext
@@ -950,6 +1006,10 @@ pub async fn send(
     let id = Uuid::new_v4();
     let thread = own_thread(&state, user_id, meta.mail.thread_id.as_deref()).await?;
     let mut spam_refused = false;
+    // Group objects: kept when recorded, removed when the send fails or a
+    // group took nothing.
+    let mut group_objects: Vec<(String, String)> = Vec::new();
+    let mut unused_group_objects: Vec<(String, String)> = Vec::new();
     let recorded: AppResult<Vec<SendRecipient>> = async {
         let mut tx = state.pool.begin().await?;
         // Lock every account in one order, so two sends cannot deadlock.
@@ -989,6 +1049,8 @@ pub async fn send(
                 readable,
                 bcc: &checked.bcc,
                 external_recipients: external.len() as i32,
+                group_id: None,
+                key_packet: None,
             },
         )
         .await?;
@@ -1019,6 +1081,8 @@ pub async fn send(
                     readable,
                     bcc: &[],
                     external_recipients: 0,
+                    group_id: None,
+                    key_packet: None,
                 },
             )
             .await?;
@@ -1027,6 +1091,64 @@ pub async fn send(
                 address: copy.address.clone(),
                 status: "delivered".into(),
             });
+        }
+        // Distribution lists, each charged to its group.
+        for (group, members) in &list_sends {
+            let address = group.address.clone();
+            if members.is_empty() {
+                // Everyone on it got the message directly.
+                results.push(SendRecipient {
+                    address,
+                    status: "delivered".into(),
+                });
+                continue;
+            }
+            let mut written = crate::mail::groups::Written::default();
+            let stored = crate::mail::groups::store_list(
+                &state,
+                &mut tx,
+                group,
+                vec![crate::mail::groups::ListCopy {
+                    data: data.to_vec(),
+                    members: members.clone(),
+                }],
+                &crate::mail::groups::ListRow {
+                    direction: "inbound",
+                    protection: "end_to_end",
+                    readable,
+                    folder: "inbox",
+                },
+                &mut written,
+            )
+            .await;
+            match stored {
+                Ok(crate::mail::groups::Stored::Delivered(_)) => {
+                    group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "delivered".into(),
+                    });
+                }
+                Ok(crate::mail::groups::Stored::AlreadyThere) => {
+                    unused_group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "delivered".into(),
+                    });
+                }
+                Ok(crate::mail::groups::Stored::Full) => {
+                    unused_group_objects.extend(written.0);
+                    results.push(SendRecipient {
+                        address,
+                        status: "full".into(),
+                    });
+                }
+                Err(error) => {
+                    unused_group_objects.extend(written.0);
+                    tracing::warn!(error = %error, "mail: storing for a group failed");
+                    return Err(AppError::internal("storing for a group failed"));
+                }
+            }
         }
         // Outside mail goes last: once Stalwart has it, it is sent. The
         // plaintext first, the likeliest to be refused: a refusal of the
@@ -1088,10 +1210,12 @@ pub async fn send(
             tracing::warn!(error = %error, "mail: spam refusal not recorded");
         }
     }
+    remove_objects(&state, &unused_group_objects).await;
     let results = match recorded {
         Ok(results) => results,
         Err(error) => {
             remove_objects(&state, &objects).await;
+            remove_objects(&state, &group_objects).await;
             return Err(error);
         }
     };

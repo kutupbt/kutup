@@ -375,6 +375,7 @@ async fn main() -> anyhow::Result<()> {
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
+    mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     mail::spawn_receiver(state.clone()).await?;
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -529,6 +530,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/.well-known/openpgpkey/policy",
             get(handlers::mail_keys::wkd_policy),
+        )
+        // RFC 9116: vulnerability reports go to the security@ role group.
+        .route(
+            "/.well-known/security.txt",
+            get(handlers::mail_groups::security_txt),
         )
         // The advanced method, on openpgpkey.<server name>.
         .route(
@@ -698,6 +704,20 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/keys/outside",
             get(handlers::mail_keys::outside_keys)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route("/api/mail/groups", get(handlers::mail_groups::my_groups))
+        .route(
+            "/api/mail/groups/recipients",
+            get(handlers::mail_groups::recipients)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/mail/groups/:id",
+            get(handlers::mail_groups::group_detail).patch(handlers::mail_groups::update_group),
+        )
+        .route(
+            "/api/mail/groups/:id/members",
+            put(handlers::mail_groups::set_members),
         )
         // --- Collections (authenticated). ---
         .route(
@@ -1663,6 +1683,16 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/mail/senders",
                     get(handlers::mail_sending::senders),
+                )
+                .route(
+                    "/api/admin/mail/groups",
+                    get(handlers::mail_groups::admin_list)
+                        .post(handlers::mail_groups::admin_create),
+                )
+                .route(
+                    "/api/admin/mail/groups/:id",
+                    patch(handlers::mail_groups::admin_update)
+                        .delete(handlers::mail_groups::admin_delete),
                 )
                 .route(
                     "/api/admin/users/:id/mail-sending",

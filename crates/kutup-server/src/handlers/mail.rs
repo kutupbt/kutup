@@ -260,19 +260,35 @@ pub async fn message_content(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     // Each message is written once under its own key, so the plain key is
     // always the stored version.
-    let key: Option<String> =
-        sqlx::query_scalar("SELECT object_key FROM mail_messages WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let key = key.ok_or_else(|| AppError::not_found("not found"))?;
+    let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT object_key, key_packet FROM mail_messages WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (key, key_packet) = row.ok_or_else(|| AppError::not_found("not found"))?;
     let (body, size) = state
         .storage
         .get_object(&key)
         .await
         .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(body, size, &[]))
+    let Some(key_packet) = key_packet else {
+        return Ok(octet_stream_response(body, size, &[]));
+    };
+    // A distribution-list copy: the member's key packet, then the list's
+    // shared data packet, which together are one OpenPGP message.
+    use futures_util::StreamExt as _;
+    let length = size + key_packet.len() as i64;
+    let stream = futures_util::stream::once(async move {
+        Ok::<_, std::io::Error>(axum::body::Bytes::from(key_packet))
+    })
+    .chain(tokio_util::io::ReaderStream::new(body.into_async_read()));
+    Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .header(axum::http::header::CONTENT_LENGTH, length)
+        .body(axum::body::Body::from_stream(stream))
+        .map_err(|_| AppError::internal("response"))
 }
 
 fn parse_ids(ids: &[String]) -> AppResult<Vec<Uuid>> {
@@ -401,15 +417,23 @@ pub(crate) async fn delete_for_good(
     .bind(folders)
     .fetch_all(&mut *tx)
     .await?;
-    let messages: Vec<(String, String, i64)> = sqlx::query_as(
+    // A distribution-list copy only drops the member's row: the shared data
+    // packet is the group's, released once nobody holds it.
+    let deleted: Vec<(String, String, i64, bool)> = sqlx::query_as(
         "DELETE FROM mail_messages WHERE user_id = $1 AND id = ANY($2) AND folder = ANY($3)
-         RETURNING object_key, object_version, size_bytes",
+         RETURNING object_key, object_version, size_bytes, key_packet IS NOT NULL",
     )
     .bind(user_id)
     .bind(ids)
     .bind(folders)
     .fetch_all(&mut *tx)
     .await?;
+    let list_copies = deleted.iter().filter(|(_, _, _, shared)| *shared).count();
+    let messages: Vec<(String, String, i64)> = deleted
+        .iter()
+        .filter(|(_, _, _, shared)| !*shared)
+        .map(|(key, version, size, _)| (key.clone(), version.clone(), *size))
+        .collect();
     let freed: i64 = messages.iter().map(|(_, _, size)| size).sum::<i64>()
         + attachments.iter().map(|(_, size)| size).sum::<i64>();
     sqlx::query(
@@ -430,7 +454,14 @@ pub(crate) async fn delete_for_good(
             tracing::warn!(error = %error, "mail: deleted message object left for the sweep");
         }
     }
-    Ok(messages.len() as u64)
+    if list_copies > 0 {
+        if let Err(error) =
+            crate::mail::groups::release_unreferenced(&state.pool, &state.storage).await
+        {
+            tracing::warn!(error = %error, "mail: group objects left for the next release");
+        }
+    }
+    Ok(deleted.len() as u64)
 }
 
 #[derive(Debug, Serialize, ToSchema)]

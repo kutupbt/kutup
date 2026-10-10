@@ -89,13 +89,14 @@ async fn ensure_address(state: &AppState, user_id: Uuid, address: &str) -> AppRe
         .bind(address)
         .execute(&state.pool)
         .await?;
-    let (id, owner): (Uuid, Uuid) =
+    let (id, owner): (Uuid, Option<Uuid>) =
         sqlx::query_as("SELECT id, user_id FROM mail_addresses WHERE address = $1")
             .bind(address)
             .fetch_one(&state.pool)
             .await?;
-    if owner != user_id {
-        // A recreated account under a reused username must not inherit keys.
+    if owner != Some(user_id) {
+        // A recreated account under a reused username must not inherit keys,
+        // and a group's address is not an account's.
         return Err(AppError::conflict(
             "this address belongs to another account",
         ));
@@ -247,13 +248,13 @@ async fn begin_list_change(
     }
 
     let mut tx = state.pool.begin().await?;
-    let owner: Option<(Uuid, String)> =
+    let owner: Option<(Option<Uuid>, String)> =
         sqlx::query_as("SELECT user_id, address FROM mail_addresses WHERE id = $1 FOR UPDATE")
             .bind(address_id)
             .fetch_optional(&mut *tx)
             .await?;
     match owner {
-        Some((owner, stored)) if owner == user_id && stored == address => {}
+        Some((Some(owner), stored)) if owner == user_id && stored == address => {}
         _ => return Err(AppError::not_found("not found")),
     }
     // The list must follow the current one exactly.
@@ -554,7 +555,7 @@ async fn public_keys(
     params(("email" = String, Query, description = "The address to look up")),
     responses(
         (status = 200, description = "Public keys and key lists", body = MailKeyLookup),
-        (status = 404, description = "No Kutup address with keys"),
+        (status = 404, description = "No Kutup address with keys (code group: a group's address)"),
     )
 )]
 pub async fn lookup_keys(
@@ -564,8 +565,28 @@ pub async fn lookup_keys(
 ) -> AppResult<Json<MailKeyLookup>> {
     let address = mail_key::canonical_address(query.email.trim().to_lowercase().as_str())
         .map_err(|_| AppError::not_found("not found"))?;
-    let Some((address_id, account, keys)) = public_keys(&state, &address).await? else {
-        return Err(AppError::not_found("not found"));
+    if let Some(lookup) = lookup_address(&state, &address).await? {
+        return Ok(Json(lookup));
+    }
+    // A group's mail is encrypted to its members: the browser asks
+    // `GET /api/mail/groups/recipients` for them.
+    if crate::mail::groups::find(&state.pool, &address)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::not_found("this address is a group")
+            .with_details(serde_json::json!({ "code": "group" })));
+    }
+    Err(AppError::not_found("not found"))
+}
+
+/// An active account's address with its keys and key-list chain.
+pub(crate) async fn lookup_address(
+    state: &AppState,
+    address: &str,
+) -> AppResult<Option<MailKeyLookup>> {
+    let Some((address_id, account, keys)) = public_keys(state, address).await? else {
+        return Ok(None);
     };
     let authority: String = sqlx::query_scalar(
         "SELECT u.account_authority_public_key FROM mail_addresses a JOIN users u ON u.id = a.user_id
@@ -580,8 +601,8 @@ pub async fn lookup_keys(
     .bind(address_id)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(MailKeyLookup {
-        address,
+    Ok(Some(MailKeyLookup {
+        address: address.to_string(),
         account,
         account_authority_public_key: authority,
         keys,

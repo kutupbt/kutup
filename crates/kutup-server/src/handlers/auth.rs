@@ -386,6 +386,15 @@ pub async fn register(
             "this username is reserved for the server",
         ));
     }
+    if crate::mail::groups::is_group_name(
+        &state.pool,
+        &req.username,
+        &state.config.chat_server_name,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("this username is taken"));
+    }
     validate_account_protection(
         req.account_protection_suite,
         &req.account_protection_salt,

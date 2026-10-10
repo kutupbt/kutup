@@ -1334,3 +1334,417 @@ fn address_keys_rotate_and_change_flags() {
     let (_, list3) = current_list(&c, &base, &user);
     assert_eq!(list3.list.sequence, 3);
 }
+
+/// Waits until `user` has the message with `message_id` (inbox or spam).
+fn wait_for(c: &Client, base: &str, user: &User, message_id: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(row) = messages(c, base, &user.token)
+            .into_iter()
+            .find(|m| m["messageId"] == message_id)
+        {
+            return row;
+        }
+        assert!(Instant::now() < deadline, "{message_id} never arrived");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// A message row's content, opened with the account's address key.
+fn open_row(c: &Client, base: &str, user: &User, address: &Address, row: &Value) -> String {
+    let stored = bearer(
+        c.get(format!(
+            "{base}/api/mail/messages/{}/content",
+            row["id"].as_str().unwrap()
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    let opened = mail_key::decrypt(&address.secret_key, &stored, None).unwrap();
+    String::from_utf8_lossy(&opened.data).into_owned()
+}
+
+fn smtp_send(smtp_address: &str, to: &str, message: &str) -> (u16, u16) {
+    let mut smtp = Smtp::connect(smtp_address);
+    assert_eq!(smtp.command("EHLO lists.sender.test"), 250);
+    assert_eq!(smtp.command("MAIL FROM:<writer@sender.test>"), 250);
+    let rcpt = smtp.command(&format!("RCPT TO:<{to}>"));
+    let data = if rcpt == 250 {
+        smtp.data(message.as_bytes())
+    } else {
+        0
+    };
+    smtp.command("QUIT");
+    (rcpt, data)
+}
+
+#[test]
+fn distribution_lists_and_role_groups() {
+    let (Ok(base), Ok(smtp_address), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut parts = admin.splitn(3, ':');
+    let (email, username, password) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let admin = common::admin_token(&c, &base, email, password, username);
+    let (alice_user, bob_user, carol_user, dave_user) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let alice = set_up_address(&c, &base, &alice_user);
+    let bob = set_up_address(&c, &base, &bob_user);
+    let carol = set_up_address(&c, &base, &carol_user);
+    // Dave receives the role group's mail as an administrator below.
+    set_up_address(&c, &base, &dave_user);
+    let domain = alice.address.split_once('@').unwrap().1.to_string();
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let name = format!("team-{}", &tag[..8]);
+    let team = format!("{name}@{domain}");
+
+    // An administrator makes the list; its name is now taken for groups and
+    // accounts alike.
+    let create = |name: &str| {
+        bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
+            .json(&json!({
+                "name": name, "displayName": "Team", "kind": "list", "postPolicy": "anyone",
+                "storageQuotaBytes": 10_000_000, "owners": [alice_user.id],
+            }))
+            .send()
+            .unwrap()
+    };
+    let r = create(&name);
+    assert_eq!(r.status(), 200, "create group");
+    let group: Value = r.json().unwrap();
+    let id = group["group"]["id"].as_str().unwrap().to_string();
+    assert_eq!(group["group"]["address"], team.as_str());
+    assert_eq!(code(create(&name)), (409, "nameTaken".into()));
+    assert_eq!(
+        code(create(&alice_user.username)),
+        (409, "nameTaken".into())
+    );
+    assert_eq!(create("postmaster").status(), 400);
+
+    // Its owner sets the members; a member cannot.
+    let set_members = |user: &User, members: Value| {
+        bearer(
+            c.put(format!("{base}/api/mail/groups/{id}/members")),
+            &user.token,
+        )
+        .json(&json!({ "members": members }))
+        .send()
+        .unwrap()
+    };
+    let three = json!([
+        { "userId": alice_user.id, "role": "owner" },
+        { "userId": bob_user.id, "role": "member" },
+        { "userId": carol_user.id, "role": "member" },
+    ]);
+    assert_eq!(set_members(&alice_user, three.clone()).status(), 200);
+    assert_eq!(set_members(&bob_user, three.clone()).status(), 403);
+    assert_eq!(
+        set_members(
+            &alice_user,
+            json!([{ "userId": bob_user.id, "role": "member" }])
+        )
+        .status(),
+        400,
+        "a group keeps an owner"
+    );
+
+    // Mail from outside: one stored copy, each member opens their own.
+    let used_before = common::used(&c, &base, &bob_user.token);
+    let message_id = format!("list-{tag}@sender.test");
+    let message = format!(
+        "From: writer@sender.test\r\nTo: {team}\r\nSubject: Team news\r\nMessage-ID: <{message_id}>\r\n\r\nHello team {tag}\r\n"
+    );
+    assert_eq!(smtp_send(&smtp_address, &team, &message), (250, 250));
+    for (user, address) in [
+        (&alice_user, &alice),
+        (&bob_user, &bob),
+        (&carol_user, &carol),
+    ] {
+        let row = wait_for(&c, &base, user, &message_id);
+        assert_eq!(row["protection"], "zero_access");
+        assert!(open_row(&c, &base, user, address, &row).contains(&format!("Hello team {tag}")));
+    }
+    assert!(messages(&c, &base, &dave_user.token)
+        .iter()
+        .all(|m| m["messageId"] != message_id.as_str()));
+    // The group pays, not its members.
+    assert_eq!(common::used(&c, &base, &bob_user.token), used_before);
+    let group_used = || -> i64 {
+        let all: Value = bearer(c.get(format!("{base}/api/admin/mail/groups")), &admin)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == id.as_str())
+            .unwrap()["storageUsedBytes"]
+            .as_i64()
+            .unwrap()
+    };
+    assert!(group_used() > 0);
+    // The same message again (a retried delivery) is not stored twice.
+    assert_eq!(smtp_send(&smtp_address, &team, &message), (250, 250));
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        messages(&c, &base, &carol_user.token)
+            .iter()
+            .filter(|m| m["messageId"] == message_id.as_str())
+            .count(),
+        1
+    );
+
+    // Members only: outside mail and non-members are refused.
+    let r = bearer(
+        c.patch(format!("{base}/api/admin/mail/groups/{id}")),
+        &admin,
+    )
+    .json(&json!({ "postPolicy": "members" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(smtp_send(&smtp_address, &team, &message).0, 550);
+    let recipients = |user: &User| {
+        bearer(
+            c.get(format!("{base}/api/mail/groups/recipients?email={team}")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+    };
+    assert_eq!(recipients(&dave_user).status(), 403);
+
+    // A member writes to the list from Kutup: one key packet per other member.
+    let lookup: Value = recipients(&bob_user).json().unwrap();
+    let addresses: Vec<String> = lookup["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["address"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(addresses.len(), 3);
+    let kutup_id = format!("kutup-{tag}@{domain}");
+    let mime = format!(
+        "From: {}\r\nTo: {team}\r\nSubject: From Bob\r\nMessage-ID: <{kutup_id}>\r\n\r\nBob to the team {tag}\r\n",
+        bob.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&bob.public_key, &alice.public_key, &carol.public_key],
+        &bob.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let send = |packets: Value| {
+        let meta = serde_json::to_vec(&json!({
+            "subject": "From Bob",
+            "to": [{ "address": team }],
+            "messageId": kutup_id,
+            "keyPackets": packets,
+        }))
+        .unwrap();
+        bearer(c.post(format!("{base}/api/mail/send")), &bob_user.token)
+            .multipart(form(vec![
+                ("meta", meta),
+                ("data", split.data_packet.clone()),
+            ]))
+            .send()
+            .unwrap()
+    };
+    // Carol's key packet missing: the browser's view of the members is stale.
+    assert_eq!(
+        code(send(
+            json!({ "self": b64(&split.key_packets[0]), alice.address.clone(): b64(&split.key_packets[1]) })
+        )),
+        (409, "groupChanged".into())
+    );
+    let r = send(json!({
+        "self": b64(&split.key_packets[0]),
+        alice.address.clone(): b64(&split.key_packets[1]),
+        carol.address.clone(): b64(&split.key_packets[2]),
+    }));
+    assert_eq!(r.status(), 200, "send to the list");
+    assert_eq!(
+        send_result(r)["recipients"],
+        json!([{ "address": team, "status": "delivered" }])
+    );
+    for (user, address) in [(&alice_user, &alice), (&carol_user, &carol)] {
+        let row = wait_for(&c, &base, user, &kutup_id);
+        assert_eq!(row["protection"], "end_to_end");
+        assert!(
+            open_row(&c, &base, user, address, &row).contains(&format!("Bob to the team {tag}"))
+        );
+    }
+    assert!(folder(&c, &base, &bob_user.token, "inbox")
+        .iter()
+        .all(|m| m["messageId"] != kutup_id.as_str()));
+
+    // Full: the group's quota, not the members', refuses at RCPT.
+    let quota = |bytes: i64| {
+        let r = bearer(
+            c.patch(format!("{base}/api/admin/mail/groups/{id}")),
+            &admin,
+        )
+        .json(&json!({ "storageQuotaBytes": bytes, "postPolicy": "anyone" }))
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), 200);
+    };
+    quota(1);
+    assert_eq!(smtp_send(&smtp_address, &team, &message).0, 452);
+    quota(10_000_000);
+
+    // Once every member deleted their copies, the group's storage is free.
+    for user in [&alice_user, &bob_user, &carol_user] {
+        let ids: Vec<String> = messages(&c, &base, &user.token)
+            .into_iter()
+            .filter(|m| {
+                m["messageId"] == message_id.as_str() || m["messageId"] == kutup_id.as_str()
+            })
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+            .json(&json!({ "ids": ids, "folder": "trash" }))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "to trash");
+        let r = bearer(
+            c.post(format!("{base}/api/mail/messages/delete")),
+            &user.token,
+        )
+        .json(&json!({ "ids": ids }))
+        .send()
+        .unwrap();
+        assert!(r.status().is_success(), "delete");
+    }
+    assert_eq!(group_used(), 0);
+
+    // A role group without members reaches every administrator; with a
+    // member, only them.
+    let r = bearer(
+        c.put(format!("{base}/api/admin/users/{}", dave_user.id)),
+        &admin,
+    )
+    .json(&json!({ "isAdmin": true }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success());
+    let all: Value = bearer(c.get(format!("{base}/api/admin/mail/groups")), &admin)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let abuse = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["systemRole"] == "abuse")
+        .expect("abuse@ is a system group")
+        .clone();
+    assert_eq!(abuse["postPolicy"], "anyone");
+    let abuse_id = abuse["id"].as_str().unwrap();
+    let abuse_address = abuse["address"].as_str().unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        &admin,
+    )
+    .json(&json!({ "members": [] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.json::<Value>().unwrap()["goesToAdministrators"], true);
+    let report = format!("abuse-{tag}@sender.test");
+    let complaint = format!(
+        "From: reporter@sender.test\r\nTo: {abuse_address}\r\nSubject: Spam\r\nMessage-ID: <{report}>\r\n\r\nspam report\r\n"
+    );
+    assert_eq!(
+        smtp_send(&smtp_address, abuse_address, &complaint),
+        (250, 250)
+    );
+    wait_for(&c, &base, &dave_user, &report);
+    assert_eq!(
+        bearer(
+            c.delete(format!("{base}/api/admin/mail/groups/{abuse_id}")),
+            &admin
+        )
+        .send()
+        .unwrap()
+        .status(),
+        400,
+        "a role address stays"
+    );
+    let r = bearer(
+        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        &admin,
+    )
+    .json(&json!({ "members": [{ "userId": carol_user.id, "role": "member" }] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    let second = format!("abuse2-{tag}@sender.test");
+    let complaint = complaint.replace(&report, &second);
+    assert_eq!(
+        smtp_send(&smtp_address, abuse_address, &complaint),
+        (250, 250)
+    );
+    wait_for(&c, &base, &carol_user, &second);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(messages(&c, &base, &dave_user.token)
+        .iter()
+        .all(|m| m["messageId"] != second.as_str()));
+    // Leave the role group as it was, for the other tests.
+    let r = bearer(
+        c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
+        &admin,
+    )
+    .json(&json!({ "members": [] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 200);
+
+    // security.txt names security@.
+    let text = c
+        .get(format!("{base}/.well-known/security.txt"))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(
+        text.contains(&format!("Contact: mailto:security@{domain}")),
+        "{text}"
+    );
+    assert!(text.contains("Expires: "));
+
+    // Deleting the list frees its name; members keep what they received.
+    assert_eq!(
+        bearer(
+            c.delete(format!("{base}/api/admin/mail/groups/{id}")),
+            &admin
+        )
+        .send()
+        .unwrap()
+        .status(),
+        204
+    );
+    assert_eq!(create(&name).status(), 200);
+}
