@@ -205,10 +205,20 @@ deletes the draft.
   "…" button, with no script (`<details>`).
 - The composer, docked like Proton's: From, To, Cc, Bcc with contact
   suggestions, subject, a rich-text editor (Tiptap) sent as HTML with a plain
-  text alternative, attachments, autosave, and Proton's shortcuts
-  (Meta+Enter send, Esc close; N new, R reply, Shift+R reply all, Shift+F
-  forward, `*` star, U unread, A archive, S spam, T trash, `/` search,
-  J/K next and previous).
+  text alternative, attachments, autosave, Meta+Enter to send and Esc to
+  close. Maximised, it dims the app behind it (Gmail's full-screen compose):
+  a click on the dimmed app or Esc docks it again, and Tab stays inside.
+- **Working the list** (Proton, Gmail): Shift-click chooses a range,
+  Ctrl/Cmd-click one more, Shift+↑/↓ extends the choice; a right click acts on
+  the chosen rows when it lands on one, else on that row (read/unread, star,
+  move, delete for good, the sender's other mail, copy, Save to contacts);
+  rows can be dragged onto Inbox, Starred, Archive, Spam or Trash; every move
+  has Undo in its toast.
+- **Shortcuts** (Proton's, listed with `?`): J/K or ↑/↓ next and previous,
+  X choose, Ctrl/Cmd+A all, Esc clear or close, N new, `/` search, `*` star,
+  R read, U unread, I inbox (or not spam), A archive, S spam, T or Delete
+  trash, Ctrl/Cmd+Backspace delete for good in Trash, Spam and Drafts. They
+  act on the chosen rows, else the open conversation.
 - New mail is fetched every 30 s while the app is open; web push later.
 
 ### C2 slices

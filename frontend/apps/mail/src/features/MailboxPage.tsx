@@ -1,25 +1,25 @@
-import { Archive, Inbox as InboxIcon, Mail, MailOpen, OctagonAlert, Paperclip, Star, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Archive, Copy, Inbox as InboxIcon, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import {
-  FOLDERS,
-  NoAddressKey,
-  useDeleteMessages,
-  useFolder,
-  useMailAccount,
-  useUpdateMessages,
-  type FolderId,
-  type MailMessage,
-  type MessageChange,
-} from '@kutup/mail-core/api'
 import { useContactLookup } from '@kutup/contacts-core/api'
+import { FOLDERS, NoAddressKey, useDeleteMessages, useFolder, useMailAccount, type FolderId, type MailMessage } from '@kutup/mail-core/api'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '@kutup/ui/components/context-menu'
 import { Skeleton } from '@kutup/ui/components/skeleton'
 import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
@@ -27,15 +27,20 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openComposer } from './composerState'
+import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
 import { Padlock } from './Padlock'
 import { PersonAvatar } from './Person'
 import { nameFor } from './personName'
+import { useSaveContact } from './saveContactState'
+import { ShortcutsDialog } from './ShortcutsDialog'
 import { ThreadView } from './ThreadView'
 
 const KNOWN = new Set<string>([...FOLDERS, 'all'])
 
+type Lookup = ReturnType<typeof useContactLookup>
+
 /** Who a row names: the sender for received mail, the recipients for sent mail and drafts; by their contact names. */
-function correspondent(message: MailMessage, t: (key: string) => string, contacts: ReturnType<typeof useContactLookup>): string {
+function correspondent(message: MailMessage, t: (key: string) => string, contacts: Lookup): string {
   if (message.direction === 'outbound') {
     const names = [...message.to, ...message.cc].map((m) => nameFor(m, contacts.find(m.address)))
     return names.length ? `${t('list.to')} ${names.join(', ')}` : t('list.noRecipients')
@@ -48,7 +53,7 @@ function avatarOf(message: MailMessage) {
   return message.direction === 'outbound' ? (message.to[0] ?? message.cc[0] ?? null) : message.from
 }
 
-function ToolbarButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function ToolbarButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <Tooltip label={label}>
       <Button variant="ghost" size="icon" aria-label={label} onClick={onClick}>
@@ -57,6 +62,21 @@ function ToolbarButton({ label, onClick, children }: { label: string; onClick: (
     </Tooltip>
   )
 }
+
+function Kbd({ children }: { children: ReactNode }) {
+  return <kbd className="ml-auto pl-4 font-sans text-xs text-muted-foreground">{children}</kbd>
+}
+
+const DELETES_FOREVER = new Set<FolderId>(['trash', 'spam', 'drafts'])
+
+const MOVE_ICON: Record<MoveTarget, ReactNode> = {
+  inbox: <InboxIcon />,
+  archive: <Archive />,
+  spam: <OctagonAlert />,
+  trash: <Trash2 />,
+}
+
+const MOVE_KEY: Record<MoveTarget, string> = { inbox: 'I', archive: 'A', spam: 'S', trash: 'T' }
 
 /** A folder: the list beside the open thread, as Proton's column layout. */
 export function MailboxPage() {
@@ -67,47 +87,179 @@ export function MailboxPage() {
   const navigate = useNavigate()
   const account = useMailAccount()
   const contacts = useContactLookup()
+  const saveContact = useSaveContact()
   const folder = (KNOWN.has(folderParam) ? folderParam : 'inbox') as FolderId
   const list = useFolder(folder, q)
-  const update = useUpdateMessages()
+  const actions = useMailActions()
   const remove = useDeleteMessages()
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [confirming, setConfirming] = useState(false)
+  // Where Shift extends a selection from, and the row the keyboard is on.
+  const anchor = useRef<number | null>(null)
+  const [cursor, setCursor] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState<string[] | null>(null)
+  const [shortcuts, setShortcuts] = useState(false)
+  // The rows a right-click menu acts on.
+  const [menuFor, setMenuFor] = useState<MailMessage[]>([])
   const messages = useMemo(() => list.data?.pages.flatMap((page) => page.messages) ?? [], [list.data])
   const chosen = messages.filter((m) => selected.has(m.id))
   const search = q ? `?q=${encodeURIComponent(q)}` : ''
+  const openIndex = messages.findIndex((m) => m.threadId === threadId)
+  const here = cursor ?? (openIndex >= 0 ? openIndex : null)
 
-  useEffect(() => setSelected(new Set()), [folder, q])
-
-  // Proton's list shortcuts (`packages/shared/lib/shortcuts/mail.ts`).
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
-      if (document.querySelector('[role="dialog"]')) return
-      const index = messages.findIndex((m) => m.threadId === threadId)
-      if (event.key === 'n') {
-        event.preventDefault()
-        openComposer({ kind: 'new' })
-      } else if (event.key === '/') {
-        event.preventDefault()
-        document.querySelector<HTMLInputElement>('[data-mail-search]')?.focus()
-      } else if ((event.key === 'j' || event.key === 'ArrowDown') && messages.length) {
-        event.preventDefault()
-        const next = messages[Math.min(index + 1, messages.length - 1)]
-        void navigate(`/${folder}/${next.threadId}${search}`)
-      } else if ((event.key === 'k' || event.key === 'ArrowUp') && messages.length) {
-        event.preventDefault()
-        const previous = messages[Math.max(index - 1, 0)]
-        void navigate(`/${folder}/${previous.threadId}${search}`)
-      } else if (event.key === 'Escape' && threadId) {
-        void navigate(`/${folder}${search}`)
+    setSelected(new Set())
+    anchor.current = null
+    setCursor(null)
+  }, [folder, q])
+  // Opening a thread puts the keyboard on it.
+  useEffect(() => {
+    if (openIndex >= 0) setCursor(openIndex)
+  }, [openIndex])
+  useEffect(() => {
+    if (here !== null && messages[here]) document.getElementById(`mail-row-${messages[here].id}`)?.scrollIntoView({ block: 'nearest' })
+  }, [here, messages])
+
+  function selectRange(from: number, to: number, add = true) {
+    const [lo, hi] = from < to ? [from, to] : [to, from]
+    setSelected((now) => {
+      const next = add ? new Set(now) : new Set<string>()
+      for (let i = lo; i <= hi; i += 1) if (messages[i]) next.add(messages[i].id)
+      return next
+    })
+  }
+
+  function toggle(index: number) {
+    const message = messages[index]
+    if (!message) return
+    setSelected((now) => {
+      const next = new Set(now)
+      if (next.has(message.id)) next.delete(message.id)
+      else next.add(message.id)
+      return next
+    })
+    anchor.current = index
+  }
+
+  /** What an action acts on: the chosen rows, else the open conversation's rows, else the keyboard's row. */
+  function targets(): MailMessage[] {
+    if (chosen.length) return chosen
+    if (threadId) return messages.filter((m) => m.threadId === threadId)
+    return here !== null && messages[here] ? [messages[here]] : []
+  }
+
+  function move(rows: MailMessage[], target: MoveTarget) {
+    actions.move(rows, target, () => {
+      setSelected(new Set())
+      // Moving the open conversation away closes it.
+      if (threadId && rows.some((m) => m.threadId === threadId)) void navigate(`/${folder}${search}`)
+    })
+  }
+
+  function deleteForever(rows: MailMessage[]) {
+    if (rows.length) setDeleting(rows.map((m) => m.id))
+  }
+
+  // Proton's list shortcuts (`packages/shared/lib/shortcuts/mail.ts`), kept
+  // in a ref so the one listener always sees this render's list.
+  const keys = useRef<(event: KeyboardEvent) => void>(() => undefined)
+  keys.current = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement | null
+    if (event.altKey) return
+    if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
+    if (document.querySelector('[role="dialog"], [role="menu"]')) return
+    const meta = event.metaKey || event.ctrlKey
+    const key = event.key
+    const step = (delta: number) => {
+      if (!messages.length) return
+      event.preventDefault()
+      const from = here ?? (delta > 0 ? -1 : messages.length)
+      const next = Math.max(0, Math.min(messages.length - 1, from + delta))
+      if (event.shiftKey) {
+        // Shift extends the selection from where it started.
+        if (anchor.current === null) anchor.current = here ?? next
+        selectRange(anchor.current, next, false)
+        setCursor(next)
+      } else {
+        anchor.current = next
+        setCursor(next)
+        void navigate(`/${folder}/${messages[next].threadId}${search}`)
       }
     }
+    if (meta) {
+      if (key === 'a' || key === 'A') {
+        event.preventDefault()
+        setSelected(chosen.length === messages.length ? new Set() : new Set(messages.map((m) => m.id)))
+      } else if (key === 'Backspace' && DELETES_FOREVER.has(folder)) {
+        event.preventDefault()
+        deleteForever(targets())
+      }
+      return
+    }
+    switch (key) {
+      case 'n':
+        event.preventDefault()
+        openComposer({ kind: 'new' })
+        break
+      case '/':
+        event.preventDefault()
+        document.querySelector<HTMLInputElement>('[data-mail-search]')?.focus()
+        break
+      case '?':
+        event.preventDefault()
+        setShortcuts(true)
+        break
+      case 'j':
+      case 'J':
+      case 'ArrowDown':
+        step(1)
+        break
+      case 'k':
+      case 'K':
+      case 'ArrowUp':
+        step(-1)
+        break
+      case 'x':
+        if (here !== null) {
+          event.preventDefault()
+          toggle(here)
+        }
+        break
+      case 'Escape':
+        if (chosen.length) setSelected(new Set())
+        else if (threadId) void navigate(`/${folder}${search}`)
+        break
+      case '*': {
+        const rows = targets()
+        actions.mark(rows, { starred: !rows.every((m) => m.starred) })
+        break
+      }
+      case 'u':
+        actions.mark(targets(), { seen: false }, () => {
+          if (threadId) void navigate(`/${folder}${search}`)
+        })
+        break
+      case 'r':
+        actions.mark(targets(), { seen: true })
+        break
+      case 'a':
+      case 'i':
+      case 's':
+      case 't': {
+        const to: MoveTarget = key === 'a' ? 'archive' : key === 'i' ? 'inbox' : key === 's' ? (folder === 'spam' ? 'inbox' : 'spam') : 'trash'
+        if (movesFor(folder).includes(to)) move(targets(), to)
+        break
+      }
+      case 'Delete':
+        if (DELETES_FOREVER.has(folder)) deleteForever(targets())
+        else move(targets(), 'trash')
+        break
+    }
+  }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => keys.current(event)
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [messages, threadId, folder, search, navigate])
+  }, [])
 
   if (!KNOWN.has(folderParam)) return <Navigate to="/inbox" replace />
 
@@ -128,19 +280,108 @@ export function MailboxPage() {
     )
   }
 
-  function apply(change: Omit<MessageChange, 'ids'>, done?: string) {
-    const ids = chosen.map((m) => m.id)
-    update.mutate(
-      { ids, ...change },
-      {
-        onSuccess: () => {
-          setSelected(new Set())
-          if (done) toast.success(done)
-        },
-        onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
-      },
-    )
+  /** A click on a row: Shift chooses a range, Ctrl/Cmd one more; a plain click opens it. */
+  function onRowClick(event: MouseEvent, index: number) {
+    if (event.shiftKey) {
+      event.preventDefault()
+      selectRange(anchor.current ?? index, index)
+      setCursor(index)
+    } else if (event.metaKey || event.ctrlKey) {
+      event.preventDefault()
+      toggle(index)
+      setCursor(index)
+    } else {
+      anchor.current = index
+    }
   }
+
+  const moves = movesFor(folder)
+  const moveLabel = (target: MoveTarget) => (folder === 'spam' && target === 'inbox' ? t('actions.notSpam') : t(`actions.moveTo.${target}`))
+  const single = menuFor.length === 1 ? menuFor[0] : null
+  const singlePerson = single ? avatarOf(single) : null
+
+  const menu = (
+    <ContextMenuContent className="w-64">
+      {menuFor.some((m) => !m.seen) ? (
+        <ContextMenuItem onSelect={() => actions.mark(menuFor, { seen: true })}>
+          <MailOpen />
+          {t('actions.markRead')}
+          <Kbd>R</Kbd>
+        </ContextMenuItem>
+      ) : null}
+      {menuFor.some((m) => m.seen) ? (
+        <ContextMenuItem onSelect={() => actions.mark(menuFor, { seen: false })}>
+          <Mail />
+          {t('actions.markUnread')}
+          <Kbd>U</Kbd>
+        </ContextMenuItem>
+      ) : null}
+      {menuFor.every((m) => m.starred) ? (
+        <ContextMenuItem onSelect={() => actions.mark(menuFor, { starred: false })}>
+          <StarOff />
+          {t('actions.unstar')}
+          <Kbd>*</Kbd>
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem onSelect={() => actions.mark(menuFor, { starred: true })}>
+          <Star />
+          {t('actions.star')}
+          <Kbd>*</Kbd>
+        </ContextMenuItem>
+      )}
+      {moves.length ? <ContextMenuSeparator /> : null}
+      {moves.map((target) => (
+        <ContextMenuItem key={target} onSelect={() => move(menuFor, target)}>
+          {MOVE_ICON[target]}
+          {moveLabel(target)}
+          <Kbd>{folder === 'spam' && target === 'inbox' ? 'S' : MOVE_KEY[target]}</Kbd>
+        </ContextMenuItem>
+      ))}
+      {DELETES_FOREVER.has(folder) ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem destructive onSelect={() => deleteForever(menuFor)}>
+            <Trash2 />
+            {t('actions.deleteForever')}
+          </ContextMenuItem>
+        </>
+      ) : null}
+      {single && singlePerson ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <UserRound />
+              <span className="min-w-0 truncate">{nameFor(singlePerson, contacts.find(singlePerson.address))}</span>
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-60">
+              <ContextMenuItem onSelect={() => void navigate(`/all?q=${encodeURIComponent(singlePerson.address)}`)}>
+                <Search />
+                {single.direction === 'outbound' ? t('person.messagesTo') : t('person.messagesFrom')}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() =>
+                  void navigator.clipboard.writeText(singlePerson.address).then(
+                    () => toast.success(t('person.copied')),
+                    () => toast.error(t('common.tryAgain')),
+                  )
+                }
+              >
+                <Copy />
+                {t('person.copy')}
+              </ContextMenuItem>
+              {!contacts.find(singlePerson.address) && singlePerson.address.toLowerCase() !== account.data?.address.toLowerCase() ? (
+                <ContextMenuItem onSelect={() => saveContact(singlePerson)}>
+                  <UserPlus />
+                  {t('person.saveContact')}
+                </ContextMenuItem>
+              ) : null}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        </>
+      ) : null}
+    </ContextMenuContent>
+  )
 
   const listPane = (
     <section
@@ -158,40 +399,32 @@ export function MailboxPage() {
           <>
             <span className="px-1 text-sm">{t('list.selected', { count: chosen.length })}</span>
             <span className="flex-1" />
-            <ToolbarButton label={t('actions.markRead')} onClick={() => apply({ seen: true })}>
+            <ToolbarButton label={t('actions.markRead')} onClick={() => actions.mark(chosen, { seen: true }, () => setSelected(new Set()))}>
               <MailOpen />
             </ToolbarButton>
-            <ToolbarButton label={t('actions.markUnread')} onClick={() => apply({ seen: false })}>
+            <ToolbarButton label={t('actions.markUnread')} onClick={() => actions.mark(chosen, { seen: false }, () => setSelected(new Set()))}>
               <Mail />
             </ToolbarButton>
-            {folder === 'trash' || folder === 'spam' || folder === 'drafts' ? (
-              <ToolbarButton label={t('actions.deleteForever')} onClick={() => setConfirming(true)}>
-                <Trash2 />
+            {moves.map((target) => (
+              <ToolbarButton key={target} label={moveLabel(target)} onClick={() => move(chosen, target)}>
+                {MOVE_ICON[target]}
               </ToolbarButton>
-            ) : (
-              <>
-                <ToolbarButton label={t('actions.archive')} onClick={() => apply({ folder: 'archive' }, t('toasts.archived'))}>
-                  <Archive />
-                </ToolbarButton>
-                <ToolbarButton label={t('actions.trash')} onClick={() => apply({ folder: 'trash' }, t('toasts.trashed'))}>
-                  <Trash2 />
-                </ToolbarButton>
-              </>
-            )}
-            {folder === 'spam' ? (
-              <ToolbarButton label={t('actions.notSpam')} onClick={() => apply({ folder: 'inbox' }, t('toasts.movedToInbox'))}>
-                <InboxIcon />
-              </ToolbarButton>
-            ) : folder !== 'trash' && folder !== 'drafts' && folder !== 'sent' ? (
-              <ToolbarButton label={t('actions.spam')} onClick={() => apply({ folder: 'spam' }, t('toasts.spam'))}>
-                <OctagonAlert />
+            ))}
+            {DELETES_FOREVER.has(folder) ? (
+              <ToolbarButton label={t('actions.deleteForever')} onClick={() => deleteForever(chosen)}>
+                <Trash2 className="text-destructive" />
               </ToolbarButton>
             ) : null}
           </>
         ) : (
-          <h1 className="truncate px-1 font-display text-base font-semibold">
-            {q ? t('list.searchResults', { q }) : t(`folders.${folder}`)}
-          </h1>
+          <>
+            <h1 className="min-w-0 flex-1 truncate px-1 font-display text-base font-semibold">
+              {q ? t('list.searchResults', { q }) : t(`folders.${folder}`)}
+            </h1>
+            <ToolbarButton label={t('shortcuts.title')} onClick={() => setShortcuts(true)}>
+              <Keyboard />
+            </ToolbarButton>
+          </>
         )}
       </div>
       {list.isPending || account.isPending ? (
@@ -209,72 +442,109 @@ export function MailboxPage() {
           <EmptyState title={q ? t('list.noMatches') : t(`empty.${folder}`)} description={q ? t('list.noMatchesHint') : t(`emptyHint.${folder}`)} />
         </div>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto">
-          {messages.map((message) => {
-            const open = message.threadId === threadId
-            return (
-              <li key={message.id} className={cn('group border-b border-border/60', open && 'bg-accent', !message.seen && !open && 'bg-primary/5')}>
-                <div className="flex items-start gap-2 px-2 py-2">
-                  {/* The avatar turns into the checkbox on hover, or once anything is chosen (Proton's list). */}
-                  <span className="relative m-1 flex size-8 shrink-0 items-center justify-center">
-                    <span className={cn('transition-opacity', chosen.length > 0 ? 'opacity-0' : 'group-hover:opacity-0')}>
-                      <PersonAvatar mailbox={avatarOf(message)} contact={contacts.find(avatarOf(message)?.address)} size={32} />
-                    </span>
-                    <Checkbox
-                    className={cn('absolute', chosen.length > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
-                    checked={selected.has(message.id)}
-                    onCheckedChange={(on) =>
-                      setSelected((now) => {
-                        const next = new Set(now)
-                        if (on === true) next.add(message.id)
-                        else next.delete(message.id)
-                        return next
-                      })
-                    }
-                    aria-label={t('list.select', { subject: message.subject || t('list.noSubject') })}
-                  />
-                  </span>
-                  <Link to={`/${folder}/${message.threadId}${search}`} className="min-w-0 flex-1 py-1" aria-current={open ? 'true' : undefined}>
-                    <span className="flex items-center gap-2">
-                      <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>
-                        {correspondent(message, t, contacts)}
-                      </span>
-                      {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
-                      <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
-                        {formatFileDate(message.receivedAt, i18n.language)}
-                      </span>
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-2">
-                      <Padlock message={message} className="[&_svg]:size-3.5" />
-                      <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>
-                        {message.subject || t('list.noSubject')}
-                      </span>
-                      {folder === 'all' || folder === 'starred' ? (
-                        <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t(`folders.${message.folder}`)}</span>
-                      ) : null}
-                    </span>
-                  </Link>
-                  <button
-                    type="button"
-                    className={cn('m-1 rounded p-1 hover:bg-muted', !message.starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
-                    aria-label={message.starred ? t('actions.unstar') : t('actions.star')}
-                    aria-pressed={message.starred}
-                    onClick={() => update.mutate({ ids: [message.id], starred: !message.starred })}
+        <ContextMenu
+          onOpenChange={(open) => {
+            if (!open) setMenuFor([])
+          }}
+        >
+          <ContextMenuTrigger asChild>
+            <ul className="min-h-0 flex-1 overflow-y-auto" aria-label={t('list.messages')}>
+              {messages.map((message, index) => {
+                const open = message.threadId === threadId
+                const isChosen = selected.has(message.id)
+                const inMenu = menuFor.some((m) => m.id === message.id)
+                const person = avatarOf(message)
+                return (
+                  <li
+                    key={message.id}
+                    id={`mail-row-${message.id}`}
+                    draggable={folder !== 'drafts'}
+                    // A right click acts on the chosen rows when it lands on one of them, else on this row (Proton, Gmail).
+                    onContextMenu={() => setMenuFor(isChosen ? chosen : [message])}
+                    onDragStart={(e) => {
+                      const rows = isChosen ? chosen : [message]
+                      const data: Movable[] = rows.map(({ id, folder: from, direction }) => ({ id, folder: from, direction }))
+                      e.dataTransfer.setData(MAIL_DRAG_TYPE, JSON.stringify(data))
+                      e.dataTransfer.setData('text/plain', t('list.dragging', { count: rows.length }))
+                      e.dataTransfer.effectAllowed = 'move'
+                    }}
+                    className={cn(
+                      'group border-b border-border/60',
+                      open ? 'bg-accent' : isChosen || inMenu ? 'bg-primary/10' : !message.seen && 'bg-primary/5',
+                      here === index && 'shadow-[inset_3px_0_0_var(--primary)]',
+                    )}
                   >
-                    <Star className={cn('size-4', message.starred ? 'fill-status-warn text-status-warn' : 'text-muted-foreground')} />
-                  </button>
-                </div>
-              </li>
-            )
-          })}
-          {list.hasNextPage ? (
-            <li className="p-3 text-center">
-              <Button variant="outline" size="sm" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-                {t('list.more')}
-              </Button>
-            </li>
-          ) : null}
-        </ul>
+                    <div className="flex items-start gap-2 px-2 py-2">
+                      {/* The avatar turns into the checkbox on hover, or once anything is chosen (Proton's list). */}
+                      <span className="relative m-1 flex size-8 shrink-0 items-center justify-center">
+                        <span className={cn('transition-opacity', chosen.length > 0 ? 'opacity-0' : 'group-hover:opacity-0')}>
+                          <PersonAvatar mailbox={person} contact={contacts.find(person?.address)} size={32} />
+                        </span>
+                        <Checkbox
+                          className={cn('absolute', chosen.length > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
+                          checked={isChosen}
+                          onClick={(e) => {
+                            // Shift-click chooses everything from the last one chosen.
+                            if (e.shiftKey && anchor.current !== null) {
+                              e.preventDefault()
+                              selectRange(anchor.current, index)
+                              setCursor(index)
+                            }
+                          }}
+                          onCheckedChange={() => toggle(index)}
+                          aria-label={t('list.select', { subject: message.subject || t('list.noSubject') })}
+                        />
+                      </span>
+                      <Link
+                        to={`/${folder}/${message.threadId}${search}`}
+                        onClick={(e) => onRowClick(e, index)}
+                        draggable={false}
+                        className="min-w-0 flex-1 py-1"
+                        aria-current={open ? 'true' : undefined}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>
+                            {correspondent(message, t, contacts)}
+                          </span>
+                          {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
+                          <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
+                            {formatFileDate(message.receivedAt, i18n.language)}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 flex items-center gap-2">
+                          <Padlock message={message} className="[&_svg]:size-3.5" />
+                          <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>
+                            {message.subject || t('list.noSubject')}
+                          </span>
+                          {folder === 'all' || folder === 'starred' ? (
+                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t(`folders.${message.folder}`)}</span>
+                          ) : null}
+                        </span>
+                      </Link>
+                      <button
+                        type="button"
+                        className={cn('m-1 rounded p-1 hover:bg-muted', !message.starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
+                        aria-label={message.starred ? t('actions.unstar') : t('actions.star')}
+                        aria-pressed={message.starred}
+                        onClick={() => actions.mark([message], { starred: !message.starred })}
+                      >
+                        <Star className={cn('size-4', message.starred ? 'fill-status-warn text-status-warn' : 'text-muted-foreground')} />
+                      </button>
+                    </div>
+                  </li>
+                )
+              })}
+              {list.hasNextPage ? (
+                <li className="p-3 text-center">
+                  <Button variant="outline" size="sm" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
+                    {t('list.more')}
+                  </Button>
+                </li>
+              ) : null}
+            </ul>
+          </ContextMenuTrigger>
+          {menuFor.length ? menu : null}
+        </ContextMenu>
       )}
     </section>
   )
@@ -289,31 +559,32 @@ export function MailboxPage() {
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
             <Mail className="size-10" aria-hidden />
             <p className="text-sm">{t('read.pick')}</p>
+            <p className="text-xs">{t('shortcuts.hint')}</p>
           </div>
         )}
       </div>
       <ConfirmDestructive
-        open={confirming}
-        onOpenChange={setConfirming}
-        title={t('actions.deleteForeverTitle', { count: chosen.length })}
-        description={t('actions.deleteForeverDescription', { count: chosen.length })}
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={t('actions.deleteForeverTitle', { count: deleting?.length ?? 0 })}
+        description={t('actions.deleteForeverDescription', { count: deleting?.length ?? 0 })}
         submit={t('actions.deleteForever')}
         pending={remove.isPending}
         error={remove.error}
         errorFallback={t('common.tryAgain')}
-        onConfirm={() =>
-          remove.mutate(
-            chosen.map((m) => m.id),
-            {
-              onSuccess: () => {
-                toast.success(t('toasts.deleted', { count: chosen.length }))
-                setSelected(new Set())
-                setConfirming(false)
-              },
+        onConfirm={() => {
+          const ids = deleting ?? []
+          remove.mutate(ids, {
+            onSuccess: () => {
+              toast.success(t('toasts.deleted', { count: ids.length }))
+              setSelected(new Set())
+              setDeleting(null)
+              if (threadId && messages.some((m) => ids.includes(m.id) && m.threadId === threadId)) void navigate(`/${folder}${search}`)
             },
-          )
-        }
+          })
+        }}
       />
+      <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
     </div>
   )
 }

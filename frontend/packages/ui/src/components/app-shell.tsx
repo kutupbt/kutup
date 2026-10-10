@@ -1,6 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Menu, X } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useLocation } from 'react-router-dom'
 import { cn } from '../lib/cn'
@@ -129,27 +129,55 @@ export function AppShell(props: AppShellProps) {
  * One sidebar entry. The active entry gets the chrome accent and the ice
  * spine; `end` matches exactly (for an index route like "/").
  */
+/** Something that may be dropped on a sidebar link (mail on a folder). */
+export interface SidebarDrop {
+  /** Whether a drag carrying these types can land here. */
+  accepts: (types: readonly string[]) => boolean
+  onDrop: (data: DataTransfer) => void
+}
+
 export function SidebarNavLink({
   to,
   icon,
   label,
   end,
   trailing,
+  drop,
 }: {
   to: string
   icon: ReactNode
   label: string
   end?: boolean
   trailing?: ReactNode
+  drop?: SidebarDrop
 }) {
+  const [over, setOver] = useState(false)
+  const dropProps = drop
+    ? {
+        onDragOver: (e: DragEvent<HTMLLIElement>) => {
+          if (!drop.accepts(e.dataTransfer.types)) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+          setOver(true)
+        },
+        onDragLeave: () => setOver(false),
+        onDrop: (e: DragEvent<HTMLLIElement>) => {
+          setOver(false)
+          if (!drop.accepts(e.dataTransfer.types)) return
+          e.preventDefault()
+          drop.onDrop(e.dataTransfer)
+        },
+      }
+    : {}
   return (
-    <li>
+    <li {...dropProps}>
       <NavLink
         to={to}
         end={end}
         className={({ isActive }) =>
           cn(
             'relative flex h-9 items-center gap-3 rounded-md px-3 text-sm transition-colors',
+            over && 'ring-2 ring-chrome-active',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-active',
             '[&_svg]:size-4 [&_svg]:shrink-0',
             isActive
