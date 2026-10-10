@@ -142,7 +142,8 @@
     "chat": "Kutup sunucuları arasında özel sohbetler ve gruplar.",
     "maps": "Paylaşılan ve birlikte düzenlenen, uçtan uca şifreli yer listeleri.",
     "photos": "Fotoğraflarınız ve videolarınız, ne zaman ve nerede çekildiklerine göre, uçtan uca şifreli.",
-    "contacts": "Yazıştığınız, sohbet ettiğiniz ve paylaştığınız herkes, tek bir şifreli adres defterinde."
+    "contacts": "Yazıştığınız, sohbet ettiğiniz ve paylaştığınız herkes, tek bir şifreli adres defterinde.",
+    "mail": "Postalarınız: diğer Kutup kullanıcılarıyla uçtan uca şifreli, başkalarından gelenler ulaştığı anda şifrelenir."
   },
   "settings": {
     "account": {

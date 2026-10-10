@@ -35,7 +35,8 @@
     "maps": "Maps",
     "office": "Office",
     "photos": "Photos",
-    "contacts": "Contacts"
+    "contacts": "Contacts",
+    "mail": "Mail"
   },
   "theme": {
     "dark": "Dark theme",

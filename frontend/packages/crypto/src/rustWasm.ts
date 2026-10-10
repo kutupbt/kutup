@@ -72,6 +72,24 @@ export interface CryptoWasmModule {
     previousDataBase64?: string,
     previousSignatureBase64?: string,
   ): import('./mailKey').SignedMailKeyList
+  openMailMessage(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    message: Uint8Array,
+    senderPublicKeyBase64?: string,
+  ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
+  encryptMailMessage(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    recipientPublicKeys: string[],
+    plaintext: Uint8Array,
+  ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   sealAccountEnvelope(
     plaintextBase64: string,
     keyBase64: string,

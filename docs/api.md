@@ -983,7 +983,7 @@ manifest. Rate-limited like user lookup.
 
 **Auth:** Bearer JWT
 
-**Response:** `{ "address": "...", "account": "username@server", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
+**Response:** `{ "address": "...", "account": "username@server", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
 
 ### GET /.well-known/openpgpkey/hu/:hash?l=:local
 
