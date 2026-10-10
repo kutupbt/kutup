@@ -10,8 +10,19 @@ function roleMenu(page: Page) {
 }
 
 async function chooseRole(page: Page, role: string) {
+  // The menu is disabled while a change is saved, and its row comes back
+  // with the refetched list: wait for it rather than the click's own timeout.
+  await expect(roleMenu(page)).toBeEnabled({ timeout: 30_000 })
   await roleMenu(page).click()
   await page.getByRole('menuitem', { name: role, exact: true }).click()
+}
+
+/** Closes the open role menu, leaving its share dialog open. */
+async function closeRoleMenu(page: Page) {
+  await expect(page.getByRole('menu')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('menu')).toBeHidden()
+  await expect(page.getByRole('dialog')).toBeVisible()
 }
 
 test('the owner changes what someone may do with a file without sharing it again', async ({ browser }) => {
@@ -105,7 +116,7 @@ test('a folder manager changes what someone may do in a folder without sharing i
   await expect(roleMenu(a)).toHaveText('Can add and edit', { timeout: 30_000 })
   await roleMenu(a).click()
   await expect(a.getByRole('menuitemcheckbox', { name: 'Can delete files they added' })).toHaveAttribute('aria-checked', 'true')
-  await a.keyboard.press('Escape')
+  await closeRoleMenu(a)
 
   // Back to viewer: deleting goes with it.
   await chooseRole(a, 'Can view')
