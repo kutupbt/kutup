@@ -104,7 +104,11 @@ pub fn run(
     let client = Client::new(&server, "");
     // The address the account will have here, which its authority vouches
     // for together with its Drive keys.
-    let server_name = client.settings().context("server settings")?.chat.server_name;
+    let server_name = client
+        .settings()
+        .context("server settings")?
+        .chat
+        .server_name;
     let drive_key_binding = kutup_crypto::drive_key_binding::sign(
         &account_identity,
         &format!("{username}@{server_name}"),
