@@ -62,7 +62,10 @@
     "more": "Daha eski postaları göster",
     "searchResults": "“{{q}}” için sonuçlar",
     "noMatches": "Eşleşme yok",
-    "noMatchesHint": "Arama konulara, gönderenlere ve alıcılara bakar."
+    "noMatchesHint": "Arama konulara, gönderenlere ve alıcılara bakar.",
+    "dragging_one": "1 ileti",
+    "dragging_other": "{{count}} ileti",
+    "messages": "İletiler"
   },
   "read": {
     "pick": "Okumak için bir posta seçin.",
@@ -86,7 +89,6 @@
     "forward": "İlet",
     "editDraft": "Taslağı düzenle",
     "downloadOriginal": "Özgün postayı indir (.eml)",
-    "addSender": "Göndereni kişilere ekle",
     "trustKeyTitle": "{{address}} açık anahtarını gönderdi",
     "trustKeyDescription": "İletilerinin ondan geldiğini doğrulamak için bu anahtara güvenin. Ona giden e-postalar da bu anahtarla şifrelenir. Parmak izi: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} farklı bir açık anahtar gönderdi",
@@ -94,7 +96,13 @@
     "trustKey": "Anahtara güven",
     "keyTrusted": "{{address}} için anahtara güvenildi.",
     "trustFailed": "Anahtar Kişiler'e kaydedilemedi.",
-    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir."
+    "pgpSignatureFailed": "Bu iletinin imzası, gönderen için güvendiğiniz anahtarla eşleşmiyor. Ondan gelmemiş olabilir.",
+    "showQuoted": "Alıntılanan metni göster",
+    "notInContacts": "{{name}} kişileriniz arasında değil.",
+    "saveToContacts": "Kişilere kaydet",
+    "dismiss": "Kapat",
+    "unknownSender": "Bilinmeyen gönderici",
+    "collapse": "İletiyi daralt"
   },
   "actions": {
     "archive": "Arşivle",
@@ -112,14 +120,15 @@
     "deleteForeverTitle_one": "{{count}} posta kalıcı olarak silinsin mi?",
     "deleteForeverTitle_other": "{{count}} posta kalıcı olarak silinsin mi?",
     "deleteForeverDescription_one": "Postalarınızdan kaldırılır ve kapladığı alan boşalır. Bu geri alınamaz.",
-    "deleteForeverDescription_other": "Postalarınızdan kaldırılırlar ve kapladıkları alan boşalır. Bu geri alınamaz."
+    "deleteForeverDescription_other": "Postalarınızdan kaldırılırlar ve kapladıkları alan boşalır. Bu geri alınamaz.",
+    "moveTo": {
+      "inbox": "Gelen Kutusuna taşı",
+      "archive": "Arşivle",
+      "spam": "İstenmeyen olarak işaretle",
+      "trash": "Çöp Kutusuna taşı"
+    }
   },
   "toasts": {
-    "archived": "Arşivlendi",
-    "trashed": "Çöpe taşındı",
-    "spam": "İstenmeyen olarak işaretlendi",
-    "movedToInbox": "Gelen kutusuna taşındı",
-    "restored": "Geri alındı",
     "deleted_one": "{{count}} posta silindi",
     "deleted_other": "{{count}} posta silindi"
   },
@@ -174,8 +183,6 @@
     "forwardedFrom": "Gönderen: {{from}}",
     "forwardedDate": "Tarih: {{date}}",
     "forwardedSubject": "Konu: {{subject}}",
-    "addContactOffer": "{{address}} kişilerinize eklensin mi?",
-    "addContact": "Ekle",
     "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
@@ -204,5 +211,68 @@
     "spam": "İstenmeyene benzeyen postalar buraya düşer.",
     "trash": "Silinen postalar, kalıcı olarak silene dek burada bekler.",
     "all": "İstenmeyen ve Çöp dışındaki tüm postalar."
+  },
+  "person": {
+    "details": "{{name}} <{{address}}> hakkında",
+    "copy": "Adresi kopyala",
+    "copied": "Adres kopyalandı.",
+    "newMessage": "Yeni ileti",
+    "viewContact": "Kişiyi görüntüle",
+    "saveContact": "Kişilere kaydet",
+    "messagesFrom": "Bu göndericiden gelen iletiler",
+    "messagesTo": "Bu alıcıya giden iletiler",
+    "chat": "Sohbet",
+    "call": "Ara"
+  },
+  "moved": {
+    "inbox_one": "Gelen Kutusuna taşındı.",
+    "inbox_other": "{{count}} ileti Gelen Kutusuna taşındı.",
+    "archive_one": "Arşivlendi.",
+    "archive_other": "{{count}} ileti arşivlendi.",
+    "spam_one": "İstenmeyen olarak işaretlendi.",
+    "spam_other": "{{count}} ileti istenmeyen olarak işaretlendi.",
+    "trash_one": "Çöp Kutusuna taşındı.",
+    "trash_other": "{{count}} ileti Çöp Kutusuna taşındı.",
+    "undo": "Geri al"
+  },
+  "shortcuts": {
+    "title": "Klavye kısayolları",
+    "hint": "Klavye kısayolları için ? tuşuna basın.",
+    "sections": {
+      "navigation": "Gezinme",
+      "selection": "Seçme",
+      "actions": "İşlemler",
+      "composer": "Yazma"
+    },
+    "keys": {
+      "next": "Sonraki ileti",
+      "previous": "Önceki ileti",
+      "close": "Kapat veya seçimi temizle",
+      "search": "Ara",
+      "help": "Kısayolları göster",
+      "select": "Seç veya seçimi kaldır",
+      "extend": "Sonrakileri de seç",
+      "range": "Aralık seç",
+      "toggle": "Bir tane daha seç",
+      "all": "Tümünü seç",
+      "menu": "Diğer işlemler",
+      "new": "Yeni ileti",
+      "star": "Yıldızla",
+      "read": "Okundu olarak işaretle",
+      "unread": "Okunmadı olarak işaretle",
+      "inbox": "Gelen Kutusuna taşı (veya istenmeyen değil)",
+      "archive": "Arşivle",
+      "spam": "İstenmeyen olarak işaretle",
+      "trash": "Çöp Kutusuna taşı",
+      "deleteForever": "Kalıcı olarak sil (Çöp, İstenmeyen, Taslaklar)",
+      "drag": "Taşımak için bir klasöre bırak",
+      "send": "Gönder",
+      "closeComposer": "Yazma penceresini kapat"
+    },
+    "mouse": {
+      "click": "Tıkla",
+      "rightClick": "Sağ tık",
+      "drag": "Sürükle"
+    }
   }
 }

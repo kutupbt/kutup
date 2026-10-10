@@ -192,5 +192,20 @@
     "label": "Kişilerinizden öneriler",
     "offer": "{{address}} kişilerinizde değil.",
     "add": "Kişilere ekle"
+  },
+  "contactSave": {
+    "title": "Kişilere kaydet",
+    "how": "Nasıl kaydedilsin",
+    "newContact": "Yeni kişi",
+    "newContactHint": "Kişilerinize yeni biri.",
+    "existing": "Bir kişiye ekle",
+    "existingHint": "Zaten kayıtlı birinin başka bir adresi.",
+    "name": "Ad",
+    "search": "Kişilerde ara",
+    "noMatches": "Eşleşen kişi yok.",
+    "moreDetails": "Kişiler uygulamasında ayrıntı ekle",
+    "save": "Kaydet",
+    "saved": "{{address}} kişilerinize kaydedildi.",
+    "failed": "Kişi kaydedilemedi."
   }
 }

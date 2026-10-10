@@ -62,7 +62,10 @@
     "more": "Show older mail",
     "searchResults": "Results for “{{q}}”",
     "noMatches": "No matches",
-    "noMatchesHint": "Search looks at subjects, senders and recipients."
+    "noMatchesHint": "Search looks at subjects, senders and recipients.",
+    "dragging_one": "1 message",
+    "dragging_other": "{{count}} messages",
+    "messages": "Messages"
   },
   "read": {
     "pick": "Choose a message to read it.",
@@ -86,7 +89,6 @@
     "forward": "Forward",
     "editDraft": "Edit draft",
     "downloadOriginal": "Download the original (.eml)",
-    "addSender": "Add sender to contacts",
     "trustKeyTitle": "{{address}} sent their public key",
     "trustKeyDescription": "Trust it to check that their messages are from them. Mail to them is then encrypted to this key. Fingerprint: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} sent a different public key",
@@ -94,7 +96,13 @@
     "trustKey": "Trust key",
     "keyTrusted": "Key trusted for {{address}}.",
     "trustFailed": "The key could not be saved to Contacts.",
-    "pgpSignatureFailed": "This message's signature does not match the key you trust for its sender. It may not be from them."
+    "pgpSignatureFailed": "This message's signature does not match the key you trust for its sender. It may not be from them.",
+    "showQuoted": "Show quoted text",
+    "notInContacts": "{{name}} is not in your contacts.",
+    "saveToContacts": "Save to contacts",
+    "dismiss": "Dismiss",
+    "unknownSender": "Unknown sender",
+    "collapse": "Collapse message"
   },
   "actions": {
     "archive": "Archive",
@@ -112,14 +120,15 @@
     "deleteForeverTitle_one": "Delete {{count}} message for good?",
     "deleteForeverTitle_other": "Delete {{count}} messages for good?",
     "deleteForeverDescription_one": "It is removed from your mail and its storage is freed. This cannot be undone.",
-    "deleteForeverDescription_other": "They are removed from your mail and their storage is freed. This cannot be undone."
+    "deleteForeverDescription_other": "They are removed from your mail and their storage is freed. This cannot be undone.",
+    "moveTo": {
+      "inbox": "Move to Inbox",
+      "archive": "Archive",
+      "spam": "Mark as spam",
+      "trash": "Move to Trash"
+    }
   },
   "toasts": {
-    "archived": "Archived",
-    "trashed": "Moved to Trash",
-    "spam": "Marked as spam",
-    "movedToInbox": "Moved to Inbox",
-    "restored": "Restored",
     "deleted_one": "{{count}} message deleted",
     "deleted_other": "{{count}} messages deleted"
   },
@@ -174,8 +183,6 @@
     "forwardedFrom": "From: {{from}}",
     "forwardedDate": "Date: {{date}}",
     "forwardedSubject": "Subject: {{subject}}",
-    "addContactOffer": "Add {{address}} to your contacts?",
-    "addContact": "Add",
     "sendingPaused": "Mail to outside addresses is paused for your account. Ask your administrator.",
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
@@ -204,5 +211,68 @@
     "spam": "Mail that looks like spam lands here.",
     "trash": "Deleted mail waits here until you delete it for good.",
     "all": "Every message except Spam and Trash."
+  },
+  "person": {
+    "details": "More about {{name}} <{{address}}>",
+    "copy": "Copy address",
+    "copied": "Address copied.",
+    "newMessage": "New message",
+    "viewContact": "View contact",
+    "saveContact": "Save to contacts",
+    "messagesFrom": "Messages from this sender",
+    "messagesTo": "Messages to this recipient",
+    "chat": "Chat",
+    "call": "Call"
+  },
+  "moved": {
+    "inbox_one": "Moved to Inbox.",
+    "inbox_other": "{{count}} messages moved to Inbox.",
+    "archive_one": "Archived.",
+    "archive_other": "{{count}} messages archived.",
+    "spam_one": "Marked as spam.",
+    "spam_other": "{{count}} messages marked as spam.",
+    "trash_one": "Moved to Trash.",
+    "trash_other": "{{count}} messages moved to Trash.",
+    "undo": "Undo"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "hint": "Press ? for keyboard shortcuts.",
+    "sections": {
+      "navigation": "Moving around",
+      "selection": "Choosing",
+      "actions": "Actions",
+      "composer": "Writing"
+    },
+    "keys": {
+      "next": "Next message",
+      "previous": "Previous message",
+      "close": "Close, or clear the choice",
+      "search": "Search",
+      "help": "Show shortcuts",
+      "select": "Choose or unchoose",
+      "extend": "Choose the next ones too",
+      "range": "Choose a range",
+      "toggle": "Choose one more",
+      "all": "Choose all",
+      "menu": "More actions",
+      "new": "New message",
+      "star": "Star",
+      "read": "Mark as read",
+      "unread": "Mark as unread",
+      "inbox": "Move to Inbox (or not spam)",
+      "archive": "Archive",
+      "spam": "Mark as spam",
+      "trash": "Move to Trash",
+      "deleteForever": "Delete for good (Trash, Spam, Drafts)",
+      "drag": "Drop on a folder to move",
+      "send": "Send",
+      "closeComposer": "Close the composer"
+    },
+    "mouse": {
+      "click": "Click",
+      "rightClick": "Right click",
+      "drag": "Drag"
+    }
   }
 }

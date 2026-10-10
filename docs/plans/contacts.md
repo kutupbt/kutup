@@ -100,8 +100,9 @@ Turkish. Screens follow Proton's contact widget and modals:
 - groups: create, rename, colour, delete, add and remove people;
 - import `.vcf` (one or many cards, with a preview and duplicate warning) and
   export all or selected as `.vcf`;
-- "Add to contacts" from Chat, Drive sharing and later Mail, always by the
-  user's action.
+- "Add to contacts" from Chat, Drive sharing and Mail, always by the user's
+  action. Mail saves in place (`contacts-core/ui/SaveContactDialog`): a new
+  contact, or the address added to an existing one.
 
 vCard text is read and written with `ical.js`, as Proton does, in the
 browser only.

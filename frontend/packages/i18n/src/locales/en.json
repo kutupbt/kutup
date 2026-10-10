@@ -192,5 +192,20 @@
     "label": "Suggestions from your contacts",
     "offer": "{{address}} is not in your contacts.",
     "add": "Add to contacts"
+  },
+  "contactSave": {
+    "title": "Save to contacts",
+    "how": "How to save it",
+    "newContact": "New contact",
+    "newContactHint": "A new person in your contacts.",
+    "existing": "Add to a contact",
+    "existingHint": "Another address of someone already there.",
+    "name": "Name",
+    "search": "Search contacts",
+    "noMatches": "No contacts match.",
+    "moreDetails": "Add more details in Contacts",
+    "save": "Save",
+    "saved": "{{address}} saved to your contacts.",
+    "failed": "The contact could not be saved."
   }
 }
