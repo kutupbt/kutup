@@ -115,4 +115,3 @@ inherits = "release"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-
