@@ -1244,6 +1244,10 @@ fn build_router(state: AppState) -> Router {
             get(shares::public_share_state),
         )
         .route(
+            "/api/share/:token/files/:fileId/assets/:assetId",
+            get(shares::public_share_asset),
+        )
+        .route(
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )

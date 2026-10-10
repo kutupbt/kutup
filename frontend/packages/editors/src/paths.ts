@@ -3,7 +3,7 @@ import { isListName } from '@kutup/map/list'
 import { appUrl } from '@kutup/session/apps'
 import { getClientType } from '@kutup/session/client'
 import type { Folder } from '@kutup/drive-core/model'
-import { editorKindFor, extensionOf } from './editorKind'
+import { opensInOffice } from '@kutup/drive-core/editorKind'
 
 // Each file has one address, whichever app it was opened from
 // (docs/architecture.md, "File editor route"): what is edited opens in Office —
@@ -19,7 +19,7 @@ export type FilePageApp = Exclude<FileApp, 'maps'>
 export function appFor(name: string | null): FileApp {
   if (!name) return 'drive'
   if (isListName(name)) return 'maps'
-  if (editorKindFor(name) || extensionOf(name) === 'pdf') return 'office'
+  if (opensInOffice(name)) return 'office'
   return 'drive'
 }
 
@@ -77,4 +77,17 @@ export function openFile(navigate: NavigateFunction, folder: Pick<Folder, 'id' |
   const here = currentApp()
   if (appFor(file.name) === here) void navigate(filePath(folder, file.id))
   else window.location.assign(fileUrl(folder, file, here))
+}
+
+/**
+ * A public link's folder page, in Drive. `hash` is the link's fragment
+ * (`#key=…`): the key goes along, never through a server.
+ */
+export function publicFolderUrl(token: string, hash: string): string {
+  return appUrl('drive', `/s/${encodeURIComponent(token)}${hash}`)
+}
+
+/** A document in a public link's folder, on Office; `hash` as above. */
+export function publicDocumentUrl(token: string, fileId: string, hash: string): string {
+  return appUrl('office', `/s/${encodeURIComponent(token)}/${encodeURIComponent(fileId)}${hash}`)
 }

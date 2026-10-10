@@ -193,7 +193,8 @@
     },
     "whiteboard": {
       "loading": "Loading whiteboard…",
-      "imageQuota": "Storage quota exceeded — image not uploaded"
+      "imageQuota": "Storage quota exceeded — image not uploaded",
+      "unreadable": "This whiteboard could not be read."
     },
     "office": {
       "loading": "Loading the document editor…",
@@ -250,5 +251,36 @@
   },
   "viewer": {
     "imageUnreadable": "This browser can't display this image. Download it to open it on your device."
+  },
+  "publicFile": {
+    "decrypting": "Decrypting on this device…",
+    "backToFolder": "Back to the shared folder",
+    "footer": "Kutup · end-to-end encrypted. The server never saw this file's contents.",
+    "failure": {
+      "missingKey": {
+        "title": "This link is incomplete",
+        "description": "The part after # holds the key and is missing. Ask for the whole link again."
+      },
+      "notFound": {
+        "title": "This link does not exist",
+        "description": "It may have been mistyped, or the file was deleted."
+      },
+      "expired": {
+        "title": "This link has expired",
+        "description": "Ask the person who shared it for a new one."
+      },
+      "badKey": {
+        "title": "This link's key does not fit",
+        "description": "The link was changed or copied incompletely. Ask for the whole link again."
+      },
+      "other": {
+        "title": "The file could not be opened",
+        "description": "Check your connection and reload."
+      },
+      "waiting": {
+        "title": "Waiting for the owner",
+        "description": "This file moved to a new key, and its owner has not updated this link yet. It works again once they open Kutup Drive."
+      }
+    }
   }
 }

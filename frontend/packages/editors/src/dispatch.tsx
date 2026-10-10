@@ -35,6 +35,8 @@ export interface OfficeEditorProps {
   resetBase?: boolean
   /** The session's base is elsewhere: reopen from it (latest when omitted). */
   onOutdated?: (base?: SessionBase) => void
+  /** False: no session and no live editing (a public link's page). */
+  live?: boolean
 }
 
 export interface WhiteboardEditorProps {

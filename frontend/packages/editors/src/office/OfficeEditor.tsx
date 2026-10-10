@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { appUrl, getAppDirectory } from '@kutup/session/apps'
 import { LoadingPanel } from '@kutup/ui/components/states'
-import { updateSession, useRequiredSession } from '@kutup/session/store'
+import { updateSession, useSession } from '@kutup/session/store'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
 import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
@@ -66,7 +66,13 @@ interface Props {
   /** The room's session base is another version (or a restore replaced it):
    *  the document must reopen from `base` (latest when omitted). */
   onOutdated?: (base?: SessionBase) => void
+  /** False: the document as it is, with no session and no live editing (a
+   *  public link's page). Opens read-only. */
+  live?: boolean
 }
+
+/** Who the editor is when nobody is signed in (`live` false): one viewer. */
+const VIEWER = { deviceId: 1, userId: '00000000-0000-0000-0000-000000000000' }
 
 /** Where an office editing session started (docs/onlyoffice.md). */
 export interface SessionBase {
@@ -161,10 +167,11 @@ function OfficeEditorBase(
     fileKey,
     keyGeneration,
     onSaveShortcut,
-    readOnly = false,
+    readOnly: viewOnly = false,
     base,
     resetBase = false,
     onOutdated,
+    live = true,
   }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
@@ -210,11 +217,14 @@ function OfficeEditorBase(
   // and one frame would silently drop, producing one-way sync.
   const outboundSeqRef = useRef<bigint>(randomSenderSeqPrefix())
 
-  const session = useRequiredSession()
-  const storedDeviceId = session.currentDeviceId
-  const username = session.username
-  const color = session.color
-  const userId = session.userId
+  // Live editing is for the signed-in; without it, nobody needs to be.
+  const session = useSession()
+  if (live && !session) throw new Error('live editing needs a session')
+  const storedDeviceId = session?.currentDeviceId ?? null
+  const username = session?.username ?? null
+  const color = session?.color ?? null
+  const userId = session?.userId ?? null
+  const readOnly = viewOnly || !live
 
   useImperativeHandle(ref, () => ({
     save: () =>
@@ -335,7 +345,9 @@ function OfficeEditorBase(
           // listener is attached (the await in ensureRegistered that gave
           // it a head start on first login is skipped). Sending here on
           // 'ready' guarantees the iframe is listening.
-          {
+          if (!live) {
+            send({ type: 'oo-self', ...VIEWER })
+          } else {
             const did = deviceIdRef.current ?? storedDeviceId
             if (did != null && userId) {
               send({ type: 'oo-self', deviceId: did, userId })
@@ -430,7 +442,7 @@ function OfficeEditorBase(
 
   // ---- WebSocket transport ----
   useEffect(() => {
-    if (!docType) return
+    if (!docType || !live) return
     let alive = true
 
     void (async () => {
@@ -580,7 +592,7 @@ function OfficeEditorBase(
     // lifetime; if the relay needs to re-auth, it'll
     // close the connection and the existing reconnect-with-backoff handles it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docType, fileId, fileKey])
+  }, [docType, fileId, fileKey, live])
 
   useEffect(() => {
     if (bridgeReady) return

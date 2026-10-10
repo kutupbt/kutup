@@ -198,6 +198,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::shares::public_share_epochs,
         crate::handlers::shares::download_public_share_file,
         crate::handlers::shares::public_share_state,
+        crate::handlers::shares::public_share_asset,
         // --- Drive federation (shared signed stack + per-share capability) ---
         crate::drive_federation::get_user,
         crate::drive_federation::get_invite,

@@ -208,6 +208,9 @@ struct PublicShareResponse {
     collection_key_envelope: String,
     collection_key_epoch: i32,
     owner_user_id: Uuid,
+    /// The owner's account address (`alice@example.org`): a public page says
+    /// who shared it, so a link cannot pass its content off as the server's.
+    owner_account: String,
     /// The owner's account authority, which signs the folder's key history.
     owner_authority_public_key: String,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -248,11 +251,12 @@ pub async fn get_public_share(
         Uuid,
         Option<OffsetDateTime>,
         String,
+        String,
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
                   p.collection_key_envelope, p.collection_key_epoch, p.owner_user_id, p.expires_at,
-                  u.account_authority_public_key
+                  u.account_authority_public_key, u.username
            FROM public_shares p JOIN users u ON u.id = p.owner_user_id WHERE p.token = $1"#,
     )
     .bind(&token)
@@ -260,8 +264,17 @@ pub async fn get_public_share(
     .await
     .ok()
     .flatten();
-    let Some((id, share_type, target_id, envelope, epoch, owner_user_id, expires_at, authority)) =
-        row
+    let Some((
+        id,
+        share_type,
+        target_id,
+        envelope,
+        epoch,
+        owner_user_id,
+        expires_at,
+        authority,
+        owner_username,
+    )) = row
     else {
         return Err(AppError::not_found("not found"));
     };
@@ -300,6 +313,7 @@ pub async fn get_public_share(
         collection_key_envelope: envelope,
         collection_key_epoch: epoch,
         owner_user_id,
+        owner_account: format!("{owner_username}@{}", state.config.chat_server_name),
         owner_authority_public_key: authority,
         expires_at,
         file,
@@ -579,6 +593,29 @@ pub async fn public_share_state(
             key_generation.to_string(),
         )],
     ))
+}
+
+/// `GET /api/share/{token}/files/{fileId}/assets/{assetId}` — a picture in a
+/// note reached by the link (sealed under the note's file key, the generation
+/// in `X-Kutup-Key-Generation`), so the public page shows the note as its
+/// owner sees it. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/files/{fileId}/assets/{assetId}",
+    tag = "shares",
+    params(
+        ("token" = String, Path, description = "Share token (the capability)"),
+        ("fileId" = String, Path, description = "File id"),
+        ("assetId" = String, Path, description = "Content-addressed asset id")
+    ),
+    responses((status = 200, description = "The encrypted asset blob (application/octet-stream)"))
+)]
+pub async fn public_share_asset(
+    State(state): State<AppState>,
+    Path((token, file_id, asset_id)): Path<(String, String, String)>,
+) -> AppResult<Response> {
+    let fid = link_reaches(&state, &token, &file_id).await?;
+    crate::handlers::file_assets::asset_response(&state, fid, &asset_id).await
 }
 
 /// `GET /api/share/{token}/download/{fileId}` — streams the encrypted blob. Anonymous:

@@ -174,7 +174,7 @@
     },
     "publicLink": {
       "title": "Public link",
-      "description": "Anyone with this link can see and download the files directly in this folder, without signing in.",
+      "description": "Anyone with this link can see and download the files directly in this folder, without signing in. The page shows your address as the one who shared it.",
       "warning": "Anyone who has this link can open these files. You can copy it again, or remove it, from the folder's Share dialog."
     },
     "invite": {

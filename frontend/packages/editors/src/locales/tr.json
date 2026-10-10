@@ -193,7 +193,8 @@
     },
     "whiteboard": {
       "loading": "Beyaz tahta yükleniyor…",
-      "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi"
+      "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi",
+      "unreadable": "Bu beyaz tahta okunamadı."
     },
     "office": {
       "loading": "Belge düzenleyici yükleniyor…",
@@ -250,5 +251,36 @@
   },
   "viewer": {
     "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
+  },
+  "publicFile": {
+    "decrypting": "Bu cihazda şifre çözülüyor…",
+    "backToFolder": "Paylaşılan klasöre dön",
+    "footer": "Kutup · uçtan uca şifreli. Sunucu bu dosyanın içeriğini hiç görmedi.",
+    "failure": {
+      "missingKey": {
+        "title": "Bu bağlantı eksik",
+        "description": "# işaretinden sonraki kısım anahtarı taşır ve eksik. Bağlantının tamamını yeniden isteyin."
+      },
+      "notFound": {
+        "title": "Bu bağlantı yok",
+        "description": "Yanlış yazılmış olabilir ya da dosya silinmiş."
+      },
+      "expired": {
+        "title": "Bu bağlantının süresi doldu",
+        "description": "Paylaşan kişiden yenisini isteyin."
+      },
+      "badKey": {
+        "title": "Bu bağlantının anahtarı uymuyor",
+        "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."
+      },
+      "other": {
+        "title": "Dosya açılamadı",
+        "description": "Bağlantınızı kontrol edip sayfayı yenileyin."
+      },
+      "waiting": {
+        "title": "Sahibi bekleniyor",
+        "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Depo’yu açtığında yeniden çalışır."
+      }
+    }
   }
 }

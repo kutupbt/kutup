@@ -7,7 +7,7 @@ import { sealedAt } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { fromBase64 } from '@kutup/crypto'
 import { isListName, stateToListJson } from '@kutup/map/list'
-import { editorKindFor, extensionOf } from './editorKind'
+import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
 
 /**
  * What a file holds now. Editors never rewrite the upload: each save is a

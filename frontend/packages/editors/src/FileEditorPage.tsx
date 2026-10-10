@@ -30,7 +30,7 @@ import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } fro
 import { contentAt, currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
-import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
+import { editorKindFor, extensionOf, type EditorKind } from '@kutup/drive-core/editorKind'
 import type { OfficeEditorHandle, SessionBase } from './office/OfficeEditor'
 import { EditorNotice } from './office/EditorNotice'
 import { listVersions, patchVersion } from '@kutup/collab/api'

@@ -174,7 +174,7 @@
     },
     "publicLink": {
       "title": "Herkese açık bağlantı",
-      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir.",
+      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir. Sayfa, paylaşan olarak adresinizi gösterir.",
       "warning": "Bu bağlantıya sahip olan herkes bu dosyaları açabilir. Bağlantıyı klasörün Paylaş penceresinden yeniden kopyalayabilir ya da kaldırabilirsiniz."
     },
     "invite": {

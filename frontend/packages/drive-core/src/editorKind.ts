@@ -40,3 +40,12 @@ export function editorKindFor(filename: string): EditorKind | null {
   if (WHITEBOARD_EXT.has(ext)) return 'whiteboard'
   return null
 }
+
+/**
+ * Whether a file opens on the Office site: what is edited there (notes and
+ * code, office documents, whiteboards) and PDFs. Everything else opens in
+ * Drive (docs/architecture.md, "File editor route").
+ */
+export function opensInOffice(filename: string): boolean {
+  return editorKindFor(filename) !== null || extensionOf(filename) === 'pdf'
+}

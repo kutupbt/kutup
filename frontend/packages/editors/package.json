@@ -6,6 +6,8 @@
   "type": "module",
   "exports": {
     "./FileRoute": "./src/FileRoute.tsx",
+    "./PublicFileRoute": "./src/PublicFileRoute.tsx",
+    "./public/share": "./src/public/share.ts",
     "./viewers/dispatch": "./src/viewers/dispatch.tsx",
     "./text/markdown/MarkdownPreview": "./src/text/markdown/MarkdownPreview.tsx",
     "./styles.css": "./src/styles.css",

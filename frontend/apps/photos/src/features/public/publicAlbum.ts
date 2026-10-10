@@ -32,6 +32,8 @@ interface ShareInfo {
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
   ownerUserId: string
+  /** Who shared it (`alice@example.org`): the page says so. */
+  ownerAccount: string
   expiresAt: string | null
   collectionKind?: string
   nameEnvelope?: string
@@ -51,6 +53,8 @@ export type PublicPhoto = Photo
 
 export interface PublicAlbum {
   name: string
+  /** Who shared it (`alice@example.org`). */
+  owner: string
   photos: PublicPhoto[]
 }
 
@@ -136,7 +140,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
       }
     }),
   )
-  return { name, photos: newestFirst(joinLivePhotos(photos.filter((p): p is PublicPhoto => Boolean(p)))) }
+  return { name, owner: share.ownerAccount, photos: newestFirst(joinLivePhotos(photos.filter((p): p is PublicPhoto => Boolean(p)))) }
 }
 
 /** A photo's thumbnail through the link. */

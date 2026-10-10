@@ -8,6 +8,7 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
+import { opensInOffice } from './editorKind'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -318,9 +319,14 @@ function wrapForLink(file: DriveFile, fileKey: Uint8Array, generation: number, l
   return sealPublicLinkFileKeyV1(fileKey, linkKey, { fileId: file.id, ownerUserId: me.userId, generation })
 }
 
+/** Where a link to one file opens: a document on Office, anything else in Drive. */
+function fileLinkApp(name: string | null): 'drive' | 'office' {
+  return name && opensInOffice(name) ? 'office' : 'drive'
+}
+
 /** The link to give people: the key rides in the fragment, never sent to a server. */
-export async function fileLinkUrl(link: FileLink, me: DriveIdentity): Promise<string> {
-  return publicLinkUrl(link.token, await fileLinkKey(link, me))
+export async function fileLinkUrl(link: FileLink, me: DriveIdentity, fileName: string | null): Promise<string> {
+  return publicLinkUrl(link.token, await fileLinkKey(link, me), fileLinkApp(fileName))
 }
 
 export const fileAccessKey = (fileId: string) => ['file-access', fileId] as const
@@ -670,7 +676,7 @@ export function useCreateFileLink() {
         id,
         ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId }),
       })
-      return publicLinkUrl(data.token, linkKey)
+      return publicLinkUrl(data.token, linkKey, fileLinkApp(file.name))
     } finally {
       await queryClient.invalidateQueries({ queryKey: fileAccessKey(file.id) })
     }

@@ -292,7 +292,7 @@
     "shared": "{{account}} ile paylaşıldı",
     "failed": "Bu yapılamadı. Yeniden deneyin.",
     "links": "Herkese açık bağlantılar",
-    "linksHint": "Bağlantısı olan herkes albümün fotoğraflarını hesap olmadan görür. Anahtar bağlantıdadır, asla sunucuda değil.",
+    "linksHint": "Bağlantısı olan herkes albümün fotoğraflarını hesap olmadan ve paylaşan olarak adresinizi görür. Anahtar bağlantıdadır, asla sunucuda değil.",
     "createLink": "Bağlantı oluştur",
     "copyLink": "Bağlantıyı kopyala",
     "linkCopied": "Bağlantı kopyalandı",

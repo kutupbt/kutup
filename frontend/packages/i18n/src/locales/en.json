@@ -75,7 +75,7 @@
     "onlyOwnerRemoves": "Only the owner can change or remove people.",
     "settingFailed": "The setting could not be saved.",
     "linksTitle": "Public links",
-    "linksHint": "Anyone with a link can open and download this file, without an account. The key is in the link itself; the server never sees it.",
+    "linksHint": "Anyone with a link can open and download this file, without an account, and sees your address as the one who shared it. The key is in the link itself; the server never sees it.",
     "link": "Public link",
     "linkCreated": "Created {{date}}",
     "copy": "Copy",
@@ -200,5 +200,9 @@
     "slash": "Names cannot contain / or \\.",
     "taken": "Something here already has that name.",
     "failed": "The name could not be saved."
+  },
+  "publicNotice": {
+    "sharedBy": "Shared publicly by {{owner}}.",
+    "unchecked": "Kutup can't see or check what people share by link. Never type a password or payment details because a shared file asks you to."
   }
 }

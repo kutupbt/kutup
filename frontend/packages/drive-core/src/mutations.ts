@@ -127,8 +127,12 @@ export function useLeaveRemoteShare() {
   })
 }
 
-/** A public link's address: the token for the server, the key in the fragment. */
-export function publicLinkUrl(token: string, linkKey: Uint8Array, app: 'drive' | 'photos' = 'drive'): string {
+/**
+ * A public link's address: the token for the server, the key in the
+ * fragment. On the app that shows it: a folder's in Drive, an album's in
+ * Photos, a document's on Office.
+ */
+export function publicLinkUrl(token: string, linkKey: Uint8Array, app: 'drive' | 'photos' | 'office' = 'drive'): string {
   return appUrl(app, `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
 }
 

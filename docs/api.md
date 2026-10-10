@@ -1918,6 +1918,7 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
   "ownerUserId": "<uuid>",
+  "ownerAccount": "alice@example.org",
   "expiresAt": "2026-04-01T00:00:00Z",
   "collectionKind": "album",
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
@@ -1926,6 +1927,8 @@ Get metadata for a public share. The wrapped collection key is included; the lin
 ```
 
 `expiresAt` is `null` when the share has no expiry. Returns `410 Gone` if the share has expired.
+`ownerAccount` is the address of the account that made the link: every public
+page says who shared it, so a link cannot pass its content off as the server's.
 `collectionKind`, `nameEnvelope` and `nameRevision` are present for collection shares; the name
 opens under the collection key (album links show the album's name).
 
@@ -2005,6 +2008,19 @@ Download a file from a public share. Streams the encrypted blob (`application/oc
 **Response:** the raw encrypted bytes.
 
 Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target. For an album link, the album's items count as belonging to it.
+
+---
+
+### GET /api/share/:token/files/:fileId/assets/:assetId
+
+A picture in a note reached by a public link: the asset envelope, sealed
+under the note's file key at the generation in `X-Kutup-Key-Generation`, as
+`GET /api/files/:fileId/assets/:assetId` serves it to members.
+
+**Auth:** None (the token is the capability)
+
+Returns `403` if the file does not belong to the shared target, `404` for an
+unknown asset, `410` if the share has expired.
 
 ---
 

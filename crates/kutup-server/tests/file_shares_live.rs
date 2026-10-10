@@ -717,6 +717,12 @@ fn a_public_link_to_one_file() {
         .unwrap();
     assert_eq!(public["shareType"], "file");
     assert_eq!(public["file"]["id"], file.id.as_str());
+    // The page says who shared it.
+    // (The domain is the server's name, whichever this test runs against.)
+    assert!(public["ownerAccount"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{}@", alice.username)));
     let key = drive_envelope::open_b64(
         public["collectionKeyEnvelope"].as_str().unwrap(),
         &link_key,
@@ -737,6 +743,51 @@ fn a_public_link_to_one_file() {
         )
         .unwrap(),
         b"just this file"
+    );
+    // A picture in the file (a note's image) reaches the link; one in a
+    // neighbour does not.
+    for f in [&file, &neighbour] {
+        assert!(put_asset(&c, &base, &alice.token, f, "img-1", b"picture")
+            .status()
+            .is_success());
+    }
+    let asset = c
+        .get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-1",
+            file.id
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(asset.status(), StatusCode::OK);
+    assert_eq!(asset.headers()["x-kutup-key-generation"], "1");
+    assert_eq!(
+        drive_envelope::open_b64(
+            &b64(&asset.bytes().unwrap()),
+            &file.key,
+            DriveEnvelopeContextV1::whiteboard_asset(&file.id, "img-1", 1).unwrap(),
+        )
+        .unwrap(),
+        b"picture"
+    );
+    assert_eq!(
+        c.get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-1",
+            neighbour.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        c.get(format!(
+            "{base}/api/share/{token}/files/{}/assets/img-2",
+            file.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
     );
     // No saved editing state yet: the upload is the file.
     assert_eq!(

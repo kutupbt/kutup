@@ -133,6 +133,16 @@ restore while another tab is open). One unexplained failure was seen once in
 about sixteen runs of the PDF two-tab test (the editing tab kept its edit
 locally without sending it) and not reproduced since; watch for it.
 
+## Public links
+
+A document reached by a public link opens on Office without an account
+(`docs/architecture.md`, "File editor route"). The page decrypts the latest
+save with the key from the link's fragment and hands it to the same sandbox
+in ONLYOFFICE's viewer (`OfficeEditor` with `live={false}`): no session, no
+device registration and no collaboration socket, so the viewer sees the
+document as it was last saved, not edits in progress. PDFs on a public link
+open in the browser's PDF viewer.
+
 ## How the bundle is delivered
 
 `docker compose up -d --build` requires no preparation step. The frontend

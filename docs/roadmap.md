@@ -150,6 +150,16 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | Backend: `POST /admin/actions/purge-trash` (forces the trash retention sweeper — `jobs::trash_sweep_once` — to run now) | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
 
+### Admin · Reports on public links, take-downs and suspensions
+
+Every public page says who shared it and that nobody checked it (`docs/architecture.md`, "File editor route"), but nobody can report one yet, and an administrator can only wipe an account, not suspend it or take one link down. Next, as one slice (no Report button before the queue that receives it):
+
+| What's needed | Where |
+|---|---|
+| A Report button on every public page (Drive, Office, Photos): a reason and a note, sent anonymously and rate-limited; it carries the whole link, key included, with the reporter's consent, since an administrator cannot otherwise see an end-to-end encrypted file | public pages, `POST /api/share/:token/report` |
+| An admin queue of reports: open the reported link, dismiss, take the link down (it answers "removed"), suspend the owner | admin panel, `/api/admin/reports` |
+| Suspending an account: no sign-in, sessions ended, every public link it made answers "removed"; reversible | `users`, auth, shares |
+
 ### Native iOS and Android apps
 
 The dedicated `kutup-ios` and `kutup-android` apps are active work in sibling

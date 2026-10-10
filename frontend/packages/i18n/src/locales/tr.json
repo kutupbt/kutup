@@ -75,7 +75,7 @@
     "onlyOwnerRemoves": "Kişileri yalnızca sahibi değiştirebilir veya kaldırabilir.",
     "settingFailed": "Ayar kaydedilemedi.",
     "linksTitle": "Herkese açık bağlantılar",
-    "linksHint": "Bağlantıya sahip herkes bu dosyayı hesap olmadan açıp indirebilir. Anahtar bağlantının kendisindedir; sunucu onu asla görmez.",
+    "linksHint": "Bağlantıya sahip herkes bu dosyayı hesap olmadan açıp indirebilir ve paylaşan olarak adresinizi görür. Anahtar bağlantının kendisindedir; sunucu onu asla görmez.",
     "link": "Herkese açık bağlantı",
     "linkCreated": "{{date}} oluşturuldu",
     "copy": "Kopyala",
@@ -200,5 +200,9 @@
     "slash": "Adlarda / ya da \\ bulunamaz.",
     "taken": "Burada bu adda bir şey zaten var.",
     "failed": "Ad kaydedilemedi."
+  },
+  "publicNotice": {
+    "sharedBy": "{{owner}} tarafından herkese açık paylaşıldı.",
+    "unchecked": "Kutup, bağlantıyla paylaşılanları göremez ve denetleyemez. Paylaşılan bir dosya istedi diye asla parola veya ödeme bilgisi girmeyin."
   }
 }
