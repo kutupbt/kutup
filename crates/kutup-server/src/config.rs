@@ -63,6 +63,10 @@ pub struct Config {
     /// Test stacks only (`APP_ENV=test`): an http origin every outside key
     /// lookup goes to instead of WKD and the key servers.
     pub mail_test_key_origin: String,
+    /// Who may send to addresses outside Kutup (`MAIL_OUTSIDE_SENDING`):
+    /// off until the server's mail setup is checked, admins for the sending
+    /// trial, then everyone.
+    pub mail_outside_sending: OutsideSending,
     /// An account's first days, and the outside recipients a day it may
     /// send to in them (most abuse comes from new accounts).
     pub mail_new_account_days: i64,
@@ -309,6 +313,7 @@ impl Config {
             mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
             mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             mail_test_key_origin: get_env("MAIL_TEST_KEY_ORIGIN", ""),
+            mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             federation_server_name,
@@ -473,5 +478,57 @@ mod tests {
             "production",
         )
         .is_err());
+    }
+}
+
+/// Who may send mail to addresses outside Kutup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutsideSending {
+    Off,
+    Admins,
+    On,
+}
+
+impl OutsideSending {
+    /// `off`, `admins` or `on`; anything else is off, so a typo never opens
+    /// sending.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "on" => OutsideSending::On,
+            "admins" => OutsideSending::Admins,
+            "off" => OutsideSending::Off,
+            other => {
+                tracing::warn!(
+                    value = other,
+                    "MAIL_OUTSIDE_SENDING is not off, admins or on; using off"
+                );
+                OutsideSending::Off
+            }
+        }
+    }
+
+    pub fn allows(self, is_admin: bool) -> bool {
+        match self {
+            OutsideSending::On => true,
+            OutsideSending::Admins => is_admin,
+            OutsideSending::Off => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod outside_sending_tests {
+    use super::OutsideSending;
+
+    #[test]
+    fn outside_sending_parses_and_fails_closed() {
+        assert_eq!(OutsideSending::parse("on"), OutsideSending::On);
+        assert_eq!(OutsideSending::parse(" Admins "), OutsideSending::Admins);
+        assert_eq!(OutsideSending::parse("off"), OutsideSending::Off);
+        assert_eq!(OutsideSending::parse("yes"), OutsideSending::Off);
+        assert!(OutsideSending::Admins.allows(true));
+        assert!(!OutsideSending::Admins.allows(false));
+        assert!(!OutsideSending::Off.allows(true));
+        assert!(OutsideSending::On.allows(false));
     }
 }

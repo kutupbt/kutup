@@ -180,6 +180,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
   const [bcc, setBcc] = useState(start.draft.bcc)
+  // Before the server's mail setup is checked, only Kutup addresses are reachable.
+  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !m.address.toLowerCase().endsWith(`@${account.domain}`))
+  const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
   const [attachments, setAttachments] = useState<Attachment[]>(start.attachments)
@@ -350,6 +353,10 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       toast.error(t('compose.invalidRecipient', { address: invalid.address }))
       return
     }
+    if (outsideBlocked) {
+      toast.error(t('compose.outsideOff'))
+      return
+    }
     if (attachments.some((a) => a.status !== 'ready')) {
       toast.error(t('compose.attachmentsPending'))
       return
@@ -380,7 +387,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
         toast.error(
-          data?.code === 'sendingPaused'
+          data?.code === 'outsideSendingOff'
+            ? t('compose.outsideOff')
+            : data?.code === 'sendingPaused'
             ? t('compose.sendingPaused')
             : data?.code === 'sendLimit'
               ? data.newAccount
@@ -434,7 +443,12 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       </header>
       {minimised ? null : (
         <>
-          {sendingStatus.data?.paused ? (
+          {outsideBlocked ? (
+            <p role="status" className="shrink-0 border-b border-border bg-status-warn/20 px-3 py-2 text-xs">
+              {t('compose.outsideOffNotice')}
+            </p>
+          ) : null}
+          {sendingStatus.data?.outsideAllowed && sendingStatus.data.paused ? (
             <p role="status" className="shrink-0 border-b border-border bg-status-warn/20 px-3 py-2 text-xs">
               {t('compose.pausedNotice')}
             </p>

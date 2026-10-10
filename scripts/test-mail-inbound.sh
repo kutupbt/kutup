@@ -31,6 +31,7 @@ export STALWART_ADMIN_SECRET="mail-integration-stalwart-admin-secret"
 export RATE_LIMIT_REGISTER_PER_HOUR=100
 # Key lookups go to the gate's WKD stand-in (only on a test stack).
 export APP_ENV=test
+export MAIL_OUTSIDE_SENDING=on
 
 command -v gpg >/dev/null || { echo "the mail gate needs GnuPG (gpg)" >&2; exit 1; }
 output="$(mktemp)"

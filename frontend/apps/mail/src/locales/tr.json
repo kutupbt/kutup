@@ -191,7 +191,9 @@
         "proton": "Alıcının Proton anahtarıyla uçtan uca şifreli",
         "keysOpenpgp": "keys.openpgp.org'dan alınan bir anahtarla uçtan uca şifreli"
       }
-    }
+    },
+    "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
+    "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",

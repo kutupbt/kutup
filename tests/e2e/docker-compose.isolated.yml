@@ -17,6 +17,8 @@ services:
   backend:
     environment:
       RATE_LIMIT_LOGIN_PER_MIN: 1000
+      # The composer's outside-sending notices (spec 58); no Stalwart here.
+      MAIL_OUTSIDE_SENDING: "on"
       RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
       RATE_LIMIT_REGISTER_PER_HOUR: 1000
       RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000

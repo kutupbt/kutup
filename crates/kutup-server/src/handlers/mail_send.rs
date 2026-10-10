@@ -764,6 +764,7 @@ struct LocalCopy {
     responses(
         (status = 200, description = "Sent", body = SendResult),
         (status = 409, description = "A recipient's key changed (code keyChanged, address)"),
+        (status = 403, description = "Outside sending is off on this server (code outsideSendingOff), or paused for you (code sendingPaused)"),
         (status = 413, description = "Too large, or your storage quota exceeded"),
         (status = 422, description = "No such Kutup address (code unknownRecipient), or refused outside"),
         (status = 429, description = "Sending limit reached"),
@@ -901,6 +902,12 @@ pub async fn send(
         }
     };
     if !external.is_empty() {
+        if !state.config.mail_outside_sending.allows(user.is_admin) {
+            return Err(AppError::forbidden(
+                "this server does not send mail to outside addresses yet",
+            )
+            .with_details(json!({ "code": "outsideSendingOff" })));
+        }
         crate::mail::safety::check_send(&state, user_id, external.len() as i64).await?;
     }
 

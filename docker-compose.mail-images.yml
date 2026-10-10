@@ -1,0 +1,13 @@
+# Runs Mail's Stalwart setup from a published image instead of building it
+# here (scripts/publish-images.sh prints its name). Use it with
+# docker-compose.mail.yml and docker-compose.images.yml:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.images.yml:docker-compose.mail.yml:docker-compose.mail-images.yml
+#
+# docs/self-hosting.md, "Mail".
+
+services:
+  stalwart-setup:
+    image: ${KUTUP_STALWART_SETUP_IMAGE:?set KUTUP_STALWART_SETUP_IMAGE to the Stalwart setup image, with its tag}
+    build: !reset null
+    pull_policy: missing

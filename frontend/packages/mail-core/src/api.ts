@@ -167,6 +167,8 @@ export interface SendingStatus {
   /** The lower limits of an account's first week apply. */
   newAccount: boolean
   paused: 'admin' | 'bounces' | 'spam' | null
+  /** Whether this server sends your mail to outside addresses yet (`MAIL_OUTSIDE_SENDING`). */
+  outsideAllowed: boolean
 }
 
 export function useSendingStatus(enabled = true) {

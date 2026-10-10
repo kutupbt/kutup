@@ -1130,7 +1130,10 @@ unreachable.
 ### GET /api/mail/sending
 
 Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
-"sentDay", "newAccount", "paused" }`. `paused` is `admin`, `bounces` or `spam`
+"sentDay", "newAccount", "paused", "outsideAllowed" }`. `outsideAllowed` is
+false while the server does not send outside for you (`MAIL_OUTSIDE_SENDING`
+`off`, or `admins` and you are not one); `POST /api/mail/send` then answers
+`403` with `code: outsideSendingOff` for any outside recipient. `paused` is `admin`, `bounces` or `spam`
 while sending outside is paused (mail between Kutup users still goes). New
 accounts may send to 50 outside recipients a day in their first week
 (`MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), then
