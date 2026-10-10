@@ -678,6 +678,23 @@ const reopenedMail = openAs(joinPackets(sealedMail.keyPackets[0], sealedMail.dat
 assert.equal(new TextDecoder().decode(reopenedMail.data), 'hello bob')
 assert.equal(reopenedMail.verified, true)
 
+// PGP with outside correspondents (docs/plans/mail.md, C3): Bob's key from
+// the split vectors stands in for an outside key.
+const bobKey = b64bytes(splitVectors.bobPublicKey)
+const outside = crypto.inspectExternalMailKey(bobKey, 'bob@kutup.dev')
+assert.equal(outside.publicKey, splitVectors.bobPublicKey)
+assert.match(outside.fingerprint, /^[0-9a-f]{40}$/)
+assert.throws(() => crypto.inspectExternalMailKey(bobKey, 'eve@kutup.dev'))
+const armoredPgp = crypto.encryptMailPgp(
+  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),
+)
+assert.match(armoredPgp, /^-----BEGIN PGP MESSAGE-----/)
+const ownPgp = openAs(new TextEncoder().encode(armoredPgp), mailVectors.publicKey)
+assert.equal(new TextDecoder().decode(ownPgp.data), 'pgp to bob')
+assert.equal(ownPgp.verified, true)
+assert.throws(() => crypto.verifyMailCleartext('not signed', undefined))
+
 // Contacts (docs/plans/contacts.md).
 const contactVectors = JSON.parse(
   await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v1.json`, 'utf8'),

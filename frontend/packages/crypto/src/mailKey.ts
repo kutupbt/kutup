@@ -154,3 +154,45 @@ export async function encryptMailMessage(key: SealedMailKey, recipientPublicKeys
     sealed.free()
   }
 }
+
+/** An outside correspondent's key, checked (docs/plans/mail.md, C3). */
+export interface ExternalMailKey {
+  /** Binary, base64. */
+  publicKey: string
+  fingerprint: string
+  createdAt: number
+}
+
+/**
+ * Checks an outside key for `address`: self-signed, not revoked or expired,
+ * a user ID for the address and an encryption subkey. Armored or binary.
+ */
+export async function inspectExternalMailKey(publicKey: Uint8Array, address: string): Promise<ExternalMailKey> {
+  return (await getCryptoWasm()).inspectExternalMailKey(publicKey, address)
+}
+
+/**
+ * Encrypts to outside keys and the sender's own (base64), signed inside:
+ * the armored message for a PGP/MIME `multipart/encrypted` part.
+ */
+export async function encryptMailPgp(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
+  return (await getCryptoWasm()).encryptMailPgp(
+    key.masterKeyBase64,
+    key.loginEmail,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    recipientPublicKeys,
+    plaintext,
+  )
+}
+
+/** Whether a `multipart/signed` signature signs `content` with the key (base64). */
+export async function verifyMailDetachedSignature(signature: Uint8Array, content: Uint8Array, signerPublicKey: string): Promise<boolean> {
+  return (await getCryptoWasm()).verifyMailDetachedSignature(signature, content, signerPublicKey)
+}
+
+/** A cleartext-signed message's text, and whether it verifies against the key when given. */
+export async function verifyMailCleartext(message: string, signerPublicKey?: string): Promise<{ text: string; verified: boolean }> {
+  return (await getCryptoWasm()).verifyMailCleartext(message, signerPublicKey)
+}

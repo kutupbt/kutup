@@ -90,6 +90,18 @@ export interface CryptoWasmModule {
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
+  inspectExternalMailKey(publicKey: Uint8Array, address: string): { publicKey: string; fingerprint: string; createdAt: number }
+  encryptMailPgp(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    recipientPublicKeys: string[],
+    plaintext: Uint8Array,
+  ): string
+  verifyMailDetachedSignature(signature: Uint8Array, content: Uint8Array, signerPublicKeyBase64: string): boolean
+  verifyMailCleartext(message: string, signerPublicKeyBase64?: string): { text: string; verified: boolean }
   sealAccountEnvelope(
     plaintextBase64: string,
     keyBase64: string,

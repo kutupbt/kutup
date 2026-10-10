@@ -59,13 +59,18 @@ export {
   MAIL_KEY_FLAGS,
   armorMailPublicKey,
   encryptMailMessage,
+  encryptMailPgp,
   generateMailAddressKey,
+  inspectExternalMailKey,
   inspectMailAddressPublicKey,
   openMailMessage,
   signMailKeyList,
+  verifyMailCleartext,
+  verifyMailDetachedSignature,
   verifyMailKeyList,
 } from './mailKey'
 export type {
+  ExternalMailKey,
   GeneratedMailAddressKey,
   MailKeyEntry,
   MailKeyListInput,

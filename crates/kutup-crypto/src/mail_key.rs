@@ -373,6 +373,207 @@ pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<V
     builder.to_vec(rand::rngs::OsRng).map_err(backend)
 }
 
+/// An outside correspondent's key (docs/plans/mail.md, C3), as found
+/// through WKD, Proton's key server, keys.openpgp.org or an Autocrypt
+/// header: checked and reduced to its binary form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalKeyInfo {
+    /// The key, binary, as given (armor removed).
+    pub public_key: Vec<u8>,
+    /// Lowercase hex, 40 digits (version 4).
+    pub fingerprint: String,
+    pub created_at_secs: u32,
+}
+
+/// Largest outside key accepted (keys with many signatures run large).
+const MAX_EXTERNAL_KEY_LEN: usize = 256 * 1024;
+
+fn parse_public_key(bytes: &[u8]) -> Result<SignedPublicKey> {
+    let invalid = || CryptoError::InvalidInput("public key does not parse".into());
+    if bytes.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+        SignedPublicKey::from_armor_single(bytes)
+            .map(|(key, _)| key)
+            .map_err(|_| invalid())
+    } else {
+        SignedPublicKey::from_bytes(bytes).map_err(|_| invalid())
+    }
+}
+
+/// When a key or subkey stops being valid: its creation plus the
+/// expiration its newest self-signature sets, if any.
+fn expired(created: u32, signatures: &[pgp::packet::Signature], now_secs: u64) -> bool {
+    let newest = signatures
+        .iter()
+        .filter_map(|sig| sig.created().map(|at| (at.as_secs(), sig)))
+        .max_by_key(|(at, _)| *at);
+    match newest.and_then(|(_, sig)| sig.key_expiration_time()) {
+        Some(lifetime) if lifetime.as_secs() != 0 => {
+            u64::from(created) + u64::from(lifetime.as_secs()) <= now_secs
+        }
+        _ => false,
+    }
+}
+
+fn email_of(user_id: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(user_id).ok()?;
+    let address = match (text.rfind('<'), text.rfind('>')) {
+        (Some(open), Some(close)) if open < close => &text[open + 1..close],
+        _ => text,
+    };
+    let address = address.trim().to_lowercase();
+    (address.contains('@') && !address.contains(char::is_whitespace)).then_some(address)
+}
+
+/// The usable encryption subkey of an outside key: bound, not revoked, not
+/// expired at `now_secs`, newest first.
+fn usable_encryption_subkey(key: &SignedPublicKey, now_secs: u64) -> Option<&SignedPublicSubKey> {
+    key.public_subkeys
+        .iter()
+        .filter(|sub| sub.algorithm().can_encrypt())
+        .filter(|sub| {
+            !sub.signatures
+                .iter()
+                .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation))
+        })
+        .filter(|sub| !expired(sub.created_at().as_secs(), &sub.signatures, now_secs))
+        .max_by_key(|sub| sub.created_at().as_secs())
+}
+
+/// Checks an outside key for `address` at `now_secs`: version 4, every
+/// binding self-signed, not revoked or expired, a user ID for the address,
+/// and an encryption subkey Kutup can use. Armored or binary in.
+pub fn inspect_external_public_key(
+    public_key: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<ExternalKeyInfo> {
+    if public_key.is_empty() || public_key.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let key = parse_public_key(public_key)?;
+    key.verify_bindings()
+        .map_err(|_| CryptoError::InvalidInput("public key is not self-signed".into()))?;
+    if key.primary_key.version() != pgp::types::KeyVersion::V4 {
+        return Err(CryptoError::InvalidInput(
+            "only version 4 keys are supported".into(),
+        ));
+    }
+    if !key.details.revocation_signatures.is_empty() {
+        return Err(CryptoError::InvalidInput("public key is revoked".into()));
+    }
+    let created = key.primary_key.created_at().as_secs();
+    let address = address.trim().to_lowercase();
+    let user = key
+        .details
+        .users
+        .iter()
+        .find(|user| email_of(user.id.id()).as_deref() == Some(address.as_str()))
+        .ok_or_else(|| CryptoError::InvalidInput("public key is for another address".into()))?;
+    if user
+        .signatures
+        .iter()
+        .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::CertRevocation))
+    {
+        return Err(CryptoError::InvalidInput("user ID is revoked".into()));
+    }
+    if expired(created, &user.signatures, now_secs) {
+        return Err(CryptoError::InvalidInput("public key has expired".into()));
+    }
+    if usable_encryption_subkey(&key, now_secs).is_none() {
+        return Err(CryptoError::InvalidInput(
+            "public key has no usable encryption subkey".into(),
+        ));
+    }
+    Ok(ExternalKeyInfo {
+        public_key: key.to_bytes().map_err(backend)?,
+        fingerprint: hex::encode(key.fingerprint().as_bytes()),
+        created_at_secs: created,
+    })
+}
+
+/// Encrypts `plaintext` to every outside key (each checked by
+/// [`inspect_external_public_key`]) and to `own_public_key`, signed with
+/// `signer_secret_key` inside the encryption, as Proton and Thunderbird
+/// send PGP/MIME: an armored message for the `application/octet-stream`
+/// part of RFC 3156 `multipart/encrypted`.
+pub fn encrypt_armored_signed(
+    recipient_public_keys: &[&[u8]],
+    signer_secret_key: &[u8],
+    plaintext: &[u8],
+    now_secs: u64,
+) -> Result<String> {
+    if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_SPLIT_RECIPIENTS {
+        return Err(CryptoError::InvalidInput(
+            "a message needs 1 to 100 recipient keys".into(),
+        ));
+    }
+    let keys = recipient_public_keys
+        .iter()
+        .map(|key| parse_public_key(key))
+        .collect::<Result<Vec<_>>>()?;
+    let signer = SignedSecretKey::from_bytes(signer_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+    for key in &keys {
+        let subkey = usable_encryption_subkey(key, now_secs).ok_or_else(|| {
+            CryptoError::InvalidInput("a recipient key has no usable encryption subkey".into())
+        })?;
+        builder
+            .encrypt_to_key(rand::rngs::OsRng, subkey)
+            .map_err(backend)?;
+    }
+    builder.sign(
+        &signer.primary_key,
+        Password::empty(),
+        HashAlgorithm::Sha512,
+    );
+    builder
+        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .map_err(backend)
+}
+
+/// Whether `signature` (armored or binary, as in a `multipart/signed`
+/// message's `application/pgp-signature` part) signs `content` with
+/// `signer_public_key` or one of its subkeys.
+pub fn verify_detached(signature: &[u8], content: &[u8], signer_public_key: &[u8]) -> Result<bool> {
+    let signature = if signature.starts_with(b"-----BEGIN PGP SIGNATURE-----") {
+        pgp::composed::DetachedSignature::from_armor_single(signature).map(|(sig, _)| sig)
+    } else {
+        pgp::composed::DetachedSignature::from_bytes(signature)
+    }
+    .map_err(|_| CryptoError::InvalidInput("signature does not parse".into()))?;
+    let signer = parse_public_key(signer_public_key)?;
+    if signature.verify(&signer.primary_key, content).is_ok() {
+        return Ok(true);
+    }
+    Ok(signer
+        .public_subkeys
+        .iter()
+        .any(|sub| signature.verify(&sub.key, content).is_ok()))
+}
+
+/// A cleartext-signed message (`-----BEGIN PGP SIGNED MESSAGE-----`): its
+/// text, and whether it verifies against `signer_public_key` when given.
+pub fn verify_cleartext(message: &str, signer_public_key: Option<&[u8]>) -> Result<(String, bool)> {
+    let (signed, _) = pgp::composed::CleartextSignedMessage::from_string(message)
+        .map_err(|_| CryptoError::InvalidInput("not a cleartext-signed message".into()))?;
+    let verified = match signer_public_key {
+        Some(key) => {
+            let signer = parse_public_key(key)?;
+            signed.verify(&signer.primary_key).is_ok()
+                || signer
+                    .public_subkeys
+                    .iter()
+                    .any(|sub| signed.verify(&sub.key).is_ok())
+        }
+        None => false,
+    };
+    Ok((signed.signed_text(), verified))
+}
+
 /// A message encrypted once for several recipients, split the way Proton
 /// sends mail between its users (docs/plans/mail.md): one key packet per
 /// recipient (a public-key encrypted session key, PKESK) and one data packet

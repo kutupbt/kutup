@@ -56,3 +56,7 @@ required-features = ["mail"]
 [[test]]
 name = "mail_split_vectors"
 required-features = ["mail"]
+
+[[test]]
+name = "mail_pgp_gnupg"
+required-features = ["mail"]
