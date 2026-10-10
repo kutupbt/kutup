@@ -116,6 +116,100 @@ snippets from the client's decrypted cache, as Proton does).
 - **Threads:** a message joins the thread of a message it names in
   `In-Reply-To` or `References`, else starts a new one.
 
+## C2: the Mail app
+
+Proton's web client (`kutup-references/WebClients`, `applications/mail`)
+is the model; where Kutup differs, the reason is given.
+
+### Format: the whole message, encrypted
+
+Every stored message is one RFC 5322 message, attachments inside,
+encrypted as one OpenPGP message, as mail from outside already is (C1).
+Proton encrypts the body and each attachment separately; Kutup keeps one
+format for all mail, so export and the future IMAP bridge get the original
+bytes and the client parses MIME the same way whatever the source.
+
+- **Between Kutup users** the sender's browser builds the MIME message,
+  signs it with the sender's address key and encrypts it once
+  (`mail_key::encrypt_split`): one data packet, plus a key packet for each
+  Kutup recipient and one for the sender's own copy, Proton's
+  `BodyKeyPacket`s. The server stores `key packet || data packet` per
+  recipient, checking each key packet names the recipient's current primary
+  key (409 when it changed). A copy names no other recipient's key, so Bcc
+  stays hidden. The message itself has no Bcc header; the sender's row keeps
+  the Bcc list as readable metadata (Proton's `BCCList`).
+- **To outside recipients** the browser also sends the plaintext MIME, over
+  TLS; the server checks its From is the sender, hands it to Stalwart's
+  submission port (Stalwart signs DKIM and sends over IPv4), and drops it.
+  Proton hands the server the body's session key instead; sending the
+  plaintext alongside is simpler and the server sees the same. Outgoing
+  volume per account is limited (recipients per hour and per day).
+- **Readable fields** for the list come from the sender's browser (subject,
+  addresses, ids); From is always the authenticated sender. The reading
+  pane shows the decrypted message's own headers and its signature check.
+- **Protection**, the padlock: received from outside `zero_access`; between
+  Kutup users `end_to_end`, verified when the signature checks against the
+  sender's key list; sent to outside "sent with zero-access encryption".
+
+### Drafts
+
+A draft is a message row in Drafts: its body (the message without
+attachments) encrypted to the sender's own key and replaced on each save,
+debounced 2 s as Proton does. Each attachment is uploaded once, as an
+encrypted MIME part (`mail_draft_attachments`), so saving the text never
+re-sends files. Sending assembles the final message in the browser and
+deletes the draft.
+
+### Server API
+
+- `PATCH /api/mail/messages` `{ ids, seen?, starred?, folder? }`, at most
+  500; `DELETE` permanently, only from Trash, Spam and Drafts (elsewhere the
+  client moves to Trash first, as Proton does).
+- `GET /api/mail/counts`: unread and total per folder.
+- `GET /api/mail/threads/{id}`: a thread's messages, oldest first.
+- `GET /api/mail/messages?folder=&q=`: `q` searches subject and addresses
+  (readable); bodies are searched in the browser later (C2f).
+- Drafts: `POST /api/mail/drafts`, `PUT /api/mail/drafts/{id}`, attachments
+  under `/api/mail/drafts/{id}/attachments`.
+- `POST /api/mail/send`: multipart with the metadata, the data packet, the
+  key packets and, for outside recipients, the plaintext.
+
+### The app at `mail.<domain>`
+
+- Proton's layout: a sidebar (Compose, Inbox, Drafts, Sent, Starred,
+  Archive, Spam, Trash, unread counts), the list (sender, subject, date,
+  star, attachment icon, unread weight, multi-select toolbar: read/unread,
+  star, archive, spam, trash, move) and the reading pane (the thread,
+  header with recipients and padlock, attachments, reply, reply all,
+  forward).
+- HTML mail is sanitised with DOMPurify (no scripts, forms or styles that
+  load anything) and shown in a sandboxed iframe; remote images are blocked
+  until the reader allows them for that message (Proton proxies them; Kutup
+  has no proxy yet, so blocking is the safe default); links open with
+  `noopener noreferrer`. MIME is parsed with postal-mime.
+- The composer, docked like Proton's: From, To, Cc, Bcc with contact
+  suggestions, subject, a rich-text editor (Tiptap) sent as HTML with a plain
+  text alternative, attachments, autosave, and Proton's shortcuts
+  (Meta+Enter send, Esc close; N new, R reply, Shift+R reply all, Shift+F
+  forward, `*` star, U unread, A archive, S spam, T trash, `/` search,
+  J/K next and previous).
+- New mail is fetched every 30 s while the app is open; web push later.
+
+### C2 slices
+
+1. **C2a crypto** (done): `encrypt_split`, key packet checks, WASM
+   `openMailMessage` and `encryptMailMessage`, vectors.
+2. **C2b server:** the API above, Bcc and draft attachments in migration
+   085, Stalwart's submission listener in the plan, sending limits.
+3. **C2c reading:** `@kutup/mail-core` and the app: list, counts, thread,
+   MIME, safe HTML, attachments, actions, search, shortcuts.
+4. **C2d writing:** composer, drafts, send, reply and forward, "Add to
+   contacts" for new correspondents.
+5. **C2e gates and docs:** browser specs (two Kutup users, end to end), the
+   mail gate extended to sending outside, docs.
+6. **C2f later:** body search in the browser (research 15 and 16), labels
+   and custom folders, Trash and Spam emptied after 30 days, web push.
+
 ## Data (migration 085)
 
 - `mail_messages`: id, user id, address id, thread id, folder (`inbox`,
