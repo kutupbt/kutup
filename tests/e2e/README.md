@@ -47,7 +47,7 @@ export COMPOSE_FILE=docker-compose.yml:tests/e2e/docker-compose.isolated.yml
 export KUTUP_E2E_DATA_DIR=/tmp/kutup-e2e-data
 export KUTUP_HTTP_PORT=39080
 export KUTUP_HTTPS_PORT=39443
-for app in account drive chat office maps photos; do
+for app in account drive chat office maps photos contacts; do
   export "KUTUP_$(echo "$app" | tr a-z A-Z)_URL=https://$app.localhost:39443"
 done
 export E2E_APP_ORIGIN='https://{app}.localhost:39443'

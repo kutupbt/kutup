@@ -1,7 +1,7 @@
 #!/bin/sh
 # Writes the nginx site for the Kutup web apps and the editor sandbox, one
 # server block per hostname, from the same settings kutup-server reads:
-# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS}_URL, or KUTUP_BASE_DOMAIN for
+# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS}_URL, or KUTUP_BASE_DOMAIN for
 # https://<app>.<domain>. The reverse proxy in front terminates TLS and must
 # pass the Host header through.
 set -eu
@@ -31,6 +31,7 @@ office=$(origin_of office KUTUP_OFFICE_URL)
 editor=$(origin_of editor KUTUP_EDITOR_URL)
 maps=$(origin_of maps KUTUP_MAPS_URL)
 photos=$(origin_of photos KUTUP_PHOTOS_URL)
+contacts=$(origin_of contacts KUTUP_CONTACTS_URL)
 
 conf=/etc/nginx/conf.d/kutup.conf
 {
@@ -43,7 +44,7 @@ server {
 }
 NGINX
   editor_origin=$(printf '%s' "$editor" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
-  for app in account drive chat maps photos office; do
+  for app in account drive chat maps photos office contacts; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
@@ -139,4 +140,4 @@ server {
 }
 NGINX
 } > "$conf"
-echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office editor=$editor"
+echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts editor=$editor"

@@ -1,4 +1,4 @@
-import { Activity, ChartPie, CircleUser, KeyRound, FileType, Globe, HardDrive, Images, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, ChartPie, CircleUser, FileType, Globe, HardDrive, Images, KeyRound, LayoutGrid, Map, MessagesSquare, MonitorSmartphone, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -36,6 +36,7 @@ export function AccountShell() {
             { id: 'drive', name: t('apps.drive'), href: appUrl('drive'), icon: <HardDrive /> },
             { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
+            { id: 'contacts', name: t('apps.contacts'), href: appUrl('contacts'), icon: <BookUser /> },
             { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },
             { id: 'maps', name: t('apps.maps'), href: appUrl('maps'), icon: <Map /> },
             { id: 'account', name: t('apps.account'), href: appUrl('account'), icon: <UserRound /> },

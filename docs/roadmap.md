@@ -449,8 +449,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
   Settings → Encryption keys
   ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)). Key import,
   rotation and marking keys obsolete or compromised come with Mail (C3).
-- **B. Contacts:** the unified encrypted address book and app, used by Chat,
-  Drive sharing, Mail and Calendar.
+- **B. Contacts** (done): the encrypted address book and its app at
+  `contacts.` ([`plans/contacts.md`](plans/contacts.md)): names and emails
+  readable and signed by the account, everything else sealed; groups, vCard
+  import and export, storage-pool accounting; suggestions in Drive, Photos
+  and Chat pickers with "Add to contacts". Mail and Calendar use it when
+  they arrive.
 - **C. Mail:** C1 infrastructure (Stalwart, RCPT hook, LMTP receiver,
   encrypt on arrival, DNS), C2 the app, C3 PGP to outside users and the MX
   switch from Cloudflare.

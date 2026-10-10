@@ -34,7 +34,8 @@
     "drive": "Depo",
     "maps": "Haritalar",
     "office": "Ofis",
-    "photos": "Galeri"
+    "photos": "Galeri",
+    "contacts": "Kişiler"
   },
   "theme": {
     "dark": "Koyu tema",
@@ -129,7 +130,8 @@
       "previews": "Küçük resimler ve önizlemeler",
       "chatMedia": "Sohbet ekleri",
       "chatHistory": "Sohbet geçmişi yedeği",
-      "reserved": "Süren yüklemeler"
+      "reserved": "Süren yüklemeler",
+      "contacts": "Kişiler"
     }
   },
   "uploads": {
@@ -183,5 +185,10 @@
       "keepBoth": "İkisini de tut",
       "skip": "Atla"
     }
+  },
+  "contactSuggest": {
+    "label": "Kişilerinizden öneriler",
+    "offer": "{{address}} kişilerinizde değil.",
+    "add": "Kişilere ekle"
   }
 }

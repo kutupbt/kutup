@@ -510,7 +510,8 @@ pub async fn migrate_legacy_versions(pool: &PgPool, storage: &StorageService) ->
 }
 
 /// Rewrites the account's one storage counter (crate::storage_pool) from
-/// the rows it stands for — Drive and Chat together — for any drifted user.
+/// the rows it stands for — Drive, Chat and Contacts together — for any
+/// drifted user.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // First find who drifted (a plain read), then correct each one under
     // their row lock with the sums taken afresh: every charge and release
@@ -518,7 +519,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
         "SELECT u.id FROM users u, LATERAL ({}) e
-         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes",
+         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes",
         reconcile_sums("u.id")
     ))
     .fetch_all(pool)
@@ -532,17 +533,17 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     };
     let mut corrected = 0;
     for uid in drifted {
-        let fixed: anyhow::Result<Option<(i64, i64, i64)>> = async {
+        let fixed: anyhow::Result<Option<(i64, i64, i64, i64)>> = async {
             let mut tx = pool.begin().await?;
             sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
                 .bind(uid)
                 .execute(&mut *tx)
                 .await?;
-            let (drive, chat): (i64, i64) = sqlx::query_as(&reconcile_sums("$1"))
+            let (drive, chat, contacts): (i64, i64, i64) = sqlx::query_as(&reconcile_sums("$1"))
                 .bind(uid)
                 .fetch_one(&mut *tx)
                 .await?;
-            let total = drive.saturating_add(chat);
+            let total = drive.saturating_add(chat).saturating_add(contacts);
             let row: Option<i64> = sqlx::query_scalar(
                 "UPDATE users SET storage_used_bytes = $2
                  WHERE id = $1 AND storage_used_bytes <> $2
@@ -553,14 +554,14 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
             .fetch_optional(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok(row.map(|used| (used, drive, chat)))
+            Ok(row.map(|used| (used, drive, chat, contacts)))
         }
         .await;
         match fixed {
-            Ok(Some((used, drive, chat))) => {
+            Ok(Some((used, drive, chat, contacts))) => {
                 corrected += 1;
                 tracing::info!(
-                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}; drift corrected)"
+                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}, contacts {contacts}; drift corrected)"
                 );
             }
             Ok(None) => {}
@@ -575,8 +576,9 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 
 /// What the user `user` (an SQL expression) is charged for, summed from the
 /// rows, as `drive_bytes` (files less pruned originals, assets, thumbnails,
-/// versions) and `chat_bytes` (media references and the history backup);
-/// their sum is the account's storage counter.
+/// versions), `chat_bytes` (media references and the history backup) and
+/// `contacts_bytes` (summaries and sealed cards, `contacts_charge`); their
+/// sum is the account's storage counter.
 fn reconcile_sums(user: &str) -> String {
     format!(
         r#"SELECT
@@ -587,7 +589,8 @@ fn reconcile_sums(user: &str) -> String {
     (COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes"#
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
+    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes"#
     )
 }
 

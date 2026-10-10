@@ -28,6 +28,7 @@
 //! - [`asset`] — whiteboard asset envelopes under the file key.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
+//! - [`contact_card`] — signed contact summaries and sealed contact cards.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
 
 pub mod account_envelope;
@@ -38,6 +39,7 @@ pub mod chat_backup_media;
 pub mod chat_media;
 pub mod collection_epoch;
 pub mod collection_keyring;
+pub mod contact_card;
 pub mod drive_envelope;
 pub mod drive_names;
 pub mod drive_object;

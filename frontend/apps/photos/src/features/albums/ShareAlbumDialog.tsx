@@ -10,6 +10,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
+import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
@@ -104,7 +105,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           }}
         >
           <Field label={t('share.email')}>
-            {(field) => <Input {...field} type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />}
+            {(field) => <ContactSuggestInput {...field} type="email" value={email} onValueChange={setEmail} />}
           </Field>
           <div className="flex items-center gap-2">
             <Checkbox id="album-can-add" checked={canAdd} onCheckedChange={(v) => setCanAdd(v === true)} />

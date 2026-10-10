@@ -178,6 +178,7 @@ jobs:
       KUTUP_EDITOR_URL: https://editor.localhost:38443
       KUTUP_MAPS_URL: https://maps.localhost:38443
       KUTUP_PHOTOS_URL: https://photos.localhost:38443
+      KUTUP_CONTACTS_URL: https://contacts.localhost:38443
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -197,7 +198,7 @@ jobs:
             -keyout nginx/certs/privkey.pem \
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
-            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,IP:127.0.0.1
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,IP:127.0.0.1
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a

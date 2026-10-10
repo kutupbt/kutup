@@ -100,6 +100,7 @@ services:
       KUTUP_EDITOR_URL: ${KUTUP_EDITOR_URL:-}
       KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
       KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
+      KUTUP_CONTACTS_URL: ${KUTUP_CONTACTS_URL:-}
       # The map relay's shared tile cache; its size is set on the admin Maps page.
       MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (email:username:password) — created on first boot; it can
@@ -180,6 +181,7 @@ services:
       KUTUP_EDITOR_URL: ${KUTUP_EDITOR_URL:-}
       KUTUP_MAPS_URL: ${KUTUP_MAPS_URL:-}
       KUTUP_PHOTOS_URL: ${KUTUP_PHOTOS_URL:-}
+      KUTUP_CONTACTS_URL: ${KUTUP_CONTACTS_URL:-}
 
   nginx:
     image: nginx:alpine

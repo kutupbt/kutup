@@ -132,6 +132,7 @@ function Overview({ usage, categories, countingFiles }: { usage: StorageUsage; c
 function categoryHref(id: UsageCategory['id']): string | null {
   if (id === 'trash') return appUrl('drive', '/trash')
   if (id === 'chatMedia' || id === 'chatHistory') return appUrl('chat', '/settings/storage')
+  if (id === 'contacts') return appUrl('contacts')
   return null
 }
 

@@ -67,8 +67,8 @@ export async function openDirectChat(page: Page, address: string): Promise<void>
   await page.getByRole('button', { name: 'New chat' }).first().click()
   const from = page.url()
   const dialog = page.getByRole('dialog')
-  await dialog.getByRole('textbox').fill(address)
-  await dialog.getByRole('textbox').press('Enter')
+  await dialog.getByRole('combobox').fill(address)
+  await dialog.getByRole('combobox').press('Enter')
   await page.waitForURL((url) => decodeURIComponent(url.href).includes(address), { timeout: 45_000 })
   if (page.url() !== from) {
     // The address changes before the view does: until the header names the

@@ -7,7 +7,8 @@ import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
-import { Input } from '@kutup/ui/components/input'
+import { offerAddToContacts } from '@kutup/contacts-core/addToContacts'
+import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import { useChat } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
 import { NewGroupDialog } from './NewGroupDialog'
@@ -45,7 +46,12 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       return
     }
     close()
-    void navigate(pathForAddress(withHomeServer(parsed, chat.capabilities?.serverName)))
+    const address = withHomeServer(parsed, chat.capabilities?.serverName)
+    void navigate(pathForAddress(address))
+    if (address.server) {
+      const text = `${address.username}@${address.server}`
+      void offerAddToContacts(text, { message: t('contactSuggest.offer', { address: text }), action: t('contactSuggest.add') })
+    }
   }
 
   return (
@@ -59,15 +65,13 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           </DialogHeader>
           <Field label={t('chat.newChat.address')} error={error}>
             {(props) => (
-              <Input
+              <ContactSuggestInput
                 {...props}
                 autoFocus
-                autoComplete="off"
-                spellCheck={false}
                 placeholder={t('chat.username')}
                 value={value}
-                onChange={(e) => {
-                  setValue(e.target.value)
+                onValueChange={(next) => {
+                  setValue(next)
                   setError(undefined)
                 }}
               />

@@ -1,0 +1,11 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "account": "alice@kutup.dev",
+  "contactsKey": "HnhG6nPM2lIwmb3Ap4LHJHXe8s5XFky9SPkxhNIvKJQ=",
+  "summary": "{\"uid\":\"urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\",\"name\":\"Ayşe Yılmaz\",\"emails\":[{\"address\":\"ayse@example.com\",\"label\":\"work\"},{\"address\":\"ayse@kutup.dev\"}],\"groups\":[\"11111111-1111-4111-8111-111111111111\"],\"pinnedKeys\":[{\"address\":\"ayse@example.com\",\"fingerprint\":\"0123456789abcdef0123456789abcdef01234567\",\"encrypt\":true,\"sign\":false}]}",
+  "signature": "T1H0x4wwYXMIn8e9Iz2CATqRanGOp7D7Nh9hXHicOE8YI1Oj8URrUy6De91bJXswRdcKgBoC5q2L/G4+axpqCw==",
+  "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+  "vcard": "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\r\nFN:Ayşe Yılmaz\r\nEMAIL;TYPE=work:ayse@example.com\r\nTEL;TYPE=cell:+90 555 000 00 00\r\nNOTE:Met at the conference\r\nEND:VCARD\r\n",
+  "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz",
+  "sealed": "S1VUQ0MxAAAAATMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30JFu7rUWaWA8F7gGuFDSJLw="
+}

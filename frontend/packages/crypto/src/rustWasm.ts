@@ -41,6 +41,15 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
+  signContactSummary(masterKeyBase64: string, account: string, summaryJson: string): { summary: string; signature: string }
+  verifyContactSummary(
+    summary: string,
+    signatureBase64: string,
+    account: string,
+    authorityPublicKeyBase64: string,
+  ): import('./contactCard').ContactSummary
+  sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
+  openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
   generateMailAddressKey(
     masterKeyBase64: string,
     loginEmail: string,

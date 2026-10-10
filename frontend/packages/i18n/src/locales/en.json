@@ -34,7 +34,8 @@
     "drive": "Drive",
     "maps": "Maps",
     "office": "Office",
-    "photos": "Photos"
+    "photos": "Photos",
+    "contacts": "Contacts"
   },
   "theme": {
     "dark": "Dark theme",
@@ -129,7 +130,8 @@
       "previews": "Thumbnails and previews",
       "chatMedia": "Chat attachments",
       "chatHistory": "Chat history backup",
-      "reserved": "Uploads in progress"
+      "reserved": "Uploads in progress",
+      "contacts": "Contacts"
     }
   },
   "uploads": {
@@ -183,5 +185,10 @@
       "keepBoth": "Keep both",
       "skip": "Skip"
     }
+  },
+  "contactSuggest": {
+    "label": "Suggestions from your contacts",
+    "offer": "{{address}} is not in your contacts.",
+    "add": "Add to contacts"
   }
 }

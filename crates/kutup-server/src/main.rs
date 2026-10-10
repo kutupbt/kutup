@@ -587,6 +587,28 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail_keys::list_addresses),
         )
         .route(
+            "/api/contacts",
+            get(handlers::contacts::list).post(handlers::contacts::create),
+        )
+        .route(
+            "/api/contacts/delete",
+            post(handlers::contacts::delete_many),
+        )
+        .route("/api/contacts/import", post(handlers::contacts::import))
+        .route("/api/contacts/emails", get(handlers::contacts::emails))
+        .route(
+            "/api/contacts/groups",
+            get(handlers::contacts::list_groups).post(handlers::contacts::create_group),
+        )
+        .route(
+            "/api/contacts/groups/:id",
+            put(handlers::contacts::update_group).delete(handlers::contacts::delete_group),
+        )
+        .route(
+            "/api/contacts/:id",
+            put(handlers::contacts::update).delete(handlers::contacts::delete),
+        )
+        .route(
             "/api/mail/addresses/:id/keys",
             post(handlers::mail_keys::add_key),
         )
