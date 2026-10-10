@@ -582,7 +582,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 /// rows, as `drive_bytes` (files less pruned originals, assets, thumbnails,
 /// versions), `chat_bytes` (media references and the history backup) and
 /// `contacts_bytes` (summaries and sealed cards, `contacts_charge`) and
-/// `mail_bytes` (stored messages); their sum is the account's storage
+/// `mail_bytes` (stored messages and draft attachments); their sum is the account's storage
 /// counter.
 fn reconcile_sums(user: &str) -> String {
     format!(
@@ -596,7 +596,8 @@ fn reconcile_sums(user: &str) -> String {
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
     COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
-    COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user}), 0)::bigint AS mail_bytes"#
+    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes"#
     )
 }
 
@@ -856,7 +857,9 @@ async fn sweep_mail_orphans(pool: &PgPool, storage: &StorageService) -> anyhow::
             .collect();
         if !candidates.is_empty() {
             let alive: std::collections::HashSet<String> = sqlx::query_scalar(
-                "SELECT object_key FROM mail_messages WHERE object_key = ANY($1)",
+                "SELECT object_key FROM mail_messages WHERE object_key = ANY($1)
+                 UNION ALL
+                 SELECT object_key FROM mail_draft_attachments WHERE object_key = ANY($1)",
             )
             .bind(&candidates)
             .fetch_all(pool)

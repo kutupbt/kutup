@@ -15,6 +15,8 @@ services:
   stalwart:
     image: stalwartlabs/stalwart:v0.16.23
     restart: unless-stopped
+    # Restarts Stalwart when stalwart-setup adds a listener (stalwart/run.sh).
+    entrypoint: ["/bin/sh", "/kutup/run.sh"]
     environment:
       # The administrator stalwart-setup applies the plan as. Stalwart's
       # management port (8080) is never published.
@@ -26,8 +28,10 @@ services:
       - "${MAIL_SMTP_PORT:-25}:25"
     volumes:
       - ./stalwart/config.json:/etc/stalwart/config.json:ro
+      - ./stalwart/run.sh:/kutup/run.sh:ro
       - stalwart_data:/var/lib/stalwart
       - stalwart_certs:/stalwart-certs:ro
+      - stalwart_control:/stalwart-control:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz/live"]
       interval: 5s
@@ -49,10 +53,13 @@ services:
       STALWART_PASSWORD: ${STALWART_ADMIN_SECRET:?set STALWART_ADMIN_SECRET}
       MAIL_DOMAIN: ${CHAT_SERVER_NAME:-kutup.local}
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME to mail.<domain>}
+      # Kutup's sending account's password (stalwart/plan.ndjson).
+      MAIL_INBOUND_TOKEN: ${MAIL_INBOUND_TOKEN:?set MAIL_INBOUND_TOKEN}
       STALWART_WATCH_CERTIFICATES: "1"
     volumes:
       - ./nginx/certs:/certs:ro
       - stalwart_certs:/stalwart-certs
+      - stalwart_control:/stalwart-control
     depends_on:
       stalwart:
         condition: service_healthy
@@ -60,7 +67,10 @@ services:
   backend:
     environment:
       MAIL_INBOUND_TOKEN: ${MAIL_INBOUND_TOKEN:?set MAIL_INBOUND_TOKEN}
+      MAIL_SEND_RECIPIENTS_PER_HOUR: ${MAIL_SEND_RECIPIENTS_PER_HOUR:-100}
+      MAIL_SEND_RECIPIENTS_PER_DAY: ${MAIL_SEND_RECIPIENTS_PER_DAY:-500}
 
 volumes:
   stalwart_data:
   stalwart_certs:
+  stalwart_control:

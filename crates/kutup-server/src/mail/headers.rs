@@ -107,7 +107,7 @@ fn threading(
     (in_reply_to, references)
 }
 
-fn message_id(value: &str) -> Option<String> {
+pub(crate) fn message_id(value: &str) -> Option<String> {
     let id = value
         .trim()
         .trim_start_matches('<')
@@ -142,14 +142,14 @@ fn find_header_end(raw: &[u8]) -> usize {
         .unwrap_or(raw.len())
 }
 
-fn single_line(value: &str) -> String {
+pub(crate) fn single_line(value: &str) -> String {
     value
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
 }
 
-fn clip(value: &str, chars: usize) -> String {
+pub(crate) fn clip(value: &str, chars: usize) -> String {
     value.chars().take(chars).collect()
 }
 

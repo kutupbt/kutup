@@ -110,6 +110,12 @@ fn checked_in_vector_opens_for_each_recipient() {
         assert_eq!(&*opened.data, MESSAGE);
         assert!(opened.signed && opened.verified);
     }
+    // A whole copy names its recipient through its first packet.
+    assert_eq!(
+        kutup_crypto::mail_key::message_key_id(&join(&packets[1], &data)).unwrap(),
+        encryption_key_id(&bob_public).unwrap()
+    );
+    assert!(kutup_crypto::mail_key::message_key_id(&data).is_err());
     // A key packet opens nothing for another key.
     assert!(decrypt(&bob_secret, &join(&packets[0], &data), None).is_err());
     // A signature from someone else does not verify.

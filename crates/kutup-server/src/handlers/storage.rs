@@ -124,7 +124,9 @@ pub async fn usage(
     .fetch_one(&state.pool)
     .await?;
     let (mail_bytes, mail_count): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(size_bytes), 0)::bigint, COUNT(*) FROM mail_messages WHERE user_id = $1",
+        "SELECT (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = $1), 0)
+               + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = $1), 0))::bigint,
+                (SELECT COUNT(*) FROM mail_messages WHERE user_id = $1)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)

@@ -1022,10 +1022,67 @@ the address key. `404` unless it is the caller's.
 
 **Auth:** Bearer JWT
 
+### PATCH /api/mail/messages
+
+`{ "ids": [...], "seen"?, "starred"?, "folder"? }`, 1 to 500 ids. Received mail
+can go to `inbox`, `archive`, `spam` or `trash`; sent mail to `sent`,
+`archive` or `trash`; drafts stay in Drafts. Moving to Trash marks read.
+**Response:** `{ "updated": 3 }`, counting only the messages that changed.
+
+### POST /api/mail/messages/delete
+
+`{ "ids": [...] }`: deletes for good, only from Trash, Spam and Drafts (a
+draft's attachments go with it), and frees their storage.
+**Response:** `{ "updated": 2 }`.
+
+### GET /api/mail/counts · GET /api/mail/threads/:id
+
+`counts`: `[{ "folder", "unread", "total" }]`, one per folder in use plus
+`starred`. `threads/:id`: the thread's messages, oldest first, as in the list.
+
+`GET /api/mail/messages` also takes `q` (subjects and addresses) and the
+folders `starred` and `all` (everything but Spam and Trash). Each message
+carries `direction` (`inbound` or `outbound`), `bcc` (your sent copies
+only), `inReplyTo` and `references`.
+
+### POST /api/mail/drafts · PUT /api/mail/drafts/:id
+
+Multipart: `meta` (JSON: `subject`, `fromName`, `to`, `cc`, `bcc` as
+`[{ "address", "name" }]`, `messageId` as `…@<server name>`, `inReplyTo`,
+`references`, `attachmentCount`, `threadId`) and `body` (the message without
+attachments, encrypted to your own address key; `400` with `code: keyChanged`
+otherwise). **Response:** the draft, as in the list. `413` when too large or
+over quota.
+
+### Draft attachments
+
+`POST /api/mail/drafts/:id/attachments` (multipart `part`: the MIME part as
+it will be sent, encrypted to your own key, all of a draft's together at
+most 25 MB) → `{ "id", "size" }`; `GET` the list; `GET` or `DELETE`
+`/api/mail/drafts/:id/attachments/:attachment`.
+
+### POST /api/mail/send
+
+Multipart: `meta` (the draft fields, plus `draftId` and `keyPackets`: base64
+key packets, `self` for your copy and one per Kutup recipient address),
+`data` (the shared data packet) and, when any recipient is outside Kutup,
+`mime` (the same message in plaintext, From you, the same Message-ID, no Bcc
+header). The server stores `key packet || data packet` for you (Sent) and
+each Kutup recipient (Inbox), hands `mime` to Stalwart for the others, and
+deletes the draft.
+
+**Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
+status `delivered` (Kutup, end to end), `sent` (outside) or `full` (a Kutup
+user out of storage; not delivered). Errors: `409` `keyChanged` with
+`address` (fetch the key again), `422` `unknownRecipient` or `refused`, `429`
+`sendLimit` (`MAIL_SEND_RECIPIENTS_PER_HOUR`, `…_PER_DAY`: 100 and 500 outside
+recipients by default), `413` over 25 MB or quota, `503` when Stalwart is
+unreachable.
+
 ### POST /internal/mail/rcpt
 
 Stalwart's MTA hook at the RCPT stage, outside `/api` and not routed by
-nginx. `Authorization: Bearer <MAIL_INBOUND_TOKEN>`. Accepts a recipient when
+nginx, and only for mail arriving on port 25. `Authorization: Bearer <MAIL_INBOUND_TOKEN>`. Accepts a recipient when
 the address (any case, without a `+tag`) is a Kutup address on this server
 with a primary key, on an active account with room in its pool; otherwise
 answers `{ "action": "reject", "response": { "status": 550 | 452, ... } }`.

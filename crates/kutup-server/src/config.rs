@@ -54,6 +54,12 @@ pub struct Config {
     pub mail_inbound_token: String,
     /// Where the LMTP receiver listens (internal network only).
     pub mail_lmtp_bind: String,
+    /// Stalwart's submission port, for mail to outside recipients.
+    pub mail_submission_addr: String,
+    /// Outside recipients one account may send to per hour and per day, so
+    /// one compromised account cannot burn the server's reputation.
+    pub mail_send_per_hour: i64,
+    pub mail_send_per_day: i64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -287,6 +293,9 @@ impl Config {
             chat_server_name,
             mail_inbound_token: get_env("MAIL_INBOUND_TOKEN", ""),
             mail_lmtp_bind: get_env("MAIL_LMTP_BIND", "0.0.0.0:2424"),
+            mail_submission_addr: get_env("MAIL_SUBMISSION_ADDR", "stalwart:2587"),
+            mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
+            mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),

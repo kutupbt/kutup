@@ -19,6 +19,7 @@ pub mod files;
 pub mod folder_access;
 pub mod mail;
 pub mod mail_keys;
+pub mod mail_send;
 pub mod name_hashes;
 pub mod sessions;
 pub mod shares;

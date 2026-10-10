@@ -7,6 +7,7 @@
 
 pub mod headers;
 pub mod lmtp;
+pub mod submit;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +35,7 @@ pub fn object_prefix(user_id: Uuid) -> String {
     format!("mail/{user_id}/")
 }
 
-fn object_key(user_id: Uuid, message_id: Uuid) -> String {
+pub(crate) fn object_key(user_id: Uuid, message_id: Uuid) -> String {
     format!("{}{message_id}", object_prefix(user_id))
 }
 
@@ -67,16 +68,16 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
 /// An accepted recipient: whose mail it is and the key it is encrypted to.
 #[derive(Debug, Clone)]
 pub struct Recipient {
-    user_id: Uuid,
-    address_id: Uuid,
-    public_key: Vec<u8>,
+    pub(crate) user_id: Uuid,
+    pub(crate) address_id: Uuid,
+    pub(crate) public_key: Vec<u8>,
 }
 
-fn unknown() -> Reply {
+pub(crate) fn unknown() -> Reply {
     Reply::new(550, "5.1.1", "no such user here")
 }
 
-fn full() -> Reply {
+pub(crate) fn full() -> Reply {
     Reply::new(452, "4.2.2", "mailbox full, try again later")
 }
 
@@ -199,24 +200,90 @@ async fn record(
     if !pool.fits(size, 0) {
         return Err(Recorded::Full);
     }
+    let inserted = insert_message(
+        &mut tx,
+        NewMessage {
+            id,
+            user_id: recipient.user_id,
+            address_id: recipient.address_id,
+            thread_id: None,
+            direction: "inbound",
+            folder: if readable.spam { "spam" } else { "inbox" },
+            protection: "zero_access",
+            seen: false,
+            object_key: key,
+            object_version: version,
+            size,
+            readable,
+            bcc: &[],
+            external_recipients: 0,
+        },
+    )
+    .await?;
+    if !inserted {
+        return Ok(None);
+    }
+    tx.commit().await?;
+    Ok(Some(Reply::new(250, "2.0.0", "stored")))
+}
+
+/// A message row to write (migration 085).
+pub(crate) struct NewMessage<'a> {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub address_id: Uuid,
+    /// The thread, when the caller knows it; otherwise the thread of an
+    /// ancestor named in In-Reply-To or References, else a new one.
+    pub thread_id: Option<Uuid>,
+    pub direction: &'static str,
+    pub folder: &'static str,
+    pub protection: &'static str,
+    pub seen: bool,
+    pub object_key: &'a str,
+    pub object_version: &'a str,
+    pub size: i64,
+    pub readable: &'a Readable,
+    pub bcc: &'a [headers::Mailbox],
+    pub external_recipients: i32,
+}
+
+/// The thread of the newest message of `user_id` that `readable` replies to.
+pub(crate) async fn ancestor_thread(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    readable: &Readable,
+) -> sqlx::Result<Option<Uuid>> {
     let ancestors: Vec<&str> = readable
         .in_reply_to
         .iter()
         .chain(readable.references.iter().rev())
         .map(String::as_str)
         .collect();
-    let thread: Option<Uuid> = if ancestors.is_empty() {
-        None
-    } else {
-        sqlx::query_scalar(
-            "SELECT thread_id FROM mail_messages
-              WHERE user_id = $1 AND message_id = ANY($2)
-              ORDER BY received_at DESC LIMIT 1",
-        )
-        .bind(recipient.user_id)
-        .bind(&ancestors)
-        .fetch_optional(&mut *tx)
-        .await?
+    if ancestors.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query_scalar(
+        "SELECT thread_id FROM mail_messages
+          WHERE user_id = $1 AND message_id = ANY($2)
+          ORDER BY received_at DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(&ancestors)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// Inserts `message` and charges its owner's pool; the caller holds the
+/// pool lock and has checked the size fits. `false` when the same incoming
+/// message was already stored for that address.
+pub(crate) async fn insert_message(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    message: NewMessage<'_>,
+) -> sqlx::Result<bool> {
+    let readable = message.readable;
+    let thread = match message.thread_id {
+        Some(thread) => Some(thread),
+        None => ancestor_thread(tx, message.user_id, readable).await?,
     };
     let sent_at = readable
         .sent_at
@@ -228,23 +295,27 @@ async fn record(
         .unwrap_or_default();
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
-            (id, user_id, address_id, thread_id, direction, folder, protection, object_key,
+            (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
              object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
-             cc_list, reply_to, message_id, in_reply_to, references_list, attachment_count)
-         VALUES ($1, $2, $3, $4, 'inbound', $5, 'zero_access', $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19)
+             cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
+             attachment_count, external_recipients)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                 $18, $19, $20, $21, $22, $23, $24)
          ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
          DO NOTHING
          RETURNING id",
     )
-    .bind(id)
-    .bind(recipient.user_id)
-    .bind(recipient.address_id)
-    .bind(thread.unwrap_or(id))
-    .bind(if readable.spam { "spam" } else { "inbox" })
-    .bind(key)
-    .bind(version)
-    .bind(size)
+    .bind(message.id)
+    .bind(message.user_id)
+    .bind(message.address_id)
+    .bind(thread.unwrap_or(message.id))
+    .bind(message.direction)
+    .bind(message.folder)
+    .bind(message.seen)
+    .bind(message.protection)
+    .bind(message.object_key)
+    .bind(message.object_version)
+    .bind(message.size)
     .bind(sent_at)
     .bind(&readable.subject)
     .bind(from_address)
@@ -252,22 +323,23 @@ async fn record(
     .bind(json!(readable.to))
     .bind(json!(readable.cc))
     .bind(json!(readable.reply_to))
+    .bind(json!(message.bcc))
     .bind(&readable.message_id)
     .bind(&readable.in_reply_to)
     .bind(&readable.references)
     .bind(readable.attachment_count)
-    .fetch_optional(&mut *tx)
+    .bind(message.external_recipients)
+    .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {
-        return Ok(None);
+        return Ok(false);
     }
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1")
-        .bind(recipient.user_id)
-        .bind(size)
-        .execute(&mut *tx)
+        .bind(message.user_id)
+        .bind(message.size)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
-    Ok(Some(Reply::new(250, "2.0.0", "stored")))
+    Ok(true)
 }
 
 struct Receiver(AppState);

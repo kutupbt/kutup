@@ -449,6 +449,18 @@ pub fn key_packet_key_id(key_packet: &[u8]) -> Result<[u8; 8]> {
     Ok(body[1..9].try_into().expect("eight bytes"))
 }
 
+/// The key ID of a whole message's first key packet: whom it is for, as far
+/// as a server can tell without opening it.
+pub fn message_key_id(message: &[u8]) -> Result<[u8; 8]> {
+    let (tag, _, length) = packet_extent(message)?;
+    if tag != TAG_PKESK {
+        return Err(CryptoError::InvalidInput(
+            "message does not start with a key packet".into(),
+        ));
+    }
+    key_packet_key_id(&message[..length])
+}
+
 /// The key ID of the subkey `public_key` is encrypted to.
 pub fn encryption_key_id(public_key: &[u8]) -> Result<[u8; 8]> {
     let recipient = parse_recipient(public_key)?;

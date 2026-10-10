@@ -23,9 +23,15 @@ fn client() -> Client {
         .unwrap()
 }
 
-/// Gives `user` an address key the way the Account app does at sign-in, and
-/// returns the address and the secret key.
-fn set_up_address(c: &Client, base: &str, user: &User) -> (String, Vec<u8>) {
+/// An address with its key, as the browser holds it.
+struct Address {
+    address: String,
+    secret_key: Vec<u8>,
+    public_key: Vec<u8>,
+}
+
+/// Gives `user` an address key the way the Account app does at sign-in.
+fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
     let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
         .send()
         .unwrap()
@@ -71,7 +77,11 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> (String, Vec<u8>) {
     .send()
     .unwrap();
     assert!(r.status().is_success(), "add key: {}", r.status());
-    (address, key.secret_key.to_vec())
+    Address {
+        address,
+        secret_key: key.secret_key.to_vec(),
+        public_key: key.public_key,
+    }
 }
 
 /// A minimal SMTP client: each command's final reply code.
@@ -156,7 +166,11 @@ fn mail_from_outside_arrives_encrypted() {
     let c = client();
     let user = register(&c, &base);
     let used_before = common::used(&c, &base, &user.token);
-    let (address, secret_key) = set_up_address(&c, &base, &user);
+    let Address {
+        address,
+        secret_key,
+        ..
+    } = set_up_address(&c, &base, &user);
     let (local, domain) = address.split_once('@').unwrap();
     let tag = uuid::Uuid::new_v4().simple().to_string();
 
@@ -329,4 +343,395 @@ Message-ID: <reply-{tag}@example.net>\r\nIn-Reply-To: <first-{tag}@example.net>\
     .unwrap();
     assert_eq!(r.status(), 204, "delete account");
     rcpt(550);
+    // The gate checks no row or object of this account is left.
+    println!("PURGED-USER {}", user.id);
+}
+
+/// One multipart send or draft request.
+fn form(parts: Vec<(&str, Vec<u8>)>) -> reqwest::blocking::multipart::Form {
+    parts.into_iter().fold(
+        reqwest::blocking::multipart::Form::new(),
+        |form, (name, bytes)| {
+            form.part(
+                name.to_string(),
+                reqwest::blocking::multipart::Part::bytes(bytes).file_name(name.to_string()),
+            )
+        },
+    )
+}
+
+fn folder(c: &Client, base: &str, token: &str, name: &str) -> Vec<Value> {
+    let page: Value = bearer(
+        c.get(format!("{base}/api/mail/messages?folder={name}")),
+        token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    page["messages"].as_array().unwrap().clone()
+}
+
+#[test]
+fn mail_between_kutup_users_and_outside() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice_user = register(&c, &base);
+    let bob_user = register(&c, &base);
+    let alice = set_up_address(&c, &base, &alice_user);
+    let bob = set_up_address(&c, &base, &bob_user);
+    let domain = alice.address.split_once('@').unwrap().1.to_string();
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let message_id = format!("{tag}@{domain}");
+    // The message as the browser builds it: no Bcc header.
+    let mime = format!(
+        "From: Alice <{}>\r\nTo: Bob <{}>, dave@outside.test\r\nSubject: =?UTF-8?Q?=C3=96zel?=\r\n\
+Message-ID: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
+        alice.address, bob.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&alice.public_key, &bob.public_key],
+        &alice.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = |key_packets: Value, extra: Value| -> Vec<u8> {
+        let mut meta = json!({
+            "subject": "Özel",
+            "fromName": "Alice",
+            "to": [{ "address": bob.address, "name": "Bob" }, { "address": "dave@outside.test" }],
+            "bcc": [{ "address": "carol@outside.test" }],
+            "messageId": message_id,
+            "keyPackets": key_packets,
+        });
+        meta.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::to_vec(&meta).unwrap()
+    };
+    let packets = json!({ "self": b64(&split.key_packets[0]), bob.address.clone(): b64(&split.key_packets[1]) });
+    let send = |meta: Vec<u8>, with_mime: bool| {
+        let mut parts = vec![("meta", meta), ("data", split.data_packet.clone())];
+        if with_mime {
+            parts.push(("mime", mime.as_bytes().to_vec()));
+        }
+        bearer(c.post(format!("{base}/api/mail/send")), &alice_user.token)
+            .multipart(form(parts))
+            .send()
+            .unwrap()
+    };
+
+    // A key packet for the wrong key, an unknown Kutup address and missing
+    // plaintext for outside recipients are refused before anything is sent.
+    let swapped = json!({ "self": b64(&split.key_packets[0]), bob.address.clone(): b64(&split.key_packets[0]) });
+    let r = send(meta(swapped, json!({})), true);
+    assert_eq!(r.status(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "keyChanged");
+    let r = send(
+        meta(
+            packets.clone(),
+            json!({ "cc": [{ "address": format!("nobody-{tag}@{domain}") }] }),
+        ),
+        true,
+    );
+    assert_eq!(r.status(), 422);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "unknownRecipient");
+    assert_eq!(send(meta(packets.clone(), json!({})), false).status(), 400);
+
+    let r = send(meta(packets.clone(), json!({})), true);
+    assert_eq!(r.status(), 200, "send: {}", r.text().unwrap_or_default());
+    let sent: Value = send_result(r);
+    let statuses: Vec<(String, String)> = sent["recipients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["address"].as_str().unwrap().into(),
+                r["status"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert!(statuses.contains(&(bob.address.clone(), "delivered".into())));
+    assert!(statuses.contains(&("dave@outside.test".into(), "sent".into())));
+    assert!(statuses.contains(&("carol@outside.test".into(), "sent".into())));
+    assert_eq!(sent["message"]["folder"], "sent");
+    assert_eq!(sent["message"]["bcc"][0]["address"], "carol@outside.test");
+    assert_eq!(sent["message"]["protection"], "zero_access");
+
+    // Bob's copy: in his inbox, end to end, opening with his key and signed
+    // by Alice, with no Bcc anywhere.
+    let inbox = folder(&c, &base, &bob_user.token, "inbox");
+    let row = inbox
+        .iter()
+        .find(|m| m["messageId"] == message_id.as_str())
+        .expect("delivered to Bob");
+    assert_eq!(row["protection"], "end_to_end");
+    assert_eq!(row["from"]["address"], alice.address.as_str());
+    assert_eq!(row["subject"], "Özel");
+    assert_eq!(row["bcc"], json!([]));
+    let id = row["id"].as_str().unwrap();
+    let copy = bearer(
+        c.get(format!("{base}/api/mail/messages/{id}/content")),
+        &bob_user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    assert!(
+        !copy.windows(8).any(|w| w == b"carol@ou"),
+        "no Bcc in Bob's copy"
+    );
+    let opened = mail_key::decrypt(&bob.secret_key, &copy, Some(&alice.public_key)).unwrap();
+    assert_eq!(&*opened.data, mime.as_bytes());
+    assert!(opened.signed && opened.verified);
+    // Alice's own copy opens with her key.
+    let own = sent["message"]["id"].as_str().unwrap();
+    let copy = bearer(
+        c.get(format!("{base}/api/mail/messages/{own}/content")),
+        &alice_user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    assert_eq!(
+        &*mail_key::decrypt(&alice.secret_key, &copy, None)
+            .unwrap()
+            .data,
+        mime.as_bytes()
+    );
+
+    // Bob answers: the reply joins the thread on both sides.
+    let reply_id = format!("re-{tag}@{domain}");
+    let reply_mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: Re: Özel\r\nMessage-ID: <{reply_id}>\r\nIn-Reply-To: <{message_id}>\r\n\r\nTamam.\r\n",
+        bob.address, alice.address
+    );
+    let reply = mail_key::encrypt_split(
+        &[&bob.public_key, &alice.public_key],
+        &bob.secret_key,
+        reply_mime.as_bytes(),
+    )
+    .unwrap();
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob_user.token)
+        .multipart(form(vec![
+            (
+                "meta",
+                serde_json::to_vec(&json!({
+                    "subject": "Re: Özel",
+                    "to": [{ "address": alice.address }],
+                    "messageId": reply_id,
+                    "inReplyTo": message_id,
+                    "references": [message_id],
+                    "threadId": row["threadId"],
+                    "keyPackets": { "self": b64(&reply.key_packets[0]), alice.address.clone(): b64(&reply.key_packets[1]) },
+                }))
+                .unwrap(),
+            ),
+            ("data", reply.data_packet.clone()),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200, "reply: {}", r.text().unwrap_or_default());
+    let reply_row = send_result(r)["message"].clone();
+    assert_eq!(reply_row["threadId"], row["threadId"]);
+    assert_eq!(reply_row["protection"], "end_to_end");
+    let thread: Value = bearer(
+        c.get(format!(
+            "{base}/api/mail/threads/{own_thread}",
+            own_thread = sent["message"]["threadId"].as_str().unwrap()
+        )),
+        &alice_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(
+        thread.as_array().unwrap().len(),
+        2,
+        "Alice's thread: her sent copy and Bob's reply"
+    );
+
+    // Filing: read, star, archive; counts follow; Trash, then gone for good
+    // with its storage refunded.
+    let patch = |body: Value| {
+        let r = bearer(
+            c.patch(format!("{base}/api/mail/messages")),
+            &bob_user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), 200);
+        r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
+    };
+    let counts = |token: &str| -> Value {
+        bearer(c.get(format!("{base}/api/mail/counts")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let unread = |counts: &Value, name: &str| {
+        counts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["folder"] == name)
+            .map(|f| f["unread"].as_i64().unwrap())
+            .unwrap_or(0)
+    };
+    assert_eq!(unread(&counts(&bob_user.token), "inbox"), 1);
+    assert_eq!(
+        patch(json!({ "ids": [id], "seen": true, "starred": true })),
+        1
+    );
+    assert_eq!(unread(&counts(&bob_user.token), "inbox"), 0);
+    assert_eq!(folder(&c, &base, &bob_user.token, "starred").len(), 1);
+    assert_eq!(
+        patch(json!({ "ids": [id], "folder": "sent" })),
+        0,
+        "received mail cannot go to Sent"
+    );
+    assert_eq!(patch(json!({ "ids": [id], "folder": "archive" })), 1);
+    let found: Value = bearer(
+        c.get(format!("{base}/api/mail/messages?folder=all&q=%C3%B6zel")),
+        &bob_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert!(found["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["id"] == id));
+    let delete = |ids: Value| -> u64 {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/messages/delete")),
+            &bob_user.token,
+        )
+        .json(&json!({ "ids": ids }))
+        .send()
+        .unwrap();
+        r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
+    };
+    assert_eq!(
+        delete(json!([id])),
+        0,
+        "only Trash, Spam and Drafts delete for good"
+    );
+    let used = common::used(&c, &base, &bob_user.token);
+    assert_eq!(patch(json!({ "ids": [id], "folder": "trash" })), 1);
+    assert_eq!(delete(json!([id])), 1);
+    assert!(common::used(&c, &base, &bob_user.token) < used);
+
+    // Drafts: text saved and replaced, attachments uploaded once each.
+    let encrypt_own = |bytes: &[u8]| {
+        let split =
+            mail_key::encrypt_split(&[&alice.public_key], &alice.secret_key, bytes).unwrap();
+        [split.key_packets[0].as_slice(), &split.data_packet].concat()
+    };
+    let draft_meta = |subject: &str| {
+        serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": bob.address }], "messageId": format!("d-{tag}@{domain}") })).unwrap()
+    };
+    let r = bearer(c.post(format!("{base}/api/mail/drafts")), &alice_user.token)
+        .multipart(form(vec![
+            ("meta", draft_meta("Taslak")),
+            ("body", encrypt_own(b"draft one")),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200, "draft: {}", r.text().unwrap_or_default());
+    let draft: Value = r.json().unwrap();
+    let draft_id = draft["id"].as_str().unwrap().to_string();
+    assert_eq!(draft["folder"], "drafts");
+    // Not encrypted to her own key: refused.
+    let r = bearer(
+        c.put(format!("{base}/api/mail/drafts/{draft_id}")),
+        &alice_user.token,
+    )
+    .multipart(form(vec![
+        ("meta", draft_meta("x")),
+        ("body", b"plain".to_vec()),
+    ]))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 400);
+    let r = bearer(
+        c.put(format!("{base}/api/mail/drafts/{draft_id}")),
+        &alice_user.token,
+    )
+    .multipart(form(vec![
+        ("meta", draft_meta("Taslak 2")),
+        ("body", encrypt_own(b"draft two")),
+    ]))
+    .send()
+    .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["subject"], "Taslak 2");
+    let part = encrypt_own(b"Content-Type: text/plain; name=a.txt\r\n\r\nek\r\n");
+    let r = bearer(
+        c.post(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        &alice_user.token,
+    )
+    .multipart(form(vec![("part", part.clone())]))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    let attachment = r.json::<Value>().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let listed: Value = bearer(
+        c.get(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        &alice_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(listed[0]["id"], attachment.as_str());
+    let fetched = bearer(
+        c.get(format!(
+            "{base}/api/mail/drafts/{draft_id}/attachments/{attachment}"
+        )),
+        &alice_user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    assert_eq!(&fetched[..], &part[..]);
+    // Deleting the draft takes its attachment with it and frees the space.
+    let used = common::used(&c, &base, &alice_user.token);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/delete")),
+        &alice_user.token,
+    )
+    .json(&json!({ "ids": [draft_id] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    assert!(common::used(&c, &base, &alice_user.token) < used);
+    let r = bearer(
+        c.get(format!("{base}/api/mail/drafts/{draft_id}/attachments")),
+        &alice_user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 404);
+    // The gate checks the sink got the outside copy, DKIM-signed, without Bcc.
+    println!("OUTSIDE-MESSAGE-ID {message_id}");
+}
+
+fn send_result(response: reqwest::blocking::Response) -> Value {
+    response.json().unwrap()
 }

@@ -591,7 +591,44 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/addresses",
             get(handlers::mail_keys::list_addresses),
         )
-        .route("/api/mail/messages", get(handlers::mail::list_messages))
+        .route(
+            "/api/mail/messages",
+            get(handlers::mail::list_messages).patch(handlers::mail::update_messages),
+        )
+        .route(
+            "/api/mail/messages/delete",
+            post(handlers::mail::delete_messages),
+        )
+        .route("/api/mail/counts", get(handlers::mail::counts))
+        .route("/api/mail/threads/:id", get(handlers::mail::thread))
+        .route(
+            "/api/mail/drafts",
+            post(handlers::mail_send::create_draft)
+                .route_layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+        )
+        .route(
+            "/api/mail/drafts/:id",
+            put(handlers::mail_send::update_draft)
+                .route_layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+        )
+        .route(
+            "/api/mail/drafts/:id/attachments",
+            get(handlers::mail_send::list_draft_attachments)
+                .post(handlers::mail_send::add_draft_attachment)
+                .route_layer(DefaultBodyLimit::max(
+                    handlers::mail_send::MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
+                )),
+        )
+        .route(
+            "/api/mail/drafts/:id/attachments/:attachment",
+            get(handlers::mail_send::draft_attachment_content)
+                .delete(handlers::mail_send::delete_draft_attachment),
+        )
+        .route(
+            "/api/mail/send",
+            post(handlers::mail_send::send)
+                .route_layer(DefaultBodyLimit::max(handlers::mail_send::SEND_BODY_LIMIT)),
+        )
         .route(
             "/api/mail/messages/:id/content",
             get(handlers::mail::message_content),

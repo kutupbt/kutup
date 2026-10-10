@@ -27,6 +27,11 @@ CREATE TABLE mail_messages (
     to_list          JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(to_list) = 'array' AND jsonb_array_length(to_list) <= 100),
     cc_list          JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(cc_list) = 'array' AND jsonb_array_length(cc_list) <= 100),
     reply_to         JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(reply_to) = 'array' AND jsonb_array_length(reply_to) <= 100),
+    -- The sender's own copy only: Bcc never travels in the message itself.
+    bcc_list         JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(bcc_list) = 'array' AND jsonb_array_length(bcc_list) <= 100),
+    -- Sent copies: how many recipients outside Kutup it went to, for the
+    -- per-account sending limits.
+    external_recipients INTEGER NOT NULL DEFAULT 0 CHECK (external_recipients BETWEEN 0 AND 100),
     message_id       TEXT CHECK (length(message_id) BETWEEN 1 AND 998),
     in_reply_to      TEXT CHECK (length(in_reply_to) BETWEEN 1 AND 998),
     references_list  TEXT[] NOT NULL DEFAULT '{}' CHECK (cardinality(references_list) <= 50),
@@ -34,9 +39,24 @@ CREATE TABLE mail_messages (
 );
 CREATE INDEX idx_mail_messages_folder ON mail_messages(user_id, folder, received_at DESC, id);
 CREATE INDEX idx_mail_messages_thread ON mail_messages(thread_id, received_at);
+CREATE INDEX idx_mail_messages_sent_recently ON mail_messages(user_id, received_at)
+    WHERE external_recipients > 0;
 CREATE INDEX idx_mail_messages_message_id ON mail_messages(user_id, message_id) WHERE message_id IS NOT NULL;
 -- One stored copy of each incoming message per address: a mailing-list copy
 -- of a message already received directly, or a delivery retried after a
 -- lost reply, is acknowledged and not stored again.
 CREATE UNIQUE INDEX idx_mail_messages_inbound_once ON mail_messages(address_id, message_id)
     WHERE direction = 'inbound' AND message_id IS NOT NULL;
+
+-- A draft's attachments, each uploaded once as an encrypted MIME part, so
+-- saving the draft's text never sends the files again. Sending assembles
+-- the message in the browser and deletes the draft with these.
+CREATE TABLE mail_draft_attachments (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id  UUID NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    object_key  TEXT NOT NULL UNIQUE,
+    size_bytes  BIGINT NOT NULL CHECK (size_bytes > 0),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_mail_draft_attachments_message ON mail_draft_attachments(message_id, created_at);
