@@ -1,6 +1,6 @@
 # Mail groups
 
-**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1a–G1c done. Follows Mail C1–C3
+**Status:** agreed 2026-10-10 (two kinds, group quotas, storage owner; the server vouches for group keys, role groups are distribution lists, member lists are not secret). G1 done (G1a–G1d); G2 moderation and G3 assigning and tags later. Follows Mail C1–C3
 ([`mail.md`](mail.md)); its own pull request after #87 → #88 → #90.
 
 ## Goal
@@ -295,7 +295,11 @@ log.
 4. **G1d gates:** the mail gate (a list with three members from outside and
    from Kutup, a full group, a role group's fallback, a shared mailbox read
    by two members, a removed member who cannot read new mail, GnuPG writing
-   to a shared mailbox through WKD), browser specs, docs.
+   to a shared mailbox through WKD), browser specs, docs. Done: the mail gate's
+   `distribution_lists_and_role_groups` and `shared_mailboxes` cover all of
+   it, GnuPG included (which caught that a new group key must make the older
+   ones obsolete, or WKD would keep publishing a key a former member holds);
+   browser spec 60 covers the apps.
 
 ## Tests
 

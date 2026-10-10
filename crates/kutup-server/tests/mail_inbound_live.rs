@@ -2112,6 +2112,70 @@ fn shared_mailboxes() {
         "the old key cannot read new mail"
     );
 
+    // An OpenPGP user outside finds the mailbox's key through WKD and
+    // writes to it end to end; its members open it with the group key.
+    if let Ok(home) = std::env::var("KUTUP_LIVE_GPG_HOME") {
+        let local = hr.split_once('@').unwrap().0;
+        let wkd = c
+            .get(format!(
+                "{base}/.well-known/openpgpkey/hu/{}?l={local}",
+                wkd_hash(local)
+            ))
+            .send()
+            .unwrap();
+        assert_eq!(wkd.status(), 200, "WKD serves the mailbox's key");
+        let published = wkd.bytes().unwrap();
+        assert!(
+            published
+                .windows(second.public_key.len())
+                .any(|w| w == second.public_key.as_slice()),
+            "the current key is published"
+        );
+        let (ok, _, err) = gpg(&home, &["--import"], &published);
+        assert!(ok, "import the mailbox's key: {err}");
+        let (ok, encrypted, err) = gpg(
+            &home,
+            &["--armor", "--encrypt", "-r", &hr],
+            format!("Content-Type: text/plain; charset=utf-8\r\n\r\nFrom GnuPG {tag}\r\n")
+                .as_bytes(),
+        );
+        assert!(ok, "GnuPG encrypts to the mailbox: {err}");
+        let pgp_id = format!("gpg-hr-{tag}@outside.test");
+        let message = pgp_mime(
+            &format!("From: dave@outside.test\r\nTo: {hr}\r\nSubject: PGP to HR\r\nMessage-ID: <{pgp_id}>\r\n"),
+            &String::from_utf8(encrypted).unwrap(),
+        );
+        assert_eq!(
+            smtp_send(&smtp_address, &hr, &String::from_utf8(message).unwrap()),
+            (250, 250)
+        );
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let row = loop {
+            if let Some(row) = in_group(&alice_user, "inbox")
+                .into_iter()
+                .find(|m| m["messageId"] == pgp_id.as_str())
+            {
+                break row;
+            }
+            assert!(Instant::now() < deadline, "the PGP message never arrived");
+            std::thread::sleep(Duration::from_secs(1));
+        };
+        assert_eq!(row["protection"], "end_to_end");
+        let outer = mail_key::decrypt(
+            &second.secret_key,
+            &content(&alice_user, &row).bytes().unwrap(),
+            None,
+        )
+        .unwrap();
+        let outer = String::from_utf8(outer.data.to_vec()).unwrap();
+        let start = outer.find("-----BEGIN PGP MESSAGE-----").unwrap();
+        let end =
+            outer.find("-----END PGP MESSAGE-----").unwrap() + "-----END PGP MESSAGE-----".len();
+        let inner =
+            mail_key::decrypt(&second.secret_key, &outer.as_bytes()[start..end], None).unwrap();
+        assert!(String::from_utf8_lossy(&inner.data).contains(&format!("From GnuPG {tag}")));
+    }
+
     // Deleting the mailbox takes its mail with it.
     assert_eq!(
         bearer(
@@ -2124,4 +2188,24 @@ fn shared_mailboxes() {
         204
     );
     assert_eq!(content(&alice_user, &row).status(), 404);
+}
+
+/// The WKD hash of a local part: z-base-32 of its SHA-1.
+fn wkd_hash(local: &str) -> String {
+    use sha1::Digest as _;
+    const ALPHABET: &[u8; 32] = b"ybndrfg8ejkmcpqxot1uwisza345h769";
+    let digest = sha1::Sha1::digest(local.to_lowercase().as_bytes());
+    let (mut out, mut buffer, mut bits) = (String::new(), 0u32, 0u32);
+    for byte in digest {
+        buffer = (buffer << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
+    }
+    out
 }

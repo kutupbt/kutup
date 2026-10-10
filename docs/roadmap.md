@@ -477,7 +477,7 @@ arrival, and direct sending. Phases, each with its own plan before code:
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
-  2026-10-10, in progress): distribution lists and shared mailboxes with
+  2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
   the role addresses become system groups. G2 moderation, G3 assigning and
   tags.

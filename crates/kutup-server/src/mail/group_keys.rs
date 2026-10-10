@@ -125,10 +125,15 @@ pub async fn publish(
     .bind(group_id)
     .fetch_all(&mut **tx)
     .await?;
-    sqlx::query("UPDATE mail_group_keys SET is_primary = false WHERE group_id = $1")
-        .bind(group_id)
-        .execute(&mut **tx)
-        .await?;
+    // Older keys stay to open older mail, but nobody encrypts to them any
+    // more: someone who left may hold them.
+    sqlx::query(
+        "UPDATE mail_group_keys SET is_primary = false, flags = flags & ~$2 WHERE group_id = $1",
+    )
+    .bind(group_id)
+    .bind(FLAG_NOT_OBSOLETE as i32)
+    .execute(&mut **tx)
+    .await?;
     let key_id: Uuid = sqlx::query_scalar(
         "INSERT INTO mail_group_keys (group_id, fingerprint, sha256_fingerprint, public_key, is_primary, flags)
          VALUES ($1, $2, $3, $4, true, $5)
@@ -156,7 +161,7 @@ pub async fn publish(
         .await?;
     }
 
-    // The next list: the older keys as they were, the new one primary.
+    // The next list: the older keys obsolete, the new one primary.
     let mut keys = existing
         .into_iter()
         .map(
@@ -165,7 +170,7 @@ pub async fn publish(
                     fingerprint: hex_array(&fingerprint)?,
                     sha256_fingerprint: hex_array(&sha256)?,
                     primary: false,
-                    flags: flags as u32,
+                    flags: flags as u32 & !FLAG_NOT_OBSOLETE,
                 })
             },
         )
