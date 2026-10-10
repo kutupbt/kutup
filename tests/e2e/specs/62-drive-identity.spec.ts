@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
+import { appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signIn, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 import { createNote, item, noteLive, openItem } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*DriveIdentityPassword'
@@ -71,6 +71,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   aliceDrive = await openDrive(a2)
   const second = await createNote(aliceDrive)
   await noteLive(aliceDrive)
+  const aliceSecondUrl = aliceDrive.url()
   const reshared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await shareOpenNote(aliceDrive, bob.email)
   expect((await reshared).status()).toBe(204)
@@ -102,6 +103,29 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await bobPage.goto(appUrl('drive', '/shared'))
   await expect(item(bobPage, second)).toBeVisible({ timeout: 60_000 })
   await expect(bobPage.getByTestId('identity-warning')).toHaveCount(0)
+
+  // In person: Alice shows her safety QR (from the people she shares with),
+  // Bob scans it (here: pastes its text). Bob sees Alice verified, everywhere.
+  const a3 = await browser.newContext()
+  await signIn(a3, { ...alice, password: NEW_PASSWORD })
+  const alicePage = await a3.newPage()
+  await alicePage.goto(aliceSecondUrl)
+  await alicePage.getByRole('button', { name: 'Share', exact: true }).click()
+  await alicePage.getByRole('dialog').getByTestId('identity-verify-open').first().click()
+  const aliceQr = alicePage.getByTestId('drive-safety-qr')
+  await expect(aliceQr).toBeVisible({ timeout: 30_000 })
+  const payload = (await aliceQr.getAttribute('data-value'))!
+  const aliceNumber = (await alicePage.getByTestId('drive-safety-number').textContent())!.trim()
+  await a3.close()
+
+  await openItem(bobPage, second)
+  await bobPage.getByTestId('identity-verify-open').first().click()
+  await expect(bobPage.getByTestId('drive-safety-number')).toHaveText(aliceNumber, { timeout: 30_000 })
+  await bobPage.getByLabel(/paste/i).fill(payload)
+  await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
+  await bobPage.keyboard.press('Escape')
+  await bobPage.goto(appUrl('drive', '/shared'))
+  await expect(bobPage.getByTestId('identity-verified').first()).toBeVisible({ timeout: 60_000 })
 
   await b.close()
 })

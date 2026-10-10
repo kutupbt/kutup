@@ -770,6 +770,11 @@ fn build_router(state: AppState) -> Router {
             get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
+            "/api/users/drive-identities",
+            post(identity::drive_identities)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
             "/api/mail/keys",
             get(handlers::mail_keys::lookup_keys)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),

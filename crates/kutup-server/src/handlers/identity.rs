@@ -170,3 +170,77 @@ pub async fn put_identity_pins(
     Err(AppError::conflict("another revision was stored first")
         .with_details(json!({ "code": "revision_conflict", "revision": current.unwrap_or(0) })))
 }
+
+/// The most accounts one identity lookup answers.
+const MAX_IDENTITIES_PER_LOOKUP: usize = 100;
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveIdentitiesRequest {
+    /// Canonical `username@<this server>` addresses (at most 100).
+    accounts: Vec<String>,
+}
+
+/// One account's published Drive identity.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveIdentity {
+    account: String,
+    account_authority_public_key: String,
+    drive_hpke_public_key: String,
+    drive_signing_public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drive_key_binding: Option<String>,
+}
+
+/// `POST /api/users/drive-identities` — the Drive identities of accounts on
+/// this server, by exact address, many at once: a page that shows who shared
+/// what checks every person with one request (docs/plans/drive-identity-pins.md).
+/// Unknown or disabled accounts are left out. Rate-limited with the user
+/// lookups, each request counting once.
+#[utoipa::path(
+    post,
+    path = "/api/users/drive-identities",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = DriveIdentitiesRequest,
+    responses((status = 200, description = "The identities found", body = [DriveIdentity]))
+)]
+pub async fn drive_identities(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Json(req): Json<DriveIdentitiesRequest>,
+) -> AppResult<Response> {
+    if req.accounts.len() > MAX_IDENTITIES_PER_LOOKUP {
+        return Err(AppError::bad_request("too many accounts in one lookup"));
+    }
+    let suffix = format!("@{}", state.config.chat_server_name);
+    let usernames: Vec<String> = req
+        .accounts
+        .iter()
+        .filter_map(|account| account.strip_suffix(&suffix))
+        .filter(|username| !username.is_empty() && !username.contains('@'))
+        .map(str::to_owned)
+        .collect();
+    let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT username, account_authority_public_key, public_key, drive_signing_public_key, drive_key_binding
+           FROM users
+          WHERE username = ANY($1) AND is_active AND NOT is_first_login",
+    )
+    .bind(&usernames)
+    .fetch_all(&state.pool)
+    .await?;
+    let identities: Vec<DriveIdentity> = rows
+        .into_iter()
+        .map(
+            |(username, authority, hpke, signing, binding)| DriveIdentity {
+                account: format!("{username}{suffix}"),
+                account_authority_public_key: authority,
+                drive_hpke_public_key: hpke,
+                drive_signing_public_key: signing,
+                drive_key_binding: binding,
+            },
+        )
+        .collect();
+    Ok(Json(identities).into_response())
+}

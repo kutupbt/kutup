@@ -86,6 +86,41 @@ fn drive_key_bindings() {
     assert_eq!(me(&bob.token)["hasDriveKeyBinding"], true);
     assert!(lookup(&c, &base, &alice.token, &bob_account)["driveKeyBinding"].is_string());
 
+    // Many people at once: the ones here, by exact address.
+    let found: Value = bearer(c.post(format!("{base}/api/users/drive-identities")), &alice.token)
+        .json(&json!({ "accounts": [alice_account, bob_account, "nobody@kutup.localhost", "x@elsewhere.example"] }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let mut accounts: Vec<_> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["account"].as_str().unwrap().to_owned())
+        .collect();
+    accounts.sort();
+    let mut expected = vec![alice_account.clone(), bob_account.clone()];
+    expected.sort();
+    assert_eq!(accounts, expected);
+    assert!(found
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|i| i["driveKeyBinding"].is_string()));
+    let too_many: Vec<String> = (0..101).map(|i| format!("u{i}@kutup.localhost")).collect();
+    assert_eq!(
+        bearer(
+            c.post(format!("{base}/api/users/drive-identities")),
+            &alice.token
+        )
+        .json(&json!({ "accounts": too_many }))
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+
     // Registration refuses a binding that does not match the keys sent.
     let mallory = AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
     let forged = drive_key_binding::sign(&mallory, &alice_account).unwrap();
