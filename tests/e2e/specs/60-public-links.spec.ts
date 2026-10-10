@@ -126,6 +126,8 @@ test("a folder's link lists in Drive and opens its documents on Office", async (
 
 test('anyone reports a link; an administrator takes it down', async ({ browser }) => {
   test.slow()
+  // Unique to this run: earlier runs' reports stay in the admin's list.
+  const complaint = `Asks for my bank password ${Date.now()}`
   const alice = newAccount('pubreport', PASSWORD)
   const owner = await browser.newContext()
   await registerAccount(owner, alice)
@@ -144,7 +146,7 @@ test('anyone reports a link; an administrator takes it down', async ({ browser }
   const dialog = page.getByRole('dialog')
   await dialog.getByTestId('report-reason').click()
   await page.getByRole('option', { name: /^Phishing/ }).click()
-  await dialog.getByLabel('Details').fill('Asks for my bank password')
+  await dialog.getByLabel('Details').fill(complaint)
   await expect(dialog.getByLabel('Let the administrators open this link')).toBeChecked()
   await dialog.getByRole('button', { name: 'Send report' }).click()
   await expect(dialog.getByText('Report sent')).toBeVisible({ timeout: 30_000 })
@@ -155,7 +157,7 @@ test('anyone reports a link; an administrator takes it down', async ({ browser }
   await signInAsAdmin(admin)
   const reports = await admin.newPage()
   await reports.goto(appUrl('account', '/admin/reports'))
-  const card = reports.getByTestId('link-report').filter({ hasText: 'Asks for my bank password' })
+  const card = reports.getByTestId('link-report').filter({ hasText: complaint })
   await expect(card).toBeVisible({ timeout: 60_000 })
   await expect(card).toContainText(alice.email)
   await expect(card.getByRole('link', { name: 'Open the link' })).toHaveAttribute('href', link)
@@ -163,7 +165,7 @@ test('anyone reports a link; an administrator takes it down', async ({ browser }
   await reports.getByRole('alertdialog').getByRole('button', { name: 'Take link down' }).click()
   await expect(card).toBeHidden({ timeout: 30_000 })
   await reports.getByRole('tab', { name: 'Resolved' }).click()
-  await expect(reports.getByTestId('link-report').filter({ hasText: 'Asks for my bank password' })).toContainText('Link taken down')
+  await expect(reports.getByTestId('link-report').filter({ hasText: complaint })).toContainText('Link taken down')
   await admin.close()
 
   // The visitor's link now says it was removed.
