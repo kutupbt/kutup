@@ -10,6 +10,8 @@ import { documentKindOf, newDocument, type DocumentKind } from '@kutup/drive-cor
 import { streamUpload } from '@kutup/files/upload/streamUpload'
 import { freshAccessToken } from '@kutup/session/client'
 import { filePath } from '@kutup/editors/paths'
+import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
+import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 
 // A document (a note, an office document, a whiteboard) is a Drive file.
 // The Office home shows every one this account can open in an editor: its
@@ -25,6 +27,8 @@ export interface DocumentEntry {
   owner: string | null
   /** Who shared it with this account (the owner, or an editor the owner lets share). */
   sharer: string | null
+  /** The keys it was shared with, to check against who the sharer is. */
+  sharerClaim: ClaimedKeys
   /** Where it opens: the file page, here in Office. */
   href: string
 }
@@ -77,6 +81,7 @@ function collectDocuments(
         kind,
         owner: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
         sharer: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
+        sharerClaim: folder.source === 'owned' ? {} : folderOwnerClaim(folder),
         href: filePath(folder, file.id),
       })
     }
@@ -97,6 +102,7 @@ function collectDocuments(
       kind,
       owner: shared.ownerAccount,
       sharer: shared.sharerAccount,
+      sharerClaim: shared.sharerClaim,
       href: filePath(shared.container, shared.file.id),
     })
   }

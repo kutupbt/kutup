@@ -4,13 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // a binding "verifies" when it names the authority it was made with, an
 // incarnation is the authority's name, and a sealed list is its JSON.
 vi.mock('@kutup/crypto/identityPins', () => ({
-  verifyDriveKeyBinding: vi.fn(async (_account: string, authority: string, _h: string, _s: string, binding: string) => binding === `bound-by-${authority}`),
-  incarnationIdOfAuthority: vi.fn(async (authority: string) => `inc-${authority}`),
-  sealIdentityPins: vi.fn(async (_m: string, _o: string, revision: number, list: unknown) => JSON.stringify({ revision, list })),
-  openIdentityPins: vi.fn(async (_m: string, _o: string, revision: number, sealed: string) => {
+  verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
+    Promise.resolve(binding === `bound-by-${authority}`),
+  ),
+  incarnationIdOfAuthority: vi.fn((authority: string) => Promise.resolve(`inc-${authority}`)),
+  sealIdentityPins: vi.fn((_m: string, _o: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ revision, list }))),
+  openIdentityPins: vi.fn((_m: string, _o: string, revision: number, sealed: string) => {
     const parsed = JSON.parse(sealed) as { revision: number; list: unknown }
-    if (parsed.revision !== revision) throw new Error('relabelled')
-    return parsed.list
+    return parsed.revision === revision ? Promise.resolve(parsed.list) : Promise.reject(new Error('relabelled'))
   }),
 }))
 
@@ -26,17 +27,12 @@ vi.mock('@kutup/session/client', () => {
   const conflict = () => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409 } })
   return {
     default: {
-      get: vi.fn(async (url: string) => {
-        if (url === '/user/identity-pins') {
-          if (!server.pins) throw notFound()
-          return { data: server.pins }
-        }
-        const account = decodeURIComponent(url.split('/').pop()!)
-        const person = server.people.get(account)
-        if (!person) throw notFound()
-        return { data: person }
+      get: vi.fn((url: string) => {
+        if (url === '/user/identity-pins') return server.pins ? Promise.resolve({ data: server.pins }) : Promise.reject(notFound())
+        const person = server.people.get(decodeURIComponent(url.split('/').pop()!))
+        return person ? Promise.resolve({ data: person }) : Promise.reject(notFound())
       }),
-      put: vi.fn(async (_url: string, body: { revision: number; envelope: string }) => {
+      put: vi.fn((_url: string, body: { revision: number; envelope: string }) => {
         server.puts++
         if (server.conflictOnce) {
           server.conflictOnce = false
@@ -45,11 +41,11 @@ vi.mock('@kutup/session/client', () => {
             revision: 1,
             envelope: JSON.stringify({ revision: 1, list: { pins: [{ account: 'carol@kutup.dev', authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z' }] } }),
           }
-          throw conflict()
+          return Promise.reject(conflict())
         }
-        if (body.revision !== (server.pins?.revision ?? 0) + 1) throw conflict()
+        if (body.revision !== (server.pins?.revision ?? 0) + 1) return Promise.reject(conflict())
         server.pins = body
-        return { data: null }
+        return Promise.resolve({ data: null })
       }),
     },
   }

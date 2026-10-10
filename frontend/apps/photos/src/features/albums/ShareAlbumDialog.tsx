@@ -15,6 +15,8 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
 import { useRemoveAlbumAccess, type Album } from './albums'
+import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import { IdentityShareWarning } from '@kutup/drive-ui/IdentityWarning'
 
 /**
  * Share an album (docs/plans/photos.md): its key sealed to each person's
@@ -63,7 +65,8 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
 
   const shareFolder = useShareFolder()
   const [invite, setInvite] = useState<{ url: string; account: string } | null>(null)
-  function share() {
+  /** `identityConfirmed`: the user chose to share although the recipient's identity is in doubt. */
+  function share(identityConfirmed = false) {
     setInvite(null)
     shareFolder.mutate(
       {
@@ -73,6 +76,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
         canDelete: false,
         uploadQuotaBytes: null,
         viewOnlyAcrossServers: true,
+        identityConfirmed,
       },
       {
         onSuccess: (result) => {
@@ -82,7 +86,11 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           if (result.kind === 'federated') setInvite({ url: result.inviteUrl, account: result.account })
           void queryClient.invalidateQueries({ queryKey: ['folder-access', album.id] })
         },
-        onError: (error) => toast.error(error instanceof RecipientNotFound ? t('share.notFound') : t('share.failed')),
+        onError: (error) => {
+          // Shown in the dialog, with the choice to share anyway.
+          if (error instanceof IdentityNotConfirmed) return
+          toast.error(error instanceof RecipientNotFound ? t('share.notFound') : t('share.failed'))
+        },
       },
     )
   }
@@ -112,6 +120,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             <Label htmlFor="album-can-add">{t('share.canAdd')}</Label>
           </div>
           <p className="text-xs text-muted-foreground">{t('share.otherServersHint')}</p>
+          {shareFolder.error instanceof IdentityNotConfirmed ? (
+            <IdentityShareWarning error={shareFolder.error} onShareAnyway={() => share(true)} />
+          ) : null}
           <div className="flex justify-end">
             <Button type="submit" disabled={!email.trim() || shareFolder.isPending}>
               {t('share.submit')}

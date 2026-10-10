@@ -42,6 +42,12 @@ export interface Folder {
   updatedAt: string
   /** "alice@example.org" for folders someone else owns. */
   ownerAccount: string | null
+  /**
+   * Someone else's folder: the owner's keys its share was checked with, to
+   * check against who the owner is (docs/plans/drive-identity-pins.md).
+   */
+  ownerSigningPublicKey?: string
+  ownerIncarnationId?: string
   canUpload: boolean
   canDelete: boolean
   /** Owner-only actions: rename, colour, share, public link, subfolders, delete. */

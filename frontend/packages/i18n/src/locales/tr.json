@@ -290,5 +290,20 @@
     "sentTitle": "Bildirim gönderildi",
     "sent": "Teşekkürler. Yöneticiler inceleyecek.",
     "failed": "Bildirim gönderilemedi. Biraz sonra yeniden deneyin."
+  },
+  "identityCheck": {
+    "changed": {
+      "title": "{{name}} kişisinin kimliği değişti",
+      "body": "{{account}}, daha önce tanıdığınız hesap değil. Bir yönetici hesabı sıfırlamış olabilir ya da sunucu başka birinin anahtarlarını onun gibi gösteriyor olabilir. Güvenmeden önce onunla başka bir yoldan doğrulayın.",
+      "shareBody": "{{account}}, daha önce tanıdığınız hesap değil. Hesabı sıfırlandıysa yine de paylaşabilirsiniz; değilse sunucu paylaştığınızı okumaya çalışıyor olabilir. Önce onunla başka bir yoldan doğrulayın."
+    },
+    "invalid": {
+      "title": "Bunun {{name}} olduğunu doğrulayamadık",
+      "body": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış. Bu ondan gelmiyor olabilir: içeriğine, bağlantılarına ya da isteklerine güvenmeyin.",
+      "shareBody": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış; sunucu paylaştığınızı okuyabilir."
+    },
+    "accept": "Yeni kimliğe güven",
+    "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
+    "shareAnyway": "Yine de paylaş"
   }
 }

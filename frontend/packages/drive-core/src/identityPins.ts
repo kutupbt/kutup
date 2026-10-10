@@ -49,6 +49,7 @@ export interface ClaimedKeys {
   driveHpkePublicKey?: string
   driveSigningPublicKey?: string
   incarnationId?: string
+  authorityPublicKey?: string
 }
 
 /** A person as their server describes them. */
@@ -198,7 +199,8 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   // The keys in use must be the ones the person's server publishes...
   if (
     (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
-    (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey)
+    (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey) ||
+    (claimed.authorityPublicKey && claimed.authorityPublicKey !== person.accountAuthorityPublicKey)
   ) {
     return { kind: 'invalid' }
   }
@@ -233,6 +235,33 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
     return true
   }).catch(() => undefined)
   return { kind: 'ok', verified: false }
+}
+
+/** Sharing to someone whose identity is in doubt, before the user said to go on. */
+export class IdentityNotConfirmed extends Error {
+  constructor(
+    readonly account: string,
+    readonly status: Extract<IdentityStatus, { kind: 'changed' | 'invalid' }>,
+  ) {
+    super(`the identity of ${account} could not be confirmed (${status.kind})`)
+  }
+}
+
+/**
+ * Before sealing anything to `account`: its keys checked as `checkIdentity`
+ * does. A changed or invalid identity stops the share with
+ * `IdentityNotConfirmed` until the user confirms (`confirmed`): Drive warns,
+ * it does not refuse.
+ */
+export async function confirmRecipient(
+  me: DriveIdentity,
+  account: string,
+  claimed: ClaimedKeys,
+  confirmed = false,
+): Promise<IdentityStatus> {
+  const status = await checkIdentity(me, account, claimed)
+  if ((status.kind === 'changed' || status.kind === 'invalid') && !confirmed) throw new IdentityNotConfirmed(account, status)
+  return status
 }
 
 /**

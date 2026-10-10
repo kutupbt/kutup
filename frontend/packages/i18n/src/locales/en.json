@@ -290,5 +290,20 @@
     "sentTitle": "Report sent",
     "sent": "Thank you. The administrators will look at it.",
     "failed": "The report could not be sent. Try again in a while."
+  },
+  "identityCheck": {
+    "changed": {
+      "title": "{{name}}'s identity changed",
+      "body": "{{account}} is not the account you met before. An administrator may have reset it, or the server may be passing off someone else's keys as theirs. Check with them another way before trusting this.",
+      "shareBody": "{{account}} is not the account you met before. If their account was reset, you can share anyway; otherwise, the server may be trying to read what you share. Check with them another way first."
+    },
+    "invalid": {
+      "title": "We couldn't confirm this is {{name}}",
+      "body": "The keys the server gave for {{account}} are not signed by their account. This may not be from them: don't trust its contents, links or requests.",
+      "shareBody": "The keys the server gave for {{account}} are not signed by their account, so the server might be able to read what you share."
+    },
+    "accept": "Trust the new identity",
+    "acceptFailed": "It could not be saved. Try again.",
+    "shareAnyway": "Share anyway"
   }
 }
