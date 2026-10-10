@@ -6,7 +6,10 @@ const request = vi.fn()
 const restore = vi.fn()
 const hasFork = vi.fn()
 vi.mock('./apps', () => ({ loadAppDirectory: vi.fn(async () => ({})) }))
+// Hoisted with the mock below, which uses it.
+const { UnrequestedForkError } = vi.hoisted(() => ({ UnrequestedForkError: class extends Error {} }))
 vi.mock('./fork', () => ({
+  UnrequestedForkError,
   consumeFork: () => consume(),
   hasForkInLocation: () => hasFork(),
   requestFork: (app: string, returnTo?: string) => request(app, returnTo),
@@ -81,6 +84,21 @@ describe('bootChildApp', () => {
     expect(second).toEqual({ kind: 'ready' })
     expect(consume).toHaveBeenCalledTimes(1)
     expect(request).not.toHaveBeenCalled()
+  })
+
+  it("ignores someone else's link: keeps this browser's own session", async () => {
+    hasFork.mockReturnValue(true)
+    consume.mockRejectedValue(new UnrequestedForkError())
+    restore.mockResolvedValue('restored')
+    expect(await bootChildApp('drive')).toEqual({ kind: 'ready', next: '/' })
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("ignores someone else's link: signs in afresh when there is no session", async () => {
+    hasFork.mockReturnValue(true)
+    consume.mockRejectedValue(new UnrequestedForkError())
+    expect(await bootChildApp('drive')).toEqual({ kind: 'redirecting' })
+    expect(request).toHaveBeenCalledWith('drive', '/')
   })
 
   it('asks again for the link that was wanted when a fork cannot be used', async () => {

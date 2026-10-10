@@ -1,6 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
+import { FileRoute } from '@kutup/editors/FileRoute'
+import { PublicFileRoute } from '@kutup/editors/PublicFileRoute'
+import { setThumbnailStoredListener } from '@kutup/drive-core/thumbnailQueue'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -24,25 +28,52 @@ function FileSharesUpkeep() {
   return null
 }
 
+/** A document's new thumbnail (drawn as it is saved) shows on the home without a reload. */
+function ThumbnailRefresh() {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    setThumbnailStoredListener(() => void queryClient.invalidateQueries({ queryKey: ['files'] }))
+    return () => setThumbnailStoredListener(null)
+  }, [queryClient])
+  return null
+}
+
+/** Everything that needs the account: the home and the documents. */
+function SignedIn() {
+  return (
+    <Boot>
+      <UnauthenticatedHandler />
+      <FileSharesUpkeep />
+      <ThumbnailRefresh />
+      <Routes>
+        {/* A document opens full screen, outside the Office frame: the
+            same page and address as Drive's (@kutup/editors/paths). */}
+        <Route path="/file/:cid/:fid" element={<FileRoute />} />
+        <Route path="/shared/file/:fid" element={<FileRoute shared />} />
+        <Route element={<OfficeShell />}>
+          <Route index element={<HomePage />} />
+          <Route path="/notes" element={<HomePage kind="note" />} />
+          <Route path="/documents" element={<HomePage kind="document" />} />
+          <Route path="/spreadsheets" element={<HomePage kind="spreadsheet" />} />
+          <Route path="/presentations" element={<HomePage kind="presentation" />} />
+          <Route path="/whiteboards" element={<HomePage kind="whiteboard" />} />
+        </Route>
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </Boot>
+  )
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <TooltipProvider delayDuration={300}>
-        <Boot>
-          <UnauthenticatedHandler />
-          <FileSharesUpkeep />
-          <Routes>
-            <Route element={<OfficeShell />}>
-              <Route index element={<HomePage />} />
-              <Route path="/notes" element={<HomePage kind="note" />} />
-              <Route path="/documents" element={<HomePage kind="document" />} />
-              <Route path="/spreadsheets" element={<HomePage kind="spreadsheet" />} />
-              <Route path="/presentations" element={<HomePage kind="presentation" />} />
-              <Route path="/whiteboards" element={<HomePage kind="whiteboard" />} />
-            </Route>
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </Boot>
+        <Routes>
+          {/* Public links need no account: they bypass the session boot entirely. */}
+          <Route path="/s/:token" element={<PublicFileRoute />} />
+          <Route path="/s/:token/:fid" element={<PublicFileRoute />} />
+          <Route path="*" element={<SignedIn />} />
+        </Routes>
         <Toaster />
       </TooltipProvider>
     </BrowserRouter>

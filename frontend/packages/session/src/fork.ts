@@ -116,6 +116,17 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
   }
 }
 
+/**
+ * A sign-in link this tab never asked for: no `state` it saved in
+ * `requestFork`. Someone else's link, opened here, would sign this browser
+ * in to their account (login CSRF), so it is never redeemed.
+ */
+export class UnrequestedForkError extends Error {
+  constructor() {
+    super('this tab did not ask for this sign-in link')
+  }
+}
+
 /** Whether this page load carries a fork to consume. */
 export function hasForkInLocation(): boolean {
   return (
@@ -138,7 +149,8 @@ export function pendingForkReturnTo(): string {
  * In drive/chat, on `/login#selector=…&sk=…&state=…`: redeem the fork, open
  * the keys, persist them for reloads and activate the session. Returns the
  * path to continue to. The fragment is wiped from the address bar and
- * history before anything else happens.
+ * history before anything else happens. Only a fork this tab asked for is
+ * redeemed (`UnrequestedForkError` otherwise, before the server is asked).
  */
 export async function consumeFork(): Promise<string> {
   const params = new URLSearchParams(window.location.hash.slice(1))
@@ -148,13 +160,13 @@ export async function consumeFork(): Promise<string> {
   const state = params.get('state')
   if (!selector || !sk) throw new Error('the sign-in link is incomplete')
 
-  let returnTo = '/'
-  if (state) {
-    const saved = sessionStorage.getItem(STATE_PREFIX + state)
-    sessionStorage.removeItem(STATE_PREFIX + state)
-    returnTo = sanitizeNext(saved) ?? '/'
-    if (returnTo.startsWith(FORK_CONSUME_PATH)) returnTo = '/'
-  }
+  // The state requestFork saved in this tab: without it, the link was
+  // made for someone else's request.
+  const saved = state ? sessionStorage.getItem(STATE_PREFIX + state) : null
+  if (saved === null) throw new UnrequestedForkError()
+  sessionStorage.removeItem(STATE_PREFIX + state!)
+  let returnTo = sanitizeNext(saved) ?? '/'
+  if (returnTo.startsWith(FORK_CONSUME_PATH)) returnTo = '/'
 
   const key = fromBase64url(sk)
   if (key.length !== 32) throw new Error('the sign-in link is malformed')

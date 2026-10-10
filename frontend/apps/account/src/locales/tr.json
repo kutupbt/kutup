@@ -19,6 +19,7 @@
     "devices": "Düzenleme cihazları",
     "admin": "Yönetim",
     "users": "Kullanıcılar",
+    "reports": "Bildirimler",
     "activity": "Etkinlik",
     "federation": "Federasyon",
     "serverSettings": "Sunucu ayarları",
@@ -518,6 +519,40 @@
       "deleted": "{{email}} silindi",
       "actionFailed": "İşlem başarısız oldu."
     },
+    "reports": {
+      "title": "Bildirimler",
+      "description": "İnsanların bildirdiği herkese açık bağlantılar. Sunucu bir bağlantının gösterdiğini göremez: bildiren eklediyse bağlantıyı açın, ardından bildirimi kapatın, bağlantıyı kaldırın ya da onu oluşturan hesabı devre dışı bırakın (bu, hesabın tüm bağlantılarını kaldırır).",
+      "open": "Açık",
+      "resolved": "Çözülen",
+      "emptyTitle": "Açık bildirim yok",
+      "emptyDescription": "Herkesin herkese açık bir bağlantının sayfasından yaptığı bildirimler burada görünür.",
+      "noneResolvedTitle": "Henüz çözülen yok",
+      "noneResolvedDescription": "Kapattığınız ya da işlem yaptığınız bildirimler burada listelenir.",
+      "more_one": "ve bu bağlantıda {{count}} bildirim daha",
+      "more_other": "ve bu bağlantıda {{count}} bildirim daha",
+      "owner": "Paylaşan",
+      "link": "Bağlantı",
+      "fileLink": "Tek bir dosyaya bağlantı, {{date}} tarihinde oluşturuldu",
+      "folderLink": "Bir klasöre ya da albüme bağlantı, {{date}} tarihinde oluşturuldu",
+      "linkRemoved": "kaldırıldı",
+      "openLink": "Bağlantıyı aç",
+      "noLink": "Bildiren bağlantıyı eklemedi.",
+      "dismiss": "Kapat",
+      "dismissed": "Bildirim kapatıldı",
+      "remove": "Bağlantıyı kaldır",
+      "removeTitle": "Bu bağlantı kaldırılsın mı?",
+      "removeDescription": "Bağlantıyı açan herkese kaldırıldığı söylenir. {{email}} dosyayı tutar ve yeniden paylaşabilir; bu bağlantıdaki tüm açık bildirimler kapatılır.",
+      "removed": "Bağlantı kaldırıldı",
+      "disableTitle": "Bu hesap devre dışı bırakılsın mı?",
+      "disableDescription": "{{email}} her yerden çıkış yapar ve giriş yapamaz; herkese açık tüm bağlantıları da hesabı yeniden etkinleştirene kadar çalışmaz. Verileri saklanır.",
+      "disabled": "Hesap devre dışı bırakıldı",
+      "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
+      "resolution": {
+        "dismissed": "Kapatıldı",
+        "removed": "Bağlantı kaldırıldı",
+        "disabled": "Hesap devre dışı"
+      }
+    },
     "activity": {
       "title": "Etkinlik",
       "description": "Yöneticilerin yaptığı değişiklikler, en yenisi önce.",
@@ -552,7 +587,9 @@
         "federationPeerRetry": "{{admin}}, {{domain}} için keşfi yeniden denedi",
         "federationPeerRetryBulk": "{{admin}} birkaç sunucu için keşfi yeniden denedi",
         "unknown": "{{admin}}: {{action}}",
-        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi"
+        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
+        "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı"
       }
     },
     "settings": {

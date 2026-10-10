@@ -20,7 +20,10 @@
     "react-i18next": "^17.0.4",
     "sonner": "^2.0.7",
     "@kutup/files": "workspace:*",
-    "@kutup/contacts-core": "workspace:*"
+    "@kutup/contacts-core": "workspace:*",
+    "@hookform/resolvers": "^5.2.2",
+    "react-hook-form": "^7.73.1",
+    "zod": "^4.3.6"
   },
   "peerDependencies": {
     "react": "^18.3.1"

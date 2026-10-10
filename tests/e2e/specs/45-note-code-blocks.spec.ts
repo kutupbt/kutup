@@ -8,7 +8,7 @@ test('in Edit mode a code block reads as in Read mode until the cursor enters it
   const page = await context.newPage()
   await page.goto(appUrl('office'))
   await page.getByTestId('office-new-note').click()
-  await page.waitForURL((url) => url.origin === appOrigin('drive') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
+  await page.waitForURL((url) => url.origin === appOrigin('office') && url.pathname.startsWith('/file/'), { timeout: 60_000 })
   await expect(page.getByRole('link', { name: 'Back to Office' })).toBeVisible({ timeout: 120_000 })
   const content = page.locator('.cm-content').first()
   await content.click()

@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
+import { FileRoute } from '@kutup/editors/FileRoute'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
 import { Toaster } from '@kutup/ui/components/sonner'
@@ -10,7 +11,6 @@ import { Boot } from './app/Boot'
 import { DriveShell } from './app/DriveShell'
 import { NewMenu } from './features/create/NewMenu'
 import { CurrentFolderProvider } from './features/drive/currentFolder'
-import { FileEditorPage } from './features/editor/FileEditorPage'
 import { FolderPage } from './features/folder/FolderPage'
 import { PublicSharePage } from './features/public/PublicSharePage'
 import { SearchPage } from './features/search/SearchPage'
@@ -65,8 +65,8 @@ function SignedIn() {
       <CurrentFolderProvider>
         <Routes>
           {/* A file opens full screen, outside the Drive frame. */}
-          <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
-          <Route path="/shared/file/:fid" element={<FileEditorPage shared />} />
+          <Route path="/file/:cid/:fid" element={<FileRoute />} />
+          <Route path="/shared/file/:fid" element={<FileRoute shared />} />
           <Route element={<DriveShell primaryAction={<NewMenu />} />}>
             <Route index element={<FolderPage />} />
             <Route path="/folders/:id" element={<FolderPage />} />

@@ -11,8 +11,9 @@ kutup uses a **CryptPad-pinned bundle** of OnlyOffice — not the upstream `@onl
 
 > **Where it runs.** The editor's code runs in a frame on its own hostname,
 > `editor.<domain>` (`KUTUP_EDITOR_URL`), which holds no session and no keys
-> and which only Drive may embed. `office.<domain>` is a different thing: the
-> Office home, a signed-in app that lists documents and opens them in Drive.
+> and which only Office may embed. `office.<domain>` is a different thing: the
+> signed-in Office app, which lists documents and opens them on its own file
+> page, embedding the editor frame.
 
 ## Why pin to CryptPad's bundle
 
@@ -73,11 +74,11 @@ frontend/public/onlyoffice/
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
 
 - **Theme:** the editor opens in ONLYOFFICE's classic light or its dark theme,
-  following Drive's (`init` carries it); toggling Drive's theme switches it live
+  following Office's (`init` carries it); toggling Office's theme switches it live
   (`oo-theme`, through ONLYOFFICE's own `Common.UI.Themes.setTheme`, a private
   API to re-check on each update). The document page stays white.
 - **Failures:** a document the editor cannot open (a file with no PDF header in
-  its first 1024 bytes, an unknown type, a startup error) is reported to Drive
+  its first 1024 bytes, an unknown type, a startup error) is reported to Office
   (`failed`), which shows why instead of the loading screen.
 - **Content blockers:** uBlock Origin and browsers that build it in block any
   file named `Analytics.js`. ONLYOFFICE's editors wait for their (inert) module
@@ -88,7 +89,9 @@ frontend/public/onlyoffice/
 
 A PDF you may change (write access, on this server) opens straight in
 ONLYOFFICE's PDF editor: annotate, fill in forms, change text and pages. One
-you may only read, or on another server, opens in Drive's viewer. The PDF editor opens the raw PDF (no x2t on
+you may only read, or on another server, opens in the PDF viewer. Either way it
+opens on the Office site, like every document (`docs/architecture.md`, "File
+editor route"). The PDF editor opens the raw PDF (no x2t on
 the way in: its `drawingfile` WASM engine reads it) and routes straight to
 `pdfeditor` (`document.isForm: false`; left undefined, `api.js` would ask
 DocumentServer whether it is a form). Saving asks the editor for its
@@ -130,6 +133,16 @@ restore while another tab is open). One unexplained failure was seen once in
 about sixteen runs of the PDF two-tab test (the editing tab kept its edit
 locally without sending it) and not reproduced since; watch for it.
 
+## Public links
+
+A document reached by a public link opens on Office without an account
+(`docs/architecture.md`, "File editor route"). The page decrypts the latest
+save with the key from the link's fragment and hands it to the same sandbox
+in ONLYOFFICE's viewer (`OfficeEditor` with `live={false}`): no session, no
+device registration and no collaboration socket, so the viewer sees the
+document as it was last saved, not edits in progress. PDFs on a public link
+open in the browser's PDF viewer.
+
 ## How the bundle is delivered
 
 `docker compose up -d --build` requires no preparation step. The frontend
@@ -151,7 +164,7 @@ document open downloads about 16 MB instead of 89 MB
 (docs/research/18-web-performance.md). In development (`./install-onlyoffice.sh`
 and Vite) the directories keep their plain names (`dist/v9/`, `dist/x2t/`).
 
-Opening a document overlaps its steps: while Drive downloads and decrypts the
+Opening a document overlaps its steps: while Office downloads and decrypts the
 file, a hidden `inner.html?warm=1&type=…` frame fetches x2t and the editor's SDK
 into the browser cache (only what is not cached already); the bridge loads
 `api.js` while x2t converts; and a PDF, which opens as itself, loads x2t only
@@ -215,5 +228,5 @@ updates. Each fork's `KUTUP.md` says how to build and release.
 - [`docs/architecture.md`](architecture.md) — overall system & E2EE model.
 - [`docs/research/05-cryptpad-onlyoffice-integration.md`](research/05-cryptpad-onlyoffice-integration.md) — deep code-level analysis of CryptPad's integration (May 2026 snapshot).
 - [`docs/research/04-office-collab-engines.md`](research/04-office-collab-engines.md) — original engine-selection rationale.
-- [`frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx`](../frontend/apps/drive/src/features/editor/office/OfficeEditor.tsx) — host-side React wrapper.
+- [`frontend/packages/editors/src/office/OfficeEditor.tsx`](../frontend/packages/editors/src/office/OfficeEditor.tsx) — host-side React wrapper, on the file page (it mounts only on the Office site).
 - [`frontend/apps/editor/public/onlyoffice/inner.html`](../frontend/apps/editor/public/onlyoffice/inner.html) — postMessage bridge.

@@ -65,7 +65,7 @@ office.<d>   ──▶ │ /  → OnlyOffice bundle (no /api, no cookies)    │
 | App | Owns |
 |---|---|
 | **account** | login (+2FA), register, first-login, recovery, the fork producer (`/authorize`), app switcher landing, settings (profile, security/2FA, recovery phrase, sessions, language, appearance, per-product sections `/drive/…`, `/chat/…`), admin (`/admin/…`). |
-| **drive** | explorer (unified list), shared with me, trash, uploads, sharing dialogs, public-link page `/s/:token`, editors (`/file/:cid/:fid`: text/markdown collab, OnlyOffice, Excalidraw, viewers), version history. |
+| **drive** | explorer (unified list), shared with me, trash, uploads, sharing dialogs, public-link page `/s/:token`, editors (`/file/:cid/:fid`: text/markdown collab, OnlyOffice, Excalidraw, viewers), version history. Since then the file page is a package both Drive and Office mount, and documents open on `office.<d>` (`docs/architecture.md`, "File editor route"). |
 | **chat** | conversation list, thread, details panel, groups, requests, safety verification, chat devices, backup/recovery status. |
 
 Cross-app bridges (send-to-chat, save-to-drive) are **not** built in this
@@ -112,6 +112,10 @@ rewrite; they go on `docs/roadmap.md` (no stub affordances).
 3. drive reads and immediately clears the fragment
    (`history.replaceState`), `POST /api/auth/forks/consume`, decrypts the
    payload, persists it (below), and navigates to the saved return path.
+   Only a fork whose `state` this tab saved in step 1 is redeemed: a link
+   minted for someone else (login CSRF, signing this browser in to their
+   account) is ignored before the server is asked, and the app starts with
+   its own stored session or asks for a fresh fork.
 
 The fork payload is a new persistent-ish wire format, so per `CLAUDE.md`
 ("Rust owns Kutup cryptographic formats") it is defined in `kutup-crypto`

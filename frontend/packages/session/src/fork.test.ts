@@ -20,7 +20,7 @@ vi.mock('@kutup/crypto/localState', () => ({
 }))
 
 import { encodeKeys, decodeKeys } from './keys'
-import { consumeFork, hasForkInLocation, produceFork, requestFork } from './fork'
+import { consumeFork, hasForkInLocation, produceFork, requestFork, UnrequestedForkError } from './fork'
 import { clearSession, setSession } from './store'
 
 const keys = {
@@ -129,9 +129,31 @@ describe('consumeFork', () => {
 
   it('refuses keys for another account', async () => {
     opened.value = encodeKeys({ ...keys, userId: 'someone-else' })
-    visit(`/login#selector=SEL&sk=${sk}`)
+    sessionStorage.setItem('kutup-fork:st', '/')
+    visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await expect(consumeFork()).rejects.toThrow(/another account/)
     expect(activateSession).not.toHaveBeenCalled()
+  })
+
+  it('never redeems a link this tab did not ask for', async () => {
+    // Someone else's fork, sent to this browser (login CSRF): no state, or
+    // one this tab never saved.
+    for (const fragment of [`selector=SEL&sk=${sk}`, `selector=SEL&sk=${sk}&state=theirs`]) {
+      visit(`/login#${fragment}`)
+      await expect(consumeFork()).rejects.toBeInstanceOf(UnrequestedForkError)
+      expect(window.location.hash).toBe('')
+    }
+    expect(post).not.toHaveBeenCalled()
+    expect(activateSession).not.toHaveBeenCalled()
+  })
+
+  it('redeems a state once: the same link twice is refused', async () => {
+    sessionStorage.setItem('kutup-fork:st', '/folders/abc')
+    visit(`/login#selector=SEL&sk=${sk}&state=st`)
+    await consumeFork()
+    visit(`/login#selector=SEL&sk=${sk}&state=st`)
+    await expect(consumeFork()).rejects.toBeInstanceOf(UnrequestedForkError)
+    expect(post).toHaveBeenCalledTimes(1)
   })
 
   it('refuses an incomplete link without calling the server', async () => {

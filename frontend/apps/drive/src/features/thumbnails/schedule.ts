@@ -1,5 +1,5 @@
 import type { UploadedFile } from '@kutup/files/upload/streamUpload'
-import { thumbnailsOfFile, thumbnailSourceFor } from './make'
+import { thumbnailsOfFile, thumbnailSourceFor } from '@kutup/editors/thumbnails/make'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 

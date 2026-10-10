@@ -1,4 +1,4 @@
-import { Activity, BookUser, ChartPie, CircleUser, FileType, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -59,6 +59,7 @@ export function AccountShell() {
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
               <SidebarNavLink to="/admin/users" icon={<Users />} label={t('nav.users')} />
+              <SidebarNavLink to="/admin/reports" icon={<Flag />} label={t('nav.reports')} />
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />
               <SidebarNavLink to="/admin/federation" icon={<Globe />} label={t('nav.federation')} />
               <SidebarNavLink to="/admin/settings" icon={<Settings2 />} label={t('nav.serverSettings')} />

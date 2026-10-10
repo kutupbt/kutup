@@ -183,10 +183,13 @@ test.describe('two-server continuous backup recovery', () => {
     const expiredDirect = `direct-expired-${tag}`
     await say(pageA, expiredDirect)
     await arrives(pageB, expiredDirect)
+    // Each side removes the message on its own 30-second timer. With four
+    // Chat clients and two servers on a two-core runner a timer can run well
+    // late, so the wait leaves room past 30 s rather than testing speed.
     await expect.poll(async () => ({
       alice: await message(pageA, expiredDirect).count(),
       bob: await message(pageB, expiredDirect).count(),
-    }), { timeout: 60_000, intervals: [1_000, 2_000] }).toEqual({ alice: 0, bob: 0 })
+    }), { timeout: 120_000, intervals: [1_000, 2_000] }).toEqual({ alice: 0, bob: 0 })
     await setDisappearing(pageA, 'off')
     await expect(pageB.getByTestId('chat-disappearing-timer'))
       .toHaveAccessibleName('Disappearing messages are off', { timeout: 45_000 })

@@ -1,0 +1,78 @@
+diff --git a/dist/index.js b/dist/index.js
+index 3fef516c8d5679d16fe2e004e8d98ff24c0fb45b..f837596f64bdbf5e26e0641c8a66a048c25bc5eb 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -125,11 +125,18 @@ var DismissableLayer = /* @__PURE__ */ React.forwardRef(
+       onInteractOutside?.(event);
+       if (!event.defaultPrevented) onDismiss?.();
+     }, ownerDocument);
+-    const isHighestLayer = node ? index === layers.length - 1 : false;
+     const handleKeyDown = (0, import_react_use_callback_ref.useCallbackRef)((event) => {
+       if (event.key !== "Escape") {
+         return;
+       }
++      // Kutup patch: decide from the live stack, not from this layer's last
++      // render. A layer opened inside this one is added in an effect and
++      // re-renders the others later; an Escape in between used to reach the
++      // outer layer, which still thought it was on top and dismissed itself.
++      const liveLayers = Array.from(context.layers);
++      if (!node || liveLayers.indexOf(node) !== liveLayers.length - 1) {
++        return;
++      }
+       onEscapeKeyDown?.(event);
+       if (!event.defaultPrevented && onDismiss) {
+         event.preventDefault();
+@@ -137,12 +144,12 @@ var DismissableLayer = /* @__PURE__ */ React.forwardRef(
+       }
+     });
+     React.useEffect(() => {
+-      if (!isHighestLayer) {
++      if (!node) {
+         return;
+       }
+       ownerDocument.addEventListener("keydown", handleKeyDown, { capture: true });
+       return () => ownerDocument.removeEventListener("keydown", handleKeyDown, { capture: true });
+-    }, [ownerDocument, isHighestLayer, handleKeyDown]);
++    }, [ownerDocument, node, handleKeyDown]);
+     React.useEffect(() => {
+       if (!node) return;
+       if (disableOutsidePointerEvents) {
+diff --git a/dist/index.mjs b/dist/index.mjs
+index b30bb957ec4911a88217d130af18fa7ca290c408..7bc5ba91903def3ca9416d75939c6a74e984668f 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -87,11 +87,18 @@ var DismissableLayer = /* @__PURE__ */ React.forwardRef(
+       onInteractOutside?.(event);
+       if (!event.defaultPrevented) onDismiss?.();
+     }, ownerDocument);
+-    const isHighestLayer = node ? index === layers.length - 1 : false;
+     const handleKeyDown = useCallbackRef((event) => {
+       if (event.key !== "Escape") {
+         return;
+       }
++      // Kutup patch: decide from the live stack, not from this layer's last
++      // render. A layer opened inside this one is added in an effect and
++      // re-renders the others later; an Escape in between used to reach the
++      // outer layer, which still thought it was on top and dismissed itself.
++      const liveLayers = Array.from(context.layers);
++      if (!node || liveLayers.indexOf(node) !== liveLayers.length - 1) {
++        return;
++      }
+       onEscapeKeyDown?.(event);
+       if (!event.defaultPrevented && onDismiss) {
+         event.preventDefault();
+@@ -99,12 +106,12 @@ var DismissableLayer = /* @__PURE__ */ React.forwardRef(
+       }
+     });
+     React.useEffect(() => {
+-      if (!isHighestLayer) {
++      if (!node) {
+         return;
+       }
+       ownerDocument.addEventListener("keydown", handleKeyDown, { capture: true });
+       return () => ownerDocument.removeEventListener("keydown", handleKeyDown, { capture: true });
+-    }, [ownerDocument, isHighestLayer, handleKeyDown]);
++    }, [ownerDocument, node, handleKeyDown]);
+     React.useEffect(() => {
+       if (!node) return;
+       if (disableOutsidePointerEvents) {
