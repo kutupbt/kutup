@@ -22,6 +22,24 @@ export interface ContactAddress {
   label?: string
 }
 
+/**
+ * An outside OpenPGP key pinned for one of the contact's addresses
+ * (docs/plans/mail.md, C3; Proton's vCard `KEY` with `X-PM-ENCRYPT` and
+ * `X-PM-SIGN`). Its fingerprint also goes into the signed summary.
+ */
+export interface ContactKey {
+  /** Lowercase; one of the contact's emails. */
+  address: string
+  /** The binary key, base64. */
+  publicKey: string
+  /** Lowercase hex, 40 digits. */
+  fingerprint: string
+  /** Encrypt mail to this address with it. */
+  encrypt: boolean
+  /** Expect mail from this address signed with it. */
+  sign: boolean
+}
+
 export interface ContactDraft {
   /** Display name (vCard FN). */
   name: string
@@ -40,6 +58,8 @@ export interface ContactDraft {
   photo: string
   /** Contact group ids. */
   groups: string[]
+  /** Pinned OpenPGP keys, at most one per address. */
+  keys: ContactKey[]
 }
 
 export function emptyDraft(): ContactDraft {
@@ -57,6 +77,7 @@ export function emptyDraft(): ContactDraft {
     urls: [],
     photo: '',
     groups: [],
+    keys: [],
   }
 }
 
@@ -94,4 +115,9 @@ export function initials(name: string): string {
 
 export function newUid(): string {
   return `urn:uuid:${crypto.randomUUID()}`
+}
+
+/** `ABCD 1234 …`: an OpenPGP fingerprint as people compare it. */
+export function formatFingerprint(fingerprint: string): string {
+  return (fingerprint.toUpperCase().match(/.{1,4}/g) ?? []).join(' ')
 }

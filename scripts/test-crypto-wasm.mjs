@@ -685,6 +685,7 @@ const outside = crypto.inspectExternalMailKey(bobKey, 'bob@kutup.dev')
 assert.equal(outside.publicKey, splitVectors.bobPublicKey)
 assert.match(outside.fingerprint, /^[0-9a-f]{40}$/)
 assert.throws(() => crypto.inspectExternalMailKey(bobKey, 'eve@kutup.dev'))
+assert.equal(crypto.describeExternalMailKey(bobKey).fingerprint, outside.fingerprint)
 const armoredPgp = crypto.encryptMailPgp(
   mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),

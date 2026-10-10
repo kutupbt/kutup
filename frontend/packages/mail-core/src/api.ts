@@ -1,10 +1,24 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
-import { encryptMailMessage, openMailMessage, toBase64, type SealedMailKey } from '@kutup/crypto'
+import { useMemo } from 'react'
+import {
+  encryptMailMessage,
+  encryptMailPgp,
+  inspectExternalMailKey,
+  openMailMessage,
+  toBase64,
+  verifyMailCleartext,
+  verifyMailDetachedSignature,
+  type SealedMailKey,
+} from '@kutup/crypto'
+import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
+import type { ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, NoKutupAddress } from './keys'
-import { buildMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
+import { buildBody, buildMessage, buildPgpMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
+import { autocryptKey, openPgp } from './pgp'
+import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
 // Mail (docs/plans/mail.md): the folders' readable fields from the server,
 // each message opened here with the address key, and messages written here,
@@ -164,14 +178,54 @@ export interface OpenedMessage {
   raw: Uint8Array
   signed: boolean
   /**
-   * A signature that checks against the sender's Kutup key list; false for
+   * A signature that checks against the sender's Kutup key list, or for
+   * OpenPGP mail from outside against a key pinned to the sender; false for
    * unsigned mail and for a signature that does not check.
    */
   verified: boolean
+  /** OpenPGP mail from outside Kutup (docs/plans/mail.md, C3). */
+  pgp?: {
+    encrypted: boolean
+    /** The sender has a key pinned to check signatures with. */
+    pinned: boolean
+  }
+  /**
+   * A key the sender offers (Autocrypt header or attached key), usable for
+   * their address and not the one already pinned: Mail offers to trust it.
+   */
+  offeredKey?: { publicKey: string; fingerprint: string; replacesPinned: boolean }
 }
 
-/** Fetches, opens and parses one message; its sender's key checked when it is from a Kutup user. */
-export async function openMessage(account: MailAccount, message: MailMessage): Promise<OpenedMessage> {
+/** Keys attached to a message as files (`application/pgp-keys`, `.asc`). */
+function attachedKeys(parsed: ParsedMessage): Uint8Array[] {
+  return parsed.attachments
+    .filter((a) => a.content.length <= 256 * 1024)
+    .filter((a) => a.mimeType === 'application/pgp-keys' || /\.(asc|key)$/i.test(a.filename))
+    .filter((a) => new TextDecoder().decode(a.content.subarray(0, 4096)).includes('-----BEGIN PGP PUBLIC KEY BLOCK-----') || a.mimeType === 'application/pgp-keys')
+    .map((a) => a.content)
+}
+
+async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, pinned: ContactKey | undefined) {
+  const candidates = [autocryptKey(raw, from), ...attachedKeys(parsed)].filter((k): k is Uint8Array => k !== null)
+  for (const candidate of candidates) {
+    try {
+      const info = await inspectExternalMailKey(candidate, from)
+      if (info.fingerprint === pinned?.fingerprint) return undefined
+      return { publicKey: info.publicKey, fingerprint: info.fingerprint, replacesPinned: !!pinned }
+    } catch {
+      // Not a usable key for the sender: offer nothing for it.
+    }
+  }
+  return undefined
+}
+
+/**
+ * Fetches, opens and parses one message; its sender's key checked when it
+ * is from a Kutup user. OpenPGP mail from outside is opened a second time
+ * (PGP/MIME, inline) or verified (multipart/signed, cleartext) with the
+ * keys pinned to the sender.
+ */
+export async function openMessage(account: MailAccount, message: MailMessage, pinned: PinnedKeys): Promise<OpenedMessage> {
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const stored = new Uint8Array(response.data)
   const sender = message.from?.address
@@ -188,16 +242,39 @@ export async function openMessage(account: MailAccount, message: MailMessage): P
     if (!opened.signed || opened.verified) break
     opened = await openMailMessage(account.key, stored, candidate)
   }
-  return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
+  const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
+  if (!outside) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
+
+  const pin = pinned(sender)
+  const signingKeys = pin?.sign ? [pin.publicKey] : []
+  const pgp = await openPgp(
+    opened.data,
+    {
+      decrypt: (bytes, signerKey) => openMailMessage(account.key, bytes, signerKey),
+      verifyDetached: (signature, content, key) => verifyMailDetachedSignature(signature, content, key),
+      verifyCleartext: (text, key) => verifyMailCleartext(text, key),
+    },
+    signingKeys,
+  )
+  const parsed = await parseMessage(pgp?.message ?? opened.data)
+  return {
+    parsed,
+    raw: opened.data,
+    signed: pgp?.signed ?? false,
+    verified: pgp?.verified ?? false,
+    ...(pgp ? { pgp: { encrypted: pgp.encrypted, pinned: signingKeys.length > 0 } } : {}),
+    offeredKey: await offeredKey(opened.data, parsed, sender, pin),
+  }
 }
 
-export function useOpenedMessage(account: MailAccount | undefined, message: MailMessage | undefined) {
+/** Opens a message once the sender's pinned keys are known (`pinned` undefined while Contacts load). */
+export function useOpenedMessage(account: MailAccount | undefined, message: MailMessage | undefined, pinned: PinnedKeys | undefined) {
   return useQuery({
     queryKey: contentKey(message?.id ?? ''),
-    enabled: !!account && !!message,
+    enabled: !!account && !!message && !!pinned,
     staleTime: Infinity,
     gcTime: 5 * 60_000,
-    queryFn: () => openMessage(account!, message!),
+    queryFn: () => openMessage(account!, message!, pinned!),
   })
 }
 
@@ -356,9 +433,35 @@ export class UnknownRecipient extends Error {
   }
 }
 
-/** Builds, encrypts and sends a draft (its attachments assembled from their parts). */
-export async function sendDraft(account: MailAccount, draft: Draft, attachmentParts: Uint8Array[]): Promise<SendRecipient[]> {
-  const message = buildMessage({
+/** The key pinned in Contacts for an address, if any. */
+export type PinnedKeys = (address: string) => ContactKey | undefined
+
+/**
+ * The keys pinned in Contacts, by address; `undefined` while Contacts load.
+ * When the address book cannot be read, nothing is pinned.
+ */
+export function usePinnedKeys(): PinnedKeys | undefined {
+  const account = useAccountAddress()
+  const contacts = useContacts()
+  const failed = account.isError || contacts.isError
+  const data = contacts.data
+  return useMemo(() => {
+    if (!data && !failed) return undefined
+    const keys = new Map<string, ContactKey>()
+    for (const contact of data?.contacts ?? []) for (const key of contact.draft.keys) keys.set(key.address, key)
+    return (address: string) => keys.get(address.toLowerCase())
+  }, [data, failed])
+}
+
+/**
+ * Builds, encrypts and sends a draft (its attachments assembled from their
+ * parts). Kutup recipients get it end to end; outside recipients with an
+ * OpenPGP key (pinned, or found) get PGP/MIME, To and Cc in one message and
+ * each Bcc recipient in their own; the rest get the plaintext. Every copy
+ * carries the sender's key in an Autocrypt header.
+ */
+export async function sendDraft(account: MailAccount, draft: Draft, attachmentParts: Uint8Array[], pinned: PinnedKeys): Promise<SendRecipient[]> {
+  const header = {
     from: { address: account.address, name: account.name },
     to: draft.to,
     cc: draft.cc,
@@ -366,13 +469,33 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
     messageId: draft.messageId,
     inReplyTo: draft.inReplyTo,
     references: draft.references,
-    html: draft.html,
-    text: draft.text,
-    attachments: attachmentParts,
-  })
+    date: new Date(),
+    autocryptKey: account.publicKey,
+  }
+  const content = { html: draft.html, text: draft.text, attachments: attachmentParts }
+  const message = buildMessage({ ...header, ...content })
   const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
   const local = everyone.filter((address) => address.endsWith(`@${account.domain}`))
   const external = everyone.filter((address) => !local.includes(address))
+  const bcc = new Set(draft.bcc.map((m) => m.address.toLowerCase()))
+
+  // Outside recipients' keys, and the PGP/MIME messages for them.
+  const protections = await Promise.all(external.map((address) => protectionFor(address, account.domain, pinned(address))))
+  const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
+  if (unusable) throw new PinnedKeyUnusable(unusable)
+  const keyed = external.flatMap((address, i) => {
+    const key = pgpKey(protections[i])
+    return key ? [{ address, key }] : []
+  })
+  const groups = [keyed.filter((r) => !bcc.has(r.address)), ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r])].filter((g) => g.length)
+  const plain = external.filter((address) => !keyed.some((r) => r.address === address))
+  const body = groups.length ? buildBody(content) : null
+  const packages = await Promise.all(
+    groups.map(async (group) => ({
+      recipients: group.map((r) => r.address),
+      message: buildPgpMessage(header, await encryptMailPgp(account.key, [...group.map((r) => r.key), account.publicKey], body!)),
+    })),
+  )
 
   const attempt = async (): Promise<SendRecipient[]> => {
     const keys = await Promise.all(
@@ -388,9 +511,14 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
       keyPackets[address] = sealed.keyPackets[i + 1]
     })
     const form = new FormData()
-    form.append('meta', new Blob([JSON.stringify({ ...meta(account, draft), keyPackets, ...(draft.id ? { draftId: draft.id } : {}) })], { type: 'application/json' }))
+    const pgp = packages.map((p) => ({ recipients: p.recipients }))
+    form.append(
+      'meta',
+      new Blob([JSON.stringify({ ...meta(account, draft), keyPackets, pgp, ...(draft.id ? { draftId: draft.id } : {}) })], { type: 'application/json' }),
+    )
     form.append('data', blob(sealed.dataPacket))
-    if (external.length > 0) form.append('mime', blob(message, 'message/rfc822'))
+    packages.forEach((p, i) => form.append(`pgp${i}`, blob(p.message, 'message/rfc822')))
+    if (plain.length > 0) form.append('mime', blob(message, 'message/rfc822'))
     return (await api.post<{ recipients: SendRecipient[] }>('/mail/send', form)).data.recipients
   }
 

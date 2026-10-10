@@ -16,11 +16,13 @@ import {
   UnknownRecipient,
   useMailAccount,
   useMailRefresh,
+  usePinnedKeys,
   useSendingStatus,
   type Draft,
   type MailAccount,
 } from '@kutup/mail-core/api'
 import { attachmentPart, describePart, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
+import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
 import api from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
@@ -173,6 +175,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const { t, i18n } = useTranslation()
   const refresh = useMailRefresh()
   const sendingStatus = useSendingStatus()
+  const pinned = usePinnedKeys()
   const start = useMemo(() => initial(account, target, t, i18n.language), [account, target, t, i18n.language])
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
@@ -358,7 +361,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const results = await sendDraft(account, current(), parts)
+      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined))
       const full = results.filter((r) => r.status === 'full').map((r) => r.address)
       const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
       if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
@@ -372,6 +375,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       closed.current = false
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
+      else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
+      else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
         toast.error(
@@ -440,7 +445,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               <span className="truncate">{account.address}</span>
             </p>
             <div className="relative">
-              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} autoFocus={target.kind === 'new' && !start.draft.to.length} />
+              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} autoFocus={target.kind === 'new' && !start.draft.to.length} />
               {!showCopies ? (
                 <button type="button" className="absolute right-3 top-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowCopies(true)}>
                   {t('compose.ccBcc')}
@@ -449,8 +454,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             </div>
             {showCopies ? (
               <>
-                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} />
-                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} />
+                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} pinned={pinned} />
+                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} pinned={pinned} />
               </>
             ) : null}
             <Input

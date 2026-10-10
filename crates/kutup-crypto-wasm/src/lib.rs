@@ -2042,6 +2042,20 @@ pub fn inspect_external_mail_key(public_key: &[u8], address: &str) -> Result<JsV
     .map_err(|error| js_error(&format!("encode key: {error}")))
 }
 
+/// An outside key as it is, unchecked (a contact's pinned key, perhaps
+/// expired): binary base64, fingerprint and creation time.
+#[wasm_bindgen(js_name = describeExternalMailKey)]
+pub fn describe_external_mail_key(public_key: &[u8]) -> Result<JsValue, JsValue> {
+    let info = kutup_crypto::mail_key::describe_external_public_key(public_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ExternalMailKeyView {
+        public_key: STANDARD.encode(&info.public_key),
+        fingerprint: info.fingerprint,
+        created_at: info.created_at_secs,
+    })
+    .map_err(|error| js_error(&format!("encode key: {error}")))
+}
+
 /// Encrypts `plaintext` to outside keys and the sender's own (base64),
 /// signed inside with the address key sealed in `envelope`: the armored
 /// message for a PGP/MIME `multipart/encrypted` part.

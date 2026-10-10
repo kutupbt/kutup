@@ -464,8 +464,13 @@ arrival, and direct sending. Phases, each with its own plan before code:
   recipient), sending outside through Stalwart (DKIM, sending limits),
   drafts, folders, search on readable fields, safe HTML. Later (C2f): body
   search in the browser, labels and custom folders, emptying Trash and Spam
-  after 30 days, web push. Then C3: PGP to outside users and the MX switch
-  from Cloudflare.
+  after 30 days, web push. C3, PGP with outside users (in progress): the
+  server finds their keys (WKD, Proton, keys.openpgp.org) and accepts
+  ready-made PGP/MIME messages; Mail encrypts to found or pinned keys,
+  opens and verifies PGP mail, sends an Autocrypt header and offers to
+  trust keys that come with mail; Contacts keeps pinned keys. Left: the
+  GnuPG gate and a manual Proton check (C3d), key import and export, and
+  the MX switch from Cloudflare (C3e).
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.

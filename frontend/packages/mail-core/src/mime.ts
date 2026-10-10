@@ -165,16 +165,34 @@ export interface OutgoingMessage {
   text: string
   /** Parts made by `attachmentPart`. */
   attachments?: Uint8Array[]
+  /**
+   * The sender's OpenPGP key (binary, base64) for an Autocrypt header
+   * (Level 1, `prefer-encrypt=mutual`), so OpenPGP mail programs can write
+   * back encrypted and offer to trust it (docs/plans/mail.md, C3).
+   */
+  autocryptKey?: string
 }
 
-/**
- * The message as sent: multipart/alternative (text and HTML), inside
- * multipart/mixed when there are attachments. Never a Bcc header: Bcc
- * recipients get the same message, and only the sender's row keeps them.
- */
-export function buildMessage(message: OutgoingMessage): Uint8Array {
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.length
+  }
+  return out
+}
+
+/** `Autocrypt: addr=…; prefer-encrypt=mutual; keydata=…`, folded. */
+export function autocryptHeader(address: string, publicKey: string): string {
+  const keydata = publicKey.replace(/\s/g, '')
+  return `Autocrypt: addr=${address}; prefer-encrypt=mutual; keydata=\r\n ${(keydata.match(/.{1,76}/g) ?? []).join('\r\n ')}`
+}
+
+/** The message's own header fields, without its Content-Type. */
+function headerFields(message: OutgoingMessage): string[] {
   const date = message.date ?? new Date()
-  const headers = [
+  return [
     `From: ${formatMailbox(message.from)}`,
     ...headerList('To', message.to),
     ...headerList('Cc', message.cc),
@@ -183,8 +201,17 @@ export function buildMessage(message: OutgoingMessage): Uint8Array {
     `Message-ID: <${message.messageId}>`,
     ...(message.inReplyTo ? [`In-Reply-To: <${message.inReplyTo}>`] : []),
     ...(message.references?.length ? [`References: ${message.references.map((id) => `<${id}>`).join('\r\n ')}`] : []),
+    ...(message.autocryptKey ? [autocryptHeader(message.from.address, message.autocryptKey)] : []),
     'MIME-Version: 1.0',
   ]
+}
+
+/**
+ * The message's body as one MIME entity, from its Content-Type on:
+ * multipart/alternative (text and HTML), inside multipart/mixed when there
+ * are attachments. What PGP/MIME encrypts (RFC 3156).
+ */
+export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'attachments'>): Uint8Array {
   const alternativeBoundary = boundary()
   const alternative = [
     `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
@@ -197,27 +224,56 @@ export function buildMessage(message: OutgoingMessage): Uint8Array {
     '',
   ].join('\r\n')
   const attachments = message.attachments ?? []
-  if (attachments.length === 0) {
-    return encoder.encode(`${headers.join('\r\n')}\r\n${alternative}`)
-  }
+  if (attachments.length === 0) return encoder.encode(alternative)
   const mixedBoundary = boundary()
   const chunks: Uint8Array[] = [
-    encoder.encode(
-      `${headers.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="${mixedBoundary}"\r\n\r\n--${mixedBoundary}\r\n${alternative}`,
-    ),
+    encoder.encode(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"\r\n\r\n--${mixedBoundary}\r\n${alternative}`),
   ]
   for (const part of attachments) {
     chunks.push(encoder.encode(`\r\n--${mixedBoundary}\r\n`), part)
   }
   chunks.push(encoder.encode(`\r\n--${mixedBoundary}--\r\n`))
-  const total = chunks.reduce((n, c) => n + c.length, 0)
-  const out = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.length
-  }
-  return out
+  return concat(chunks)
+}
+
+/**
+ * The message as sent in plaintext: its header fields and `buildBody`.
+ * Never a Bcc header: Bcc recipients get the same message, and only the
+ * sender's row keeps them.
+ */
+export function buildMessage(message: OutgoingMessage): Uint8Array {
+  return concat([encoder.encode(`${headerFields(message).join('\r\n')}\r\n`), buildBody(message)])
+}
+
+/**
+ * The message as sent to OpenPGP recipients (RFC 3156 `multipart/encrypted`):
+ * the same header fields, and `armored`, the body (`buildBody`) encrypted
+ * and signed. The subject stays readable, as at Proton.
+ */
+export function buildPgpMessage(message: Omit<OutgoingMessage, 'html' | 'text' | 'attachments'>, armored: string): Uint8Array {
+  const outer = boundary()
+  return encoder.encode(
+    [
+      ...headerFields({ ...message, html: '', text: '' }),
+      `Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="${outer}"`,
+      '',
+      'This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156)',
+      `--${outer}`,
+      'Content-Type: application/pgp-encrypted',
+      'Content-Description: PGP/MIME version identification',
+      '',
+      'Version: 1',
+      '',
+      `--${outer}`,
+      'Content-Type: application/octet-stream; name="encrypted.asc"',
+      'Content-Description: OpenPGP encrypted message',
+      'Content-Disposition: inline; filename="encrypted.asc"',
+      '',
+      armored.replace(/\r?\n/g, '\r\n').trimEnd(),
+      `--${outer}--`,
+      '',
+    ].join('\r\n'),
+  )
 }
 
 /** A new Message-ID on this server's domain. */

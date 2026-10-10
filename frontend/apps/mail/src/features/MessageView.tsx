@@ -1,6 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { Download, Forward, Paperclip, Reply, ReplyAll, UserPlus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useOpenedMessage, type MailAccount, type MailMessage } from '@kutup/mail-core/api'
+import { toast } from 'sonner'
+import { usePinKey } from '@kutup/contacts-core/api'
+import { formatFingerprint } from '@kutup/contacts-core/model'
+import { useOpenedMessage, usePinnedKeys, type MailAccount, type MailMessage, type OpenedMessage } from '@kutup/mail-core/api'
 import { appUrl } from '@kutup/session/apps'
 import type { Mailbox, ParsedAttachment } from '@kutup/mail-core/mime'
 import { Alert } from '@kutup/ui/components/alert'
@@ -61,6 +65,44 @@ function Attachments({ list }: { list: ParsedAttachment[] }) {
   )
 }
 
+/**
+ * A key the sender offers (Autocrypt, attached key): trusting it pins it to
+ * their contact (docs/plans/mail.md, C3), never without the person's action.
+ */
+function OfferedKey({ address, name, offered }: { address: string; name: string; offered: NonNullable<OpenedMessage['offeredKey']> }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const pin = usePinKey()
+  const fingerprint = formatFingerprint(offered.fingerprint)
+  return (
+    <Alert variant={offered.replacesPinned ? 'warn' : 'info'} title={t(offered.replacesPinned ? 'read.replaceKeyTitle' : 'read.trustKeyTitle', { address })}>
+      <p className="break-all">{t(offered.replacesPinned ? 'read.replaceKeyDescription' : 'read.trustKeyDescription', { fingerprint })}</p>
+      <Button
+        size="sm"
+        variant="outline"
+        className="mt-2"
+        disabled={pin.isPending}
+        onClick={() =>
+          pin.mutate(
+            { address, name, publicKey: offered.publicKey },
+            {
+              onSuccess: () => {
+                toast.success(t('read.keyTrusted', { address }))
+                // Opened again with the key: signatures now check against it.
+                void queryClient.invalidateQueries({ queryKey: ['mail', 'content'] })
+                void queryClient.invalidateQueries({ queryKey: ['mail', 'protection'] })
+              },
+              onError: () => toast.error(t('read.trustFailed')),
+            },
+          )
+        }
+      >
+        {t('read.trustKey')}
+      </Button>
+    </Alert>
+  )
+}
+
 /** One message of a thread: a line when folded, the whole message when open. */
 export function MessageView({
   account,
@@ -74,7 +116,8 @@ export function MessageView({
   onToggle: () => void
 }) {
   const { t, i18n } = useTranslation()
-  const opened = useOpenedMessage(account, expanded ? message : undefined)
+  const pinned = usePinnedKeys()
+  const opened = useOpenedMessage(account, expanded ? message : undefined, pinned)
   const parsed = opened.data?.parsed
   const from = parsed?.from ?? message.from
   const draft = message.folder === 'drafts'
@@ -123,9 +166,14 @@ export function MessageView({
           <Alert variant="error">{t('read.cannotOpen')}</Alert>
         ) : (
           <>
-            {opened.data.signed && !opened.data.verified && message.protection === 'end_to_end' ? (
+            {opened.data.pgp ? (
+              opened.data.pgp.pinned && opened.data.signed && !opened.data.verified ? (
+                <Alert variant="warn">{t('read.pgpSignatureFailed')}</Alert>
+              ) : null
+            ) : opened.data.signed && !opened.data.verified && message.protection === 'end_to_end' ? (
               <Alert variant="warn">{t('read.signatureFailed')}</Alert>
             ) : null}
+            {opened.data.offeredKey && from ? <OfferedKey address={from.address} name={from.name} offered={opened.data.offeredKey} /> : null}
             <MailBody parsed={opened.data.parsed} />
             <Attachments list={opened.data.parsed.attachments} />
             <div className="flex flex-wrap gap-2 pt-1">

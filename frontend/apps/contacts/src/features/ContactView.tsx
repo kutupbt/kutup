@@ -10,6 +10,7 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { ContactAvatar } from './ContactAvatar'
 import { useEditor } from './editorState'
+import { PinnedKey } from './PinnedKey'
 import { downloadVCards } from './exportVCards'
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
@@ -100,6 +101,8 @@ export function ContactView({ contact, groups, backTo }: { contact: Contact; gro
               </Labelled>
               {server && email.address.toLowerCase().endsWith(`@${server}`) ? (
                 <Badge title={t('contacts.kutupAddressHint')}>{t('contacts.kutupAddress')}</Badge>
+              ) : server ? (
+                <PinnedKey contact={contact} address={email.address} />
               ) : null}
             </div>
           ))}

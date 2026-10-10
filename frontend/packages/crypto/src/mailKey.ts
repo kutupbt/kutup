@@ -171,6 +171,11 @@ export async function inspectExternalMailKey(publicKey: Uint8Array, address: str
   return (await getCryptoWasm()).inspectExternalMailKey(publicKey, address)
 }
 
+/** An outside key as it is, unchecked: for showing a pinned key, even an expired one. */
+export async function describeExternalMailKey(publicKey: Uint8Array): Promise<ExternalMailKey> {
+  return (await getCryptoWasm()).describeExternalMailKey(publicKey)
+}
+
 /**
  * Encrypts to outside keys and the sender's own (base64), signed inside:
  * the armored message for a PGP/MIME `multipart/encrypted` part.

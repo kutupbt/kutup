@@ -280,7 +280,21 @@ help pages (checked 2026-10-10):
    one marks its recipients `failed`.
 3. **C3c app:** per-recipient protection in the composer, PGP/MIME
    building, Autocrypt, opening and verifying PGP mail, pinning keys to
-   contacts.
+   contacts. Done as follows. The composer shows a lock per recipient
+   (Kutup, a pinned key, a found key with its source, a pinned key that no
+   longer works); a pinned key that no longer works stops the send rather
+   than sending in clear, and so does a failed lookup. PGP/MIME encrypts the
+   body entity (`buildBody`) to the recipients' keys and the sender's own,
+   signed inside; the header fields, subject included, stay readable as at
+   Proton. Every message (plaintext, PGP/MIME, and between Kutup users)
+   carries `Autocrypt: addr=…; prefer-encrypt=mutual; keydata=…`. Reading
+   opens `multipart/encrypted` (also when signed in a second
+   `multipart/signed` layer), inline PGP, `multipart/signed` over the exact
+   signed part, and cleartext signatures; header fields repeated inside the
+   encrypted part win (protected headers). A key from an Autocrypt header or
+   an attached key file is offered for trusting when it is usable for the
+   sender and is not the pinned one ("sent a different public key" when it
+   would replace it).
 4. **C3d gates:** the mail gate with a GnuPG correspondent (a WKD server and
    a sink that decrypts with `gpg`), both ways; a manual check against a real
    Proton account, documented.

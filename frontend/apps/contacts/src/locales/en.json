@@ -130,5 +130,20 @@
     "done_one": "{{count}} contact imported",
     "done_other": "{{count}} contacts imported",
     "failed": "The import did not finish. Nothing from the failed batch was saved."
+  },
+  "keys": {
+    "title": "OpenPGP key",
+    "label": "OpenPGP key for {{address}}",
+    "add": "Add OpenPGP key",
+    "replace": "Replace",
+    "remove": "Remove key",
+    "trusted": "Trusted",
+    "trustedHint": "Mail to this address is encrypted to this key, and its signatures are checked with it.",
+    "unusable": "Not usable",
+    "unusableHint": "The key has expired or been revoked, or no longer names this address. Mail is not encrypted to it.",
+    "pinned": "Key saved for {{address}}.",
+    "removed": "Key removed for {{address}}.",
+    "noUsableKey": "This file has no usable OpenPGP key for {{address}}.",
+    "saveFailed": "The contact could not be saved."
   }
 }

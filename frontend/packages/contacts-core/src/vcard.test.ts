@@ -22,7 +22,31 @@ describe('vCard', () => {
     expect(text).toMatch(/^BEGIN:VCARD\r\nVERSION:4.0\r\n/)
     const [card] = parseVCards(text)
     expect(card.uid).toBe('urn:uuid:1')
-    expect(card.draft).toEqual({ ...draft, photo: '', groups: [] })
+    expect(card.draft).toEqual({ ...draft, photo: '', groups: [], keys: [] })
+  })
+
+  it('keeps pinned keys in Proton’s grouped form', () => {
+    const draft = {
+      ...emptyDraft(),
+      name: 'Dave',
+      emails: [{ address: 'dave@example.org' }, { address: 'Dave@Work.example' }],
+      keys: [{ address: 'dave@work.example', publicKey: 'xjMEZQ+/', fingerprint: '', encrypt: true, sign: false }],
+    }
+    const text = toVCard(draft, 'urn:uuid:2', 'Dave')
+    expect(text).toContain('ITEM2.EMAIL:Dave@Work.example\r\n')
+    expect(text).toContain('ITEM2.KEY;PREF=1:data:application/pgp-keys;base64')
+    expect(text).toContain('ITEM2.X-PM-ENCRYPT:true\r\n')
+    expect(text).toContain('ITEM2.X-PM-SIGN:false\r\n')
+    expect(parseVCards(text)[0].draft.keys).toEqual(draft.keys)
+
+    // As Proton exports it: preferences absent mean yes; a key without its email group is dropped.
+    const proton = [
+      'BEGIN:VCARD', 'VERSION:4.0', 'FN:P', 'item1.EMAIL;PREF=1:p@proton.me', 'item1.KEY;PREF=1:data:application/pgp-keys;base64,AAAA',
+      'item9.KEY:data:application/pgp-keys;base64,BBBB', 'END:VCARD',
+    ].join('\r\n')
+    expect(parseVCards(proton)[0].draft.keys).toEqual([
+      { address: 'p@proton.me', publicKey: 'AAAA', fingerprint: '', encrypt: true, sign: true },
+    ])
   })
 
   it('reads several vCard 3.0 cards from one file', () => {

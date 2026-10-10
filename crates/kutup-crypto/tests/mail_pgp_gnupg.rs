@@ -151,6 +151,10 @@ fn kutup_and_gnupg_exchange_signed_encrypted_mail() {
     assert!(
         inspect_external_public_key(&dave_public, "dave@example.org", now() + 400 * DAY).is_err()
     );
+    // Described as it is, expired or not.
+    let described = kutup_crypto::mail_key::describe_external_public_key(&armored).unwrap();
+    assert_eq!(described.fingerprint, info.fingerprint);
+    assert_eq!(described.public_key, info.public_key);
 
     // Kutup (Alice) writes to Dave: GnuPG opens it and checks her signature.
     let alice = generate_address_key("alice@kutup.dev", 1_790_000_000).unwrap();

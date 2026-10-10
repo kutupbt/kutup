@@ -59,6 +59,7 @@ export {
   MAIL_KEY_FLAGS,
   armorMailPublicKey,
   encryptMailMessage,
+  describeExternalMailKey,
   encryptMailPgp,
   generateMailAddressKey,
   inspectExternalMailKey,

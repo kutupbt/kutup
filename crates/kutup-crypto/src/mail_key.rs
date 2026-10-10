@@ -469,6 +469,29 @@ fn usable_encryption_subkey(key: &SignedPublicKey, now_secs: u64) -> Option<&Sig
         .max_by_key(|sub| sub.created_at().as_secs())
 }
 
+/// A single outside key (armored or binary) as it is, unchecked: its binary
+/// form, fingerprint and creation time, for showing a key pinned to a
+/// contact even once it has expired. Use [`inspect_external_public_key`]
+/// before encrypting to it.
+pub fn describe_external_public_key(public_key: &[u8]) -> Result<ExternalKeyInfo> {
+    if public_key.is_empty() || public_key.len() > MAX_EXTERNAL_KEY_LEN {
+        return Err(CryptoError::InvalidInput(
+            "public key size is invalid".into(),
+        ));
+    }
+    let key = parse_public_key(public_key)?;
+    if key.primary_key.version() != pgp::types::KeyVersion::V4 {
+        return Err(CryptoError::InvalidInput(
+            "only version 4 keys are supported".into(),
+        ));
+    }
+    Ok(ExternalKeyInfo {
+        public_key: key.to_bytes().map_err(backend)?,
+        fingerprint: hex::encode(key.fingerprint().as_bytes()),
+        created_at_secs: key.primary_key.created_at().as_secs(),
+    })
+}
+
 /// Every key in a key server's answer (armored or binary; WKD and HKP may
 /// serve several), each checked by [`inspect_external_public_key`]; the
 /// newest valid one wins.
