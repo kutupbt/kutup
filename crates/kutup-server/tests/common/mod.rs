@@ -37,6 +37,16 @@ pub struct User {
 }
 
 pub fn register(c: &Client, base: &str) -> User {
+    register_with(c, base, true)
+}
+
+/// An account as an older client makes it: no Drive key binding
+/// (docs/plans/drive-identity-pins.md).
+pub fn register_without_binding(c: &Client, base: &str) -> User {
+    register_with(c, base, false)
+}
+
+fn register_with(c: &Client, base: &str, binding: bool) -> User {
     let mut rng = rand::thread_rng();
     let tag = rng.next_u64() % 1_000_000_000;
     let email = format!("integrity-{tag}@example.com");
@@ -61,9 +71,7 @@ pub fn register(c: &Client, base: &str) -> User {
     let seal = |plain: &[u8], key: &[u8], purpose| {
         account_envelope::seal_b64(plain, key, purpose, &email).unwrap()
     };
-    let r = c
-        .post(format!("{base}/api/auth/register"))
-        .json(&json!({
+    let mut body = json!({
             "email": email, "username": username,
             "loginKey": b64(keys.login_key.as_slice()),
             "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
@@ -78,7 +86,17 @@ pub fn register(c: &Client, base: &str) -> User {
             "accountProtectionSalt": b64(&salt),
             "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
             "recoveryProof": b64(recovery_proof.as_slice()),
-        }))
+    });
+    if binding {
+        let account = format!("{username}@{DOMAIN}");
+        body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
+            &identity, &account
+        )
+        .unwrap()));
+    }
+    let r = c
+        .post(format!("{base}/api/auth/register"))
+        .json(&body)
         .send()
         .unwrap();
     assert!(r.status().is_success(), "register: {}", r.status());

@@ -58,6 +58,9 @@ pub struct RegisterRequest {
     pub argon_iterations: u32,
     pub argon_parallelism: u32,
     pub recovery_proof: String,
+    /// The account authority's signature over its Drive keys
+    /// (docs/plans/drive-identity-pins.md).
+    pub drive_key_binding: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

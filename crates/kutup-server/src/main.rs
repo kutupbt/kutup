@@ -503,7 +503,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
-        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
+        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access, identity,
         link_reports, sessions as session_routes, shares, trash, tus,
     };
 
@@ -604,6 +604,19 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route(
+            "/api/user/drive-key-binding",
+            put(identity::put_drive_key_binding),
+        )
+        .route(
+            "/api/user/identity-pins",
+            get(identity::get_identity_pins)
+                .put(identity::put_identity_pins)
+                // One sealed list, base64, and no more.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::identity_pins::MAX_SEALED_BYTES / 3 * 4 + 64 * 1024,
+                )),
+        )
         .route("/api/user/storage", get(handlers::storage::usage))
         .route(
             "/api/mail/addresses",

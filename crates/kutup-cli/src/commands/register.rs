@@ -101,6 +101,16 @@ pub fn run(
     .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
 
+    let client = Client::new(&server, "");
+    // The address the account will have here, which its authority vouches
+    // for together with its Drive keys.
+    let server_name = client.settings().context("server settings")?.chat.server_name;
+    let drive_key_binding = kutup_crypto::drive_key_binding::sign(
+        &account_identity,
+        &format!("{username}@{server_name}"),
+    )
+    .context("sign the Drive key binding")?;
+
     let req = RegisterRequest {
         email: email.clone(),
         username: username.clone(),
@@ -119,9 +129,9 @@ pub fn run(
         argon_iterations: kdf::AccountProtectionParameters::V1.iterations,
         argon_parallelism: kdf::AccountProtectionParameters::V1.parallelism,
         recovery_proof: b64.encode(recovery_proof.as_slice()),
+        drive_key_binding: b64.encode(drive_key_binding),
     };
 
-    let client = Client::new(&server, "");
     client.register(&req).context("register")?;
 
     if json {
