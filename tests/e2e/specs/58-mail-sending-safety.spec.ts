@@ -7,6 +7,10 @@ import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/
 
 const PASSWORD = 'Deneme123*SendingSafetyPassword'
 
+// Needs a stack with MAIL_OUTSIDE_SENDING=on (tests/e2e/docker-compose.isolated.yml,
+// CI's clean-browser job); spec 59 covers the default, off.
+test.skip(process.env.E2E_MAIL_OUTSIDE_SENDING === 'off', 'outside sending is off on this stack')
+
 test('an administrator pauses and resumes an account’s outside mail, and its owner is told', async ({ browser }) => {
   test.slow()
   const owner = newAccount('mailsafety', PASSWORD)

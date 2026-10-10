@@ -89,6 +89,21 @@ registers one); `E2E_TRUST_LOCAL_CERT=1` makes Chromium accept it.
 Normal local runs write the HTML report to `playwright-report/` and per-test
 artifacts to `test-results/`; both are ignored by Git.
 
+## Mail and outside sending
+
+The isolated stack runs with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
+nothing actually leaves), which spec 58 needs for its pause notice. Spec 59
+checks the default, off: restart the backend with it off and run that spec
+with `E2E_MAIL_OUTSIDE_SENDING=off` (spec 58 then skips itself):
+
+```sh
+MAIL_OUTSIDE_SENDING=off docker compose up -d --wait backend
+E2E_MAIL_OUTSIDE_SENDING=off npx playwright test specs/59-mail-outside-off.spec.ts
+```
+
+CI's clean-browser job on master runs specs 54, 57 and 58, then 59 the same
+way.
+
 ## Required Chat backup gates
 
 Use the repository scripts from the workspace root. They own disposable Compose
