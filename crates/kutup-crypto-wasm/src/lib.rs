@@ -2118,8 +2118,12 @@ fn open_group_secret(
         fingerprint_hex,
     )?;
     let share = decode_canonical_base64(share_base64, "share")?;
-    kutup_crypto::mail_key::open_group_key_share(&member, &share, &group_fingerprint(group_fingerprint_hex)?)
-        .map_err(|error| js_error(&error.to_string()))
+    kutup_crypto::mail_key::open_group_key_share(
+        &member,
+        &share,
+        &group_fingerprint(group_fingerprint_hex)?,
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Makes a shared mailbox's key for `group_address`, with a share for each
