@@ -62,6 +62,7 @@ pub mod mnemonic;
 pub mod named_share;
 pub mod photos_library;
 pub mod profile_key_share;
+pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;
 

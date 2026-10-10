@@ -779,4 +779,13 @@ assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, 8, resealedPins),
 assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 0, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
+// The safety number every app shows (kutup-crypto safety_number, V1 vector).
+const one = Buffer.alloc(32, 1).toString('base64')
+const two = Buffer.alloc(32, 2).toString('base64')
+const safety = crypto.deriveSafetyNumber('alice@kutup.dev', one, 'bob@example.org', two)
+assert.equal(safety.fingerprint, '43287 64308 39064 62898 28602 34220 14368 04694 33524 24006 58545 00869 00480 18981 08556 55505')
+assert.deepEqual(crypto.deriveSafetyNumber('bob@example.org', two, 'alice@kutup.dev', one), safety)
+assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', one, safety.qrPayload), true)
+assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', two, safety.qrPayload), false)
+
 console.log('crypto WASM canonical vectors passed')

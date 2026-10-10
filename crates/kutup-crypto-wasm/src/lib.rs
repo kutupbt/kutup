@@ -2601,6 +2601,54 @@ pub fn incarnation_id_of_authority(authority_public_key_base64: &str) -> Result<
     )
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SafetyNumberView {
+    fingerprint: String,
+    qr_payload: String,
+}
+
+/// The safety number of two accounts (the same one Chat shows).
+#[wasm_bindgen(js_name = deriveSafetyNumber)]
+pub fn derive_safety_number(
+    local_account: &str,
+    local_authority_base64: &str,
+    peer_account: &str,
+    peer_authority_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let number = kutup_crypto::safety_number::derive(
+        local_account,
+        &public_key_32(local_authority_base64, "local authority key")?,
+        peer_account,
+        &public_key_32(peer_authority_base64, "peer authority key")?,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&SafetyNumberView {
+        fingerprint: number.fingerprint,
+        qr_payload: number.qr_payload,
+    })
+    .map_err(|error| js_error(&format!("encode safety number: {error}")))
+}
+
+/// Whether a scanned safety QR is exactly the one for these two accounts.
+#[wasm_bindgen(js_name = safetyQrMatches)]
+pub fn safety_qr_matches(
+    local_account: &str,
+    local_authority_base64: &str,
+    peer_account: &str,
+    peer_authority_base64: &str,
+    scanned: &str,
+) -> bool {
+    let (Ok(local), Ok(peer)) = (
+        public_key_32(local_authority_base64, "local authority key"),
+        public_key_32(peer_authority_base64, "peer authority key"),
+    ) else {
+        return false;
+    };
+    kutup_crypto::safety_number::derive(local_account, &local, peer_account, &peer)
+        .is_ok_and(|number| kutup_crypto::safety_number::matches_qr_payload(&number, scanned))
+}
+
 fn pins_revision(revision: f64) -> Result<u64, JsValue> {
     if revision.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&revision) {
         return Err(js_error("revision must be a positive safe integer"));
