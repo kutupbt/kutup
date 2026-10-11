@@ -156,6 +156,25 @@ The shared safety encoding sorts both `(canonical account, raw authority key)`
 pairs, encodes them under `kutup/chat/safety-number/v1`, hashes with SHA-256,
 and renders the full digest as sixteen lossless five-digit groups. The QR is a
 versioned `kutup://verify/chat/v1/…` encoding of the canonical public payload.
+The derivation lives in `kutup-crypto` (`safety_number`), so Drive and the CLI
+show the same number.
+
+Chat also keeps to the account's synced identity pins, the list Drive, Office,
+Photos and the CLI share (docs/plans/drive-identity-pins.md). Right after the
+engine accepts a contact's identity, and before anything is sealed to them:
+
+- a first-seen contact whose address the list holds with another authority is
+  quarantined (the send fails with a trust error), not trusted on first use;
+- an authority the list holds as verified (compared in person in another app
+  or on another device) becomes `Verified` here;
+- a contact new to the list is added to it, and one verified here is written
+  as verified.
+
+The list never lifts a quarantine: only an exact scan does, and its result is
+written back as verified. Chat's own in-person verification also outranks a
+list entry that was only accepted elsewhere without comparing. The web and
+native engines read and store the list (`GET/PUT /api/user/identity-pins`)
+with the key derived from the master key at start-up.
 
 Relevant routes:
 

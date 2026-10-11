@@ -35,6 +35,14 @@ pub fn run(
     };
 
     let sess = login_with_password(profile, &server, &email, &password)?;
+    // An account made before Drive key bindings signs its own now, as the web
+    // app does at sign-in (docs/plans/drive-identity-pins.md). Best effort:
+    // the next sign-in tries again.
+    if let Ok(ctx) = crate::context::require_session(profile) {
+        if let Ok(me) = crate::identity::Me::of(&ctx, profile) {
+            let _ = crate::identity::ensure_binding(&ctx, &me);
+        }
+    }
 
     if json {
         crate::output::print_json(&serde_json::json!({

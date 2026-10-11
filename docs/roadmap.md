@@ -88,8 +88,8 @@ Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 |---|---|
 | Apple Developer ID for macOS signing + notarization | external — requires Apple Developer Program ($99/yr) |
 | Microsoft Authenticode certificate for Windows | external — DigiCert / Sectigo (~$300/yr) |
-| Native iOS signing, TestFlight/App Store Connect, entitlements, and opaque production icons | external + sibling `kutup-ios` repository |
-| Native Android upload key, Play App Signing/Console, and release metadata | external + sibling `kutup-android` repository |
+| Native iOS signing, TestFlight/App Store Connect, entitlements, and opaque production icons | external + each native app's repository (iOS) |
+| Native Android upload key, Play App Signing/Console, and release metadata | external + each native app's repository (Android) |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 
 ---
@@ -152,9 +152,12 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 
 ### Native iOS and Android apps
 
-The dedicated `kutup-ios` and `kutup-android` apps are active work in sibling
-repositories and are not release-ready. The implemented `kutup-client-ffi`
-boundary is only one dependency of those products; native UI integration,
+Not started, and deferred until the web apps are done. Each product is its
+own app, one repository per app covering iOS and Android: Kutup Drive, Chat
+and Mail first, Photos later, and maybe more such as a password vault
+(decided 2026-10-11; the empty `kutup-ios` and `kutup-android` repositories
+are retired). The implemented `kutup-client-ffi` boundary is only one
+dependency of those products; native UI integration,
 platform lifecycle, secure storage, complete Direct/MLS/media/backup parity,
 packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
@@ -209,7 +212,7 @@ Native iOS/Android notifications for shared-file and Chat events. Not v1.
 |---|---|
 | Apple Push Notification Service setup | external |
 | Backend: APNS sender + per-user device-token registry | new |
-| Native clients: APNS/FCM registration, permission, and presentation | sibling iOS/Android repositories |
+| Native clients: APNS/FCM registration, permission, and presentation | each native app's repository |
 
 ### Responsive/native mobile · recovery-phrase management
 
@@ -263,7 +266,7 @@ names unambiguous):
 | 5b | Confidential broadcast | **V1 blocker scheduled after Phase 6, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
-| 9 | Native clients | **Work in progress; not release-ready.** Stabilize the UniFFI APIs, package XCFramework/AAR artifacts, complete Keychain/Keystore and lifecycle integration, reach Direct/MLS/media/backup parity, and pass real-device release gates in the sibling iOS/Android repositories. |
+| 9 | Native clients | **Not started; deferred.** One app per product (Drive, Chat, Mail; later Photos), each in its own repository. Stabilize the UniFFI APIs, package XCFramework/AAR artifacts, complete Keychain/Keystore and lifecycle integration, reach Direct/MLS/media/backup parity, and pass real-device release gates in each app's repository. |
 
 Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
 
@@ -848,6 +851,16 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
   until uploaded again.
 - The CLI has no Replace for a taken name (it skips the same file, and
   `--keep-both` keeps both).
+
+### Drive · identity pins: what is left
+
+Drive, Chat and the CLI share one list of trusted identities and one safety
+number (docs/plans/drive-identity-pins.md). Still to do:
+
+- Contacts shows each person's state from the list (gray, green, red shield)
+  on their page, as the Contacts plan foresaw.
+- The native apps' own screens for the shield and the verification dialog
+  (their Chat engine already keeps to the list).
 
 ### Drive · share dialogs: what is left
 

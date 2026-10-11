@@ -30,7 +30,7 @@ Replaces the single-SPA "Polar Workspace" frontend described in
 | Visual system | asec-next frontend system (tokens, Radix primitives, a sidebar chrome that follows the theme, paper canvas, "spine", IBM Plex, next-themes, sonner) with Kutup's glacier/ice palette; three-diamond logo unchanged (`TRADEMARK.md`). |
 | Drive list | One list for folders, files, notes, office docs, whiteboards. Sort / filter / view controls top-right. **Default: list, last modified, newest first.** "Folders first" toggle, **default off**. |
 | Platforms | Web + CLI first → Android / iOS → desktop. The new frontend is **web-only** (no Tauri code paths). |
-| Mobile (later) | Two native apps per platform, **Kutup Drive** and **Kutup Chat**, mirroring the web split and sharing the Rust core (`kutup-client-ffi`); one repo per platform with two app targets (`kutup-ios`, `kutup-android`). Cross-app sign-in later via iOS keychain access group / Android signature-protected provider — the Nextcloud Files + Talk model (Nextcloud Android-SingleSignOn). |
+| Mobile (later) | One native app per product, mirroring the web split and sharing the Rust core (`kutup-client-ffi`): **Kutup Drive**, **Kutup Chat** and **Kutup Mail**, later Photos and more. *Revised 2026-10-11:* one repository per app covering iOS and Android, not one per platform with several targets; `kutup-ios` / `kutup-android` are retired ([`mobile-build.md`](../mobile-build.md)). Cross-app sign-in later via iOS keychain access group / Android signature-protected provider — the Nextcloud Files + Talk model (Nextcloud Android-SingleSignOn). |
 
 References (read-only checkouts in `../kutup-references/`, see its README):
 Proton `WebClients` (fork protocol, app shell, Drive explorer), `cryptpad`

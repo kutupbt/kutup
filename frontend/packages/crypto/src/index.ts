@@ -78,6 +78,10 @@ export {
   verifyMailCleartext,
   verifyMailDetachedSignature,
   verifyMailKeyList,
+  encryptMailMessageUnsigned,
+  encryptMailPgpUnsigned,
+  signMailDetached,
+  signMailDetachedAsGroup,
 } from './mailKey'
 export type {
   ExternalMailKey,

@@ -159,7 +159,7 @@ export async function signIn(context: BrowserContext, account: Account): Promise
  * several accounts meets that limit the way a person would, with "Too many
  * attempts", and waits for it to refill before trying again.
  */
-async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
+export async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
   const limited = page.getByRole('alert').filter({ hasText: 'Too many attempts' })
   for (let attempt = 1; ; attempt++) {
     const retrying = await limited.isVisible()

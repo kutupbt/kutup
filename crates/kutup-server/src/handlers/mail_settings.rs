@@ -1,6 +1,7 @@
 //! Mail settings (docs/plans/mail-parity.md), as Proton's mail settings:
 //! auto-delete of Trash and Spam after 30 days, and whether All mail leaves
-//! out Spam and Trash. Emptying a folder is here too.
+//! out Spam and Trash, and whether mail outside Kutup starts signed.
+//! Emptying a folder is here too.
 
 use axum::extract::State;
 use axum::Json;
@@ -22,20 +23,24 @@ pub struct MailSettings {
     pub auto_delete_days: i32,
     /// All mail leaves out Spam and Trash (Proton's `AlmostAllMail`).
     pub almost_all_mail: bool,
+    /// New mail to people outside Kutup starts with Sign on (Proton's "Sign
+    /// external messages"); the composer can still change it per message.
+    pub sign_outside: bool,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
-    let row: Option<(i32, bool)> = sqlx::query_as(
-        "SELECT auto_delete_days, almost_all_mail FROM mail_settings WHERE user_id = $1",
+    let row: Option<(i32, bool, bool)> = sqlx::query_as(
+        "SELECT auto_delete_days, almost_all_mail, sign_outside FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (auto_delete_days, almost_all_mail) = row.unwrap_or((0, false));
+    let (auto_delete_days, almost_all_mail, sign_outside) = row.unwrap_or((0, false, true));
     Ok(MailSettings {
         auto_delete_days,
         almost_all_mail,
+        sign_outside,
     })
 }
 
@@ -57,6 +62,7 @@ pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Jso
 pub struct UpdateMailSettings {
     pub auto_delete_days: Option<i32>,
     pub almost_all_mail: Option<bool>,
+    pub sign_outside: Option<bool>,
 }
 
 /// `PATCH /api/mail/settings`.
@@ -84,16 +90,18 @@ pub async fn update(
         return Err(AppError::bad_request("auto-delete is 0 or 30 days"));
     }
     sqlx::query(
-        "INSERT INTO mail_settings (user_id, auto_delete_days, almost_all_mail)
-         VALUES ($1, COALESCE($2, 0), COALESCE($3, false))
+        "INSERT INTO mail_settings (user_id, auto_delete_days, almost_all_mail, sign_outside)
+         VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, true))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
+             sign_outside = COALESCE($4, mail_settings.sign_outside),
              updated_at = now()",
     )
     .bind(user_id)
     .bind(request.auto_delete_days)
     .bind(request.almost_all_mail)
+    .bind(request.sign_outside)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

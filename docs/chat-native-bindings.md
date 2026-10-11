@@ -1,7 +1,8 @@
 # Native chat bindings
 
-**Status:** shared FFI boundary implemented; integration into the dedicated iOS
-and Android apps is work in progress, and those apps are not release-ready.
+**Status:** shared FFI boundary implemented. The native apps that will use it
+are not started; each product (Drive, Chat, Mail …) will be its own app in its
+own repository ([`mobile-build.md`](mobile-build.md)).
 
 `kutup-client-ffi` is the stable Swift/Kotlin boundary around
 `kutup-chat-core`. It is a standalone crate so libsignal, UniFFI, and the

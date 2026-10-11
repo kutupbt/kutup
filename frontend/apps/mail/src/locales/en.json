@@ -48,8 +48,8 @@
     "pgpEncrypted": "PGP-encrypted message",
     "pgpEncryptedSigned": "PGP-encrypted and signed message",
     "pgpVerified": "PGP-encrypted message from verified sender",
-    "pgpSigned": "PGP-signed message",
-    "pgpSignedVerified": "PGP-signed message from verified sender"
+    "pgpSigned": "Signed message; the signature could not be checked",
+    "pgpSignedVerified": "Signed by a verified sender; not end-to-end encrypted"
   },
   "list": {
     "to": "To:",
@@ -203,12 +203,22 @@
         "wkd": "End-to-end encrypted with a key from the recipient's domain (Web Key Directory)",
         "proton": "End-to-end encrypted with the recipient's Proton key",
         "keysOpenpgp": "End-to-end encrypted with a key from keys.openpgp.org"
-      }
+      },
+      "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
+      "readableOutside": "Not encrypted for this message: plain mail"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
     "groupNotAllowed": "{{address}} only takes mail from its members or managers.",
-    "noGroupShare": "You hold no copy of this mailbox's current key. Ask one of its managers to add you again."
+    "noGroupShare": "You hold no copy of this mailbox's current key. Ask one of its managers to add you again.",
+    "encrypt": "Encrypt",
+    "sign": "Sign",
+    "encryptOn": "Encrypted end to end for every recipient who can receive it. Turn off for this message.",
+    "encryptOff": "Not encrypted end to end. Turn on.",
+    "signOn": "Signed with your key, so recipients can check it is from you. Turn off for this message.",
+    "signOff": "Not signed. Turn on.",
+    "notEncryptedKutup": "Not end-to-end encrypted: Kutup can read this message while delivering it to Kutup recipients, then stores it encrypted. Lists and shared mailboxes still get it end to end.",
+    "notEncrypted": "Not encrypted: recipients outside Kutup get plain mail."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -479,7 +489,9 @@
     "autoDelete": "Auto-delete unwanted messages",
     "autoDeleteHint": "Delete Trash and Spam messages after 30 days. Turning it on counts messages already there from now.",
     "almostAllMail": "Exclude Spam/Trash from All mail",
-    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash."
+    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash.",
+    "signOutside": "Sign outside mail",
+    "signOutsideHint": "New mail to people outside Kutup starts signed with your key, so they can check it came from you. Mail between Kutup users always starts signed. You can still turn Sign off for one message."
   },
   "senders": {
     "title": "Block and allow",

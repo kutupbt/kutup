@@ -48,8 +48,8 @@
     "pgpEncrypted": "PGP ile şifrelenmiş ileti",
     "pgpEncryptedSigned": "PGP ile şifrelenmiş ve imzalanmış ileti",
     "pgpVerified": "Doğrulanmış gönderenden PGP ile şifrelenmiş ileti",
-    "pgpSigned": "PGP ile imzalanmış ileti",
-    "pgpSignedVerified": "Doğrulanmış gönderenden PGP ile imzalanmış ileti"
+    "pgpSigned": "İmzalı ileti; imza doğrulanamadı",
+    "pgpSignedVerified": "Doğrulanmış bir göndericiden imzalı; uçtan uca şifreli değil"
   },
   "list": {
     "to": "Alıcı:",
@@ -203,12 +203,22 @@
         "wkd": "Alıcının alan adından alınan bir anahtarla uçtan uca şifreli (Web Key Directory)",
         "proton": "Alıcının Proton anahtarıyla uçtan uca şifreli",
         "keysOpenpgp": "keys.openpgp.org'dan alınan bir anahtarla uçtan uca şifreli"
-      }
+      },
+      "readableKutup": "Bu ileti için uçtan uca şifreli değil: geldiğinde şifrelenir",
+      "readableOutside": "Bu ileti için şifreli değil: düz posta"
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
     "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
     "groupNotAllowed": "{{address}} yalnızca üyelerinden ya da yöneticilerinden e-posta alıyor.",
-    "noGroupShare": "Bu posta kutusunun güncel anahtarının bir kopyası sizde yok. Yöneticilerinden birinden sizi yeniden eklemesini isteyin."
+    "noGroupShare": "Bu posta kutusunun güncel anahtarının bir kopyası sizde yok. Yöneticilerinden birinden sizi yeniden eklemesini isteyin.",
+    "encrypt": "Şifrele",
+    "sign": "İmzala",
+    "encryptOn": "Alabilen her alıcı için uçtan uca şifreli. Bu ileti için kapatın.",
+    "encryptOff": "Uçtan uca şifreli değil. Açın.",
+    "signOn": "Anahtarınızla imzalı; alıcılar sizden geldiğini doğrulayabilir. Bu ileti için kapatın.",
+    "signOff": "İmzasız. Açın.",
+    "notEncryptedKutup": "Uçtan uca şifreli değil: Kutup bu iletiyi Kutup alıcılarına teslim ederken okuyabilir, sonra şifreli saklar. Listeler ve ortak posta kutuları yine uçtan uca alır.",
+    "notEncrypted": "Şifreli değil: Kutup dışındaki alıcılar düz posta alır."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -479,7 +489,9 @@
     "autoDelete": "İstenmeyen iletileri otomatik sil",
     "autoDeleteHint": "Çöp Kutusu ve İstenmeyen’deki iletileri 30 gün sonra sil. Açıldığında orada olan iletiler şimdiden sayılır.",
     "almostAllMail": "Tüm postalara İstenmeyen/Çöp’ü katma",
-    "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir."
+    "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir.",
+    "signOutside": "Kutup dışına giden postayı imzala",
+    "signOutsideHint": "Kutup dışındaki kişilere giden yeni posta anahtarınızla imzalı başlar; böylece sizden geldiğini doğrulayabilirler. Kutup kullanıcıları arasındaki posta her zaman imzalı başlar. Tek bir ileti için İmzala'yı yine kapatabilirsiniz."
   },
   "senders": {
     "title": "Engelle ve izin ver",

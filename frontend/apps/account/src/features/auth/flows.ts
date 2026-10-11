@@ -19,7 +19,9 @@ import {
   deriveAccountProtectionInWorker,
   generateRegistrationInWorker,
 } from '@kutup/crypto/accountProtectionWorker'
+import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import type { AccountProtectionConfig } from '@kutup/crypto/kdf'
+import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
 import { persistKeys } from '@kutup/session/persist'
@@ -91,6 +93,29 @@ async function activate(
 ): Promise<void> {
   await activateSession(keys, response.accessToken, response.sessionId)
   await persistKeys(response.sessionId, keys)
+  // In the background: signing in must not wait for it, and the next
+  // sign-in tries again.
+  void ensureDriveKeyBinding(keys.masterKey).catch(() => undefined)
+}
+
+/** The address an account has on this server, which its binding names. */
+async function accountAddress(username: string): Promise<string> {
+  const settings = await loadServerSettings<{ chat?: { serverName?: string | null } }>()
+  const server = settings.chat?.serverName
+  if (!server) throw new Error('the server did not publish its name')
+  return `${username}@${server}`
+}
+
+/**
+ * An account made before Drive key bindings (docs/plans/drive-identity-pins.md)
+ * signs its own: its authority vouching for its Drive keys, so the people it
+ * shares with can check them.
+ */
+async function ensureDriveKeyBinding(masterKey: Uint8Array): Promise<void> {
+  const { data: me } = await api.get<{ username: string; hasDriveKeyBinding?: boolean }>('/user/me')
+  if (me.hasDriveKeyBinding !== false || !me.username) return
+  const driveKeyBinding = await signDriveKeyBinding(toBase64(masterKey), await accountAddress(me.username))
+  await api.put('/user/drive-key-binding', { driveKeyBinding })
 }
 
 /**
@@ -178,7 +203,8 @@ export async function registerAndSignIn(
   keys: RegistrationKeys,
 ): Promise<void> {
   if (!registered.has(keys)) {
-    await api.post('/auth/register', { email, username, ...registrationBody(keys) })
+    const driveKeyBinding = await signDriveKeyBinding(toBase64(keys.masterKey), await accountAddress(username))
+    await api.post('/auth/register', { email, username, ...registrationBody(keys), driveKeyBinding })
     registered.add(keys)
   }
   const { data } = await api.post<LoginResponse>('/auth/login', { email, loginKey: keys.loginKey })

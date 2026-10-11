@@ -11,6 +11,7 @@ mod context;
 mod cryptohelpers;
 mod errors;
 mod file_crypto;
+mod identity;
 mod keyring;
 mod mimetype;
 mod names;
@@ -200,6 +201,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
+    /// Who the people you share with are: trusted identities, safety numbers.
+    Identity {
+        #[command(subcommand)]
+        command: commands::identity::IdentityCmd,
+    },
     /// List and end your account's sign-ins (web apps, other CLIs).
     Sessions {
         #[command(subcommand)]
@@ -313,6 +319,7 @@ fn main() {
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Sessions { command } => commands::sessions::run(&cli.profile, cli.json, command),
+        Commands::Identity { command } => commands::identity::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),
         Commands::Pub { command } => commands::pubshare::run(cli.json, command),
