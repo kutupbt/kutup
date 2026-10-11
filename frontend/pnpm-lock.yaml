@@ -256,6 +256,9 @@ importers:
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@kutup/mail-core':
+        specifier: workspace:*
+        version: link:../../packages/mail-core
       '@kutup/session':
         specifier: workspace:*
         version: link:../../packages/session

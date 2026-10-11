@@ -25,28 +25,59 @@ describe('vCard', () => {
     expect(card.draft).toEqual({ ...draft, photo: '', groups: [], keys: [] })
   })
 
-  it('keeps pinned keys in Proton’s grouped form', () => {
+  it('keeps trusted keys in Proton’s grouped form, in order, with the address’s preferences', () => {
     const draft = {
       ...emptyDraft(),
       name: 'Dave',
-      emails: [{ address: 'dave@example.org' }, { address: 'Dave@Work.example' }],
-      keys: [{ address: 'dave@work.example', publicKey: 'xjMEZQ+/', fingerprint: '', encrypt: true, sign: false }],
+      emails: [{ address: 'dave@example.org' }, { address: 'Dave@Work.example', pgp: { sign: false, scheme: 'inline' as const } }],
+      keys: [
+        { address: 'dave@work.example', publicKey: 'xjMEZQ+/', fingerprint: '' },
+        { address: 'dave@work.example', publicKey: 'xjMEYQ+/', fingerprint: '' },
+      ],
     }
     const text = toVCard(draft, 'urn:uuid:2', 'Dave')
     expect(text).toContain('ITEM2.EMAIL:Dave@Work.example\r\n')
-    expect(text).toContain('ITEM2.KEY;PREF=1:data:application/pgp-keys;base64')
-    expect(text).toContain('ITEM2.X-PM-ENCRYPT:true\r\n')
+    expect(text).toContain('ITEM2.KEY;PREF=1:data:application/pgp-keys;base64,xjMEZQ+/')
+    expect(text).toContain('ITEM2.KEY;PREF=2:data:application/pgp-keys;base64,xjMEYQ+/')
     expect(text).toContain('ITEM2.X-PM-SIGN:false\r\n')
-    expect(parseVCards(text)[0].draft.keys).toEqual(draft.keys)
+    expect(text).toContain('ITEM2.X-PM-SCHEME:pgp-inline\r\n')
+    // Unset preferences are not written: the defaults apply.
+    expect(text).not.toContain('X-PM-ENCRYPT')
+    const read = parseVCards(text)[0].draft
+    expect(read.keys).toEqual(draft.keys)
+    expect(read.emails[1].pgp).toEqual({ sign: false, scheme: 'inline' })
+    expect(read.emails[0].pgp).toBeUndefined()
+  })
 
-    // As Proton exports it: preferences absent mean yes; a key without its email group is dropped.
+  it('writes Encrypt as Proton does: with keys X-PM-ENCRYPT, found keys only X-PM-ENCRYPT-UNTRUSTED; encrypting signs', () => {
+    const pinned = toVCard(
+      { ...emptyDraft(), emails: [{ address: 'a@example.org', pgp: { encrypt: true, sign: false } }], keys: [{ address: 'a@example.org', publicKey: 'AAAA', fingerprint: '' }] },
+      'urn:uuid:3',
+      'A',
+    )
+    expect(pinned).toContain('ITEM1.X-PM-ENCRYPT:true\r\n')
+    expect(pinned).toContain('ITEM1.X-PM-SIGN:true\r\n')
+    const foundOnly = toVCard({ ...emptyDraft(), emails: [{ address: 'b@example.org', pgp: { encrypt: false } }] }, 'urn:uuid:4', 'B')
+    expect(foundOnly).toContain('ITEM1.X-PM-ENCRYPT-UNTRUSTED:false\r\n')
+    expect(parseVCards(foundOnly)[0].draft.emails[0].pgp).toEqual({ encrypt: false })
+  })
+
+  it('reads Proton’s cards and Kutup’s older ones (one key, its own flags)', () => {
+    // As Proton exports it: a key without its email group is dropped; PREF orders the rest.
     const proton = [
-      'BEGIN:VCARD', 'VERSION:4.0', 'FN:P', 'item1.EMAIL;PREF=1:p@proton.me', 'item1.KEY;PREF=1:data:application/pgp-keys;base64,AAAA',
-      'item9.KEY:data:application/pgp-keys;base64,BBBB', 'END:VCARD',
+      'BEGIN:VCARD', 'VERSION:4.0', 'FN:P', 'item1.EMAIL;PREF=1:p@proton.me',
+      'item1.KEY;PREF=2:data:application/pgp-keys;base64,BBBB', 'item1.KEY;PREF=1:data:application/pgp-keys;base64,AAAA',
+      'item1.X-PM-ENCRYPT:true', 'item1.X-PM-SIGN:true', 'item1.X-PM-SCHEME:pgp-mime',
+      'item9.KEY:data:application/pgp-keys;base64,CCCC', 'END:VCARD',
     ].join('\r\n')
-    expect(parseVCards(proton)[0].draft.keys).toEqual([
-      { address: 'p@proton.me', publicKey: 'AAAA', fingerprint: '', encrypt: true, sign: true },
+    const card = parseVCards(proton)[0].draft
+    expect(card.keys).toEqual([
+      { address: 'p@proton.me', publicKey: 'AAAA', fingerprint: '' },
+      { address: 'p@proton.me', publicKey: 'BBBB', fingerprint: '' },
     ])
+    expect(card.emails[0].pgp).toEqual({ encrypt: true, sign: true, scheme: 'pgp_mime' })
+    const older = ['BEGIN:VCARD', 'VERSION:4.0', 'FN:O', 'item1.EMAIL:o@example.org', 'item1.KEY;PREF=1:data:application/pgp-keys;base64,DDDD', 'item1.X-PM-ENCRYPT:false', 'END:VCARD'].join('\r\n')
+    expect(parseVCards(older)[0].draft.emails[0].pgp).toEqual({ encrypt: false })
   })
 
   it('reads several vCard 3.0 cards from one file', () => {

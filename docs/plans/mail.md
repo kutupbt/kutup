@@ -269,17 +269,19 @@ help pages (checked 2026-10-10):
 ### How Kutup does it
 
 - **Finding keys** is the server's job, as at Proton (a browser cannot read
-  other domains' WKD): `GET /api/mail/keys?email=` answers outside
-  addresses too, from WKD (advanced, then direct), Proton's HKP for Proton
+  other domains' WKD): `GET /api/mail/keys/outside?email=` answers outside
+  addresses, every usable key of the first source that has any, from WKD
+  (advanced, then direct), Proton's HKP for Proton
   domains and MX, then keys.openpgp.org (verified addresses only). Each key
   must carry a valid self-signed user ID for the address and a usable
   encryption subkey (`kutup-crypto` checks). Lookups go through the SSRF
   guard, are cached for an hour, and are rate-limited.
-- **Trust:** a contact's pinned key (the signed contact summary's
-  `pinnedKeys`) wins; otherwise a found key is used to encrypt, as Proton
-  does, and marked "found through WKD" (or Proton, keys.openpgp.org).
-  Signatures verify only against pinned keys; a key that comes with a
-  message (Autocrypt, `.asc`) is offered for pinning.
+- **Trust:** a contact's trusted keys (the signed contact summary's
+  `pinnedKeys`; several per address, in order, as Proton's,
+  [`contact-keys.md`](contact-keys.md)) win; otherwise a found key is used to
+  encrypt, as Proton does, and marked "found through WKD" (or Proton,
+  keys.openpgp.org). Signatures verify only against trusted keys; a key
+  that comes with a message (Autocrypt, `.asc`) is offered for trust.
 - **Sending** is built in the browser: PGP recipients get RFC 3156
   `multipart/encrypted` (inner message signed and encrypted in one OpenPGP
   message, armored), To and Cc in one message, each Bcc in their own (key

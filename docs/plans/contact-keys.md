@@ -1,8 +1,10 @@
 # Contacts: keys for outside addresses, as Proton's
 
-**Status:** planned 2026-10-11, handed over from the third session; the user
-asked to follow Proton directly for automatic lookup, key history and trust
-([`mail-parity.md`](mail-parity.md), [`mail.md`](mail.md) C3).
+**Status:** built 2026-10-11 on `feat/contact-keys`, handed over from the
+third session; the user asked to follow Proton directly for automatic
+lookup, key history and trust ([`mail-parity.md`](mail-parity.md),
+[`mail.md`](mail.md) C3). Not yet: a key's own Obsolete and Compromised
+marks (Proton's, for its own users' keys).
 
 ## What is missing
 

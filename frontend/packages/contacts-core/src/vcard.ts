@@ -219,5 +219,8 @@ export function toVCard(draft: ContactDraft, uid: string, name: string): string 
     photo.setValue(draft.photo)
     card.addProperty(photo)
   }
-  return card.toString().replace(/\r?\n/g, '\r\n') + '\r\n'
+  // ical.js escapes the comma of a KEY's data: URI as if it were text; a
+  // URI is not escaped in vCard 4.0, and Proton reads `base64,` as written.
+  const out = card.toString().replace(/^((?:item\d+\.)?KEY[^:]*:data:application\/pgp-keys;base64)\\,/gim, '$1,')
+  return out.replace(/\r?\n/g, '\r\n') + '\r\n'
 }
