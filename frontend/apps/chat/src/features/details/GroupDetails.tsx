@@ -9,6 +9,7 @@ import type {
   MlsConversationMember,
   PendingMlsOwnerApprovalRequest,
 } from '@kutup/chat-core/types'
+import { useContactLookup } from '@kutup/contacts-core/api'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -20,6 +21,7 @@ import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
 import { groupIdOf } from '../../state/views'
 import type { ConversationModel } from '../thread/useConversationModel'
+import { useSaveContact } from '../contacts/saveContactState'
 import { Section } from './DetailsPanel'
 import { GroupLinkSection } from '../groupLink/GroupLinkSection'
 import { MlsGroupSecurityDetails } from './MlsGroupSecurityDetails'
@@ -38,6 +40,8 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
   const { t } = useTranslation()
   const { service, snapshot, self, capabilities } = useChat()
   const selfAddress = self!.address
+  const contacts = useContactLookup()
+  const saveContact = useSaveContact()
   const groupId = groupIdOf(group)
   const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -141,6 +145,15 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
                   t('chat.group.approvalRequested'),
                 )}
               onRemove={() => void run(() => service!.removeGroupMember(groupId, member.address), t('chat.group.memberRemoved'))}
+              onSaveContact={
+                contacts.ready && canonicalAccountAddress(member.address) !== selfAddress && !contacts.find(canonicalAccountAddress(member.address))
+                  ? () => {
+                      const address = canonicalAccountAddress(member.address)
+                      const name = personName(address, profiles, selfAddress, t)
+                      saveContact({ address, name: name === address ? undefined : name })
+                    }
+                  : undefined
+              }
             />
           ))}
         </ul>
@@ -364,6 +377,7 @@ function MemberRow({
   onToggleAdmin,
   onToggleOwner,
   onRemove,
+  onSaveContact,
 }: {
   member: MlsConversationMember
   name: string
@@ -378,6 +392,8 @@ function MemberRow({
   onToggleAdmin: () => void
   onToggleOwner: () => void
   onRemove: () => void
+  /** Present for a member who is not in the address book. */
+  onSaveContact?: () => void
 }) {
   const { t } = useTranslation()
   const address = canonicalAccountAddress(member.address)
@@ -401,6 +417,11 @@ function MemberRow({
           </span>
         ) : null}
       </span>
+      {onSaveContact ? (
+        <Button size="icon" variant="ghost" onClick={onSaveContact} aria-label={t('chat.contacts.saveNamed', { name })} data-testid={`chat-group-save-contact-${address}`}>
+          <UserPlus />
+        </Button>
+      ) : null}
       {canManage && !self ? (
         <span className="flex shrink-0 items-center">
           {canOwn ? (

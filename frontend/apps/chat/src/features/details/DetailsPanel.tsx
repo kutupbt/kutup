@@ -9,6 +9,7 @@ import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { DISAPPEARING_PRESETS } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
+import { ContactEntry } from '../contacts/ContactEntry'
 import type { ConversationModel } from '../thread/useConversationModel'
 import { EditGroupInfoDialog } from './EditGroupInfoDialog'
 import { GroupDetails } from './GroupDetails'
@@ -87,6 +88,7 @@ function DetailsBody({ model }: { model: ConversationModel }) {
           <p className="max-w-full break-words text-sm" data-testid="chat-contact-about">{model.profile.about}</p>
         ) : null}
         {model.note ? <p className="text-sm text-muted-foreground">{t('chat.noteToSelfDescription')}</p> : null}
+        {model.address && !model.note ? <ContactEntry address={model.address} name={model.profile?.displayName} /> : null}
         {model.group ? <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.group.currentRoster.length })}</p> : null}
         {info?.description ? (
           <p className="max-w-full whitespace-pre-line break-words text-sm" data-testid="chat-group-about">{info.description}</p>
