@@ -2548,6 +2548,152 @@ pub fn verify_mail_key_list(
         .map_err(|error| js_error(&format!("encode key list: {error}")))
 }
 
+// --- Drive identity (docs/plans/drive-identity-pins.md) ------------------------
+
+fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
+    decode_canonical_base64(value, what)?
+        .try_into()
+        .map_err(|_| js_error(&format!("{what} must be 32 bytes")))
+}
+
+/// The account's Drive key binding: its authority vouching for its Drive keys.
+#[wasm_bindgen(js_name = signDriveKeyBinding)]
+pub fn sign_drive_key_binding(master_key_base64: &str, account: &str) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let signature = kutup_crypto::drive_key_binding::sign(&identity, account)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(signature))
+}
+
+/// Whether `authority` vouches for these Drive keys of `account`.
+#[wasm_bindgen(js_name = verifyDriveKeyBinding)]
+pub fn verify_drive_key_binding(
+    account: &str,
+    authority_public_key_base64: &str,
+    drive_hpke_public_key_base64: &str,
+    drive_signing_public_key_base64: &str,
+    binding_base64: &str,
+) -> bool {
+    let check = || -> Result<(), JsValue> {
+        let signature = decode_canonical_base64(binding_base64, "binding")?;
+        kutup_crypto::drive_key_binding::verify(
+            account,
+            &public_key_32(authority_public_key_base64, "authority key")?,
+            &public_key_32(drive_hpke_public_key_base64, "Drive HPKE key")?,
+            &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,
+            &signature,
+        )
+        .map_err(|error| js_error(&error.to_string()))
+    };
+    check().is_ok()
+}
+
+/// The incarnation id an authority key stands for.
+#[wasm_bindgen(js_name = incarnationIdOfAuthority)]
+pub fn incarnation_id_of_authority(authority_public_key_base64: &str) -> Result<String, JsValue> {
+    Ok(
+        kutup_crypto::identity::incarnation_id_from_authority_public(&public_key_32(
+            authority_public_key_base64,
+            "authority key",
+        )?),
+    )
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SafetyNumberView {
+    fingerprint: String,
+    qr_payload: String,
+}
+
+/// The safety number of two accounts (the same one Chat shows).
+#[wasm_bindgen(js_name = deriveSafetyNumber)]
+pub fn derive_safety_number(
+    local_account: &str,
+    local_authority_base64: &str,
+    peer_account: &str,
+    peer_authority_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let number = kutup_crypto::safety_number::derive(
+        local_account,
+        &public_key_32(local_authority_base64, "local authority key")?,
+        peer_account,
+        &public_key_32(peer_authority_base64, "peer authority key")?,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&SafetyNumberView {
+        fingerprint: number.fingerprint,
+        qr_payload: number.qr_payload,
+    })
+    .map_err(|error| js_error(&format!("encode safety number: {error}")))
+}
+
+/// Whether a scanned safety QR is exactly the one for these two accounts.
+#[wasm_bindgen(js_name = safetyQrMatches)]
+pub fn safety_qr_matches(
+    local_account: &str,
+    local_authority_base64: &str,
+    peer_account: &str,
+    peer_authority_base64: &str,
+    scanned: &str,
+) -> bool {
+    let (Ok(local), Ok(peer)) = (
+        public_key_32(local_authority_base64, "local authority key"),
+        public_key_32(peer_authority_base64, "peer authority key"),
+    ) else {
+        return false;
+    };
+    kutup_crypto::safety_number::derive(local_account, &local, peer_account, &peer)
+        .is_ok_and(|number| kutup_crypto::safety_number::matches_qr_payload(&number, scanned))
+}
+
+fn pins_revision(revision: f64) -> Result<u64, JsValue> {
+    if revision.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&revision) {
+        return Err(js_error("revision must be a positive safe integer"));
+    }
+    Ok(revision as u64)
+}
+
+/// Seals the account's identity pin list (canonical JSON) at `revision`.
+#[wasm_bindgen(js_name = sealIdentityPins)]
+pub fn seal_identity_pins(
+    master_key_base64: &str,
+    owner: &str,
+    revision: f64,
+    pins_json: &str,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let list: kutup_crypto::identity_pins::IdentityPinsV1 = serde_json::from_str(pins_json)
+        .map_err(|error| js_error(&format!("identity pins: {error}")))?;
+    let key = kutup_crypto::identity_pins::derive_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = kutup_crypto::identity_pins::seal(&key, owner, pins_revision(revision)?, &list)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens the account's identity pin list stored at `revision`; returns its JSON.
+#[wasm_bindgen(js_name = openIdentityPins)]
+pub fn open_identity_pins(
+    master_key_base64: &str,
+    owner: &str,
+    revision: f64,
+    sealed_base64: &str,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key = kutup_crypto::identity_pins::derive_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = decode_canonical_base64(sealed_base64, "identity pins")?;
+    let list = kutup_crypto::identity_pins::open(&key, owner, pins_revision(revision)?, &sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    String::from_utf8(
+        kutup_crypto::identity_pins::encode(&list).map_err(|error| js_error(&error.to_string()))?,
+    )
+    .map_err(|_| js_error("identity pins are not UTF-8"))
+}
+
 // --- contacts (docs/plans/contacts.md) ---------------------------------------
 
 #[derive(Serialize)]

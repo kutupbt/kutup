@@ -759,4 +759,33 @@ assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'la
 assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'folder', nameVectors.id, resealedName))
 assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
 
+// Drive identity (docs/plans/drive-identity-pins.md).
+const identityVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v1.json`, 'utf8'),
+)
+const iv = identityVectors
+assert.equal(crypto.signDriveKeyBinding(iv.masterKey, iv.account), iv.driveKeyBinding)
+assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
+// Another address, a swapped recipient key or signer, another authority: refused.
+assert.equal(crypto.verifyDriveKeyBinding('bob@kutup.dev', iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
+assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision, iv.sealed), iv.pins)
+assert.throws(() => crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision + 1, iv.sealed))
+assert.throws(() => crypto.openIdentityPins(iv.masterKey, 'bob@kutup.dev', iv.revision, iv.sealed))
+const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins)
+assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, 8, resealedPins), iv.pins)
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 0, iv.pins))
+assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
+
+// The safety number every app shows (kutup-crypto safety_number, V1 vector).
+const one = Buffer.alloc(32, 1).toString('base64')
+const two = Buffer.alloc(32, 2).toString('base64')
+const safety = crypto.deriveSafetyNumber('alice@kutup.dev', one, 'bob@example.org', two)
+assert.equal(safety.fingerprint, '43287 64308 39064 62898 28602 34220 14368 04694 33524 24006 58545 00869 00480 18981 08556 55505')
+assert.deepEqual(crypto.deriveSafetyNumber('bob@example.org', two, 'alice@kutup.dev', one), safety)
+assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', one, safety.qrPayload), true)
+assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', two, safety.qrPayload), false)
+
 console.log('crypto WASM canonical vectors passed')

@@ -310,14 +310,15 @@ fn worker_main(
         config.database_key.zeroize();
         let database = Rc::new(database?);
 
-        let authority = AccountAuthority::derive(&config.master_key);
-        config.master_key.zeroize();
-        let authority = authority?;
+        let authority = AccountAuthority::derive(&config.master_key)?;
         let transport: Rc<dyn ChatTransport> = Rc::new(http::NativeTransport { http: config.http });
         let mut rng = OsRng.unwrap_err();
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
         engine.set_local_server(&config.server_name)?;
+        // One identity for every app of the account (docs/plans/drive-identity-pins.md).
+        engine.enable_identity_pins(&config.master_key)?;
+        config.master_key.zeroize();
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
     });

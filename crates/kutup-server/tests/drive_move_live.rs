@@ -268,10 +268,10 @@ fn drive_move_contract() {
         &a2,
         &a.id,
         2,
-        &format!("{}@{DOMAIN}", owner.username),
+        &owner.account,
         &owner.identity.incarnation_id(),
         owner.identity.drive_signing_key(),
-        &format!("{}@{DOMAIN}", editor.username),
+        &editor.account,
         &editor.identity.incarnation_id(),
         &editor.identity.drive_hpke_public_key(),
     )

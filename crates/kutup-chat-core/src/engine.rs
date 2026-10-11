@@ -188,6 +188,9 @@ pub struct Engine {
     /// sets how long a replaced prekey must be kept. The server says
     /// (`mailboxRetentionDays`); until it has, its default.
     mailbox_retention_days: u32,
+    /// The account's synced identity pins, once the application hands over
+    /// the key (`enable_identity_pins`); without it Chat keeps to its own.
+    identity_pins: Option<crate::identity_sync::IdentityPinsSync>,
 }
 
 impl Engine {
@@ -227,7 +230,67 @@ impl Engine {
             waiting_checked_at: 0,
             clock_offset_ms: 0,
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
+            identity_pins: None,
         }
+    }
+
+    /// Share identities with the account's other apps through its synced
+    /// identity pins (docs/plans/drive-identity-pins.md). Needs the local
+    /// server bound (`set_local_server`): the list is sealed to the account's
+    /// canonical address.
+    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32]) -> Result<()> {
+        let owner = self.canonical_self()?;
+        self.identity_pins = Some(crate::identity_sync::IdentityPinsSync::new(
+            owner, master_key,
+        )?);
+        Ok(())
+    }
+
+    /// Brings `peer`'s identity in line with the synced pins, right after
+    /// Chat accepted it and before anything is sealed to it: a contact the
+    /// list knows by another authority is quarantined (and this returns the
+    /// trust error), one it holds verified is verified here, and Chat's view
+    /// is written back. The list being out of reach leaves Chat's own pins.
+    async fn sync_identity(&mut self, peer: &str) -> Result<()> {
+        let Some(mut sync) = self.identity_pins.take() else {
+            return Ok(());
+        };
+        let result = self.sync_identity_with(&mut sync, peer).await;
+        self.identity_pins = Some(sync);
+        result
+    }
+
+    async fn sync_identity_with(
+        &mut self,
+        sync: &mut crate::identity_sync::IdentityPinsSync,
+        peer: &str,
+    ) -> Result<()> {
+        use crate::identity_sync::{Reconcile, DIFFERS_FROM_SYNCED};
+        let Some(trust) = self.session.manifest_trust(peer).await? else {
+            return Ok(());
+        };
+        if self.canonical_self().is_ok_and(|me| me == trust.account) {
+            return Ok(());
+        }
+        match sync.reconcile(&*self.transport, &trust).await {
+            Ok(Reconcile::Nothing) => {}
+            Ok(Reconcile::MarkVerified) => {
+                self.session.mark_authority_verified(peer).await?;
+            }
+            Ok(Reconcile::Quarantine) => {
+                self.session
+                    .quarantine_authority(peer, DIFFERS_FROM_SYNCED, None)
+                    .await?;
+                return Err(ChatError::Trust(DIFFERS_FROM_SYNCED.into()));
+            }
+            Err(_) => return Ok(()),
+        }
+        if let Some(trust) = self.session.manifest_trust(peer).await? {
+            let now = (crate::clock::unix_millis().max(0) / 1000) as u64;
+            // Best effort: the list is written again at the next contact.
+            let _ = sync.record(&*self.transport, &trust, now).await;
+        }
+        Ok(())
     }
 
     /// Bind bare local usernames to their canonical federation domain. This is
@@ -489,6 +552,8 @@ impl Engine {
         } else {
             self.session.mark_authority_verified(peer).await?;
         }
+        // Verified in person: verified for the account's other apps too.
+        self.sync_identity(peer).await?;
         self.safety_number(authority, peer).await
     }
 
@@ -2565,7 +2630,7 @@ impl Engine {
             let (trust, history) = self
                 .recover_manifest_history(peer_user, pending, prior_manifest.as_ref())
                 .await?;
-            return self
+            let devices = self
                 .session
                 .accept_bundle_response_with_history(
                     peer_user,
@@ -2574,11 +2639,16 @@ impl Engine {
                     history,
                     self.manifest_policy,
                 )
-                .await;
+                .await?;
+            self.sync_identity(peer_user).await?;
+            return Ok(devices);
         }
-        self.session
+        let devices = self
+            .session
             .accept_bundle_response(peer_user, response, self.manifest_policy)
-            .await
+            .await?;
+        self.sync_identity(peer_user).await?;
+        Ok(devices)
     }
 
     /// Derive the contacts-only delivery capability used by sealed messages
@@ -2722,18 +2792,20 @@ impl Engine {
                     return Err(error);
                 }
             };
-        if manifest_trust.continuity_gap {
+        let accepted = if manifest_trust.continuity_gap {
             let (trust, history) = self
                 .recover_manifest_history(account, manifest, prior_manifest.as_ref())
                 .await?;
             self.session
                 .accept_manifest_evidence_with_history(account, manifest, trust, history)
-                .await
+                .await?
         } else {
             self.session
                 .accept_manifest_evidence(account, manifest)
-                .await
-        }
+                .await?
+        };
+        self.sync_identity(account).await?;
+        Ok(accepted)
     }
 
     async fn recover_manifest_history(

@@ -7,6 +7,7 @@ import type { DriveFile } from '@kutup/drive-core/model'
 import { DOCUMENT_KINDS, type DocumentKind } from '@kutup/drive-core/documents'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
+import { IdentityWarningIcon } from '@kutup/drive-ui/IdentityWarning'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -95,6 +96,7 @@ function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: st
             >
               {sharer ? t('home.sharedBy', { when, sharer }) : t('home.changed', { when })}
             </span>
+            <IdentityWarningIcon account={entry.sharer} claimed={entry.sharerClaim} />
           </span>
         </span>
       </Link>

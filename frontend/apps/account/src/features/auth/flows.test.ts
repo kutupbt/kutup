@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistrationKeys } from '@kutup/crypto'
 
 const post = vi.hoisted(() => vi.fn())
-vi.mock('@kutup/session/client', () => ({ default: { post } }))
+vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn(() => Promise.resolve({ data: { username: 'a', hasDriveKeyBinding: true } })) } }))
 vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
-vi.mock('@kutup/crypto', () => ({}))
+vi.mock('@kutup/crypto', () => ({ toBase64: () => 'master' }))
+vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding: vi.fn(() => Promise.resolve('binding')) }))
+vi.mock('@kutup/session/apps', () => ({ loadServerSettings: vi.fn(() => Promise.resolve({ chat: { serverName: 'kutup.dev' } })) }))
 vi.mock('@kutup/crypto/accountProtectionWorker', () => ({}))
 vi.mock('@kutup/session/profile', () => ({ activateSession: vi.fn() }))
 
@@ -33,6 +35,8 @@ describe('registerAndSignIn', () => {
     await expect(registerAndSignIn('a@kutup.dev', 'a', k)).rejects.toBeInstanceOf(AxiosError)
     await registerAndSignIn('a@kutup.dev', 'a', k)
     expect(paths).toEqual(['/auth/register', '/auth/login', '/auth/login'])
+    // The account's Drive key binding goes with it (docs/plans/drive-identity-pins.md).
+    expect(post.mock.calls[0][1]).toMatchObject({ username: 'a', driveKeyBinding: 'binding' })
   })
 
   it('registers again after a failed registration', async () => {

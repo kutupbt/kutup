@@ -1,0 +1,13 @@
+{
+  "masterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+  "account": "alice@kutup.dev",
+  "authorityPublicKey": "L7ufiPkKWVyJEEY4psjgc/s7U+udm/RqZdwwKcHfyDE=",
+  "driveHpkePublicKey": "BPhp9HswcvE11d9GJFcqRJxaPpAook3ZT20QiBfo2go=",
+  "driveSigningPublicKey": "P8imsvV6sQO5GJNEBe0D5JDQh2zbGtdPRKPj267Y8FI=",
+  "driveKeyBinding": "DTb3yO8nakOF0/JQpqeOQChug42QL4+bmyDmuPhZEG23Ns0RXMm8I4OMuQRwFUjU2wQEswSJROb1rOxK6ZrPBQ==",
+  "pinsKey": "9wRlOY3Qxip5tOtIJpAvqqp3f+0079Dw3VuQH3zAH9U=",
+  "revision": 7,
+  "pins": "{\"pins\":[{\"account\":\"bob@kutup.dev\",\"authorityPublicKey\":\"NtTt6Y2mlS7yLMBo1r/CJ6tnIMCecuIn4EHRlujaang=\",\"state\":\"seen\",\"since\":\"2026-10-10T12:00:00Z\"},{\"account\":\"carol@example.org\",\"authorityPublicKey\":\"wh/ihJY5mNaYEaqo6SwOW6oRcympd7BAvKW5LboF7RE=\",\"state\":\"verified\",\"since\":\"2026-10-11T08:30:00.250Z\",\"replaced\":[\"1441e29c58699c0ee89f3422647af95a1682a92a28e7bb64e515a49fcbdf9304\"]}]}",
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "sealed": "S1VUSVAxAAAAAUREREREREREREREREREREREREREREREROUZuOGzIGeJ+2idGGW9o5mztCqfGsWL09FEhMBoOCd+VuGuFcWXQEfc0V1Jt641IDC3je2OLpq3JjHBld+CeSRn0VX20dpk4Y5zBADJDOQUlTqMnal4XnidpixX5i7dWl/IDTWQyY92EBc70OrE7DV6axGTzCXIba5g0Ed7BTCmY3WwmqZTL5NGLnFLZYsfLznsBLlFk5g30uNbU54LL7WJTsqbxR4AB1Y0u9HqOsm62PYtD9W67uk/qRVoDILdzcieXIbgK5zfaHnTNAkZcv3KLIYlZlS7JljpgRAGe13rCJHwW8miT37mu2VMiLghR4XoXLbaH1eVcu7rpnTac4MBqxvXN/S7ezuc3tdJWv5LAbPT2UpZC2cex3NGIG+jbQMJrVUn43JTYjF9iN7bsA6Jr5aRlA2I+Y/akTiq8vNbCKI51+VJtc1ukFtkoFJasFhn+RSFlBkV7AHCG3HaF8c1bRXkI9QjUcaQxfHo6tHU3OehWcVH0+QWOXryok64bcnGI32szt2Ok9+VqY3i0ASW0Q=="
+}

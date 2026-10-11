@@ -4,6 +4,7 @@ pub mod access;
 pub mod color;
 pub mod devices;
 pub mod download;
+pub mod identity;
 pub mod login;
 pub mod logout;
 pub mod ls;

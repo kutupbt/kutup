@@ -106,6 +106,7 @@ struct MockServer {
     sync_mailbox: RefCell<Vec<DeliveredEnvelope>>,
     seen_send_ids: RefCell<HashSet<String>>,
     seen_sync_ids: RefCell<HashSet<String>>,
+    identity_pins: RefCell<Option<kutup_chat_core::IdentityPinsRecord>>,
 }
 
 impl MockServer {
@@ -138,6 +139,26 @@ impl MockServer {
 
 #[async_trait(?Send)]
 impl ChatTransport for MockServer {
+    async fn fetch_identity_pins(&self) -> Result<Option<kutup_chat_core::IdentityPinsRecord>> {
+        Ok(self.identity_pins.borrow().clone())
+    }
+
+    async fn store_identity_pins(
+        &self,
+        record: &kutup_chat_core::IdentityPinsRecord,
+    ) -> Result<bool> {
+        let current = self
+            .identity_pins
+            .borrow()
+            .as_ref()
+            .map_or(0, |r| r.revision);
+        if record.revision != current + 1 {
+            return Ok(false);
+        }
+        *self.identity_pins.borrow_mut() = Some(record.clone());
+        Ok(true)
+    }
+
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         Ok(1)
     }
@@ -2161,4 +2182,86 @@ fn local_timeline_notices_are_never_sent() {
             Err(ChatError::Invalid(message)) if message.contains("never sent")
         ));
     }
+}
+
+/// The account's synced identity pins (docs/plans/drive-identity-pins.md),
+/// as Drive or another device left them for Alice.
+fn synced_pins(
+    owner_master: &[u8; 32],
+    pins: Vec<kutup_crypto::identity_pins::IdentityPinV1>,
+) -> kutup_chat_core::IdentityPinsRecord {
+    use base64::Engine as _;
+    let key = kutup_crypto::identity_pins::derive_key(owner_master).unwrap();
+    let sealed = kutup_crypto::identity_pins::seal(
+        &key,
+        "alice@example.test",
+        1,
+        &kutup_crypto::identity_pins::IdentityPinsV1 { pins },
+    )
+    .unwrap();
+    kutup_chat_core::IdentityPinsRecord {
+        revision: 1,
+        envelope: base64::engine::general_purpose::STANDARD.encode(sealed),
+    }
+}
+
+fn pin_of(
+    authority: &AccountAuthority,
+    state: kutup_crypto::identity_pins::PinState,
+) -> kutup_crypto::identity_pins::IdentityPinV1 {
+    kutup_crypto::identity_pins::IdentityPinV1 {
+        account: "bob@example.test".into(),
+        authority_public_key: authority.public_key_base64(),
+        state,
+        since: "2026-10-10T12:00:00Z".into(),
+        replaced: vec![],
+    }
+}
+
+#[test]
+fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
+    use kutup_crypto::identity_pins::PinState;
+    let master = [30u8; 32];
+    let local_authority = AccountAuthority::derive(&master).unwrap();
+    let bob_authority = AccountAuthority::derive(&[40; 32]).unwrap();
+    let other_authority = AccountAuthority::derive(&[41; 32]).unwrap();
+    let open = |pins: Option<kutup_chat_core::IdentityPinsRecord>| {
+        let mut rng = test_rng();
+        let bob = device("bob", 1, &mut rng);
+        let manifest =
+            signed_manifest_with_authority("bob@example.test", &bundle_of(&bob, 1), &bob_authority);
+        let server = Rc::new(MockServer::default());
+        *server.own_manifest.borrow_mut() = Some(manifest);
+        *server.identity_pins.borrow_mut() = pins;
+        let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
+        alice.set_local_server("example.test").unwrap();
+        alice.enable_identity_pins(&master).unwrap();
+        (alice, server)
+    };
+
+    // Unknown to the list: trusted on first use, and added to it.
+    let (mut alice, server) = open(None);
+    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    assert_eq!(safety.trust, AuthorityTrust::Tofu);
+    assert_eq!(server.identity_pins.borrow().as_ref().unwrap().revision, 1);
+
+    // Verified in Drive (or on another device): verified in Chat at first sight.
+    let (mut alice, _) = open(Some(synced_pins(
+        &master,
+        vec![pin_of(&bob_authority, PinState::Verified)],
+    )));
+    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    assert_eq!(safety.trust, AuthorityTrust::Verified);
+
+    // The account knows Bob by another authority: quarantined, not trusted on first use.
+    let (mut alice, _) = open(Some(synced_pins(
+        &master,
+        vec![pin_of(&other_authority, PinState::Seen)],
+    )));
+    assert!(matches!(
+        block_on(alice.safety_number(&local_authority, "bob")),
+        Err(ChatError::Trust(_))
+    ));
+    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    assert_eq!(safety.trust, AuthorityTrust::Quarantined);
 }
