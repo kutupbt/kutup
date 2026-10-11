@@ -95,8 +95,8 @@ The isolated stack starts with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
 nothing actually leaves), which spec 58 needs for its pause notice. Spec 59
 sets outside sending to "Nobody" in Administration → Mail sending, checks
 Mail, and sets it back to "Everyone"; no restart is needed, since the stored
-setting wins over the variable after the first start. CI's clean-browser job
-on master runs them all in one Mail step.
+setting wins over the variable after the first start. CI's `Mail browser
+specs` job on master runs the Mail and Contacts lines on a stack of its own.
 
 ## Required Chat backup gates
 
