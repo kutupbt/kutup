@@ -3031,7 +3031,12 @@ fn auto_reply_answers_once_per_sender() {
     let answers = |user: &User, name: &str| -> Vec<Value> {
         folder(&c, &base, &user.token, name)
             .into_iter()
-            .filter(|m| m["subject"].as_str().unwrap_or_default().starts_with("Auto: "))
+            .filter(|m| {
+                m["subject"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("Auto: ")
+            })
             .collect()
     };
     let wait_answers = |user: &User, name: &str, count: usize| -> Vec<Value> {
@@ -3041,7 +3046,10 @@ fn auto_reply_answers_once_per_sender() {
             if found.len() >= count {
                 return found;
             }
-            assert!(Instant::now() < deadline, "{count} answers never reached {name}");
+            assert!(
+                Instant::now() < deadline,
+                "{count} answers never reached {name}"
+            );
             std::thread::sleep(Duration::from_millis(500));
         }
     };
@@ -3053,7 +3061,10 @@ fn auto_reply_answers_once_per_sender() {
     assert_eq!(reply["protection"], "zero_access");
     assert_eq!(reply["from"]["address"], alice_address.address.as_str());
     let content = open_row(&c, &base, &bob, &bob_address, &reply);
-    assert!(content.contains("Auto-Submitted: auto-replied"), "{content}");
+    assert!(
+        content.contains("Auto-Submitted: auto-replied"),
+        "{content}"
+    );
     // Alice keeps it in Sent, in the same thread as Bob's message.
     let kept = wait_answers(&alice, "sent", 1).remove(0);
     let original = wait_for(&c, &base, &alice, &first);
