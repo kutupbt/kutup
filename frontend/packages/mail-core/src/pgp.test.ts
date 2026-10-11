@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBody, buildMessage, buildPgpMessage, buildSignedMessage, parseMessage } from './mime'
+import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, parseMessage } from './mime'
 import { autocryptKey, openPgp, type PgpCrypto } from './pgp'
 
 const encoder = new TextEncoder()
@@ -92,6 +92,37 @@ describe('pgp', () => {
     const signed = await openPgp(bytes(clear), fakeCrypto(''), ['dave'])
     expect(signed).toMatchObject({ encrypted: false, signed: true, verified: true })
     expect((await parseMessage(signed!.message)).text?.trim()).toBe('Imzalı ğ')
+  })
+
+  it('opens Inline PGP with files: signed files need their .sig, encrypted files are opened', async () => {
+    const header = { from: { address: 'dave@example.org', name: 'Dave' }, to: [{ address: 'alice@kutup.dev', name: '' }], cc: [], subject: 'Dosya', messageId: 'm2@example.org' }
+    const cleartext = '-----BEGIN PGP SIGNED MESSAGE-----\r\nHash: SHA256\r\n\r\nEkte rapor\r\n-----BEGIN PGP SIGNATURE-----\r\nx\r\n-----END PGP SIGNATURE-----'
+    const file = (name: string, text: string) => attachmentPart({ name, type: 'application/octet-stream', bytes: bytes(text) })
+    // Files are signed when their .sig says "sig-over:<content>".
+    const crypto: PgpCrypto = {
+      ...fakeCrypto(''),
+      verifyDetached: (signature, content, key) => Promise.resolve(decoder.decode(signature) === `sig-over:${decoder.decode(content)}` && key === 'dave'),
+    }
+    const signedOk = await openPgp(buildInlineMessage(header, cleartext, [file('rapor.txt', 'rapor'), file('rapor.txt.sig', 'sig-over:rapor')]), crypto, ['dave'])
+    expect(signedOk).toMatchObject({ encrypted: false, signed: true, verified: true })
+    const shown = await parseMessage(signedOk!.message)
+    expect(shown.text?.trim()).toBe('Ekte rapor')
+    expect(shown.attachments.map((a) => a.filename)).toEqual(['rapor.txt'])
+    // A file changed after signing, or with no .sig, is not verified.
+    const swapped = await openPgp(buildInlineMessage(header, cleartext, [file('rapor.txt', 'başka'), file('rapor.txt.sig', 'sig-over:rapor')]), crypto, ['dave'])
+    expect(swapped).toMatchObject({ signed: true, verified: false })
+    const unsigned = await openPgp(buildInlineMessage(header, cleartext, [file('ek.txt', 'ek')]), crypto, ['dave'])
+    expect(unsigned).toMatchObject({ signed: true, verified: false })
+
+    // Encrypted: the text and each name.pgp open with the key.
+    const encrypted = await openPgp(buildInlineMessage(header, ARMORED, [file('rapor.txt.pgp', ARMORED)]), fakeCrypto('açık'), ['dave'])
+    expect(encrypted).toMatchObject({ encrypted: true, verified: true })
+    const opened = await parseMessage(encrypted!.message)
+    expect(opened.text?.trim()).toBe('açık')
+    expect(opened.attachments.map((a) => [a.filename, decoder.decode(a.content)])).toEqual([['rapor.txt', 'açık']])
+    // A file in clear beside encrypted text: shown, but not verified.
+    const mixed = await openPgp(buildInlineMessage(header, ARMORED, [file('clear.txt', 'x')]), fakeCrypto('açık'), ['dave'])
+    expect(mixed).toMatchObject({ encrypted: true, verified: false })
   })
 
   it('leaves other mail alone', async () => {

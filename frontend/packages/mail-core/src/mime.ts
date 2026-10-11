@@ -329,6 +329,34 @@ export function buildPgpMessage(message: Omit<OutgoingMessage, 'html' | 'text' |
   )
 }
 
+/**
+ * An Inline PGP message (Proton's "Inline" scheme; Inline forces plain
+ * text): `text`, an armored encrypted message or a cleartext-signed one, as
+ * a plain-text body, with `attachments` (parts, each encrypted or with its
+ * `.sig` beside it) after it in multipart/mixed when there are any.
+ */
+export function buildInlineMessage(message: Omit<OutgoingMessage, 'html' | 'text' | 'attachments'>, text: string, attachments: Uint8Array[]): Uint8Array {
+  const fields = headerFields({ ...message, html: '', text: '' })
+  const body = textPart('text/plain', text.replace(/\r?\n/g, '\r\n'))
+  if (attachments.length === 0) return encoder.encode(`${fields.join('\r\n')}\r\n${body}\r\n`)
+  const mixed = boundary()
+  const chunks: Uint8Array[] = [encoder.encode(`${fields.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="${mixed}"\r\n\r\n--${mixed}\r\n${body}`)]
+  for (const part of attachments) chunks.push(encoder.encode(`\r\n--${mixed}\r\n`), part)
+  chunks.push(encoder.encode(`\r\n--${mixed}--\r\n`))
+  return concat(chunks)
+}
+
+/** The file inside a part made by `attachmentPart`. */
+export function partContent(part: Uint8Array): Uint8Array {
+  const text = new TextDecoder().decode(part)
+  const split = text.indexOf('\r\n\r\n')
+  const encoded = split >= 0 ? text.slice(split + 4).replace(/\s+/g, '') : ''
+  const binary = atob(encoded)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
 /** A new Message-ID on this server's domain. */
 export function newMessageId(domain: string): string {
   return `${crypto.randomUUID()}@${domain}`

@@ -80,6 +80,8 @@ export {
   verifyMailKeyList,
   encryptMailMessageUnsigned,
   encryptMailPgpUnsigned,
+  signMailCleartext,
+  signMailCleartextAsGroup,
   signMailDetached,
   signMailDetachedAsGroup,
 } from './mailKey'

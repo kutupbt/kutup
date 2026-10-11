@@ -222,7 +222,8 @@
     "signOn": "Signed with your key, so recipients can check it is from you. Turn off for this message.",
     "signOff": "Not signed. Turn on.",
     "notEncryptedKutup": "Not end-to-end encrypted: Kutup can read this message while delivering it to Kutup recipients, then stores it encrypted. Lists and shared mailboxes still get it end to end.",
-    "notEncrypted": "Not encrypted: recipients outside Kutup get plain mail."
+    "notEncrypted": "Not encrypted: recipients outside Kutup get plain mail.",
+    "publicKeyFailed": "Your public key could not be attached."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -501,7 +502,14 @@
     "conversations": "Conversation grouping",
     "conversationsHint": "Group emails in the same conversation together in your mailbox, or display them separately.",
     "signOutside": "Sign outside mail",
-    "signOutsideHint": "New mail to people outside Kutup starts signed with your key, so they can check it came from you. Mail between Kutup users always starts signed. You can still turn Sign off for one message."
+    "signOutsideHint": "New mail to people outside Kutup starts signed with your key, so they can check it came from you. Mail between Kutup users always starts signed. You can still turn Sign off for one message.",
+    "pgpTitle": "PGP for people outside Kutup",
+    "pgpHint": "Only change these if you write to people who use PGP outside Kutup. Mail between Kutup users is always end-to-end encrypted.",
+    "attachPublicKey": "Attach public key",
+    "attachPublicKeyHint": "Each new message carries your public key as a file, so people can check your signatures and write to you encrypted. You can remove it from a message.",
+    "pgpScheme": "Default PGP scheme",
+    "pgpSchemeHint": "How mail to outside PGP users is encrypted or signed. Inline PGP sends plain text only, each attachment on its own.",
+    "inline": "Inline"
   },
   "senders": {
     "title": "Block and allow",

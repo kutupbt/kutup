@@ -477,3 +477,31 @@ fn gnupg_verifies_a_kutup_detached_signature() {
     assert!(!ok);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// GnuPG checks a Kutup cleartext signature (the body of an Inline PGP
+/// message that is signed but not encrypted).
+#[test]
+fn gnupg_verifies_a_kutup_cleartext_signature() {
+    if Command::new("gpg").arg("--version").output().is_err() {
+        eprintln!("gpg not installed; skipping");
+        return;
+    }
+    let home = home("cleartext");
+    let alice =
+        kutup_crypto::mail_key::generate_address_key("alice@kutup.dev", now() as u32 - 60).unwrap();
+    let armored = kutup_crypto::mail_key::armor_public_key(&alice.public_key).unwrap();
+    let (ok, _, err) = gpg(&home, &["--import"], armored.as_bytes());
+    assert!(ok, "import: {err}");
+    let signed =
+        kutup_crypto::mail_key::sign_cleartext(&alice.secret_key, "Merhaba,\n\nİmzalı metin.\n")
+            .unwrap();
+    let (ok, _, err) = gpg(&home, &["--verify"], signed.as_bytes());
+    assert!(ok, "gpg --verify: {err}");
+    assert!(err.contains("Good signature"), "{err}");
+    let (ok, _, _) = gpg(
+        &home,
+        &["--verify"],
+        signed.replace("Merhaba", "Selam").as_bytes(),
+    );
+    assert!(!ok);
+}
