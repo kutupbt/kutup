@@ -9,6 +9,7 @@ import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { opensInOffice } from './editorKind'
+import { confirmRecipient, type ClaimedKeys } from './identityPins'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -64,6 +65,9 @@ export interface SharedFile {
   ownerAccount: string
   /** Who shared it with this account: the owner, or an editor the owner lets share. */
   sharerAccount: string
+  /** The keys its share was checked with, to check against who they are. */
+  sharerClaim: ClaimedKeys
+  ownerClaim: ClaimedKeys
   sharedAt: string
   /** From another server: the accepted invite's id here (to remove it). */
   remoteShareId?: string
@@ -138,6 +142,8 @@ async function openShared(row: SharedFileRow, me: DriveIdentity, remoteShareId?:
     state,
     ownerAccount: row.ownerAccount,
     sharerAccount: row.sharerAccount,
+    sharerClaim: { driveSigningPublicKey: row.sharerSigningPublicKey, incarnationId: row.sharerIncarnationId },
+    ownerClaim: { driveSigningPublicKey: row.ownerSigningPublicKey, incarnationId: row.ownerIncarnationId },
     sharedAt: row.sharedAt,
     remoteShareId,
   }
@@ -225,6 +231,8 @@ async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<S
       state: 'gone',
       ownerAccount: row.ownerAccount,
       sharerAccount: row.ownerAccount,
+      sharerClaim: {},
+      ownerClaim: {},
       sharedAt: row.createdAt,
       remoteShareId: row.id,
     }
@@ -464,7 +472,17 @@ export class OnlyOwnersShareAcross extends Error {
 export function useShareFile() {
   const queryClient = useQueryClient()
   return useDriveMutation(
-    async (input: { folder: Folder; file: DriveFile; recipient: string; canEdit: boolean }, me): Promise<FileShareResult> => {
+    async (
+      input: {
+        folder: Folder
+        file: DriveFile
+        recipient: string
+        canEdit: boolean
+        /** The user chose to share although the recipient's identity is in doubt (`IdentityNotConfirmed`). */
+        identityConfirmed?: boolean
+      },
+      me,
+    ): Promise<FileShareResult> => {
       const address = input.recipient.trim()
       const owner = canShareFile(input.folder, input.file)
       if (!owner && !(input.folder.source === 'file' && input.file.fileKey)) throw new Error('file is not open')
@@ -491,6 +509,7 @@ export function useShareFile() {
             if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
             throw error
           }
+          await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
           const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
@@ -502,6 +521,7 @@ export function useShareFile() {
           return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
         }
         if (recipient.userId === me.userId) throw new CannotShareWithSelf()
+        await confirmRecipient(me, recipient.account, { driveHpkePublicKey: recipient.driveHpkePublicKey, incarnationId: recipient.accountIncarnationId }, input.identityConfirmed)
         // The owner first brings the file and its shares up to date; an editor
         // shares the key they hold (the server takes it only if it is current).
         const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file

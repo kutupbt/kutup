@@ -20,12 +20,13 @@
 
 | Threat | Required control and result |
 |---|---|
-| Server substitutes a share recipient key | Recipient key must be in the pinned or explicitly TOFU-accepted account manifest. A mismatch blocks sharing. |
+| Server substitutes a share recipient key | The recipient key must be covered by the recipient authority's Drive key binding, and that authority must be the one pinned for the address (pinned on first use). A mismatch stops the share in the dialog until the user chooses to share anyway. |
 | Server moves ciphertext between objects or revisions | Suite, purpose, canonical identifiers, epoch and revision are authenticated as AAD. Decryption fails without returning partial plaintext. |
 | Server rolls back a collection after a member was removed | Owner-signed epoch chain and durable client pin reject rollback. Clients never write under an unverified pending epoch. |
 | Removed member reads new content | Removal completes only after a new random collection key is distributed to remaining accounts and the signed epoch is committed, in one transaction; new content is accepted only under the current key (files re-keyed first). Previously learned plaintext/ciphertext cannot be revoked. |
 | Offline writer uses a stale key | Upload and collaborative mutation carry the exact epoch; server and clients reject stale writes. There is no automatic legacy-key retry. |
 | Named share is forged or redirected | HPKE ciphertext is signed by the sender's manifest-bound Drive signer and binds exact canonical sender, recipient, collection, epoch and suite. |
+| Server hands out keys that are not the person's (a forged sender, a substituted recipient) | Each account's authority signs a Drive key binding over its address and Drive keys; clients check it and pin the authority per address in a synced, sealed list (docs/plans/drive-identity-pins.md). A key not covered by the binding, a missing binding for a pinned account, or another authority for a pinned address is shown as a warning beside the person and the share, and sharing to them asks first: Drive warns rather than refuses (as Proton Drive does). |
 | Federation peer or network is unavailable | Retain established pins and readable cached data; block state-changing operations that require fresh identity/epoch evidence. |
 | Account address is wiped and reused | Wipe terminates the old incarnation. Peers show a red identity reset and shares/groups do not transfer without explicit reauthorization. |
 | Compromised client retains secrets | Device removal stops future authenticated service access and rotates affected future-access keys. It cannot remotely erase copied master keys or old plaintext. |

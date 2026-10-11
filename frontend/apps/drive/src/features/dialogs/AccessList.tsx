@@ -29,6 +29,7 @@ import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
 import { publicLinkUrl } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
+import { VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 
 type Pending = { label: string; removal: Removal } | null
 
@@ -113,14 +114,17 @@ export function AccessList({ folder }: { folder: Folder }) {
               name={person.name}
               detail={person.profile ? m.account : ''}
               control={
-                <RoleMenu
-                  name={person.name}
-                  canUpload={m.canUpload}
-                  canDelete={m.canDelete}
-                  busy={busy}
-                  onChange={(canUpload, canDelete) => change(m, person.name, canUpload, canDelete)}
-                  onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.userId] } })}
-                />
+                <>
+                  <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                  <RoleMenu
+                    name={person.name}
+                    canUpload={m.canUpload}
+                    canDelete={m.canDelete}
+                    busy={busy}
+                    onChange={(canUpload, canDelete) => change(m, person.name, canUpload, canDelete)}
+                    onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.userId] } })}
+                  />
+                </>
               }
             />
           )

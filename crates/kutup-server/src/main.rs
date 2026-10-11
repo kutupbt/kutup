@@ -377,6 +377,8 @@ async fn main() -> anyhow::Result<()> {
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     mail::spawn_receiver(state.clone()).await?;
+    // Auto-delete of old Trash and Spam, for accounts that turned it on.
+    mail::retention::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -501,7 +503,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
-        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
+        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access, identity,
         link_reports, sessions as session_routes, shares, trash, tus,
     };
 
@@ -602,6 +604,19 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route(
+            "/api/user/drive-key-binding",
+            put(identity::put_drive_key_binding),
+        )
+        .route(
+            "/api/user/identity-pins",
+            get(identity::get_identity_pins)
+                .put(identity::put_identity_pins)
+                // One sealed list, base64, and no more.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::identity_pins::MAX_SEALED_BYTES / 3 * 4 + 64 * 1024,
+                )),
+        )
         .route("/api/user/storage", get(handlers::storage::usage))
         .route(
             "/api/mail/addresses",
@@ -625,6 +640,14 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/folders/:id",
             patch(handlers::mail_folders::update_folder)
                 .delete(handlers::mail_folders::delete_folder),
+        )
+        .route(
+            "/api/mail/settings",
+            get(handlers::mail_settings::get).patch(handlers::mail_settings::update),
+        )
+        .route(
+            "/api/mail/messages/empty",
+            post(handlers::mail_settings::empty),
         )
         .route(
             "/api/mail/sender-rules",
@@ -745,6 +768,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/users/by-email/:email",
             get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/users/drive-identities",
+            post(identity::drive_identities)
+                .route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
             "/api/mail/keys",

@@ -22,6 +22,8 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
+import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import { IdentityShareWarning, VerifyPersonButton } from './IdentityWarning'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
@@ -51,9 +53,14 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
 
   function submit(event: FormEvent) {
     event.preventDefault()
+    send(false)
+  }
+
+  /** `identityConfirmed`: the user chose to share although the recipient's identity is in doubt. */
+  function send(identityConfirmed: boolean) {
     if (!target || !recipient.trim()) return
     share.mutate(
-      { ...target, recipient, canEdit },
+      { ...target, recipient, canEdit, identityConfirmed },
       {
         onSuccess: (result) => {
           setRecipient('')
@@ -65,7 +72,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
     )
   }
 
-  const errorText = share.error
+  const errorText = share.error && !(share.error instanceof IdentityNotConfirmed)
     ? isAxiosError(share.error) && share.error.response?.status === 409 && target?.role === 'editor'
       ? t('fileShare.alreadyHas')
       : share.error instanceof RecipientNotFound
@@ -127,6 +134,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
             </Alert>
           ) : null}
           {errorText ? <Alert variant="error">{errorText}</Alert> : null}
+          {share.error instanceof IdentityNotConfirmed ? <IdentityShareWarning error={share.error} onShareAnyway={() => send(true)} /> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>{t('common.close')}</Button>
             <Button type="submit" loading={share.isPending} disabled={!recipient.trim()}>
@@ -230,15 +238,18 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 name={person.name}
                 detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
                 control={
-                  owner ? (
-                    <RoleMenu
-                      name={person.name}
-                      canEdit={m.canEdit}
-                      busy={busy}
-                      onRole={(canEdit) => changeRole(m, person.name, canEdit)}
-                      onRemove={() => setPending({ userId: m.userId, name: person.name })}
-                    />
-                  ) : null
+                  <>
+                    <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                    {owner ? (
+                      <RoleMenu
+                        name={person.name}
+                        canEdit={m.canEdit}
+                        busy={busy}
+                        onRole={(canEdit) => changeRole(m, person.name, canEdit)}
+                        onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                      />
+                    ) : null}
+                  </>
                 }
               />
             )

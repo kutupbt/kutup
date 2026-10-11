@@ -49,6 +49,8 @@ export interface KutupChatTransport {
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
   fetchSealedBundles(username: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
+  fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>;
+  storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
@@ -243,6 +245,17 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = fetchOwnProfile)]
     async fn js_fetch_own_profile(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchIdentityPins)]
+    async fn js_fetch_identity_pins(
+        this: &JsChatTransport,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = storeIdentityPins)]
+    async fn js_store_identity_pins(
+        this: &JsChatTransport,
+        record: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = publishProfile)]
     async fn js_publish_profile(
@@ -467,6 +480,24 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_publish_manifest(to_transport(manifest)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_identity_pins(&self) -> Result<Option<crate::IdentityPinsRecord>> {
+        from_transport(
+            self.js
+                .js_fetch_identity_pins()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn store_identity_pins(&self, record: &crate::IdentityPinsRecord) -> Result<bool> {
+        from_transport(
+            self.js
+                .js_store_identity_pins(to_transport(record)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -820,6 +851,10 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         engine.set_local_server(&server_name).map_err(chat_error)?;
+        // One identity for every app of the account (docs/plans/drive-identity-pins.md).
+        engine
+            .enable_identity_pins(&master_key)
+            .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
             .sync_own_manifest(&authority, now_rfc3339())

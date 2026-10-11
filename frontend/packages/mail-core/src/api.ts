@@ -5,6 +5,10 @@ import {
   encryptMailMessageAsGroup,
   encryptMailPgp,
   encryptMailPgpAsGroup,
+  encryptMailMessageUnsigned,
+  encryptMailPgpUnsigned,
+  signMailDetached,
+  signMailDetachedAsGroup,
   inspectExternalMailKey,
   openMailGroupMessage,
   openMailMessage,
@@ -20,7 +24,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
-import { buildBody, buildMessage, buildPgpMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
+import { buildBody, buildMessage, buildPgpMessage, buildSignedMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
@@ -308,10 +312,20 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
     opened = await open(stored, candidate)
   }
   const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
-  if (!outside) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
+  // A Kutup user's mail they sent with Encrypt off (docs/plans/mail-encrypt-sign.md):
+  // readable on the way, encrypted on arrival; its signature, if any, is
+  // checked against the sender's own key list.
+  const readableFromKutup = message.direction === 'inbound' && !!sender && !outside && message.protection === 'zero_access'
+  if (!outside && !readableFromKutup) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
 
-  const pin = pinned(sender)
-  const signingKeys = pin?.sign ? [pin.publicKey] : []
+  const pin = outside ? pinned(sender) : undefined
+  const signingKeys = outside
+    ? pin?.sign
+      ? [pin.publicKey]
+      : []
+    : await addressKeys(sender)
+        .then((keys) => keys.all)
+        .catch(() => [])
   const pgp = await openPgp(
     opened.data,
     {
@@ -328,7 +342,8 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
     signed: pgp?.signed ?? false,
     verified: pgp?.verified ?? false,
     ...(pgp ? { pgp: { encrypted: pgp.encrypted, pinned: signingKeys.length > 0 } } : {}),
-    offeredKey: await offeredKey(opened.data, parsed, sender, pin),
+    // A Kutup sender's key comes from their key list, never from the mail.
+    offeredKey: outside ? await offeredKey(opened.data, parsed, sender, pin) : undefined,
   }
 }
 
@@ -408,6 +423,51 @@ export function useDeleteMessages() {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: mailKey })
       void queryClient.invalidateQueries({ queryKey: ['storage'] })
+    },
+  })
+}
+
+/** Deletes everything in Trash or Spam for good (Proton's "Delete all"). */
+export function useEmptyFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ folder, group }: { folder: 'trash' | 'spam'; group?: string }) =>
+      (await api.post<{ updated: number }>('/mail/messages/empty', { folder, ...scoped(group) })).data.updated,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: mailKey })
+      void queryClient.invalidateQueries({ queryKey: ['storage'] })
+    },
+  })
+}
+
+/** The account's mail settings (docs/plans/mail-parity.md), as Proton's. */
+export interface MailSettings {
+  /** 30 to delete Trash and Spam after 30 days, 0 not to. */
+  autoDeleteDays: 0 | 30
+  /** All mail leaves out Spam and Trash. */
+  almostAllMail: boolean
+  /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
+  signOutside: boolean
+}
+
+export const mailSettingsKey = ['mail', 'settings'] as const
+
+export function useMailSettings() {
+  return useQuery({
+    queryKey: mailSettingsKey,
+    staleTime: 5 * 60_000,
+    queryFn: async () => (await api.get<MailSettings>('/mail/settings')).data,
+  })
+}
+
+export function useUpdateMailSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (change: Partial<MailSettings>) => (await api.patch<MailSettings>('/mail/settings', change)).data,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(mailSettingsKey, settings)
+      // All mail may now show Spam and Trash, or not.
+      void queryClient.invalidateQueries({ queryKey: ['mail', 'folder', 'all'] })
     },
   })
 }
@@ -563,20 +623,41 @@ export interface SendAs {
   key: GroupMailKey
 }
 
+/**
+ * Encrypt and Sign for one message (docs/plans/mail-encrypt-sign.md). Encrypt
+ * off sends Kutup recipients the readable message (the server encrypts it on
+ * arrival) and outside ones plain mail; lists and shared mailboxes stay end
+ * to end. Sign off leaves the signature out.
+ */
+export interface SendOptions {
+  encrypt: boolean
+  sign: boolean
+}
+
 export async function sendDraft(
   account: MailAccount,
   draft: Draft,
   attachmentParts: Uint8Array[],
   pinned: PinnedKeys,
   as?: SendAs,
+  options: SendOptions = { encrypt: true, sign: true },
 ): Promise<SendRecipient[]> {
   // As a shared mailbox: its address, its key for the sent copy and Autocrypt,
   // and signed by it.
   const self = as ? { address: as.address, name: as.name, publicKey: as.publicKey } : { address: account.address, name: account.name, publicKey: account.publicKey }
   const seal = (keys: string[], plaintext: Uint8Array) =>
-    as ? encryptMailMessageAsGroup(as.key, keys, plaintext) : encryptMailMessage(account.key, keys, plaintext)
+    !options.sign
+      ? encryptMailMessageUnsigned(keys, plaintext)
+      : as
+        ? encryptMailMessageAsGroup(as.key, keys, plaintext)
+        : encryptMailMessage(account.key, keys, plaintext)
   const sealPgp = (keys: string[], plaintext: Uint8Array) =>
-    as ? encryptMailPgpAsGroup(as.key, keys, plaintext) : encryptMailPgp(account.key, keys, plaintext)
+    !options.sign
+      ? encryptMailPgpUnsigned(keys, plaintext)
+      : as
+        ? encryptMailPgpAsGroup(as.key, keys, plaintext)
+        : encryptMailPgp(account.key, keys, plaintext)
+  const signDetached = (content: Uint8Array) => (as ? signMailDetachedAsGroup(as.key, content) : signMailDetached(account.key, content))
   const header = {
     from: { address: self.address, name: self.name },
     to: draft.to,
@@ -599,10 +680,13 @@ export async function sendDraft(
   const protections = await Promise.all(external.map((address) => protectionFor(address, account.domain, pinned(address))))
   const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
   if (unusable) throw new PinnedKeyUnusable(unusable)
-  const keyed = external.flatMap((address, i) => {
-    const key = pgpKey(protections[i])
-    return key ? [{ address, key }] : []
-  })
+  // Encrypt off: no outside recipient gets a PGP message.
+  const keyed = options.encrypt
+    ? external.flatMap((address, i) => {
+        const key = pgpKey(protections[i])
+        return key ? [{ address, key }] : []
+      })
+    : []
   const groups = [keyed.filter((r) => !bcc.has(r.address)), ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r])].filter((g) => g.length)
   const plain = external.filter((address) => !keyed.some((r) => r.address === address))
   const body = groups.length ? buildBody(content) : null
@@ -613,12 +697,28 @@ export async function sendDraft(
     })),
   )
 
+  // The readable message, for outside recipients without a PGP message and
+  // Kutup recipients with Encrypt off: signed (multipart/signed) when Sign is on.
+  let readableMessage: Promise<Uint8Array> | null = null
+  const readableFor = (): Promise<Uint8Array> => {
+    readableMessage ??= options.sign
+      ? (async () => {
+          const signedBody = buildBody(content)
+          return buildSignedMessage(header, signedBody, await signDetached(signedBody))
+        })()
+      : Promise.resolve(message)
+    return readableMessage
+  }
+
   const attempt = async (): Promise<SendRecipient[]> => {
     // Each Kutup address, or each member of a group (once, and not you).
     const targets = new Map<string, string>()
+    const readable: string[] = []
     for (const address of local) {
       try {
-        targets.set(address, (await addressKeys(address)).primary)
+        const keys = await addressKeys(address)
+        if (options.encrypt) targets.set(address, keys.primary)
+        else readable.push(address)
       } catch (error) {
         if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
         if (!(error instanceof GroupAddress)) throw error
@@ -644,6 +744,7 @@ export async function sendDraft(
             ...(as ? { fromName: as.name, fromGroup: as.groupId } : {}),
             keyPackets,
             pgp,
+            ...(readable.length ? { readable } : {}),
             ...(draft.id ? { draftId: draft.id } : {}),
           }),
         ],
@@ -652,7 +753,7 @@ export async function sendDraft(
     )
     form.append('data', blob(sealed.dataPacket))
     packages.forEach((p, i) => form.append(`pgp${i}`, blob(p.message, 'message/rfc822')))
-    if (plain.length > 0) form.append('mime', blob(message, 'message/rfc822'))
+    if (plain.length > 0 || readable.length > 0) form.append('mime', blob(await readableFor(), 'message/rfc822'))
     return (await api.post<{ recipients: SendRecipient[] }>('/mail/send', form)).data.recipients
   }
 

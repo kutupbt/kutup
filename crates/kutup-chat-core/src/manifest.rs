@@ -1,6 +1,6 @@
 //! V1 account self-authority, signed manifest history, and durable peer pins.
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
@@ -9,7 +9,6 @@ use kutup_chat_proto::{
     ACCOUNT_MANIFEST_VERSION,
 };
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
 
 use crate::db::{AccountManifestHistoryRecordV1, AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
@@ -32,8 +31,6 @@ pub struct AccountAuthority {
     identity: kutup_crypto::identity::AccountIdentityKeysV1,
 }
 
-const SAFETY_NUMBER_DOMAIN: &[u8] = b"kutup/chat/safety-number/v1\0";
-const SAFETY_QR_PREFIX: &str = "kutup://verify/chat/v1/";
 const MAX_SAFETY_QR_BYTES: usize = 1024;
 
 /// Human-verifiable binding between two canonical accounts and their stable
@@ -83,36 +80,16 @@ pub fn derive_safety_number(
     }
     let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
     let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
-    let mut identities = [(local.as_str(), local_key), (peer.as_str(), peer_key)];
-    identities.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
-
-    let mut canonical = Vec::with_capacity(
-        SAFETY_NUMBER_DOMAIN.len()
-            + identities
-                .iter()
-                .map(|entry| entry.0.len() + 36)
-                .sum::<usize>(),
-    );
-    canonical.extend_from_slice(SAFETY_NUMBER_DOMAIN);
-    for (account, key) in identities {
-        let length = u32::try_from(account.len())
-            .map_err(|_| ChatError::Invalid("safety-number account is too long".into()))?;
-        canonical.extend_from_slice(&length.to_be_bytes());
-        canonical.extend_from_slice(account.as_bytes());
-        canonical.extend_from_slice(&key);
-    }
-    let digest: [u8; 32] = Sha256::digest(&canonical).into();
-    let fingerprint = digest
-        .chunks_exact(2)
-        .map(|chunk| format!("{:05}", u16::from_be_bytes([chunk[0], chunk[1]])))
-        .collect::<Vec<_>>()
-        .join(" ");
+    // One number for every app (kutup-crypto safety_number).
+    let shared = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
+        .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let (fingerprint, qr_payload) = (shared.fingerprint, shared.qr_payload);
 
     Ok(SafetyNumberV1 {
         local_account: local,
         peer_account: peer,
         fingerprint,
-        qr_payload: format!("{SAFETY_QR_PREFIX}{}", URL_SAFE_NO_PAD.encode(canonical)),
+        qr_payload,
         authority_key_id: trust.authority_key_id.clone(),
         retained_authority_key_id: None,
         trust: trust.trust,

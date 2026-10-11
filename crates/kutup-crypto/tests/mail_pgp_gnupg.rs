@@ -430,3 +430,50 @@ fn address_keys_export_and_import() {
     let (_, rsa, _) = gpg_with(&gnupg, "x", &["--export-secret-keys", "rsa@kutup.dev"], b"");
     assert!(import_address_secret_key(&rsa, "x", "rsa@kutup.dev").is_err());
 }
+
+/// A Kutup user's signed but unencrypted mail (docs/plans/mail-encrypt-sign.md):
+/// GnuPG checks the detached signature over the signed MIME part.
+#[test]
+fn gnupg_verifies_a_kutup_detached_signature() {
+    if Command::new("gpg").arg("--version").output().is_err() {
+        eprintln!("gpg not installed; skipping");
+        return;
+    }
+    let home = home("signed-only");
+    let alice =
+        kutup_crypto::mail_key::generate_address_key("alice@kutup.dev", now() as u32 - 60).unwrap();
+    let armored = kutup_crypto::mail_key::armor_public_key(&alice.public_key).unwrap();
+    let (ok, _, err) = gpg(&home, &["--import"], armored.as_bytes());
+    assert!(ok, "import: {err}");
+    let part = b"Content-Type: text/plain; charset=utf-8\r\n\r\nImzali ama sifresiz.\r\n";
+    let signature = kutup_crypto::mail_key::sign_detached(&alice.secret_key, part).unwrap();
+    let dir = std::env::temp_dir().join(format!("kutup-signed-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (part_path, sig_path) = (dir.join("part"), dir.join("part.asc"));
+    std::fs::write(&part_path, part).unwrap();
+    std::fs::write(&sig_path, signature.as_bytes()).unwrap();
+    let (ok, _, err) = gpg(
+        &home,
+        &[
+            "--verify",
+            sig_path.to_str().unwrap(),
+            part_path.to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(ok, "gpg --verify: {err}");
+    assert!(err.contains("Good signature"), "{err}");
+    // The part changed after signing: GnuPG says so.
+    std::fs::write(&part_path, b"Content-Type: text/plain\r\n\r\nchanged\r\n").unwrap();
+    let (ok, _, _) = gpg(
+        &home,
+        &[
+            "--verify",
+            sig_path.to_str().unwrap(),
+            part_path.to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(!ok);
+    let _ = std::fs::remove_dir_all(&dir);
+}

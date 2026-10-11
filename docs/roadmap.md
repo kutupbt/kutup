@@ -462,9 +462,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   `scripts/test-mail-inbound.sh` gate. C2, the app at `mail.<domain>`:
   end-to-end mail between Kutup users (encrypted once, a key packet per
   recipient), sending outside through Stalwart (DKIM, sending limits),
-  drafts, folders, search on readable fields, safe HTML. Later (C2f): body
-  search in the browser, labels and custom folders, emptying Trash and Spam
-  after 30 days, web push. The goal is Proton Mail parity: the gap list and
+  drafts, folders, search on readable fields, safe HTML. Since then: your
+  own folders and labels (names sealed), filters, block and allow lists,
+  Delete all and auto-delete of Trash and Spam, Mail → Settings. Later:
+  body search in the browser, web push. The goal is Proton Mail parity: the gap list and
   its order are in [`plans/mail-parity.md`](plans/mail-parity.md); folders,
   labels and filters come first ([`plans/mail-filters.md`](plans/mail-filters.md)). C3, PGP with outside users (in progress): the
   server finds their keys (WKD, Proton, keys.openpgp.org) and accepts
@@ -847,6 +848,16 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
   until uploaded again.
 - The CLI has no Replace for a taken name (it skips the same file, and
   `--keep-both` keeps both).
+
+### Drive · identity pins: what is left
+
+Drive, Chat and the CLI share one list of trusted identities and one safety
+number (docs/plans/drive-identity-pins.md). Still to do:
+
+- Contacts shows each person's state from the list (gray, green, red shield)
+  on their page, as the Contacts plan foresaw.
+- The native apps' own screens for the shield and the verification dialog
+  (their Chat engine already keeps to the list).
 
 ### Drive · share dialogs: what is left
 

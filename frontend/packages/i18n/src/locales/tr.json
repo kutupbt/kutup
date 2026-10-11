@@ -290,5 +290,51 @@
     "sentTitle": "Bildirim gönderildi",
     "sent": "Teşekkürler. Yöneticiler inceleyecek.",
     "failed": "Bildirim gönderilemedi. Biraz sonra yeniden deneyin."
+  },
+  "identityCheck": {
+    "changed": {
+      "title": "{{name}} kişisinin kimliği değişti",
+      "body": "{{account}}, daha önce tanıdığınız hesap değil. Bir yönetici hesabı sıfırlamış olabilir ya da sunucu başka birinin anahtarlarını onun gibi gösteriyor olabilir. Güvenmeden önce onunla başka bir yoldan doğrulayın.",
+      "shareBody": "{{account}}, daha önce tanıdığınız hesap değil. Hesabı sıfırlandıysa yine de paylaşabilirsiniz; değilse sunucu paylaştığınızı okumaya çalışıyor olabilir. Önce onunla başka bir yoldan doğrulayın."
+    },
+    "invalid": {
+      "title": "Bunun {{name}} olduğunu doğrulayamadık",
+      "body": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış. Bu ondan gelmiyor olabilir: içeriğine, bağlantılarına ya da isteklerine güvenmeyin.",
+      "shareBody": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış; sunucu paylaştığınızı okuyabilir."
+    },
+    "accept": "Yeni kimliğe güven",
+    "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
+    "shareAnyway": "Yine de paylaş",
+    "verified": "{{name}} doğrulandı",
+    "verify": "{{name}} kişisini doğrula",
+    "verifyInPerson": "Yüz yüze doğrula",
+    "cannotVerifyTitle": "Henüz doğrulanacak bir şey yok",
+    "cannotVerify": "{{account}} Drive anahtarlarını henüz imzalamadı. Bir sonraki girişinde imzalar.",
+    "lookupFailedTitle": "Bilgileri alınamadı",
+    "lookupFailed": "Kimliği şu anda getirilemedi. Biraz sonra yeniden deneyin."
+  },
+  "safetyNumber": {
+    "cameraUnavailable": "Kameraya erişilemedi. Onun yerine QR değerini yapıştır.",
+    "candidateAuthority": "Aday otorite parmak izi",
+    "copied": "Güvenlik numarası kopyalandı",
+    "copyFailed": "Güvenlik numarası kopyalanamadı.",
+    "description": "Yüz yüze buluş ve karşındakinin cihazında görünen QR kodunu tara. İki cihazda da aynı tam güvenlik numarası görünmeli.",
+    "mismatch": "Bu QR kodu bu sohbetle eşleşmiyor. Hiçbir şey doğrulanmadı.",
+    "numberLabel": "Tam güvenlik numarası",
+    "pasteLabel": "Ya da QR değerini yapıştır",
+    "qrLabel": "Doğrulama QR kodun",
+    "retainedAuthority": "Saklanan otorite parmak izi",
+    "scan": "QR kodunu tara",
+    "scanUnsupported": "Bu tarayıcı QR kodu tarayamıyor. Onun yerine QR değerini yapıştır.",
+    "scanning": "Taranıyor…",
+    "stateBlocked": "Sabitlenen kimlik değişti ya da geçmişiyle çelişiyor. Bu yeni kimliği birebir doğrulayana kadar mesaj gönderemezsin.",
+    "stateUnverified": "Geçerli, sabitlenmiş bir kimlikle şifreli; ama yüz yüze doğrulanmadı.",
+    "stateVerified": "Bu cihazda yüz yüze doğrulandı.",
+    "title": "{{peer}} kişisini doğrula",
+    "triggerVerified": "{{peer}} doğrulandı",
+    "triggerVerify": "{{peer}} kişisini doğrula",
+    "triggerWarning": "{{peer}} için güvenlik uyarısı",
+    "verifiedToast": "{{peer}} artık bu cihazda doğrulandı",
+    "verify": "Birebir eşleşmeyi doğrula"
   }
 }

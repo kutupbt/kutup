@@ -64,6 +64,11 @@ pub struct RemoteDriveUserResponse {
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
     pub account_authority_public_key: String,
+    /// The authority's signature over the Drive keys
+    /// (docs/plans/drive-identity-pins.md); absent for an account that has
+    /// not signed one yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_key_binding: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -570,15 +575,15 @@ pub async fn get_user(
             Ok(username) => username,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
-        let identity: Option<(String, String, String, String)> = sqlx::query_as(
+        let identity: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
             "SELECT public_key, account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key
+                    account_authority_public_key, drive_key_binding
              FROM users WHERE username = $1 AND is_active = true",
         )
         .bind(username)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((hpke_key, incarnation_id, signing_key, authority_key)) = identity else {
+        let Some((hpke_key, incarnation_id, signing_key, authority_key, binding)) = identity else {
             return signed_app_error(
                 federation,
                 &authenticated,
@@ -597,6 +602,7 @@ pub async fn get_user(
                 account_incarnation_id: incarnation_id,
                 drive_signing_public_key: signing_key,
                 account_authority_public_key: authority_key,
+                drive_key_binding: binding,
             },
         )
     }
