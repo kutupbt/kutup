@@ -78,7 +78,7 @@ After comparing Proton Pass (per-item records, offline read-only), Strongbox and
 - **The vault is one KDBX 4.1 file in Kutup Drive** (for example in a `Passwords` folder). It is encrypted twice: by KDBX (Argon2id + AES-256 or ChaCha20, under the vault password) and by Drive's end-to-end encryption on top. The server sees only Drive ciphertext.
 - **Every client keeps a local copy and edits it offline.** Nothing about editing needs the server; sync happens when a connection is there.
 - **Drive keeps every version** of the file (Drive version history exists today), so a bad save can be rolled back, and Kutup has the common starting version for merging.
-- **The standard KeePass apps keep working**: KeePassXC on desktop, Strongbox / KeePassium on iOS, KeePassDX / Keepass2Android on Android. They bring autofill, passkeys, SSH agents and biometric unlock that Kutup does not have to build.
+- **KeePassXC keeps working on desktop** through `kutup sync`, with its autofill, passkeys and SSH agent. On phones the Kutup Pass website is the client for now; the KeePass phone apps (Strongbox, KeePassium, KeePassDX, Keepass2Android) can open the file once a Kutup native app makes Drive reachable from the phone.
 - **Leaving Kutup is trivial**: the vault is a standard KeePass file.
 
 ### Clients and how each edits offline
@@ -87,9 +87,10 @@ After comparing Proton Pass (per-item records, offline read-only), Strongbox and
 |---|---|---|---|
 | **Kutup Pass website** (`pass.<domain>`, the product built now) | Opens the KDBX from Drive and decrypts it in the browser (KDBX codec in the Rust core, WASM) | Edits the local copy; the save waits in an outbox (encrypted, in IndexedDB) until online | Kutup (three-way) |
 | **Desktop: KeePassXC + `kutup sync`** | `kutup sync` (exists today, with a three-way-merge sync engine for folders) keeps a local folder in sync; KeePassXC opens the file there. Double encryption intact | KeePassXC edits the local file | Kutup: `kutup sync` learns to merge KDBX files (decrypting with the vault password) instead of producing a conflict copy |
-| **Phones: Strongbox, KeePassium, KeePassDX, Keepass2Android** | Route (a), now: an **opt-in WebDAV address for the vault file only**; route (b), later: a Kutup Drive native app exposing Drive to the system Files app | The app edits its local copy and uploads later | The app merges with its own rules on upload; Kutup re-merges with the common base afterwards (below) |
+| **Phones, now** | The Kutup Pass website in the phone's browser | As the website (best-effort offline on mobile browsers, §5.6) | Kutup (three-way) |
+| **Phones, later** | Kutup's native apps ([`../mobile-build.md`](../mobile-build.md)): a native Kutup Pass and/or a Kutup Drive app exposing Drive to the system Files app, so Strongbox, KeePassium, KeePassDX and Keepass2Android can open the file with both encryption layers intact | The app edits its local copy and uploads later | Kutup's native app (three-way), or the KeePass app with its own rules followed by Kutup's re-merge (below) |
 
-Route (a) note: server-side WebDAV breaks Drive's end-to-end encryption ([`06-webdav-support.md`](06-webdav-support.md)), so the file behind that address is protected **by KDBX encryption only**, the same exposure as a KDBX on Dropbox: the server operator could copy it and attempt offline password guessing, bounded by Argon2id. It is per vault, opt-in, and says so in the UI. Route (b) keeps both layers and comes with the native Drive app ([`../mobile-build.md`](../mobile-build.md)).
+**No WebDAV, CalDAV or CardDAV for phones** (decided 2026-10-11). Proton offers none of them; serving them from Kutup's server would mean handing it readable data (for the vault file: KDBX encryption only, without Drive's layer — [`06-webdav-support.md`](06-webdav-support.md)). Phones use the website until Kutup's native apps arrive.
 
 ### KeePassXC's merge, the starting point (`KXC/core/Merger.cpp`)
 
@@ -127,8 +128,8 @@ The same rules, plus the one thing KeePassXC lacks: the version both edits start
 
 - **Kutup clients save conditionally**: "this file, based on Drive version N". If the file moved on, the client fetches it, merges, and saves again. A save never replaces a version it has not seen. (Recording which version an upload is based on is new in Drive.)
 - **The server cannot merge**: it cannot decrypt the file. Merges always run on a client that holds the vault password.
-- **Uploads from phone apps over WebDAV**: the endpoint honours `If-Match` / ETags where the app sends them, and records each upload as a new Drive version with the version it replaced. When two versions diverge from a common ancestor (two devices saved without seeing each other), the next Kutup client that opens the vault — the website or `kutup sync` — runs the three-way merge with that ancestor and saves the result. Until then both versions are kept; nothing is dropped.
-- Whatever a phone app's own merge decided, Kutup's later re-merge against the common base restores field changes it may have buried in history.
+- **Diverged versions** (two devices saved without seeing each other, for example once KeePass phone apps reach the file through a later native Drive app): Drive records each upload as a new version with the version it replaced; the next Kutup client that opens the vault — the website or `kutup sync` — runs the three-way merge with the common ancestor and saves the result. Until then both versions are kept; nothing is dropped.
+- Whatever another app's own merge decided, Kutup's later re-merge against the common base restores field changes it may have buried in history.
 
 ### What the earlier research becomes
 
@@ -143,9 +144,9 @@ The same rules, plus the one thing KeePassXC lacks: the version both edits start
 | **K0** | KDBX 4.1 codec (read every variant KeePassXC reads; write 4.1) and the three-way merge engine in the Rust core; KeePassXC test corpus; merge property tests |
 | **K1** | `kutup sync` merges KDBX files instead of making conflict copies — the first offline client (desktop with KeePassXC) |
 | **K2** | The Kutup Pass website: open, view, edit and create entries in a KDBX from Drive; local copy and save outbox for offline; version history and rollback; conflict review |
-| **K3** | Phones: the opt-in vault WebDAV address with `If-Match`; divergence detection and re-merge by Kutup clients |
+| **K3** | Divergence detection and re-merge of diverged versions by Kutup clients; the website tuned for phone browsers |
 | **K3b** | The opt-in SSH agent in the `kutup` CLI (below); can start right after K1, since it reads the vault `kutup sync` keeps |
-| **K4 (later)** | Kutup Drive native app with system Files integration (double encryption on phones); the per-item path (§5) if sharing items between users becomes important |
+| **K4 (later)** | Kutup's native apps: Kutup Pass and/or the Kutup Drive app with system Files integration, so KeePass phone apps can open the vault with both encryption layers; the per-item path (§5) if sharing items between users becomes important |
 
 ### SSH agent in the `kutup` CLI (decided 2026-10-11)
 
@@ -166,8 +167,7 @@ The `kutup` CLI includes an SSH agent, **opt-in**: installing the CLI never star
 
 1. **Where the vault password lives.** Pure KeePass: the user types it (one more password). Convenience: Kutup stores it wrapped by the account master key, so the website and `kutup sync` unlock with the Kutup sign-in; the KeePass apps still ask for it.
 2. **Key files and YubiKey challenge-response**: support them in the website and `kutup sync`, or password-only for vaults Kutup merges?
-3. **Is the single-layer WebDAV route acceptable** for phones until the Drive native app exists?
-4. **One vault file per user, or several** (personal, shared family vault in a shared folder)?
+3. **One vault file per user, or several** (personal, shared family vault in a shared folder)?
 
 ---
 
