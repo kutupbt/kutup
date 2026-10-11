@@ -467,7 +467,26 @@
     "title": "Settings",
     "folders": "Folders and labels",
     "filters": "Filters",
+    "general": "General",
     "senders": "Block and allow"
+  },
+  "emptyFolder": {
+    "action": "Delete all",
+    "trashTitle": "Delete everything in Trash?",
+    "spamTitle": "Delete everything in Spam?",
+    "description": "All of it is deleted for good and its storage freed. This cannot be undone.",
+    "autoDeleteOffer": "Automatically delete messages that have been in Trash and Spam for more than 30 days.",
+    "autoDeleteOn": "Messages that have been in Trash and Spam more than 30 days will be automatically deleted.",
+    "enable": "Enable",
+    "autoDeleteEnabled": "Auto-delete is on."
+  },
+  "general": {
+    "title": "General",
+    "saved": "Preference saved.",
+    "autoDelete": "Auto-delete unwanted messages",
+    "autoDeleteHint": "Delete Trash and Spam messages after 30 days. Turning it on counts messages already there from now.",
+    "almostAllMail": "Exclude Spam/Trash from All mail",
+    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash."
   },
   "senders": {
     "title": "Block and allow",

@@ -377,6 +377,8 @@ async fn main() -> anyhow::Result<()> {
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     mail::spawn_receiver(state.clone()).await?;
+    // Auto-delete of old Trash and Spam, for accounts that turned it on.
+    mail::retention::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -625,6 +627,14 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/folders/:id",
             patch(handlers::mail_folders::update_folder)
                 .delete(handlers::mail_folders::delete_folder),
+        )
+        .route(
+            "/api/mail/settings",
+            get(handlers::mail_settings::get).patch(handlers::mail_settings::update),
+        )
+        .route(
+            "/api/mail/messages/empty",
+            post(handlers::mail_settings::empty),
         )
         .route(
             "/api/mail/sender-rules",
