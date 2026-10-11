@@ -719,6 +719,17 @@ pub fn encrypt_armored_signed(
     plaintext: &[u8],
     now_secs: u64,
 ) -> Result<String> {
+    encrypt_armored(recipient_public_keys, Some(signer_secret_key), plaintext, now_secs)
+}
+
+/// [`encrypt_armored_signed`] with the signature optional: unsigned when the
+/// sender turned Sign off for the message (docs/plans/mail-encrypt-sign.md).
+pub fn encrypt_armored(
+    recipient_public_keys: &[&[u8]],
+    signer_secret_key: Option<&[u8]>,
+    plaintext: &[u8],
+    now_secs: u64,
+) -> Result<String> {
     if recipient_public_keys.is_empty() || recipient_public_keys.len() > MAX_SPLIT_RECIPIENTS {
         return Err(CryptoError::InvalidInput(
             "a message needs 1 to 100 recipient keys".into(),
@@ -728,8 +739,12 @@ pub fn encrypt_armored_signed(
         .iter()
         .map(|key| parse_public_key(key))
         .collect::<Result<Vec<_>>>()?;
-    let signer = SignedSecretKey::from_bytes(signer_secret_key)
-        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let signer = signer_secret_key
+        .map(|secret| {
+            SignedSecretKey::from_bytes(secret)
+                .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))
+        })
+        .transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     for key in &keys {
@@ -740,14 +755,36 @@ pub fn encrypt_armored_signed(
             .encrypt_to_key(rand::rngs::OsRng, subkey)
             .map_err(backend)?;
     }
-    builder.sign(
-        &signer.primary_key,
-        Password::empty(),
-        HashAlgorithm::Sha512,
-    );
+    if let Some(signer) = &signer {
+        builder.sign(
+            &signer.primary_key,
+            Password::empty(),
+            HashAlgorithm::Sha512,
+        );
+    }
     builder
         .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
         .map_err(backend)
+}
+
+/// A detached, armored OpenPGP signature over `content` by
+/// `signer_secret_key` (binary signature type, SHA-512): the
+/// `application/pgp-signature` part of an RFC 3156 `multipart/signed`
+/// message, which Proton, Thunderbird and GnuPG check. `content` is the
+/// signed MIME part exactly as sent, CRLF line endings included.
+pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String> {
+    let signer = SignedSecretKey::from_bytes(signer_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    pgp::composed::DetachedSignature::sign_binary_data(
+        rand::rngs::OsRng,
+        &signer.primary_key,
+        &Password::empty(),
+        HashAlgorithm::Sha512,
+        content,
+    )
+    .map_err(backend)?
+    .to_armored_string(ArmorOptions::default())
+    .map_err(backend)
 }
 
 /// Whether `signature` (armored or binary, as in a `multipart/signed`
