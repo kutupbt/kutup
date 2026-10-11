@@ -62,3 +62,7 @@ rand09 = { package = "rand", version = "0.9" }
 # offline root is never configured here; only a root-signed server certificate
 # and its online private key are loaded by the service.
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+
+[dev-dependencies]
+# Live tests build vault secrets (tests/pass_live.rs).
+zeroize.workspace = true

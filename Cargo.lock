@@ -3066,6 +3066,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "unicode-normalization",
+ "uuid",
  "zeroize",
 ]
 
@@ -3110,6 +3111,7 @@ dependencies = [
  "chrono",
  "keepass",
  "proptest",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "uuid",
  "zeroize",
@@ -3163,6 +3165,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

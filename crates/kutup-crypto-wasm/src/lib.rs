@@ -626,9 +626,11 @@ pub fn open_account_envelope(
 /// generic account-envelope path cannot hand their secret key to JavaScript.
 fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {
     match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        AccountEnvelopePurpose::MailAddressPrivateKey => Err(js_error(
-            "this account envelope purpose has its own typed export",
-        )),
+        AccountEnvelopePurpose::MailAddressPrivateKey | AccountEnvelopePurpose::PassVaultSecret => {
+            Err(js_error(
+                "this account envelope purpose has its own typed export",
+            ))
+        }
         purpose => Ok(purpose),
     }
 }
@@ -3007,4 +3009,77 @@ pub fn open_contact_card(
     let vcard = kutup_crypto::contact_card::open_card(&key, account, uid, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))
+}
+
+/// A Kutup Pass vault secret as JavaScript sees it: the password, and the key
+/// file in base64.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PassVaultSecretView {
+    password: Option<String>,
+    key_file: Option<String>,
+}
+
+fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {
+    Ok(*Uuid::parse_str(file_id)
+        .map_err(|_| js_error("vault file id is not a UUID"))?
+        .as_bytes())
+}
+
+/// Seals what opens vault `fileId` (a password, a base64 key file, or both)
+/// under the master key (docs/plans/pass.md, "Vault secrets").
+#[wasm_bindgen(js_name = sealPassVaultSecret)]
+pub fn seal_pass_vault_secret(
+    master_key_base64: &str,
+    login_email: &str,
+    file_id: &str,
+    password: Option<String>,
+    key_file_base64: Option<String>,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let key_file = key_file_base64
+        .map(|value| decode_canonical_base64(&value, "key file"))
+        .transpose()?;
+    let secret = kutup_crypto::pass_vault::VaultSecretV1 {
+        password: password.map(zeroize::Zeroizing::new),
+        key_file: key_file.map(zeroize::Zeroizing::new),
+    };
+    let sealed = kutup_crypto::pass_vault::seal_vault_secret(
+        &master_key,
+        login_email,
+        &vault_id(file_id)?,
+        &secret,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens the secret of vault `fileId`: `{ password, keyFile }` (each may be
+/// null; the key file in base64).
+#[wasm_bindgen(js_name = openPassVaultSecret)]
+pub fn open_pass_vault_secret(
+    envelope_base64: &str,
+    master_key_base64: &str,
+    login_email: &str,
+    file_id: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let envelope = decode_canonical_base64(envelope_base64, "vault secret")?;
+    let secret = kutup_crypto::pass_vault::open_vault_secret(
+        &envelope,
+        &master_key,
+        login_email,
+        &vault_id(file_id)?,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    // `null`, not `undefined`, for what the secret does not hold.
+    PassVaultSecretView {
+        password: secret.password.as_ref().map(|p| p.to_string()),
+        key_file: secret
+            .key_file
+            .as_ref()
+            .map(|k| STANDARD.encode(k.as_slice())),
+    }
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&error.to_string()))
 }

@@ -11,9 +11,14 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine as _;
+use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
+use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecretV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::api::versions::{NewVersion, ORIGINAL};
 use crate::api::{ApiError, Client, File};
@@ -51,8 +56,9 @@ pub(crate) fn recorded(version: &str) -> String {
 }
 
 /// The keys that open the vaults of one sync run (and of every pass of
-/// `--watch`): `KUTUP_VAULT_PASSWORD` and `KUTUP_VAULT_KEY_FILE`, then what
-/// the person types, remembered per vault in memory only.
+/// `--watch`): the vault secret kept in the account (docs/plans/pass.md,
+/// "Vault secrets"), `KUTUP_VAULT_PASSWORD` and `KUTUP_VAULT_KEY_FILE`, then
+/// what the person types, remembered per vault in memory only.
 pub struct VaultKeys {
     configured: Vec<VaultKey>,
     /// Combined with a typed password.
@@ -61,6 +67,15 @@ pub struct VaultKeys {
     /// Per vault: the keys that opened a version of it, in the order found;
     /// `None` once the person skipped it.
     known: BTreeMap<String, Option<Vec<VaultKey>>>,
+    /// What opens the account's vault secrets.
+    account: Option<Account>,
+    /// The account's sealed vault secrets by file id, fetched once a pass.
+    stored: Option<BTreeMap<String, String>>,
+}
+
+struct Account {
+    master_key: Zeroizing<Vec<u8>>,
+    email: String,
 }
 
 impl VaultKeys {
@@ -99,28 +114,49 @@ impl VaultKeys {
             key_file: key_file.map(<[u8]>::to_vec),
             interactive,
             known: BTreeMap::new(),
+            account: None,
+            stored: None,
         }
     }
 
-    /// Opens a version of vault `rel` with a key already known for it, a
-    /// configured one, or (`ask`) one the person types. The index is which
-    /// known key opened it.
-    fn open(&mut self, rel: &str, contents: &[u8], ask: bool) -> Option<(Database, usize)> {
+    /// The signed-in account, whose vault secrets open vaults; read again
+    /// on every pass.
+    pub fn sign_in(&mut self, session: &crate::session::Session) -> Result<()> {
+        self.account = Some(Account {
+            master_key: Zeroizing::new(session.master_key_bytes()?),
+            email: session.email.clone(),
+        });
+        self.stored = None;
+        Ok(())
+    }
+
+    /// Opens a version of vault `rel` (Drive file `file_id`) with a key
+    /// already known for it, its vault secret, a configured one, or (`ask`)
+    /// one the person types. The index is which known key opened it.
+    fn open(
+        &mut self,
+        client: &Client,
+        rel: &str,
+        file_id: &str,
+        contents: &[u8],
+        ask: bool,
+    ) -> Option<(Database, usize)> {
         // `None`: skipped earlier in this run.
         let known = self
             .known
             .entry(rel.to_owned())
             .or_insert_with(|| Some(Vec::new()))
-            .as_mut()?;
+            .clone()?;
         for (index, key) in known.iter().enumerate() {
             if let Ok(db) = kutup_pass::open(contents, key) {
                 return Some((db, index));
             }
         }
-        for key in &self.configured {
-            if let Ok(db) = kutup_pass::open(contents, key) {
-                known.push(key.clone());
-                return Some((db, known.len() - 1));
+        let mut candidates: Vec<VaultKey> = self.stored_key(client, file_id).into_iter().collect();
+        candidates.extend(self.configured.iter().cloned());
+        for key in candidates {
+            if let Ok(db) = kutup_pass::open(contents, &key) {
+                return Some((db, self.remember(rel, key)));
             }
         }
         if !ask || !self.interactive {
@@ -135,6 +171,7 @@ impl VaultKeys {
             let Ok(password) = rpassword::prompt_password(question) else {
                 break;
             };
+            let password = Zeroizing::new(password);
             if password.is_empty() {
                 break;
             }
@@ -143,17 +180,123 @@ impl VaultKeys {
                 key = key.with_key_file(file);
             }
             if let Ok(db) = kutup_pass::open(contents, &key) {
-                known.push(key);
-                return Some((db, known.len() - 1));
+                self.offer_to_keep(client, file_id, contents, &password);
+                return Some((db, self.remember(rel, key)));
             }
         }
         self.known.insert(rel.to_owned(), None);
         None
     }
 
+    fn remember(&mut self, rel: &str, key: VaultKey) -> usize {
+        let keys = self
+            .known
+            .entry(rel.to_owned())
+            .or_insert_with(|| Some(Vec::new()))
+            .get_or_insert_with(Vec::new);
+        keys.push(key);
+        keys.len() - 1
+    }
+
     fn key(&self, rel: &str, index: usize) -> Option<&VaultKey> {
         self.known.get(rel)?.as_ref()?.get(index)
     }
+
+    /// The key in the account's vault secret for `file_id`, if one is kept.
+    fn stored_key(&mut self, client: &Client, file_id: &str) -> Option<VaultKey> {
+        let account = self.account.as_ref()?;
+        let stored = self.stored.get_or_insert_with(|| {
+            client
+                .list_vault_secrets()
+                .map(|rows| rows.into_iter().map(|r| (r.file_id, r.envelope)).collect())
+                .unwrap_or_default()
+        });
+        let envelope = account_envelope::decode_canonical_b64(stored.get(file_id)?).ok()?;
+        let id = Uuid::parse_str(file_id).ok()?;
+        let secret = open_vault_secret(
+            &envelope,
+            &account.master_key,
+            &account.email,
+            id.as_bytes(),
+        )
+        .ok()?;
+        let mut key = VaultKey::new();
+        if let Some(password) = &secret.password {
+            key = key.with_password(password);
+        }
+        if let Some(file) = &secret.key_file {
+            key = key.with_key_file(file);
+        }
+        Some(key)
+    }
+
+    /// After a typed password opened the vault: offers to keep it in the
+    /// account, so Kutup Pass and sync open the vault with the sign-in.
+    fn offer_to_keep(&mut self, client: &Client, file_id: &str, contents: &[u8], password: &str) {
+        let Some(account) = &self.account else {
+            return;
+        };
+        eprint!(
+            "  Keep this vault's key in your Kutup account, so Kutup Pass and sync \
+             open it with your sign-in? [Y/n] "
+        );
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err()
+            || answer.trim().to_lowercase().starts_with('n')
+        {
+            return;
+        }
+        let kept = keep_secret(
+            client,
+            &account.master_key,
+            &account.email,
+            file_id,
+            contents,
+            Some(password),
+            self.key_file.as_deref(),
+        );
+        match kept {
+            Ok(envelope) => {
+                eprintln!("  Kept.");
+                if let Some(stored) = &mut self.stored {
+                    stored.insert(file_id.to_owned(), envelope);
+                }
+            }
+            Err(error) => eprintln!("  Could not keep it: {error:#}"),
+        }
+    }
+}
+
+/// Keeps what opens vault `file_id` (whose current contents are `contents`)
+/// in the account: checked to open the vault by itself, sealed under the
+/// master key and stored. Returns the envelope (base64).
+pub(crate) fn keep_secret(
+    client: &Client,
+    master_key: &[u8],
+    email: &str,
+    file_id: &str,
+    contents: &[u8],
+    password: Option<&str>,
+    key_file: Option<&[u8]>,
+) -> Result<String> {
+    let key_file = key_file.map(kutup_pass::key_file_secret);
+    let mut key = VaultKey::new();
+    if let Some(password) = password {
+        key = key.with_password(password);
+    }
+    if let Some(file) = &key_file {
+        key = key.with_key_file(file);
+    }
+    kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
+    let id = Uuid::parse_str(file_id)?;
+    let secret = VaultSecretV1 {
+        password: password.map(|p| Zeroizing::new(p.to_owned())),
+        key_file: key_file.map(Zeroizing::new),
+    };
+    let sealed = seal_vault_secret(master_key, email, id.as_bytes(), &secret)?;
+    let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
+    client.put_vault_secret(file_id, &envelope)?;
+    Ok(envelope)
 }
 
 /// Where a vault lives on Drive and what opens it there.
@@ -230,7 +373,7 @@ pub(crate) fn merge_and_save(
     base: Option<(&str, &str)>,
     local: &[u8],
 ) -> Result<Option<Saved>> {
-    let Some((mut ours, ours_key)) = keys.open(rel, local, true) else {
+    let Some((mut ours, ours_key)) = keys.open(client, rel, vault.file_id, local, true) else {
         return Ok(None);
     };
     // The base opens with a key already known; an old version under a key
@@ -239,14 +382,16 @@ pub(crate) fn merge_and_save(
         Some((file_id, version)) if file_id == vault.file_id => {
             fetch_version(client, vault, version)
                 .ok()
-                .and_then(|contents| keys.open(rel, &contents, false))
+                .and_then(|contents| keys.open(client, rel, vault.file_id, &contents, false))
         }
         _ => None,
     };
     let mut report = MergeReport::default();
     for _ in 0..SAVE_ATTEMPTS {
         let (theirs_contents, theirs_version) = fetch_current(client, vault)?;
-        let Some((theirs, theirs_key)) = keys.open(rel, &theirs_contents, true) else {
+        let Some((theirs, theirs_key)) =
+            keys.open(client, rel, vault.file_id, &theirs_contents, true)
+        else {
             return Ok(None);
         };
         let (merged, this_report) =
@@ -361,7 +506,7 @@ fn current_file(client: &Client, vault: &VaultFile) -> Result<(File, [u8; 32])> 
 }
 
 /// What the file holds now, with the version it is (as the server names it).
-fn fetch_current(client: &Client, vault: &VaultFile) -> Result<(Vec<u8>, String)> {
+pub(crate) fn fetch_current(client: &Client, vault: &VaultFile) -> Result<(Vec<u8>, String)> {
     let (response, version) = client.download_current_stream(vault.file_id)?;
     let sealed = response.bytes().context("download vault")?.to_vec();
     let version = match version {
@@ -437,6 +582,13 @@ mod tests {
         assert_eq!(recorded("v1"), "v1");
     }
 
+    const VAULT_ID: &str = "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70";
+
+    /// Never reached: without a signed-in account no secret is fetched.
+    fn offline() -> Client {
+        Client::new("http://127.0.0.1:9", "")
+    }
+
     fn vault(title: &str, key: &VaultKey) -> Vec<u8> {
         let mut db = Database::new();
         db.root_mut().add_entry().set_unprotected("Title", title);
@@ -448,19 +600,25 @@ mod tests {
         let key = VaultKey::new().with_password("p");
         let contents = vault("a", &key);
         let mut keys = VaultKeys::new(Some("p"), None, false);
-        let (_, index) = keys.open("a.kdbx", &contents, true).unwrap();
+        let (_, index) = keys
+            .open(&offline(), "a.kdbx", VAULT_ID, &contents, true)
+            .unwrap();
         assert_eq!(index, 0);
         assert!(keys.key("a.kdbx", 0).is_some());
         // A version under another key does not open without a prompt.
         let other = vault("a", &VaultKey::new().with_password("q"));
-        assert!(keys.open("a.kdbx", &other, true).is_none());
+        assert!(keys
+            .open(&offline(), "a.kdbx", VAULT_ID, &other, true)
+            .is_none());
     }
 
     #[test]
     fn without_a_key_or_a_terminal_nothing_opens() {
         let contents = vault("a", &VaultKey::new().with_password("p"));
         let mut keys = VaultKeys::new(None, None, false);
-        assert!(keys.open("a.kdbx", &contents, true).is_none());
+        assert!(keys
+            .open(&offline(), "a.kdbx", VAULT_ID, &contents, true)
+            .is_none());
     }
 
     #[test]
