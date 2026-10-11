@@ -505,3 +505,75 @@ fn gnupg_verifies_a_kutup_cleartext_signature() {
     );
     assert!(!ok);
 }
+
+/// A key table's details for GnuPG keys: type, expiry and state, never a
+/// refusal for an expired or revoked key (Proton's key history).
+#[test]
+fn key_details_show_type_expiry_and_state() {
+    use kutup_crypto::mail_key::{describe_external_key_details, ExternalKeyState};
+    if Command::new("gpg").arg("--version").output().is_err() {
+        eprintln!("gpg not installed; skipping");
+        return;
+    }
+    let home = home("details");
+    make_key(&home, "Dave <dave@example.org>", "1y");
+    let key = export(&home, "dave@example.org");
+    let details = describe_external_key_details(&key, "dave@example.org", now()).unwrap();
+    assert_eq!(details.algorithm, "ECC (Curve25519)");
+    assert_eq!(details.state, ExternalKeyState::Usable);
+    let expires = details.expires_at_secs.expect("an expiry");
+    assert!(
+        expires > now() + 300 * 86_400 && expires < now() + 400 * 86_400,
+        "{expires}"
+    );
+    let later =
+        describe_external_key_details(&key, "dave@example.org", now() + 2 * 365 * 86_400).unwrap();
+    assert_eq!(later.state, ExternalKeyState::Expired);
+    let other = describe_external_key_details(&key, "eve@example.org", now()).unwrap();
+    assert_eq!(other.state, ExternalKeyState::OtherAddress);
+
+    // Its user ID revoked (GnuPG keeps the last one, so add another first):
+    // listed as revoked, not refused.
+    let (ok, _, err) = gpg(
+        &home,
+        &[
+            "--quick-add-uid",
+            "dave@example.org",
+            "Dave <dave@work.example>",
+        ],
+        b"",
+    );
+    assert!(ok, "add-uid: {err}");
+    let (ok, _, err) = gpg(
+        &home,
+        &[
+            "--quick-revoke-uid",
+            "dave@work.example",
+            "Dave <dave@example.org>",
+        ],
+        b"",
+    );
+    assert!(ok, "revoke-uid: {err}");
+    let revoked = export(&home, "dave@work.example");
+    let details = describe_external_key_details(&revoked, "dave@example.org", now()).unwrap();
+    assert_eq!(details.state, ExternalKeyState::Revoked);
+    let still = describe_external_key_details(&revoked, "dave@work.example", now()).unwrap();
+    assert_eq!(still.state, ExternalKeyState::Usable);
+
+    // RSA keys name their size.
+    let (ok, _, err) = gpg(
+        &home,
+        &[
+            "--quick-gen-key",
+            "Rsa <rsa@example.org>",
+            "rsa3072",
+            "cert,sign,encr",
+            "1y",
+        ],
+        b"",
+    );
+    assert!(ok, "gen-key: {err}");
+    let rsa = export(&home, "rsa@example.org");
+    let details = describe_external_key_details(&rsa, "rsa@example.org", now()).unwrap();
+    assert_eq!(details.algorithm, "RSA (3072)");
+}

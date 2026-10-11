@@ -2466,6 +2466,40 @@ pub fn describe_external_mail_key(public_key: &[u8]) -> Result<JsValue, JsValue>
     .map_err(|error| js_error(&format!("encode key: {error}")))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalMailKeyDetailsView {
+    public_key: String,
+    fingerprint: String,
+    created_at: u32,
+    expires_at: Option<u64>,
+    algorithm: String,
+    /// `usable`, `expired`, `revoked`, `otherAddress` or `cannotEncrypt`.
+    state: &'static str,
+}
+
+/// An outside key as a contact's key table lists it (Proton's
+/// `ContactKeysTable`): type, expiry, and where it stands for `address`
+/// now; an expired or revoked key is described, not refused.
+#[wasm_bindgen(js_name = describeExternalMailKeyDetails)]
+pub fn describe_external_mail_key_details(
+    public_key: &[u8],
+    address: &str,
+) -> Result<JsValue, JsValue> {
+    let details =
+        kutup_crypto::mail_key::describe_external_key_details(public_key, address, now_secs())
+            .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ExternalMailKeyDetailsView {
+        public_key: STANDARD.encode(&details.info.public_key),
+        fingerprint: details.info.fingerprint,
+        created_at: details.info.created_at_secs,
+        expires_at: details.expires_at_secs,
+        algorithm: details.algorithm,
+        state: details.state.as_str(),
+    })
+    .map_err(|error| js_error(&format!("encode key: {error}")))
+}
+
 /// Encrypts `plaintext` to outside keys and the sender's own (base64),
 /// signed inside with the address key sealed in `envelope`: the armored
 /// message for a PGP/MIME `multipart/encrypted` part.

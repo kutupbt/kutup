@@ -211,6 +211,20 @@ export async function describeExternalMailKey(publicKey: Uint8Array): Promise<Ex
   return (await getCryptoWasm()).describeExternalMailKey(publicKey)
 }
 
+/** An outside key as a contact's key table lists it (Proton's ContactKeysTable). */
+export interface ExternalMailKeyDetails extends ExternalMailKey {
+  /** Seconds since the epoch, when it stops being valid; none when it does not expire. */
+  expiresAt?: number | null
+  /** "RSA (4096)", "ECC (Curve25519)". */
+  algorithm: string
+  state: 'usable' | 'expired' | 'revoked' | 'otherAddress' | 'cannotEncrypt'
+}
+
+/** {@link describeExternalMailKey} with type, expiry and where the key stands for `address` now. */
+export async function describeExternalMailKeyDetails(publicKey: Uint8Array, address: string): Promise<ExternalMailKeyDetails> {
+  return (await getCryptoWasm()).describeExternalMailKeyDetails(publicKey, address)
+}
+
 /**
  * Encrypts to outside keys and the sender's own (base64), signed inside:
  * the armored message for a PGP/MIME `multipart/encrypted` part.

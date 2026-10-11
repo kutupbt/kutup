@@ -761,6 +761,19 @@ pub struct OutsideMailKey {
     pub public_key: String,
     pub fingerprint: String,
     pub created_at: u32,
+    /// Every usable key the source served, newest first (the one above
+    /// among them), for a contact's key table.
+    pub keys: Vec<OutsideMailKeyEntry>,
+}
+
+/// One usable key of an outside address.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OutsideMailKeyEntry {
+    /// Binary OpenPGP public key, base64, checked as above.
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: u32,
 }
 
 /// `GET /api/mail/keys/outside?email=` — an outside address's OpenPGP key,
@@ -799,5 +812,14 @@ pub async fn outside_keys(
         public_key: STANDARD.encode(&found.key.public_key),
         fingerprint: found.key.fingerprint,
         created_at: found.key.created_at_secs,
+        keys: found
+            .keys
+            .iter()
+            .map(|key| OutsideMailKeyEntry {
+                public_key: STANDARD.encode(&key.public_key),
+                fingerprint: key.fingerprint.clone(),
+                created_at: key.created_at_secs,
+            })
+            .collect(),
     }))
 }

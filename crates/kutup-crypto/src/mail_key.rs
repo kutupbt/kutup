@@ -570,6 +570,106 @@ fn usable_encryption_subkey(key: &SignedPublicKey, now_secs: u64) -> Option<&Sig
         .max_by_key(|sub| sub.created_at().as_secs())
 }
 
+/// Where an outside key stands for an address, as Proton's key table shows
+/// it (`ContactKeysTable`): usable to encrypt to, or why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalKeyState {
+    Usable,
+    Expired,
+    Revoked,
+    /// No self-signed user ID for the address.
+    OtherAddress,
+    /// No encryption subkey Kutup can use.
+    CannotEncrypt,
+}
+
+impl ExternalKeyState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExternalKeyState::Usable => "usable",
+            ExternalKeyState::Expired => "expired",
+            ExternalKeyState::Revoked => "revoked",
+            ExternalKeyState::OtherAddress => "otherAddress",
+            ExternalKeyState::CannotEncrypt => "cannotEncrypt",
+        }
+    }
+}
+
+/// An outside key as a contact's key table lists it: never refused for
+/// being expired or revoked, so its history stays visible.
+#[derive(Debug, Clone)]
+pub struct ExternalKeyDetails {
+    pub info: ExternalKeyInfo,
+    /// When it stops being valid, if it does (its newest self-signature).
+    pub expires_at_secs: Option<u64>,
+    /// "RSA (4096)", "ECC (Curve25519)", as Proton names them.
+    pub algorithm: String,
+    pub state: ExternalKeyState,
+}
+
+fn algorithm_name(key: &SignedPublicKey) -> String {
+    use pgp::crypto::public_key::PublicKeyAlgorithm as A;
+    use pgp::types::PublicParams;
+    use rsa::traits::PublicKeyParts as _;
+    match key.primary_key.public_params() {
+        PublicParams::RSA(params) => format!("RSA ({})", params.key.n().bits()),
+        _ => match key.primary_key.algorithm() {
+            A::EdDSALegacy | A::Ed25519 | A::X25519 | A::ECDH => "ECC (Curve25519)".into(),
+            A::Ed448 | A::X448 => "ECC (Curve448)".into(),
+            A::ECDSA => "ECC (NIST)".into(),
+            A::DSA => "DSA".into(),
+            other => format!("{other:?}"),
+        },
+    }
+}
+
+/// [`describe_external_public_key`] with what a key table shows: expiry,
+/// algorithm and where the key stands for `address` at `now_secs`
+/// ([`inspect_external_public_key`]'s checks, as a state).
+pub fn describe_external_key_details(
+    public_key: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<ExternalKeyDetails> {
+    let info = describe_external_public_key(public_key)?;
+    let key = parse_public_key(public_key)?;
+    let self_signatures: Vec<pgp::packet::Signature> = key
+        .details
+        .users
+        .iter()
+        .flat_map(|user| user.signatures.iter())
+        .filter(|sig| self_issued(sig, &key))
+        .filter(|sig| sig.typ() != Some(pgp::packet::SignatureType::CertRevocation))
+        .cloned()
+        .collect();
+    let expires_at_secs = self_signatures
+        .iter()
+        .filter_map(|sig| sig.created().map(|at| (at.as_secs(), sig)))
+        .max_by_key(|(at, _)| *at)
+        .and_then(|(_, sig)| sig.key_expiration_time())
+        .filter(|lifetime| lifetime.as_secs() != 0)
+        .map(|lifetime| u64::from(info.created_at_secs) + u64::from(lifetime.as_secs()));
+    let state = match inspect_external_public_key(public_key, address, now_secs) {
+        Ok(_) => ExternalKeyState::Usable,
+        Err(CryptoError::InvalidInput(reason)) if reason.contains("revoked") => {
+            ExternalKeyState::Revoked
+        }
+        Err(CryptoError::InvalidInput(reason)) if reason.contains("expired") => {
+            ExternalKeyState::Expired
+        }
+        Err(CryptoError::InvalidInput(reason)) if reason.contains("user ID for the address") => {
+            ExternalKeyState::OtherAddress
+        }
+        Err(_) => ExternalKeyState::CannotEncrypt,
+    };
+    Ok(ExternalKeyDetails {
+        info,
+        expires_at_secs,
+        algorithm: algorithm_name(&key),
+        state,
+    })
+}
+
 /// A single outside key (armored or binary) as it is, unchecked: its binary
 /// form, fingerprint and creation time, for showing a key pinned to a
 /// contact even once it has expired. Use [`inspect_external_public_key`]
@@ -601,6 +701,19 @@ pub fn inspect_external_public_keys(
     address: &str,
     now_secs: u64,
 ) -> Result<ExternalKeyInfo> {
+    inspect_external_public_keys_all(keys, address, now_secs)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CryptoError::InvalidInput("no usable key for the address".into()))
+}
+
+/// Every usable key in a key server's answer, newest first (Proton lists
+/// them all in a contact's key table); an error when none is.
+pub fn inspect_external_public_keys_all(
+    keys: &[u8],
+    address: &str,
+    now_secs: u64,
+) -> Result<Vec<ExternalKeyInfo>> {
     if keys.is_empty() || keys.len() > MAX_EXTERNAL_KEY_LEN {
         return Err(CryptoError::InvalidInput(
             "public key size is invalid".into(),
@@ -616,12 +729,19 @@ pub fn inspect_external_public_keys(
             .map(|iter| iter.filter_map(|key| key.ok()).collect())
             .map_err(|_| CryptoError::InvalidInput("public keys do not parse".into()))?
     };
-    parsed
+    let mut usable: Vec<ExternalKeyInfo> = parsed
         .iter()
         .filter_map(|key| key.to_bytes().ok())
         .filter_map(|bytes| inspect_external_public_key(&bytes, address, now_secs).ok())
-        .max_by_key(|info| info.created_at_secs)
-        .ok_or_else(|| CryptoError::InvalidInput("no usable key for the address".into()))
+        .collect();
+    if usable.is_empty() {
+        return Err(CryptoError::InvalidInput(
+            "no usable key for the address".into(),
+        ));
+    }
+    usable.sort_by_key(|info| std::cmp::Reverse(info.created_at_secs));
+    usable.dedup_by(|a, b| a.fingerprint == b.fingerprint);
+    Ok(usable)
 }
 
 /// Checks an outside key for `address` at `now_secs`: version 4, not

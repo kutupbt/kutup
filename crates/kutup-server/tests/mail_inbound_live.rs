@@ -1014,6 +1014,9 @@ fn pgp_with_a_gnupg_correspondent() {
     .unwrap();
     assert_eq!(found["source"], "wkd", "found: {found}");
     assert_eq!(found["fingerprint"], fingerprint.as_str());
+    // Every usable key the source served, the newest first (one here).
+    assert_eq!(found["keys"].as_array().unwrap().len(), 1, "found: {found}");
+    assert_eq!(found["keys"][0]["fingerprint"], fingerprint.as_str());
     let dave_key = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         found["publicKey"].as_str().unwrap(),

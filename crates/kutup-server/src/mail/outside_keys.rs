@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
-use kutup_crypto::mail_key::{inspect_external_public_keys, ExternalKeyInfo};
+use kutup_crypto::mail_key::{inspect_external_public_keys_all, ExternalKeyInfo};
 use serde::Serialize;
 use url::Url;
 use utoipa::ToSchema;
@@ -33,7 +33,11 @@ pub enum KeySource {
 #[derive(Clone, Debug)]
 pub struct OutsideKey {
     pub source: KeySource,
+    /// The newest usable key, which mail is encrypted to.
     pub key: ExternalKeyInfo,
+    /// Every usable key the source served, newest first (`key` among them),
+    /// for a contact's key table (docs/plans/contact-keys.md).
+    pub keys: Vec<ExternalKeyInfo>,
 }
 
 /// Proton's own domains, whose users' keys Proton serves over HKP (it serves
@@ -94,7 +98,7 @@ fn candidates(local: &str, domain: &str, address: &str) -> Vec<(KeySource, Strin
     urls
 }
 
-/// The usable key of an outside address, if any source has one.
+/// The usable keys of an outside address, from the first source that has any.
 pub async fn lookup(state: &AppState, address: &str) -> Option<OutsideKey> {
     let (local, domain) = split(address)?;
     let address = format!("{local}@{domain}");
@@ -110,8 +114,12 @@ pub async fn lookup(state: &AppState, address: &str) -> Option<OutsideKey> {
         let Ok(body) = fetch(state, &url).await else {
             continue;
         };
-        if let Ok(key) = inspect_external_public_keys(&body, &address, now) {
-            found = Some(OutsideKey { source, key });
+        if let Ok(keys) = inspect_external_public_keys_all(&body, &address, now) {
+            found = Some(OutsideKey {
+                source,
+                key: keys[0].clone(),
+                keys,
+            });
             break;
         }
     }

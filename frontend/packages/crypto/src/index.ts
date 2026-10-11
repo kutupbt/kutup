@@ -62,6 +62,7 @@ export {
   armorMailPublicKey,
   encryptMailMessage,
   describeExternalMailKey,
+  describeExternalMailKeyDetails,
   encryptMailMessageAsGroup,
   encryptMailPgp,
   encryptMailPgpAsGroup,
