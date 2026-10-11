@@ -193,6 +193,55 @@
     "offer": "{{address}} is not in your contacts.",
     "add": "Add to contacts"
   },
+  "mailGroups": {
+    "title": "Groups",
+    "loading": "Loading the group…",
+    "pageDescription": "The groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens beside it, and its members read and answer it together.",
+    "emptyTitle": "No groups yet",
+    "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes.",
+    "kind": {
+      "list": "Distribution list",
+      "shared": "Shared mailbox"
+    },
+    "goesToAdministrators": "This role address has no members yet, so its mail goes to every administrator.",
+    "toAdministrators": "Goes to all administrators",
+    "displayName": "Name",
+    "postPolicy": "Who may write to it",
+    "systemPolicy": "Role addresses take mail from anyone.",
+    "policy": {
+      "anyone": "Anyone, outside Kutup too",
+      "local": "Kutup users of this server",
+      "members": "Its members",
+      "managers": "Its owners and managers"
+    },
+    "description": "Description",
+    "members": "Members",
+    "membersCount_one": "{{count}} member",
+    "membersCount_other": "{{count}} members",
+    "roleOf": "Role of {{address}}",
+    "role": {
+      "owner": "Owner",
+      "manager": "Manager",
+      "member": "Member"
+    },
+    "canSendAs": "May send as it",
+    "remove": "Remove {{address}}",
+    "addPlaceholder": "name@example.org",
+    "add": "Add member",
+    "sharedKeysHint": "Saving shares the mailbox's key with new members, and gives it a new key when someone leaves, so they cannot read new mail.",
+    "withoutHistory": "You hold no copy of this mailbox's key, so new members get a new key and see only mail from now on. Save again to go ahead.",
+    "saveWithoutHistory": "Save without older mail",
+    "save": "Save",
+    "saved": "Group saved.",
+    "saveFailed": "The group could not be saved.",
+    "noAccount": "{{address}} is not a Kutup account on this server, or has not signed in yet.",
+    "manage": "Manage",
+    "viewMembers": "Members",
+    "openMailbox": "Open",
+    "sharedMailboxes": "Shared mailboxes",
+    "foldersOf": "Folders of {{name}}",
+    "deleted": "Group deleted."
+  },
   "nameDialog": {
     "label": "Name",
     "required": "Enter a name.",

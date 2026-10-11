@@ -476,7 +476,36 @@ arrival, and direct sending. Phases, each with its own plan before code:
   (`test/mail-proton.md`).
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
-- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, aliases, custom domains.
+- **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
+  2026-10-10; G1 done): distribution lists and shared mailboxes with
+  their own storage quota, owner/manager/member roles and post policies;
+  the role addresses become system groups. G2 moderation, G3 assigning and
+  tags.
+- **Aliases ("hide my email"), next after groups G1**, modelled on Proton's
+  (SimpleLogin, now Proton Pass aliases; `WebClients/packages/pass`, alias
+  types and settings), with Apple's Hide My Email and Firefox Relay as the
+  simpler cases:
+  - an alias is a prefix the person picks plus a suffix the server offers
+    and signs (`netflix.x7f2@<alias domain>`), so nobody can claim another's
+    suffix; random aliases too; ideally on a separate domain
+    (`relay.<domain>`, needing its own MX, SPF and DKIM) so aliases cannot
+    be guessed from usernames; later the person's custom domains;
+  - each alias has a display name, a note, the site it was made for, an
+    on/off switch (off refuses at RCPT) and counts of forwarded, replied and
+    blocked mail;
+  - it delivers to the owner's mailbox (Proton: one or more verified
+    mailboxes, outside ones included; Kutup: the account's own, encrypted on
+    arrival, labelled with the alias; outside mailboxes later);
+  - alias contacts: each address that writes to an alias becomes a contact
+    of it, which can be blocked; replying, or starting a conversation
+    ("reverse alias"), sends From the alias so the other side never learns
+    the real address;
+  - per-account limits; a browser extension or password manager offering an
+    alias inside sign-up forms comes later.
+  Built on the address records groups introduce (an address owned by an
+  account or a group). Its own plan before code.
+- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, custom domains, organisations
+  (which then own groups' storage, see the groups plan).
 
 Sending is over IPv4 only (`95.217.238.230`, PTR `mail.kutup.dev`);
 outbound port 25 is open on the host (checked 2026-10-09).

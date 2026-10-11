@@ -345,6 +345,9 @@ address blocklisted, and then nobody's mail arrives, so before the MX switch:
    content), pause, resume, own limits, flags; in the audit log.
 5. **Role addresses:** `postmaster@` and `abuse@` reach the administrator;
    those and `hostmaster`, `mailer-daemon` and `security` cannot be registered.
+   Since groups ([`mail-groups.md`](mail-groups.md)), all four but
+   `mailer-daemon@` are system groups that reach their members, or every
+   administrator while they have none.
    Google Postmaster Tools and Microsoft SNDS before the MX switch.
 
 Migration 087: `mail_sending_policies` (overrides, pause, flag) and

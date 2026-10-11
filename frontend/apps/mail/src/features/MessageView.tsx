@@ -15,6 +15,7 @@ import { formatBytes, formatInstant, formatFileDate } from '@kutup/ui/lib/format
 import { cn } from '@kutup/ui/lib/cn'
 import { openComposer } from './composerState'
 import { MailBody } from './MailBody'
+import { useGroupScope, useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
 
 function who(mailbox: Mailbox | null | undefined): string {
@@ -117,7 +118,9 @@ export function MessageView({
 }) {
   const { t, i18n } = useTranslation()
   const pinned = usePinnedKeys()
-  const opened = useOpenedMessage(account, expanded ? message : undefined, pinned)
+  const { group } = useMailboxScope()
+  const scope = useGroupScope(account)
+  const opened = useOpenedMessage(account, expanded ? message : undefined, pinned, scope)
   const parsed = opened.data?.parsed
   const from = parsed?.from ?? message.from
   const draft = message.folder === 'drafts'
@@ -147,6 +150,7 @@ export function MessageView({
           <Recipients label={t('read.to')} list={parsed?.to ?? message.to} />
           <Recipients label={t('read.cc')} list={parsed?.cc ?? message.cc} />
           <Recipients label={t('read.bcc')} list={message.bcc} />
+          {message.sentBy ? <p className="text-xs text-muted-foreground">{t('read.sentBy', { name: message.sentBy })}</p> : null}
         </button>
         <div className="flex shrink-0 items-center gap-2">
           <Padlock message={message} opened={opened.data} />
@@ -183,15 +187,15 @@ export function MessageView({
                 </Button>
               ) : (
                 <>
-                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'reply', message, opened: opened.data })}>
+                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'reply', message, opened: opened.data, fromGroup: group })}>
                     <Reply />
                     {t('read.reply')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'replyAll', message, opened: opened.data })}>
+                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'replyAll', message, opened: opened.data, fromGroup: group })}>
                     <ReplyAll />
                     {t('read.replyAll')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'forward', message, opened: opened.data })}>
+                  <Button variant="outline" size="sm" onClick={() => openComposer({ kind: 'forward', message, opened: opened.data, fromGroup: group })}>
                     <Forward />
                     {t('read.forward')}
                   </Button>

@@ -2,12 +2,16 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteD
 import { useMemo } from 'react'
 import {
   encryptMailMessage,
+  encryptMailMessageAsGroup,
   encryptMailPgp,
+  encryptMailPgpAsGroup,
   inspectExternalMailKey,
+  openMailGroupMessage,
   openMailMessage,
   toBase64,
   verifyMailCleartext,
   verifyMailDetachedSignature,
+  type GroupMailKey,
   type SealedMailKey,
 } from '@kutup/crypto'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
@@ -15,7 +19,7 @@ import type { ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
-import { addressKeys, forgetKeys, NoKutupAddress } from './keys'
+import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { buildBody, buildMessage, buildPgpMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
@@ -48,6 +52,10 @@ export interface MailMessage {
   inReplyTo: string | null
   references: string[]
   attachmentCount: number
+  /** The distribution list or shared mailbox it came through. */
+  groupAddress: string | null
+  /** A shared mailbox's sent mail: the member who sent it. */
+  sentBy: string | null
 }
 
 interface Page {
@@ -74,6 +82,19 @@ export interface MailAccount {
   olderKeys: SealedMailKey[]
 }
 
+/** Opens a shared mailbox's message with the newest group key that opens it. */
+async function openWithGroupKeys(keys: GroupMailKey[], message: Uint8Array, signerKey?: string) {
+  let last: unknown = new Error('no key of this shared mailbox opens the message')
+  for (const key of keys) {
+    try {
+      return await openMailGroupMessage(key, message, signerKey)
+    } catch (error) {
+      last = error
+    }
+  }
+  throw last
+}
+
 /** Opens a message with the primary key, else with an older key (mail from before a new key). */
 async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey?: string) {
   try {
@@ -91,10 +112,12 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 }
 
 export const mailKey = ['mail'] as const
-const folderKey = (folder: FolderId, q: string) => ['mail', 'folder', folder, q] as const
-const countsKey = ['mail', 'counts'] as const
-const threadKey = (id: string) => ['mail', 'thread', id] as const
+// `group` is a shared mailbox's id; absent, the account's own mailbox.
+const folderKey = (folder: FolderId, q: string, group?: string) => ['mail', 'folder', folder, q, group ?? null] as const
+const countsKey = (group?: string) => ['mail', 'counts', group ?? null] as const
+const threadKey = (id: string, group?: string) => ['mail', 'thread', id, group ?? null] as const
 const contentKey = (id: string) => ['mail', 'content', id] as const
+const scoped = (group?: string) => (group ? { group } : {})
 
 /** Fetched again this often while the app is open (web push comes later). */
 const POLL_MS = 30_000
@@ -143,14 +166,14 @@ export function useMailAccount() {
   })
 }
 
-export function useFolder(folder: FolderId, q = '') {
+export function useFolder(folder: FolderId, q = '', group?: string) {
   return useInfiniteQuery({
-    queryKey: folderKey(folder, q),
+    queryKey: folderKey(folder, q, group),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) =>
       (
         await api.get<Page>('/mail/messages', {
-          params: { folder, ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}), limit: 50 },
+          params: { folder, ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}), limit: 50, ...scoped(group) },
         })
       ).data,
     getNextPageParam: (last) => last.next ?? null,
@@ -179,20 +202,26 @@ export function useSendingStatus(enabled = true) {
   })
 }
 
-export function useCounts() {
+export function useCounts(group?: string) {
   return useQuery({
-    queryKey: countsKey,
-    queryFn: async () => (await api.get<FolderCount[]>('/mail/counts')).data,
+    queryKey: countsKey(group),
+    queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: scoped(group) })).data,
     refetchInterval: POLL_MS,
   })
 }
 
-export function useThread(threadId: string | undefined) {
+export function useThread(threadId: string | undefined, group?: string) {
   return useQuery({
-    queryKey: threadKey(threadId ?? ''),
+    queryKey: threadKey(threadId ?? '', group),
     enabled: !!threadId,
-    queryFn: async () => (await api.get<MailMessage[]>(`/mail/threads/${threadId}`)).data,
+    queryFn: async () => (await api.get<MailMessage[]>(`/mail/threads/${threadId}`, { params: scoped(group) })).data,
   })
+}
+
+/** A shared mailbox being read: its id and the group keys the reader holds. */
+export interface GroupScope {
+  groupId: string
+  keys: GroupMailKey[]
 }
 
 export interface OpenedMessage {
@@ -248,9 +277,14 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
  * (PGP/MIME, inline) or verified (multipart/signed, cleartext) with the
  * keys pinned to the sender.
  */
-export async function openMessage(account: MailAccount, message: MailMessage, pinned: PinnedKeys): Promise<OpenedMessage> {
-  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
+export async function openMessage(account: MailAccount, message: MailMessage, pinned: PinnedKeys, scope?: GroupScope): Promise<OpenedMessage> {
+  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, {
+    responseType: 'arraybuffer',
+    params: scoped(scope?.groupId),
+  })
   const stored = new Uint8Array(response.data)
+  // A shared mailbox's mail opens with a group key the reader holds.
+  const open = scope ? (bytes: Uint8Array, signer?: string) => openWithGroupKeys(scope.keys, bytes, signer) : (bytes: Uint8Array, signer?: string) => openWithKeys(account, bytes, signer)
   const sender = message.from?.address
   let candidates: string[] = []
   if (sender === account.address) {
@@ -260,10 +294,10 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
       .then((keys) => keys.all)
       .catch(() => [])
   }
-  let opened = await openWithKeys(account, stored, candidates[0])
+  let opened = await open(stored, candidates[0])
   for (const candidate of candidates.slice(1)) {
     if (!opened.signed || opened.verified) break
-    opened = await openWithKeys(account, stored, candidate)
+    opened = await open(stored, candidate)
   }
   const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
   if (!outside) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
@@ -273,7 +307,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   const pgp = await openPgp(
     opened.data,
     {
-      decrypt: (bytes, signerKey) => openWithKeys(account, bytes, signerKey),
+      decrypt: (bytes, signerKey) => open(bytes, signerKey),
       verifyDetached: (signature, content, key) => verifyMailDetachedSignature(signature, content, key),
       verifyCleartext: (text, key) => verifyMailCleartext(text, key),
     },
@@ -291,13 +325,19 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
 }
 
 /** Opens a message once the sender's pinned keys are known (`pinned` undefined while Contacts load). */
-export function useOpenedMessage(account: MailAccount | undefined, message: MailMessage | undefined, pinned: PinnedKeys | undefined) {
+export function useOpenedMessage(
+  account: MailAccount | undefined,
+  message: MailMessage | undefined,
+  pinned: PinnedKeys | undefined,
+  scope?: GroupScope | null,
+) {
   return useQuery({
     queryKey: contentKey(message?.id ?? ''),
-    enabled: !!account && !!message && !!pinned,
+    // In a shared mailbox, once its keys are known (`scope` null while they load).
+    enabled: !!account && !!message && !!pinned && scope !== null,
     staleTime: Infinity,
     gcTime: 5 * 60_000,
-    queryFn: () => openMessage(account!, message!, pinned!),
+    queryFn: () => openMessage(account!, message!, pinned!, scope ?? undefined),
   })
 }
 
@@ -315,6 +355,8 @@ function patchCached(queryClient: ReturnType<typeof useQueryClient>, ids: string
 
 export interface MessageChange {
   ids: string[]
+  /** A shared mailbox's id. */
+  group?: string
   seen?: boolean
   starred?: boolean
   folder?: 'inbox' | 'archive' | 'spam' | 'trash' | 'sent'
@@ -334,7 +376,8 @@ export function useUpdateMessages() {
 export function useDeleteMessages() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (ids: string[]) => (await api.post<{ updated: number }>('/mail/messages/delete', { ids })).data.updated,
+    mutationFn: async ({ ids, group }: { ids: string[]; group?: string }) =>
+      (await api.post<{ updated: number }>('/mail/messages/delete', { ids, ...scoped(group) })).data.updated,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: mailKey })
       void queryClient.invalidateQueries({ queryKey: ['storage'] })
@@ -483,9 +526,32 @@ export function usePinnedKeys(): PinnedKeys | undefined {
  * each Bcc recipient in their own; the rest get the plaintext. Every copy
  * carries the sender's key in an Autocrypt header.
  */
-export async function sendDraft(account: MailAccount, draft: Draft, attachmentParts: Uint8Array[], pinned: PinnedKeys): Promise<SendRecipient[]> {
+/** Writing as a shared mailbox: its address, name, primary key and the writer's share of it. */
+export interface SendAs {
+  groupId: string
+  address: string
+  name: string
+  /** The group's primary public key (base64). */
+  publicKey: string
+  key: GroupMailKey
+}
+
+export async function sendDraft(
+  account: MailAccount,
+  draft: Draft,
+  attachmentParts: Uint8Array[],
+  pinned: PinnedKeys,
+  as?: SendAs,
+): Promise<SendRecipient[]> {
+  // As a shared mailbox: its address, its key for the sent copy and Autocrypt,
+  // and signed by it.
+  const self = as ? { address: as.address, name: as.name, publicKey: as.publicKey } : { address: account.address, name: account.name, publicKey: account.publicKey }
+  const seal = (keys: string[], plaintext: Uint8Array) =>
+    as ? encryptMailMessageAsGroup(as.key, keys, plaintext) : encryptMailMessage(account.key, keys, plaintext)
+  const sealPgp = (keys: string[], plaintext: Uint8Array) =>
+    as ? encryptMailPgpAsGroup(as.key, keys, plaintext) : encryptMailPgp(account.key, keys, plaintext)
   const header = {
-    from: { address: account.address, name: account.name },
+    from: { address: self.address, name: self.name },
     to: draft.to,
     cc: draft.cc,
     subject: draft.subject,
@@ -493,7 +559,7 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
     inReplyTo: draft.inReplyTo,
     references: draft.references,
     date: new Date(),
-    autocryptKey: account.publicKey,
+    autocryptKey: self.publicKey,
   }
   const content = { html: draft.html, text: draft.text, attachments: attachmentParts }
   const message = buildMessage({ ...header, ...content })
@@ -516,28 +582,46 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
   const packages = await Promise.all(
     groups.map(async (group) => ({
       recipients: group.map((r) => r.address),
-      message: buildPgpMessage(header, await encryptMailPgp(account.key, [...group.map((r) => r.key), account.publicKey], body!)),
+      message: buildPgpMessage(header, await sealPgp([...group.map((r) => r.key), self.publicKey], body!)),
     })),
   )
 
   const attempt = async (): Promise<SendRecipient[]> => {
-    const keys = await Promise.all(
-      local.map((address) =>
-        addressKeys(address).catch((error) => {
-          throw error instanceof NoKutupAddress ? new UnknownRecipient(address) : error
-        }),
-      ),
-    )
-    const sealed = await encryptMailMessage(account.key, [account.publicKey, ...keys.map((k) => k.primary)], message)
+    // Each Kutup address, or each member of a group (once, and not you).
+    const targets = new Map<string, string>()
+    for (const address of local) {
+      try {
+        targets.set(address, (await addressKeys(address)).primary)
+      } catch (error) {
+        if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
+        if (!(error instanceof GroupAddress)) throw error
+        for (const member of await groupMembers(address)) {
+          if (member.address !== self.address && !targets.has(member.address)) targets.set(member.address, member.primary)
+        }
+      }
+    }
+    const addresses = [...targets.keys()]
+    const sealed = await seal([self.publicKey, ...addresses.map((a) => targets.get(a)!)], message)
     const keyPackets: Record<string, string> = { self: sealed.keyPackets[0] }
-    local.forEach((address, i) => {
+    addresses.forEach((address, i) => {
       keyPackets[address] = sealed.keyPackets[i + 1]
     })
     const form = new FormData()
     const pgp = packages.map((p) => ({ recipients: p.recipients }))
     form.append(
       'meta',
-      new Blob([JSON.stringify({ ...meta(account, draft), keyPackets, pgp, ...(draft.id ? { draftId: draft.id } : {}) })], { type: 'application/json' }),
+      new Blob(
+        [
+          JSON.stringify({
+            ...meta(account, draft),
+            ...(as ? { fromName: as.name, fromGroup: as.groupId } : {}),
+            keyPackets,
+            pgp,
+            ...(draft.id ? { draftId: draft.id } : {}),
+          }),
+        ],
+        { type: 'application/json' },
+      ),
     )
     form.append('data', blob(sealed.dataPacket))
     packages.forEach((p, i) => form.append(`pgp${i}`, blob(p.message, 'message/rfc822')))
@@ -549,9 +633,10 @@ export async function sendDraft(account: MailAccount, draft: Draft, attachmentPa
     return await attempt()
   } catch (error) {
     const response = (error as { response?: { status?: number; data?: { code?: string; address?: string } } }).response
-    if (response?.status === 409 && response.data?.code === 'keyChanged') {
-      // A recipient rotated their key since it was looked up: once more.
-      forgetKeys(response.data.address)
+    if (response?.status === 409 && (response.data?.code === 'keyChanged' || response.data?.code === 'groupChanged')) {
+      // A recipient rotated their key, or a group's members changed, since
+      // they were looked up: once more.
+      forgetKeys(response.data.code === 'keyChanged' ? response.data.address : undefined)
       return attempt()
     }
     if (response?.status === 422 && response.data?.code === 'unknownRecipient' && response.data.address) {

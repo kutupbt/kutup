@@ -193,6 +193,55 @@
     "offer": "{{address}} kişilerinizde değil.",
     "add": "Kişilere ekle"
   },
+  "mailGroups": {
+    "title": "Gruplar",
+    "loading": "Grup yükleniyor…",
+    "pageDescription": "Üyesi olduğunuz gruplar. Dağıtım listelerinin e-postaları kendi gelen kutunuza gelir; paylaşılan posta kutusu onun yanında açılır ve üyeleri birlikte okur, birlikte yanıtlar.",
+    "emptyTitle": "Henüz grup yok",
+    "emptyDescription": "Bir yönetici sizi dağıtım listelerine ve paylaşılan posta kutularına ekler.",
+    "kind": {
+      "list": "Dağıtım listesi",
+      "shared": "Paylaşılan posta kutusu"
+    },
+    "goesToAdministrators": "Bu rol adresinin henüz üyesi yok; e-postaları tüm yöneticilere gider.",
+    "toAdministrators": "Tüm yöneticilere gider",
+    "displayName": "Ad",
+    "postPolicy": "Kimler yazabilir",
+    "systemPolicy": "Rol adresleri herkesten e-posta alır.",
+    "policy": {
+      "anyone": "Herkes, Kutup dışından da",
+      "local": "Bu sunucudaki Kutup kullanıcıları",
+      "members": "Üyeleri",
+      "managers": "Sahipleri ve yöneticileri"
+    },
+    "description": "Açıklama",
+    "members": "Üyeler",
+    "membersCount_one": "{{count}} üye",
+    "membersCount_other": "{{count}} üye",
+    "roleOf": "{{address}} rolü",
+    "role": {
+      "owner": "Sahip",
+      "manager": "Yönetici",
+      "member": "Üye"
+    },
+    "canSendAs": "Onun adına gönderebilir",
+    "remove": "{{address}} kaldır",
+    "addPlaceholder": "ad@ornek.org",
+    "add": "Üye ekle",
+    "sharedKeysHint": "Kaydetmek, posta kutusunun anahtarını yeni üyelerle paylaşır; biri ayrıldığında da yeni bir anahtar oluşturur, böylece ayrılan yeni e-postaları okuyamaz.",
+    "withoutHistory": "Bu posta kutusunun anahtarının bir kopyası sizde yok; yeni üyeler yeni bir anahtar alır ve yalnızca bundan sonraki e-postaları görür. Devam etmek için yeniden kaydedin.",
+    "saveWithoutHistory": "Eski e-postalar olmadan kaydet",
+    "save": "Kaydet",
+    "saved": "Grup kaydedildi.",
+    "saveFailed": "Grup kaydedilemedi.",
+    "noAccount": "{{address}} bu sunucuda bir Kutup hesabı değil ya da henüz oturum açmadı.",
+    "manage": "Yönet",
+    "viewMembers": "Üyeler",
+    "openMailbox": "Aç",
+    "sharedMailboxes": "Paylaşılan posta kutuları",
+    "foldersOf": "{{name}} klasörleri",
+    "deleted": "Grup silindi."
+  },
   "nameDialog": {
     "label": "Ad",
     "required": "Bir ad girin.",

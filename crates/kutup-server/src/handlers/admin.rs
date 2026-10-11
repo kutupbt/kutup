@@ -184,6 +184,15 @@ pub async fn create_user(
             "this username is reserved for the server",
         ));
     }
+    if crate::mail::groups::is_group_name(
+        &state.pool,
+        &req.username,
+        &state.config.chat_server_name,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("this username is taken"));
+    }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
         req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;

@@ -20,9 +20,13 @@ import {
   useSendingStatus,
   type Draft,
   type MailAccount,
+  type SendAs,
 } from '@kutup/mail-core/api'
+import { GroupNotAllowed } from '@kutup/mail-core/keys'
 import { attachmentPart, describePart, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
 import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
+import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
@@ -163,6 +167,21 @@ function ToolbarToggle({ editor, label, active, onClick, children }: { editor: E
   )
 }
 
+/** Writing as a shared mailbox: its primary key and the writer's share of it. */
+class NoGroupShare extends Error {
+  constructor() {
+    super('you hold no share of this mailbox\'s current key')
+  }
+}
+
+async function sendAs(account: MailAccount, group: MailGroup): Promise<SendAs> {
+  const rows = await groupKeys(group.id)
+  const primary = rows.find((row) => row.primary)
+  const key = primary ? heldKeys([primary], [account.key, ...account.olderKeys])[0] : undefined
+  if (!primary || !key) throw new NoGroupShare()
+  return { groupId: group.id, address: group.address, name: group.displayName, publicKey: primary.publicKey, key }
+}
+
 /** The docked composer, as Proton's: one at a time, minimised or maximised. */
 export function Composer() {
   const { target, generation } = useComposer()
@@ -176,6 +195,11 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const refresh = useMailRefresh()
   const sendingStatus = useSendingStatus()
   const pinned = usePinnedKeys()
+  // Shared mailboxes this account may write as (docs/plans/mail-groups.md).
+  const groups = useMyGroups()
+  const sendAsChoices = (groups.data ?? []).filter((group) => group.kind === 'shared' && group.myCanSendAs)
+  const [fromGroup, setFromGroup] = useState<string | undefined>(target.fromGroup)
+  const from = sendAsChoices.find((group) => group.id === fromGroup)
   const start = useMemo(() => initial(account, target, t, i18n.language), [account, target, t, i18n.language])
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
@@ -368,7 +392,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined))
+      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined)
       const full = results.filter((r) => r.status === 'full').map((r) => r.address)
       const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
       if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
@@ -382,12 +406,16 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       closed.current = false
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
+      else if (error instanceof NoGroupShare) toast.error(t('compose.noGroupShare'))
+      else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
       else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
         toast.error(
-          data?.code === 'outsideSendingOff'
+          data?.code === 'notAllowed'
+            ? t('compose.groupNotAllowed', { address: (data as { address?: string }).address ?? '' })
+            : data?.code === 'outsideSendingOff'
             ? t('compose.outsideOff')
             : data?.code === 'sendingPaused'
             ? t('compose.sendingPaused')
@@ -454,10 +482,28 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             </p>
           ) : null}
           <div className="shrink-0">
-            <p className="flex min-h-10 items-center border-b border-border px-3 text-sm">
-              <span className="w-10 shrink-0 text-muted-foreground">{t('compose.from')}</span>
-              <span className="truncate">{account.address}</span>
-            </p>
+            <div className="flex min-h-10 items-center border-b border-border px-3 text-sm">
+              <span className="w-10 shrink-0 text-muted-foreground" id="compose-from">
+                {t('compose.from')}
+              </span>
+              {sendAsChoices.length > 0 ? (
+                <Select value={from?.id ?? 'self'} onValueChange={(value) => setFromGroup(value === 'self' ? undefined : value)}>
+                  <SelectTrigger className="h-8 w-auto max-w-full border-0 px-1 shadow-none" aria-labelledby="compose-from">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="self">{account.address}</SelectItem>
+                    {sendAsChoices.map((group) => (
+                      <SelectItem key={group.id} value={group.id}>
+                        {group.displayName ? `${group.displayName} <${group.address}>` : group.address}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <span className="truncate">{account.address}</span>
+              )}
+            </div>
             <div className="relative">
               <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} autoFocus={target.kind === 'new' && !start.draft.to.length} />
               {!showCopies ? (
