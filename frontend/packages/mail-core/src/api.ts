@@ -604,6 +604,20 @@ export function useUpdateMessages() {
   })
 }
 
+/** Every message of a place at once (Proton's select all), as `PATCH /mail/messages` changes them. */
+export interface PlaceChange extends Omit<MessageChange, 'ids' | 'starred'> {
+  /** The list's place, All mail aside. */
+  place: PlaceKey
+}
+
+export function useBatchMessages() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (change: PlaceChange) => (await api.post<{ updated: number }>('/mail/messages/batch', change)).data.updated,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: mailKey }),
+  })
+}
+
 /** Deletes for good (from Trash, Spam and Drafts). */
 export function useDeleteMessages() {
   const queryClient = useQueryClient()

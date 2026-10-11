@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
-import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { seedDrafts } from '../fixtures/mail'
 
 // Pages of the list (docs/plans/mail-parity.md, P3), as Proton's: previous,
 // "page/pages" and next at the toolbar's end, numbered pages at the foot,
@@ -16,31 +17,9 @@ test('the list pages as Proton: controls, address bar, page size, selection pane
   await mail.goto(appUrl('mail'))
   await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
 
-  // One draft through the composer; its stored message, encrypted to the
-  // address key, makes 50 more drafts.
+  // 51 drafts.
   const tag = Date.now().toString(36)
-  const saved = mail.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/mail/drafts')
-  await mail.getByRole('button', { name: 'New message' }).first().click()
-  await mail.getByRole('dialog', { name: 'New message' }).getByRole('textbox', { name: 'Subject' }).fill(`Sayfa ${tag}`)
-  await mail.getByRole('textbox', { name: 'Message' }).fill('sayfalar')
-  const draft = mail.getByRole('dialog', { name: `Sayfa ${tag}` })
-  await expect(draft.getByText('Saved')).toBeVisible({ timeout: 30_000 })
-  await draft.getByRole('button', { name: 'Close and keep the draft' }).click()
-  const request = await saved
-  const authorization = (await request.allHeaders()).authorization
-  const first = (await (await request.response())!.json()) as { id: string; messageId: string }
-  const domain = first.messageId.split('@')[1]
-  const content = await (await mail.request.get(apiUrl(`/mail/messages/${first.id}/content`), { headers: { authorization } })).body()
-  for (let i = 0; i < 50; i++) {
-    const response = await mail.request.post(apiUrl('/mail/drafts'), {
-      headers: { authorization },
-      multipart: {
-        meta: { name: 'meta', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ subject: `Sayfa ${tag} ${i}`, messageId: `${tag}-${i}@${domain}` })) },
-        body: { name: 'body', mimeType: 'application/octet-stream', buffer: content },
-      },
-    })
-    expect(response.ok(), `${response.status()} ${await response.text()}`).toBe(true)
-  }
+  await seedDrafts(mail, `Sayfa ${tag}`, 50)
 
   await mail.getByRole('link', { name: /^Drafts( \d+)?$/ }).click()
   const rows = mail.getByRole('link', { name: new RegExp(`Sayfa ${tag}`) })

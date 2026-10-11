@@ -721,6 +721,12 @@
         "messages_one": "<strong>{{count}} ileti</strong> bu etiketle işaretli",
         "messages_other": "<strong>{{count}} ileti</strong> bu etiketle işaretli"
       }
+    },
+    "selectedIn": {
+      "conversations_one": "{{name}} içinde <strong>{{count}} konuşma</strong> seçtiniz",
+      "conversations_other": "{{name}} içinde <strong>{{count}} konuşma</strong> seçtiniz",
+      "messages_one": "{{name}} içinde <strong>{{count}} ileti</strong> seçtiniz",
+      "messages_other": "{{name}} içinde <strong>{{count}} ileti</strong> seçtiniz"
     }
   },
   "attachments": {
@@ -733,5 +739,80 @@
     "position": "{{index}} / {{count}}",
     "previous": "Önceki dosya",
     "next": "Sonraki dosya"
+  },
+  "selectAll": {
+    "selected": {
+      "conversations_one": "<strong>{{count}} konuşma</strong> seçtiniz.",
+      "conversations_other": "<strong>{{count}} konuşma</strong> seçtiniz.",
+      "messages_one": "<strong>{{count}} ileti</strong> seçtiniz.",
+      "messages_other": "<strong>{{count}} ileti</strong> seçtiniz."
+    },
+    "clear": "Seçimi temizle",
+    "selectAll_one": "{{location}} içindeki {{count}} öğenin tümünü seç",
+    "selectAll_other": "{{location}} içindeki {{count}} öğenin tümünü seç",
+    "applying": {
+      "conversations": "İşlemler konuşmalara uygulanıyor",
+      "messages": "İşlemler iletilere uygulanıyor"
+    },
+    "move": {
+      "title": {
+        "conversations": "Tüm konuşmaları taşı",
+        "messages": "Tüm iletileri taşı"
+      },
+      "body": {
+        "conversations_one": "{{count}} konuşma {{name}} klasörüne taşınacak.",
+        "conversations_other": "{{count}} konuşma {{name}} klasörüne taşınacak.",
+        "messages_one": "{{count}} ileti {{name}} klasörüne taşınacak.",
+        "messages_other": "{{count}} ileti {{name}} klasörüne taşınacak."
+      },
+      "submit": "Taşı"
+    },
+    "mark": {
+      "title": {
+        "read": {
+          "conversations": "Konuşmaları okundu olarak işaretle",
+          "messages": "İletileri okundu olarak işaretle"
+        },
+        "unread": {
+          "conversations": "Konuşmaları okunmadı olarak işaretle",
+          "messages": "İletileri okunmadı olarak işaretle"
+        }
+      },
+      "body": {
+        "read": {
+          "conversations_one": "{{count}} konuşma okundu olarak işaretlenecek.",
+          "conversations_other": "{{count}} konuşma okundu olarak işaretlenecek.",
+          "messages_one": "{{count}} ileti okundu olarak işaretlenecek.",
+          "messages_other": "{{count}} ileti okundu olarak işaretlenecek."
+        },
+        "unread": {
+          "conversations_one": "{{count}} konuşma okunmadı olarak işaretlenecek.",
+          "conversations_other": "{{count}} konuşma okunmadı olarak işaretlenecek.",
+          "messages_one": "{{count}} ileti okunmadı olarak işaretlenecek.",
+          "messages_other": "{{count}} ileti okunmadı olarak işaretlenecek."
+        }
+      },
+      "read": "Okundu olarak işaretle",
+      "unread": "Okunmadı olarak işaretle"
+    },
+    "label": {
+      "title": {
+        "conversations": "Tüm konuşmalara uygula",
+        "messages": "Tüm iletilere uygula"
+      },
+      "added": {
+        "conversations_one": "{{count}} konuşma şu etiketleri alacak:",
+        "conversations_other": "{{count}} konuşma şu etiketleri alacak:",
+        "messages_one": "{{count}} ileti şu etiketleri alacak:",
+        "messages_other": "{{count}} ileti şu etiketleri alacak:"
+      },
+      "removed": {
+        "conversations_one": "{{count}} konuşma şu etiketlerden çıkarılacak:",
+        "conversations_other": "{{count}} konuşma şu etiketlerden çıkarılacak:",
+        "messages_one": "{{count}} ileti şu etiketlerden çıkarılacak:",
+        "messages_other": "{{count}} ileti şu etiketlerden çıkarılacak:"
+      },
+      "submit": "Tamam"
+    }
   }
 }

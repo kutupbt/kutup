@@ -3601,3 +3601,82 @@ fn one_click_unsubscribe_goes_through_the_server() {
     let row = wait_for(&c, &base, &alice, &message_id);
     assert_eq!(row["unsubscribed"], true);
 }
+
+#[test]
+fn select_all_changes_a_whole_place() {
+    use kutup_crypto::mail_names::MailNameKind::Label;
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let account = address.address.clone();
+    for subject in ["Bir", "İki", "Üç"] {
+        send_to_self(&c, &base, &user, &address, subject);
+    }
+    let inbox = |c: &Client| folder(c, &base, &user.token, "inbox");
+    for _ in 0..100 {
+        if inbox(&c).len() == 3 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(inbox(&c).len(), 3);
+    let batch = |body: Value| {
+        bearer(
+            c.post(format!("{base}/api/mail/messages/batch")),
+            &user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    let updated = |r: reqwest::blocking::Response| -> u64 {
+        assert!(r.status().is_success(), "batch: {}", r.status());
+        r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
+    };
+
+    // Read, then unread: every message of the Inbox, past any page.
+    assert_eq!(updated(batch(json!({ "place": "inbox", "seen": true }))), 3);
+    assert!(inbox(&c).iter().all(|m| m["seen"] == true));
+    // Into the Archive; the copies in Sent stay.
+    assert_eq!(
+        updated(batch(json!({ "place": "inbox", "folder": "archive" }))),
+        3
+    );
+    assert!(inbox(&c).is_empty());
+    assert_eq!(folder(&c, &base, &user.token, "archive").len(), 3);
+    assert_eq!(folder(&c, &base, &user.token, "sent").len(), 3);
+    // A label on everything archived, then off.
+    let label = uuid::Uuid::new_v4().to_string();
+    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+        .json(&json!({ "id": label, "name": sealed_name(&user, &account, Label, &label, "Hepsi"), "color": "#22aa55" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201);
+    assert_eq!(
+        updated(batch(json!({ "place": "archive", "addLabels": [label] }))),
+        3
+    );
+    assert_eq!(
+        folder(&c, &base, &user.token, &format!("label:{label}")).len(),
+        3
+    );
+    assert_eq!(
+        updated(batch(
+            json!({ "place": format!("label:{label}"), "removeLabels": [label] })
+        )),
+        3
+    );
+    assert!(folder(&c, &base, &user.token, &format!("label:{label}")).is_empty());
+    // All mail, an unknown place and an empty change are refused.
+    for body in [
+        json!({ "place": "all", "seen": true }),
+        json!({ "place": "elsewhere", "seen": true }),
+        json!({ "place": "archive" }),
+    ] {
+        assert_eq!(batch(body.clone()).status(), 400, "{body}");
+    }
+}
