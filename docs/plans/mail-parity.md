@@ -36,7 +36,7 @@ reference only where Proton has nothing.
 | Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | ✅ a message's More actions: Export, Print, View headers (and download), View HTML / rendered |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
-| Link confirmation | `LinkConfirmationModal.tsx` | ❌ |
+| Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ❌ |
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ❌ |

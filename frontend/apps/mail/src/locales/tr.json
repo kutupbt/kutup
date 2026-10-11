@@ -522,7 +522,9 @@
     "attachPublicKeyHint": "Her yeni ileti açık anahtarınızı dosya olarak taşır; böylece kişiler imzalarınızı doğrulayabilir ve size şifreli yazabilir. Bir iletiden kaldırabilirsiniz.",
     "pgpScheme": "Varsayılan PGP biçimi",
     "pgpSchemeHint": "Dışarıdaki PGP kullanıcılarına giden postanın nasıl şifreleneceği ya da imzalanacağı. Satır içi PGP yalnızca düz metin gönderir; her ek ayrı ayrı işlenir.",
-    "inline": "Satır içi"
+    "inline": "Satır içi",
+    "confirmLink": "Bağlantı adreslerini onayla",
+    "confirmLinkHint": "Bir iletideki Kutup dışına giden bir bağlantıya tıkladığınızda, açılmadan önce gerçekte nereye gittiğini görün. İstenmeyen klasöründeki bağlantılar her zaman sorar."
   },
   "senders": {
     "title": "Engelle ve izin ver",
@@ -648,5 +650,18 @@
     },
     "reset": "Sıfırla",
     "empty": "Bu filtrelere uyan ileti yok."
+  },
+  "link": {
+    "title": "Bağlantı onayı",
+    "body": "Başka bir tarayıcı sekmesi açıp şu adresi ziyaret etmek üzeresiniz:",
+    "suspiciousTitle": "Uyarı: sahte olduğundan şüphelenilen site",
+    "suspiciousBody": "Bu ileti istenmeyen olarak ayrıldı. Bağlantı, parola ve kart bilgileri gibi bilgilerinizi çalmaya çalışan bir siteye gidiyor olabilir.",
+    "punycode": "Bu bağlantı bir benzer karakter saldırısı olabilir: adresi başka harflere benzeyen karakterler kullanıyor. Ziyaret etmek istediğiniz site olduğundan emin olun ya da açmayın.",
+    "understand": "Riski anlıyorum",
+    "dontAsk": "Bir daha sorma",
+    "confirm": "Onayla",
+    "confirmOpen": "{{url}} adresini açmayı onayla",
+    "copy": "Bağlantıyı kopyala",
+    "copied": "Bağlantı kopyalandı"
   }
 }

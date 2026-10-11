@@ -43,6 +43,12 @@ export function GeneralSettingsPage() {
           onChange={(on) => save({ viewMode: on ? 'conversation' : 'message' })}
         />
         <Setting
+          label={t('general.confirmLink')}
+          hint={t('general.confirmLinkHint')}
+          checked={settings.data.confirmLink}
+          onChange={(on) => save({ confirmLink: on })}
+        />
+        <Setting
           label={t('general.autoDelete')}
           hint={t('general.autoDeleteHint')}
           checked={settings.data.autoDeleteDays === 30}
