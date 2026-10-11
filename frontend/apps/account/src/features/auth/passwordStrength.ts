@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { retryImport } from '@kutup/crypto/retry'
 
 type Zxcvbn = (password: string) => { score: number }
 
@@ -8,7 +9,13 @@ type Zxcvbn = (password: string) => { score: number }
  */
 let loading: Promise<Zxcvbn> | null = null
 function loadZxcvbn(): Promise<Zxcvbn> {
-  loading ??= import('zxcvbn').then((module) => module.default)
+  // A fetch cut off by a network change is tried once more; a failure is not kept.
+  if (!loading) {
+    loading = retryImport(() => import('zxcvbn')).then((module) => module.default)
+    loading.catch(() => {
+      loading = null
+    })
+  }
   return loading
 }
 
