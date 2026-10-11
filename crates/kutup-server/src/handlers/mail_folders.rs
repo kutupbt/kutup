@@ -413,6 +413,18 @@ pub async fn delete_folder(
     .execute(&mut *tx)
     .await?
     .rows_affected();
+    // Filters that filed mail there keep their other actions; one left
+    // with none is switched off (docs/plans/mail-filters.md).
+    let targets: Vec<String> = folders.iter().map(|f| format!("custom:{f}")).collect();
+    sqlx::query(
+        "UPDATE mail_filters SET actions = actions - 'folder',
+             enabled = enabled AND (actions - 'folder') <> '{}'::jsonb
+          WHERE user_id = $1 AND actions->>'folder' = ANY($2)",
+    )
+    .bind(user_id)
+    .bind(&targets)
+    .execute(&mut *tx)
+    .await?;
     let removed = sqlx::query("DELETE FROM mail_folders WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
@@ -560,15 +572,34 @@ pub async fn delete_label(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
+    let mut tx = state.pool.begin().await?;
     let removed = sqlx::query("DELETE FROM mail_labels WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if removed == 0 {
         return Err(AppError::not_found("no such label"));
     }
+    // Filters that added it keep their other actions; one left with none is switched off.
+    sqlx::query(
+        "UPDATE mail_filters SET actions = CASE
+                 WHEN jsonb_array_length(actions->'labels') = 1 THEN actions - 'labels'
+                 ELSE jsonb_set(actions, '{labels}', (actions->'labels') - $2) END
+          WHERE user_id = $1 AND actions->'labels' ? $2",
+    )
+    .bind(user_id)
+    .bind(id.to_string())
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE mail_filters SET enabled = false WHERE user_id = $1 AND actions = '{}'::jsonb",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

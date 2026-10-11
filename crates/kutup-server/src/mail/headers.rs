@@ -5,7 +5,7 @@
 //! nothing from the body is kept.
 
 use mail_parser::{Address, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Column limits of `mail_messages` (migration 085).
 const SUBJECT_CHARS: usize = 1000;
@@ -16,9 +16,10 @@ const MAX_ADDRESSES: usize = 100;
 const MAX_REFERENCES: usize = 50;
 
 /// One mailbox of a From, To, Cc or Reply-To header.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mailbox {
     pub address: String,
+    #[serde(default)]
     pub name: String,
 }
 

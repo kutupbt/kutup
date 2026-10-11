@@ -8,7 +8,9 @@ import { Boot } from './app/Boot'
 import { MailShell } from './app/MailShell'
 import { GroupsPage } from './features/GroupsPage'
 import { MailboxPage } from './features/MailboxPage'
+import { FiltersSettingsPage } from './features/FiltersSettingsPage'
 import { PlacesSettingsPage } from './features/PlacesSettingsPage'
+import { SettingsLayout } from './features/SettingsLayout'
 import { NotFoundPage } from './NotFoundPage'
 
 /** When the sign-in ends (signed out elsewhere, expired), ask the account app again. */
@@ -35,7 +37,11 @@ export function App() {
               <Route path="/f/:placeId/:threadId" element={<MailboxPage />} />
               <Route path="/l/:placeId" element={<MailboxPage />} />
               <Route path="/l/:placeId/:threadId" element={<MailboxPage />} />
-              <Route path="/settings/folders" element={<PlacesSettingsPage />} />
+              <Route path="/settings" element={<SettingsLayout />}>
+                <Route index element={<Navigate to="/settings/folders" replace />} />
+                <Route path="folders" element={<PlacesSettingsPage />} />
+                <Route path="filters" element={<FiltersSettingsPage />} />
+              </Route>
               {/* A shared mailbox (docs/plans/mail-groups.md). */}
               <Route path="/g/:groupId" element={<Navigate to="inbox" replace />} />
               <Route path="/g/:groupId/:folder" element={<MailboxPage />} />

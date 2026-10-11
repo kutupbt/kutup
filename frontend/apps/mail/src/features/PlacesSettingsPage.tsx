@@ -210,8 +210,6 @@ export function PlacesSettingsPage() {
     ])
 
   return (
-    // Mail's shell is flush (the list runs edge to edge); a settings page has its own margins.
-    <div className="h-full overflow-y-auto px-4 py-6 md:px-8">
     <PageBody>
       <PageHeader title={t('places.settingsTitle')} description={t('places.settingsDescription')} />
       {data.unreadable ? <Alert variant="warn">{t('places.unreadable', { count: data.unreadable })}</Alert> : null}
@@ -296,6 +294,5 @@ export function PlacesSettingsPage() {
         </DialogContent>
       </Dialog>
     </PageBody>
-    </div>
   )
 }

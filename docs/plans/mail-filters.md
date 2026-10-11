@@ -115,7 +115,8 @@ name and the names of the folders and labels it files into do not.
   Sieve is): *sender* (address and name), *recipient* (To and Cc, and the
   address it came to, which matters with aliases), *subject*, *has
   attachments*; comparators *contains, is, begins with, ends with,
-  matches* (`*` and `?`), each with *not*; case and accents folded. Bodies
+  matches* (`*` and `?`), each with *not*; case folded as Sieve's
+  `i;unicode-casemap` (Proton), with Turkish İ, I, ı and i as one letter. Bodies
   are encrypted, so no filter can look into them; Proton is the same.
 - **Actions:** move to Inbox, Archive, Spam, Trash or a folder; add labels;
   mark read; star. Auto-reply comes with the vacation responder, forwarding
@@ -176,9 +177,10 @@ managers, in a later slice; until then its mail uses the fixed folders.
 5. **Slices** in the order below, which builds each layer on the one
    before: places first, then what files mail into them.
 
-## Data (migration 112)
+## Data (migrations 112, 113)
 
-110 and 111 are taken by the aliases plan (A0, A1).
+110 and 111 are taken by the aliases plan (A0, A1); 112 holds folders and
+labels (F1), 113 filters and their runs (F2).
 
 - `mail_folders` (id, user_id, parent_id, sealed name, colour, position,
   expanded, notify), depth checked on write.
@@ -222,8 +224,11 @@ managers, in a later slice; until then its mail uses the fixed folders.
    sealed names (`kutup-crypto` `mail_names`), the sidebar, Move to and
    Label as (toolbar, right click, `M`, `L`, dropping), Settings → Folders
    and labels, counts. Built on `feat/mail-filters`.
-2. **F2 filters:** the matcher in `insert_message`, the builder, order,
-   on/off, apply to existing, "Always move/label sender's emails".
+2. **F2 filters:** the matcher in `insert_message` (`mail/filters.rs`),
+   migration 113, the four-step builder in Settings → Filters, order,
+   on/off, apply to existing (a background run with progress), "Always
+   move/label sender's emails" in Move to and Label as. Built on
+   `feat/mail-filters-f2`, stacked on F1.
 3. **F3 block, spam and allow** lists, with DMARC for allow, and their
    menus.
 4. **F4 Sieve** import and export of the subset; folders, labels and
