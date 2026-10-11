@@ -11,6 +11,7 @@ pub mod collections;
 pub mod contacts;
 pub mod devices;
 pub mod drive_move;
+pub mod feedback;
 pub mod file_assets;
 pub mod file_shares;
 pub mod file_thumbnails;

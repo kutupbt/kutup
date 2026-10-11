@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import { BookUser, FileType, HardDrive, Images, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -101,7 +103,12 @@ export function ContactsShell() {
           </li>
         </>
       }
-      sidebarFooter={<StorageMeter />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="contacts" services={feedbackServices} />
+          <StorageMeter />
+        </div>
+      }
       headerEnd={
         <UserMenu
           name={session.username ?? session.email}

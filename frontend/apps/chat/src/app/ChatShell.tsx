@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import { BookUser, FileType, HardDrive, Images, Mail as MailIcon, Map as MapIcon, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound, Video } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -131,7 +133,12 @@ export function ChatShell() {
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('chat.nav.settings')} />
         </>
       }
-      sidebarFooter={<BackupIndicator />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="chat" services={feedbackServices} />
+          <BackupIndicator />
+        </div>
+      }
       headerStart={<ChatSearchBox />}
       headerEnd={
         <UserMenu
