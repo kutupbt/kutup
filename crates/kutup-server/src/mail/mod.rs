@@ -5,6 +5,7 @@
 //! stored in S3 with its readable fields in `mail_messages`, charged to the
 //! account's one storage pool.
 
+pub mod auto_reply;
 pub mod filters;
 pub mod group_keys;
 pub mod groups;
@@ -214,10 +215,12 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     let owned = raw.to_vec();
     let public_key = recipient.public_key.clone();
     let authserv = state.config.mail_hostname.clone();
-    let (readable, ciphertext) = tokio::task::spawn_blocking(move || {
+    let (readable, may_answer, ciphertext) = tokio::task::spawn_blocking(move || {
         let mut readable = Readable::parse(&owned);
         readable.from_authenticated = headers::dmarc_passed(&owned, &authserv);
-        kutup_crypto::mail_key::encrypt_binary(&public_key, &owned).map(|c| (readable, c))
+        let may_answer = auto_reply::may_answer(&owned);
+        kutup_crypto::mail_key::encrypt_binary(&public_key, &owned)
+            .map(|c| (readable, may_answer, c))
     })
     .await??;
 
@@ -244,6 +247,15 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
         .await?;
     let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
         Ok(Some(stored)) => {
+            if may_answer && readable.bounce.is_none() {
+                auto_reply::spawn(
+                    state,
+                    auto_reply::Delivered {
+                        user_id: recipient.user_id,
+                        message: id,
+                    },
+                );
+            }
             // A report of mail this account sent failing: counts towards
             // pausing its sending (only for its own messages).
             if let Some(bounce) = &readable.bounce {

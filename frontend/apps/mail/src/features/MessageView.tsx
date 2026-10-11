@@ -275,6 +275,7 @@ export function MessageView({
             ) : opened.data.signed && !opened.data.verified && message.protection === 'end_to_end' ? (
               <Alert variant="warn">{t('read.signatureFailed')}</Alert>
             ) : null}
+            {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}
             {draft ? null : (
               <NotInContacts
                 people={(message.direction === 'inbound' ? (from ? [from] : []) : [...(parsed?.to ?? message.to), ...(parsed?.cc ?? message.cc)]).filter(

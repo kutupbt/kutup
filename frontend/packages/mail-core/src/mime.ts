@@ -32,6 +32,18 @@ export interface ParsedMessage {
   html: string | null
   text: string | null
   attachments: ParsedAttachment[]
+  /** Written automatically in answer to an earlier message (an auto-reply), as Proton's `isAutoReply`. */
+  autoReply: boolean
+}
+
+const AUTO_REPLY_HEADERS = ['x-autoreply', 'x-autorespond', 'x-autoreply-from', 'x-mail-autoreply']
+
+/** Auto-reply headers, as Proton reads them, and RFC 3834's `Auto-Submitted: auto-replied`. */
+export function isAutoReply(headers: { key: string; value: string }[]): boolean {
+  return headers.some(({ key, value }) => {
+    const name = key.toLowerCase()
+    return AUTO_REPLY_HEADERS.includes(name) || (name === 'auto-submitted' && value.trim().toLowerCase() === 'auto-replied')
+  })
 }
 
 function mailboxes(list: Address[] | undefined): Mailbox[] {
@@ -77,6 +89,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
             ? new TextEncoder().encode(a.content)
             : new Uint8Array(a.content),
     })),
+    autoReply: isAutoReply(email.headers),
   }
 }
 

@@ -209,6 +209,49 @@ export function useUpdateMailIdentity() {
   })
 }
 
+/** When the auto-reply is on and what it says (docs/plans/mail-parity.md), as Proton's AutoResponder. Times are wall-clock times in `zone`. */
+export interface AutoReplySettings {
+  enabled: boolean
+  repeat: 'fixed' | 'daily' | 'weekly' | 'monthly' | 'permanent'
+  /** An IANA time zone. */
+  zone: string
+  /** Fixed: `YYYY-MM-DDTHH:MM`. */
+  start?: string | null
+  end?: string | null
+  /** Daily: weekdays, 0 Sunday to 6 Saturday. */
+  days: number[]
+  /** Weekly: a weekday 0–6; monthly: a day of the month 1–31. */
+  startDay?: number | null
+  endDay?: number | null
+  /** Minutes after midnight. */
+  startMinute?: number | null
+  endMinute?: number | null
+  messageHtml: string
+  messageText: string
+}
+
+export interface AutoReply {
+  /** None until one is saved. */
+  settings: AutoReplySettings | null
+  /** Answering now: on and inside its schedule. */
+  active: boolean
+}
+
+export function useAutoReply() {
+  return useQuery({
+    queryKey: ['mail', 'autoReply'],
+    queryFn: async () => (await api.get<AutoReply>('/mail/auto-reply')).data,
+  })
+}
+
+export function useSaveAutoReply() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (settings: AutoReplySettings) => (await api.put<AutoReply>('/mail/auto-reply', settings)).data,
+    onSuccess: (saved) => queryClient.setQueryData(['mail', 'autoReply'], saved),
+  })
+}
+
 export function useFolder(folder: PlaceKey, q = '', group?: string) {
   return useInfiniteQuery({
     queryKey: folderKey(folder, q, group),
