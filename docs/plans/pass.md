@@ -1,6 +1,6 @@
 # Kutup Pass (password manager)
 
-**Status:** plan, 2026-10-11. K0 in progress. The research and every product
+**Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`) built. The research and every product
 decision are in
 [`../research/19-password-manager.md`](../research/19-password-manager.md)
 ("Priorities", "Direction", "SSH agent in the `kutup` CLI", "Unlocking, key
@@ -52,13 +52,17 @@ KeePass apps still working, and with merges that never lose an edit.
 ## Architecture
 
 ```
-crates/kutup-pass          (new, pure Rust; no server or UI dependencies)
-  kdbx.rs     open / save through `keepass` (pinned =0.15.2, save_kdbx4),
-              upgrade to 4.1 on save, composite key (password, key file,
-              challenge-response behind a feature)
-  merge.rs    three-way merge of `keepass::Database` values
-  vault.rs    the operations clients need: open, list, edit, save with base
-              tracking, merge-and-retry
+crates/kutup-pass          (pure Rust; no server or UI dependencies)
+  kdbx.rs     open / save through `keepass`, upgrade to 4.1 on save,
+              composite key (password, key file)
+  merge.rs    three-way merge of `keepass::Database` values, with a report
+  refs.rs     moving entries between vaults (attachments, custom icons,
+              history) and rebuilding the crate's back-references
+  vendor/keepass  the `keepass` crate 0.15.2 (MIT), patched only to make its
+              model fields public (`scripts/patch-vendored-keepass.py`,
+              `vendor/keepass/KUTUP.md`); its public API cannot move
+              attachments and custom icons between vaults with their ids,
+              which a lossless merge needs
 crates/kutup-pass-wasm     (K2) the same for the website
 crates/kutup-cli           (K1) `kutup sync` merges .kdbx; (K3b) ssh agent
 crates/kutup-server        (K1) conditional version writes; (K2) vault-secret
@@ -104,15 +108,18 @@ one database, plus a report of what happened.
 
 ### Tests (K0)
 
-- **Round-trip corpus**: every vault in `keepassxc/tests/data/` that opens is
-  saved as 4.1 and compared after reopening (the probe's check), in CI from a
-  checked-in copy of the vaults that KeePassXC's licence allows us to vendor,
-  or fetched by the test script otherwise.
-- **Merge cases** as named fixtures: disjoint edits; same field different
+- **Round-trip corpus** (`tests/corpus.rs`): every vault in
+  `keepassxc/tests/data/` that opens is saved as 4.1 and compared after
+  reopening, and merged with itself without change. KeePassXC's vaults are
+  GPL, so they are not copied into this repository: the test reads
+  `KUTUP_KDBX_CORPUS` or the `kutup-references/keepassxc` checkout beside the
+  repository, and is skipped when neither is there (CI runs the generated
+  fixtures and properties below).
+- **Merge cases** (`tests/merge.rs`) as named fixtures: disjoint edits; same field different
   values; same field same value; edit vs delete (both orders); move vs edit;
   moves on both sides; added on both sides with the same UUID; history
   overflow; metadata changes; no base.
-- **Properties** (proptest): merging base with itself returns it; the result
+- **Properties** (`tests/properties.rs`, proptest): merging base with itself returns it; the result
   contains every field change made on either side, either current or in
   history; merging is deterministic; `merge(base, ours, base) == ours`;
   `merge(base, base, theirs) == theirs`.
@@ -191,8 +198,8 @@ keeps, approval per use, keys listed while locked, memory only,
 
 | Slice | Contents | Done when |
 |---|---|---|
-| **K0a** | `crates/kutup-pass`: KDBX open/save through `keepass`, upgrade to 4.1, composite keys; the corpus round-trip test | every corpus vault in a supported format round-trips equal |
-| **K0b** | Three-way merge with the report and review marks; fixtures and property tests | all merge cases and properties pass |
+| **K0a** ✅ | `crates/kutup-pass`: KDBX open/save through `keepass`, upgrade to 4.1, composite keys; the corpus round-trip test | every corpus vault in a supported format round-trips equal |
+| **K0b** ✅ | Three-way merge with the report and review marks; fixtures and property tests | all merge cases and properties pass |
 | **K1** | `basedOn` and parent versions on the server (+ migration); `kutup sync` saves `.kdbx` as versions and merges on conflict | two machines editing one vault offline, then syncing, lose nothing (live test) |
 | **K2** | `kutup-pass-wasm`; the `pass.<domain>` app; vault secrets; editing; offline outbox | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
 | **K3** | Divergence handling and re-merge; the website on phone browsers | diverged versions are merged by the next client that opens the vault |
