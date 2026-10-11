@@ -1,5 +1,7 @@
 import type { RegistrationKeys } from './index'
 import type { AccountProtectionConfig } from './kdf'
+import { LoadFailure, retryLoad } from './retry'
+import type { KDFWorkerRequest, KDFWorkerResponse } from './workers/kdf.worker'
 
 function bytes(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value
@@ -10,41 +12,46 @@ function bytes(value: unknown): Uint8Array {
   throw new Error('KDF worker returned malformed key bytes')
 }
 
-export function generateRegistrationInWorker(
-  password: string,
-  loginEmail: string,
-): Promise<RegistrationKeys> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (event) => {
-      worker.terminate()
-      if (event.data.type === 'error') reject(new Error(event.data.message))
-      else if (event.data.type === 'register') resolve(event.data.keys as RegistrationKeys)
-      else reject(new Error('KDF worker returned an unexpected response'))
-    }
-    worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message)) }
-    worker.postMessage({ type: 'register', password, loginEmail })
-  })
+/**
+ * One request to a new KDF worker. A worker that could not start (its script
+ * not fetched) rejects with [`LoadFailure`], and [`retryLoad`] runs the
+ * request again in another new worker, which has a module map of its own.
+ * Inside, the worker's WASM load retries by itself (@kutup/crypto/rustWasm);
+ * what the worker reports after that, a real error or a load that kept
+ * failing, is not retried here, so the waits do not multiply.
+ */
+function runWorker(request: KDFWorkerRequest): Promise<KDFWorkerResponse> {
+  return retryLoad(
+    () =>
+      new Promise<KDFWorkerResponse>((resolve, reject) => {
+        const worker = new Worker(new URL('./workers/kdf.worker.ts', import.meta.url), { type: 'module' })
+        worker.onmessage = (event: MessageEvent<KDFWorkerResponse>) => {
+          worker.terminate()
+          const response = event.data
+          if (response.type === 'error') reject(new Error(response.message))
+          else resolve(response)
+        }
+        // The worker reports its own errors; this is one that never started.
+        worker.onerror = (event) => {
+          worker.terminate()
+          reject(new LoadFailure(event.message || 'KDF worker could not start'))
+        }
+        worker.postMessage(request)
+      }),
+  )
 }
 
-export function deriveAccountProtectionInWorker(
+export async function generateRegistrationInWorker(password: string, loginEmail: string): Promise<RegistrationKeys> {
+  const response = await runWorker({ type: 'register', password, loginEmail })
+  if (response.type !== 'register') throw new Error('KDF worker returned an unexpected response')
+  return response.keys
+}
+
+export async function deriveAccountProtectionInWorker(
   password: string,
   accountProtection: AccountProtectionConfig,
 ): Promise<{ keyEncryptionKey: Uint8Array; loginKey: Uint8Array }> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (event) => {
-      worker.terminate()
-      if (event.data.type === 'error') reject(new Error(event.data.message))
-      else if (event.data.type === 'deriveKeys') {
-        resolve({
-          keyEncryptionKey: bytes(event.data.keyEncryptionKey),
-          loginKey: bytes(event.data.loginKey),
-        })
-      } else reject(new Error('KDF worker returned an unexpected response'))
-    }
-    worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message)) }
-    worker.postMessage({ type: 'deriveKeys', password, accountProtection })
-  })
+  const response = await runWorker({ type: 'deriveKeys', password, accountProtection })
+  if (response.type !== 'deriveKeys') throw new Error('KDF worker returned an unexpected response')
+  return { keyEncryptionKey: bytes(response.keyEncryptionKey), loginKey: bytes(response.loginKey) }
 }
-

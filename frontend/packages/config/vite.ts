@@ -5,6 +5,7 @@ import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import type { Plugin, UserConfig } from 'vite'
+import { reloadGuardScript } from './src/reloadGuard.ts'
 
 /** frontend/ — the workspace root. */
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
@@ -27,6 +28,16 @@ export function wasmHash(module: WasmModule): string {
     hash.update(name).update('\0').update(readFileSync(file)).update('\0')
   }
   return hash.digest('hex').slice(0, 16)
+}
+
+/** The reload guard ([`reloadGuard`]) inline in each app page, ahead of the bundle it watches. */
+function reloadOnceOnLoadFailure(): Plugin {
+  const build = Date.now().toString(36)
+  return {
+    name: 'kutup-reload-once',
+    apply: 'build',
+    transformIndexHtml: () => [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+  }
 }
 
 /**
@@ -102,7 +113,7 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
   const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
   const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
-    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm)],
+    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure()],
     worker: { format: 'es' },
     resolve: {
       alias: {
