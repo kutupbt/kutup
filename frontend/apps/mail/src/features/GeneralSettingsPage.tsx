@@ -19,7 +19,7 @@ function Setting({ label, hint, checked, onChange }: { label: string; hint: stri
   )
 }
 
-/** Settings → General (Proton's Messages section): auto-delete, All mail. */
+/** Settings → General (Proton's Messages section): auto-delete, All mail, Sign outside mail. */
 export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
@@ -46,6 +46,12 @@ export function GeneralSettingsPage() {
           hint={t('general.almostAllMailHint')}
           checked={settings.data.almostAllMail}
           onChange={(on) => save({ almostAllMail: on })}
+        />
+        <Setting
+          label={t('general.signOutside')}
+          hint={t('general.signOutsideHint')}
+          checked={settings.data.signOutside}
+          onChange={(on) => save({ signOutside: on })}
         />
       </div>
     </PageBody>

@@ -725,6 +725,19 @@ const ownPgp = openAs(new TextEncoder().encode(armoredPgp), mailVectors.publicKe
 assert.equal(new TextDecoder().decode(ownPgp.data), 'pgp to bob')
 assert.equal(ownPgp.verified, true)
 assert.throws(() => crypto.verifyMailCleartext('not signed', undefined))
+// Encrypt and Sign per message (docs/plans/mail-encrypt-sign.md).
+const unsignedPgp = crypto.encryptMailPgpUnsigned([mailVectors.publicKey], new TextEncoder().encode('no signature'))
+const openedUnsigned = openAs(new TextEncoder().encode(unsignedPgp), mailVectors.publicKey)
+assert.equal(new TextDecoder().decode(openedUnsigned.data), 'no signature')
+assert.equal(openedUnsigned.signed, false)
+const unsignedSplit = crypto.encryptMailMessageUnsigned([mailVectors.publicKey], new TextEncoder().encode('split, unsigned'))
+assert.equal(unsignedSplit.keyPackets.length, 1)
+unsignedSplit.free()
+const signedPart = new TextEncoder().encode('Content-Type: text/plain\r\n\r\nsigned only\r\n')
+const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, signedPart)
+assert.match(detached, /^-----BEGIN PGP SIGNATURE-----/)
+assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), signedPart, mailVectors.publicKey), true)
+assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), new TextEncoder().encode('changed'), mailVectors.publicKey), false)
 
 // Contacts (docs/plans/contacts.md).
 const contactVectors = JSON.parse(

@@ -2601,7 +2601,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "signOutside": true })
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
@@ -2628,12 +2628,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30 }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "signOutside": false }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "signOutside": false })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -2780,5 +2780,115 @@ fn block_spam_and_allow_lists() {
     .json(&json!({ "patterns": ["not a domain"], "kind": "block" }))
     .send()
     .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+}
+
+/// Encrypt off, Sign on (docs/plans/mail-encrypt-sign.md): Bob sends Alice a
+/// readable, signed message; the server encrypts it to her on arrival
+/// (zero-access), and the signature checks against Bob's key.
+#[test]
+fn encrypt_off_sign_on_between_kutup_users() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    // The signed part and its detached signature, as the composer builds them.
+    let part = "Content-Type: text/plain; charset=utf-8\r\n\r\nSifresiz ama imzali.\r\n";
+    let signature = mail_key::sign_detached(&bob_address.secret_key, part.as_bytes()).unwrap();
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: readable\r\nMessage-ID: <{message_id}>\r\nMIME-Version: 1.0\r\n\
+         Content-Type: multipart/signed; micalg=pgp-sha512; protocol=\"application/pgp-signature\"; boundary=\"s\"\r\n\r\n\
+         --s\r\n{part}\r\n--s\r\nContent-Type: application/pgp-signature; name=\"signature.asc\"\r\n\r\n{signature}\r\n--s--\r\n",
+        bob_address.address, alice_address.address
+    );
+    // Bob's own copy stays end to end: encrypted to his key only.
+    let split = mail_key::encrypt_split(
+        &[&bob_address.public_key],
+        &bob_address.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": alice_address.address }],
+        "subject": "readable",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [alice_address.address.to_uppercase()],
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.clone().into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "send: {} {}",
+        r.status(),
+        r.text().unwrap_or_default()
+    );
+
+    let inbox = folder(&c, &base, &alice.token, "inbox");
+    let message = inbox
+        .iter()
+        .find(|m| m["subject"] == "readable")
+        .expect("delivered");
+    assert_eq!(message["protection"], "zero_access");
+    let stored = bearer(
+        c.get(format!(
+            "{base}/api/mail/messages/{}/content",
+            message["id"].as_str().unwrap()
+        )),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap();
+    let opened = mail_key::decrypt(&alice_address.secret_key, &stored, None).unwrap();
+    assert_eq!(
+        &opened.data[..],
+        mime.as_bytes(),
+        "stored exactly as sent, encrypted on arrival"
+    );
+    assert!(mail_key::verify_detached(
+        signature.as_bytes(),
+        part.as_bytes(),
+        &bob_address.public_key
+    )
+    .unwrap());
+    // Bob's Sent copy is end to end.
+    let sent = folder(&c, &base, &bob.token, "sent");
+    assert_eq!(
+        sent.iter().find(|m| m["subject"] == "readable").unwrap()["protection"],
+        "end_to_end"
+    );
+
+    // Readable without the readable message: refused.
+    let split =
+        mail_key::encrypt_split(&[&bob_address.public_key], &bob_address.secret_key, b"x").unwrap();
+    let meta = json!({
+        "to": [{ "address": alice_address.address }],
+        "subject": "readable",
+        "messageId": format!("{}@{domain}", uuid::Uuid::new_v4().simple()),
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [alice_address.address],
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
     assert_eq!(r.status().as_u16(), 400);
 }

@@ -1,6 +1,6 @@
 # Mail: Encrypt and Sign per message
 
-**Status:** agreed 2026-10-11; built right after P1 ([`mail-parity.md`](mail-parity.md)).
+**Status:** agreed 2026-10-11; slices 1–3 built on `feat/mail-encrypt-sign`, the "Sign outside mail" setting in Mail → Settings → General. ([`mail-parity.md`](mail-parity.md))
 Goes beyond Proton, which has no per-message switches.
 
 ## Goal
