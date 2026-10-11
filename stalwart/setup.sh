@@ -65,6 +65,21 @@ fi
 # removals.
 apply < "$dir/reload.ndjson"
 
+# The backend trusts DMARC only from the Authentication-Results header
+# Stalwart writes on port 25 (crates/kutup-server mail/headers.rs); were it
+# off, a sender's own forged header would be the topmost. Refuse to go on.
+auth_results="$(stalwart-cli get MtaStageData --fields addAuthResultsHeader --json --no-color)"
+# On for every port (else true), or a rule that turns it on for port 25.
+if ! printf '%s' "$auth_results" | jq -e '
+    [.. | objects | select(has("addAuthResultsHeader")) | .addAuthResultsHeader
+     | select(.else == "true" or ([.match
+         | if type == "object" then .[] elif type == "array" then .[] else empty end
+         | select(.if == "local_port == 25" and .then == "true")] | length > 0))] | length > 0' >/dev/null; then
+  echo "FATAL: Stalwart's addAuthResultsHeader is not on for port 25; Kutup's allow lists would trust forged Authentication-Results. Stalwart reports: $auth_results" >&2
+  exit 1
+fi
+echo "Stalwart writes Authentication-Results on port 25"
+
 # Listeners are bound only when Stalwart starts: if port 25 or the
 # submission port does not answer, ask run.sh to restart it.
 smtp_host="${STALWART_URL#http://}"

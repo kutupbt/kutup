@@ -7,5 +7,5 @@
 {"@type":"update","object":"MtaOutboundStrategy","value":{"route":{"else":"'mx'","match":{"0":{"if":"is_local_domain(rcpt_domain)","then":"'kutup'"}}}}}
 {"@type":"upsert","object":"MtaConnectionStrategy","matchOn":["name"],"value":{"default":{"name":"default","description":"Default connection strategy","ehloHostname":"@MAIL_HOSTNAME@"}}}
 {"@type":"reconcile","object":"MtaHook","matchOn":["url"],"value":{"kutup":{"url":"http://backend:3000/internal/mail/rcpt","stages":{"rcpt":true},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"EnvironmentVariable","variableName":"MAIL_INBOUND_TOKEN"}},"enable":{"else":"local_port == 25","match":{}},"timeout":10000,"tempFailOnError":true,"allowInvalidCerts":false}}}
-{"@type":"update","object":"MtaStageData","value":{"maxMessageSize":{"else":"52428800","match":{}}}}
+{"@type":"update","object":"MtaStageData","value":{"maxMessageSize":{"else":"52428800","match":{}},"addAuthResultsHeader":{"else":"false","match":{"0":{"if":"local_port == 25","then":"true"}}}}}
 {"@type":"update","object":"MtaStageAuth","value":{"saslMechanisms":{"match":{"0":{"if":"local_port == 2587","then":"[plain]"}},"else":"false"},"mustMatchSender":{"match":{"0":{"if":"local_port == 2587","then":"false"}},"else":"true"}}}

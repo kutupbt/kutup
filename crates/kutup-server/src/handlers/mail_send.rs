@@ -277,6 +277,8 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
             spam: false,
             bounce: None,
             pgp_encrypted: false,
+            // From is the sending account's own address, checked here.
+            from_authenticated: true,
         },
         bcc,
     })
@@ -1145,6 +1147,8 @@ pub async fn send(
         )
         .await?;
         let mut results = Vec::new();
+        // Copies a recipient's block list dropped: their objects go after the commit.
+        let mut blocked: Vec<(String, String)> = Vec::new();
         for copy in &copies {
             let pool = pools.get_mut(&copy.recipient.user_id).expect("locked");
             if !pool.fits(copy.size, 0) {
@@ -1154,7 +1158,7 @@ pub async fn send(
                 });
                 continue;
             }
-            insert_message(
+            let stored = insert_message(
                 &mut tx,
                 NewMessage {
                     id: Uuid::new_v4(),
@@ -1177,7 +1181,12 @@ pub async fn send(
                 },
             )
             .await?;
-            pool.used += copy.size;
+            if stored {
+                pool.used += copy.size;
+            } else {
+                blocked.push((copy.key.clone(), copy.version.clone()));
+            }
+            // A blocked sender is told nothing, as Proton does.
             results.push(SendRecipient {
                 address: copy.address.clone(),
                 status: "delivered".into(),
@@ -1333,6 +1342,11 @@ pub async fn send(
             }));
         }
         tx.commit().await?;
+        for (key, version) in &blocked {
+            if let Err(error) = state.storage.delete_stored(key, version).await {
+                tracing::warn!(error = %error, "mail: a blocked copy's object left for the sweep");
+            }
+        }
         Ok(results)
     }
     .await;
