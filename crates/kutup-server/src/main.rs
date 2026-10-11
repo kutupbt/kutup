@@ -376,6 +376,8 @@ async fn main() -> anyhow::Result<()> {
     chat_mls::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
+    site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
+        .await?;
     mail::spawn_receiver(state.clone()).await?;
     // Auto-delete of old Trash and Spam, for accounts that turned it on.
     mail::retention::spawn(state.clone());
@@ -1814,6 +1816,11 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/mail/senders",
                     get(handlers::mail_sending::senders),
+                )
+                .route(
+                    "/api/admin/mail/outside-sending",
+                    get(handlers::mail_sending::outside_sending)
+                        .put(handlers::mail_sending::set_outside_sending),
                 )
                 .route(
                     "/api/admin/mail/groups",

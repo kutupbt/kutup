@@ -3266,3 +3266,103 @@ fn conversations_group_a_thread_in_one_row() {
     assert_eq!(counts("?conversations=true")["unread"], 2);
     assert_eq!(counts("?conversations=true")["total"], 2);
 }
+
+#[test]
+fn outside_sending_is_set_by_administrators() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut parts = admin.splitn(3, ':');
+    let (email, username, password) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let admin = common::admin_token(&c, &base, email, password, username);
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let policy = |token: &str| -> (u16, Value) {
+        let r = bearer(
+            c.get(format!("{base}/api/admin/mail/outside-sending")),
+            token,
+        )
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json().unwrap_or(Value::Null))
+    };
+    let set = |token: &str, value: &str| -> u16 {
+        bearer(
+            c.put(format!("{base}/api/admin/mail/outside-sending")),
+            token,
+        )
+        .json(&json!({ "outsideSending": value }))
+        .send()
+        .unwrap()
+        .status()
+        .as_u16()
+    };
+    let allowed = |token: &str| -> bool {
+        let status: Value = bearer(c.get(format!("{base}/api/mail/sending")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        status["outsideAllowed"].as_bool().unwrap()
+    };
+
+    // The gate starts from MAIL_OUTSIDE_SENDING=on, seeded at start.
+    assert_eq!(policy(&admin), (200, json!({ "outsideSending": "on" })));
+    // Administrators only.
+    assert_eq!(policy(&user.token).0, 403);
+    assert_eq!(set(&user.token, "off"), 403);
+    assert_eq!(set(&admin, "sometimes"), 400);
+
+    // Admins: at once, without a restart, people are told and refused.
+    assert_eq!(set(&admin, "admins"), 200);
+    assert!(!allowed(&user.token));
+    assert!(allowed(&admin));
+    let (status, body) = code(send_plain(
+        &c,
+        &base,
+        &user,
+        &address,
+        &["someone@example.org".to_string()],
+        "dışarı",
+    ));
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("outsideSendingOff"), "{body}");
+    // Off: administrators too.
+    assert_eq!(set(&admin, "off"), 200);
+    assert!(!allowed(&admin));
+    assert_eq!(policy(&admin).1, json!({ "outsideSending": "off" }));
+
+    // Each change is in the audit log, from and to.
+    let activity: Value = bearer(c.get(format!("{base}/api/admin/activity?limit=20")), &admin)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let changes: Vec<&Value> = activity["entries"]
+        .as_array()
+        .or_else(|| activity.as_array())
+        .unwrap()
+        .iter()
+        .filter(|e| e["action"] == "mail.outside_sending.update")
+        .collect();
+    assert!(
+        changes
+            .iter()
+            .any(|e| e["payload"]["from"] == "admins" && e["payload"]["to"] == "off"),
+        "{activity}"
+    );
+
+    // Back as the gate had it.
+    assert_eq!(set(&admin, "on"), 200);
+    assert!(allowed(&user.token));
+}
