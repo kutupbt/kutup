@@ -28,10 +28,10 @@ reference only where Proton has nothing.
 | Quick filters (unread, has attachments), sort (date, size) | `FilterList.tsx` | ❌ |
 | Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | 🔶 "load more" only |
 | Selection pane for several messages | `SelectionPane.tsx` | ❌ |
-| Right-click menu, Shift/Ctrl selection, drag to folders, undo | `ItemContextMenu.tsx` | 🔶 #95 |
-| Sender card, Save to contacts, Chat and Call | recipient dropdown | 🔶 #95 (Chat, Call are Kutup's) |
-| Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | 🔶 #95 (list keys; message keys R, Shift+R, F missing) |
-| Dark mode body, folded quotes | `ExtraDarkStyle.tsx`, blockquote toggle | 🔶 #95 |
+| Right-click menu, Shift/Ctrl selection, drag to folders, undo | `ItemContextMenu.tsx` | ✅ |
+| Sender card, Save to contacts, Chat and Call | recipient dropdown | ✅ (Chat, Call are Kutup's) |
+| Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | ✅ list keys; ❌ message keys R, Shift+R, F |
+| Dark mode body, folded quotes | `ExtraDarkStyle.tsx`, blockquote toggle | ✅ |
 | Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ❌ (download one by one) |
 | Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | 🔶 .eml only |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
@@ -51,14 +51,14 @@ reference only where Proton has nothing.
 |---|---|---|
 | Rich text editor, attachments, drafts autosave | RoosterJS, `useAutoSave.tsx` | ✅ (Tiptap) |
 | Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ❌ |
-| Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised: #95) |
+| Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised) |
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ❌ |
 | Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ❌ |
-| From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | 🔶 #93 (groups), aliases plan |
+| From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ❌ (suggestions only) |
 | Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
 | Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | 🔶 per-contact flags on pinned keys; no account setting |
-| Per-message Encrypt and Sign toggles in the composer | (none) | ❌ proposed beyond Proton (2026-10-11), open questions with the user |
+| Per-message Encrypt and Sign toggles in the composer | (none) | 🔶 agreed beyond Proton: [`mail-encrypt-sign.md`](mail-encrypt-sign.md), after P1 |
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ❌ |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ❌ |
 | Expiring messages | `ComposerExpirationModal.tsx` | ❌ |
@@ -73,12 +73,12 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Inbox, Drafts, Sent, Starred, Archive, Spam, Trash, All mail | `MailSidebarSystemFolders.tsx` | ✅ |
-| Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | 🔶 delete chosen; "Empty" missing |
-| Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ❌ (C2f) |
-| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ❌ |
-| Custom folders (nested), labels | `FoldersSection.tsx` | 🔶 [`mail-filters.md`](mail-filters.md) F1 |
-| Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | 🔶 F2 |
-| Block, spam, allow lists | `SpamFiltersSection.tsx` | 🔶 F3 (#100) |
+| Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | ✅ delete chosen, "Delete all" in Trash and Spam |
+| Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ✅ "Auto-delete unwanted messages" (off by default, as Proton), banner with Enable |
+| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; ❌ keep moved messages in Sent |
+| Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
+| Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
+| Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ❌ |
@@ -94,7 +94,7 @@ reference only where Proton has nothing.
 | PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | 🔶 fixed defaults, no settings |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
 | Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ |
-| Distribution lists, shared mailboxes | (business: groups) | 🔶 #93 |
+| Distribution lists, shared mailboxes | (business: groups) | ✅ |
 | Aliases (hide-my-email) | Pass aliases | 🔶 aliases plan (`feat/mail-aliases`) |
 | Dots, dashes, capitals and `+tags` ignored | `CANONICALIZE_SCHEME.PROTON` | 🔶 aliases A0 |
 | Several addresses per account, default address | `AddressesSection.tsx` | ❌ |
@@ -126,18 +126,20 @@ reference only where Proton has nothing.
 | Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ❌ |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
-| Settings for mail (one place) | mail routes | ❌ (keys in Account only) |
+| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Folders and labels, Filters, Block and allow; keys in Account |
 
 ## Order
 
 Each is its own plan and pull request, Proton first:
 
-1. **What is in flight:** #93 groups, #95 UX, aliases A0–A3.
+1. **What is in flight:** aliases A0–A3.
 2. **P1 organising:** folders, labels, filters, block lists
    ([`mail-filters.md`](mail-filters.md) F1–F3), with the Mail → Settings
    area they need, auto-empty Spam and Trash, Empty folder, Almost all mail.
    First because nearly everything after it files into these places or
    adds a setting to that area.
+   Then **Encrypt and Sign per message** ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)),
+   as its own pull request.
 3. **P2 Mail settings and identity:** a Mail → Settings area (layout,
    density, conversation mode, composer defaults, privacy switches),
    display name and signatures per address, auto-reply, PGP settings.
