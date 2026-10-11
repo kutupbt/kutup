@@ -80,7 +80,9 @@ opentelemetry-otlp = { version = "0.32", default-features = false, features = ["
 uuid = { version = "1", features = ["v4", "serde"] }
 # S3 (SeaweedFS) — replaces aws-sdk-go-v2.
 aws-config = "1"
-aws-sdk-s3 = "1"
+# Default features minus the legacy `rustls` one, which pulls rustls 0.21 and a
+# vulnerable rustls-webpki 0.101; `default-https-client` is rustls 0.23.
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 aws-credential-types = "1"
 # Stream S3 object bodies into Axum responses, and buffer multipart uploads to disk.
 tokio-util = { version = "0.7", features = ["io"] }
