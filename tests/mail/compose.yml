@@ -3,7 +3,8 @@
 # without the certificate watch, and a sink standing in for the outside
 # world (mail for outside.test goes there, tests/mail/plan.ndjson). Key
 # lookups go to mail-keys, which serves the GnuPG correspondent's key by WKD
-# (the backend's test override, APP_ENV=test and MAIL_TEST_KEY_ORIGIN).
+# and takes one-click unsubscribes (the backend's test override, APP_ENV=test
+# and MAIL_TEST_KEY_ORIGIN).
 services:
   backend:
     ports:
@@ -24,6 +25,10 @@ services:
       - ./tests/mail/sink.py:/sink.py:ro
   mail-keys:
     image: python:3.12-alpine
-    command: ["python", "-u", "-m", "http.server", "8080", "--directory", "/keys"]
+    command: ["python", "-u", "/keys.py"]
+    # On loopback, so the live tests read back the POSTs it took.
+    ports:
+      - "127.0.0.1:${KUTUP_MAIL_KEYS_PORT:-39088}:8080"
     volumes:
       - ${KUTUP_MAIL_KEYS_DIR:?the gate sets KUTUP_MAIL_KEYS_DIR}:/keys:ro
+      - ./tests/mail/keys.py:/keys.py:ro

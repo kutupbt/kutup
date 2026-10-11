@@ -50,8 +50,8 @@ const HIT_TTL: Duration = Duration::from_secs(3600);
 const MISS_TTL: Duration = Duration::from_secs(900);
 const CACHE_MAX: usize = 10_000;
 const KEY_LIMIT_BYTES: usize = 256 * 1024;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECTS: usize = 3;
 const USER_AGENT: &str = "Kutup mail key lookup (+https://kutup.dev)";
 
@@ -135,7 +135,7 @@ pub async fn lookup(state: &AppState, address: &str) -> Option<OutsideKey> {
 }
 
 #[derive(Debug)]
-struct Unusable;
+pub(crate) struct Unusable;
 
 /// Fetches `url` within the limits above. On a test stack
 /// (`APP_ENV=test` and `MAIL_TEST_KEY_ORIGIN`), every lookup goes to that
@@ -211,7 +211,7 @@ async fn read(response: reqwest::Response) -> Result<Vec<u8>, Unusable> {
     Ok(body)
 }
 
-fn public_https(url: &str) -> Result<Url, Unusable> {
+pub(crate) fn public_https(url: &str) -> Result<Url, Unusable> {
     let url = Url::parse(url).map_err(|_| Unusable)?;
     if url.scheme() != "https"
         || url.port_or_known_default() != Some(443)
@@ -224,7 +224,7 @@ fn public_https(url: &str) -> Result<Url, Unusable> {
     Ok(url)
 }
 
-async fn resolve_public(url: &Url) -> Result<SocketAddr, Unusable> {
+pub(crate) async fn resolve_public(url: &Url) -> Result<SocketAddr, Unusable> {
     let host = url.host_str().ok_or(Unusable)?;
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))

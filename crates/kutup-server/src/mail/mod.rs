@@ -16,6 +16,7 @@ pub mod retention;
 pub mod safety;
 pub mod sender_rules;
 pub mod submit;
+pub mod unsubscribe;
 
 use std::sync::Arc;
 use std::time::Duration;

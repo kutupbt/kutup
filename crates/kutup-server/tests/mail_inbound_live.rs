@@ -3490,3 +3490,68 @@ fn list_filters_and_sorts() {
     .unwrap();
     assert_eq!(r.status(), 400);
 }
+
+#[test]
+fn one_click_unsubscribe_goes_through_the_server() {
+    let (Ok(base), Ok(smtp_address), Ok(keys)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_KEYS"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP / KUTUP_LIVE_KEYS not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let message_id = format!("list-{tag}@lists.outside.test");
+    let message = format!(
+        "From: News <news@lists.outside.test>\r\nTo: {}\r\nSubject: Bülten\r\nMessage-ID: <{message_id}>\r\n\
+         List-Unsubscribe: <https://lists.outside.test/u?id={tag}>, <mailto:leave@lists.outside.test>\r\n\
+         List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nHaberler.\r\n",
+        alice_address.address
+    );
+    let (rcpt, data) = smtp_send(&smtp_address, &alice_address.address, &message);
+    assert_eq!((rcpt, data), (250, 250));
+    let row = wait_for(&c, &base, &alice, &message_id);
+    assert_eq!(row["unsubscribed"], false);
+    let id = row["id"].as_str().unwrap().to_string();
+
+    // Someone else's message: not found.
+    let eve = register(&c, &base);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/{id}/unsubscribe")),
+        &eve.token,
+    )
+    .json(&json!({}))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // One click: the server POSTs RFC 8058's body to the list's URL.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/{id}/unsubscribe")),
+        &alice.token,
+    )
+    .json(&json!({ "oneClickUrl": format!("https://lists.outside.test/u?id={tag}") }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 204, "{}", r.text().unwrap_or_default());
+    let posts: Value = c
+        .get(format!("{keys}/__posts"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let post = posts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["path"] == format!("/lists.outside.test/u?id={tag}"))
+        .expect("the one-click POST");
+    assert_eq!(post["body"], "List-Unsubscribe=One-Click");
+    assert_eq!(post["contentType"], "application/x-www-form-urlencoded");
+    let row = wait_for(&c, &base, &alice, &message_id);
+    assert_eq!(row["unsubscribed"], true);
+}

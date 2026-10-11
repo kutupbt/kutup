@@ -67,6 +67,8 @@ export interface MailMessage {
   inReplyTo: string | null
   references: string[]
   attachmentCount: number
+  /** From a mailing list the reader unsubscribed from. */
+  unsubscribed?: boolean
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -551,6 +553,23 @@ export interface MessageChange {
   customFolder?: string
   addLabels?: string[]
   removeLabels?: string[]
+}
+
+/**
+ * Unsubscribes from a message's mailing list (Proton's): with `oneClickUrl`
+ * the server sends RFC 8058's request; without it, the reader went another
+ * way and the message is only marked. Either way it then says
+ * "Unsubscribed".
+ */
+export function useUnsubscribe(group?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, oneClickUrl }: { id: string; oneClickUrl?: string }) => {
+      await api.post(`/mail/messages/${id}/unsubscribe`, { ...(oneClickUrl ? { oneClickUrl } : {}), ...scoped(group) })
+      return id
+    },
+    onSuccess: (id) => patchCached(queryClient, [id], { unsubscribed: true }),
+  })
 }
 
 /** Read, star, or file messages; the lists update at once and are fetched again after. */

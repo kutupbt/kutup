@@ -68,6 +68,8 @@ pub struct MailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachment_count: i32,
+    /// From a mailing list the reader unsubscribed from (Proton's banner then says so).
+    pub unsubscribed: bool,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -218,6 +220,7 @@ pub(crate) struct Row {
     in_reply_to: Option<String>,
     references_list: Vec<String>,
     attachment_count: i32,
+    unsubscribed: bool,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -227,7 +230,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     ARRAY(SELECT l.label_id FROM mail_message_labels l WHERE l.message_id = mail_messages.id) AS labels,
     seen, starred, protection,
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
-    reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count,
+    reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -259,6 +262,7 @@ impl From<Row> for MailMessage {
             in_reply_to: row.in_reply_to,
             references: row.references_list,
             attachment_count: row.attachment_count,
+            unsubscribed: row.unsubscribed,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -600,6 +604,73 @@ async fn list_conversations(
         )
         .collect();
     Ok(Json(MailMessagePage { messages, next }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnsubscribeMailList {
+    /// The message's https `List-Unsubscribe` URL when it also has
+    /// `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058): the
+    /// server sends the request. Absent when the reader unsubscribed
+    /// another way (a web page, an email).
+    pub one_click_url: Option<String>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `POST /api/mail/messages/{id}/unsubscribe` — unsubscribes from the
+/// message's mailing list (Proton's one-click unsubscribe), or records that
+/// the reader did, so the message says "Unsubscribed".
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/{id}/unsubscribe",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Message id")),
+    request_body = UnsubscribeMailList,
+    responses(
+        (status = 204, description = "Unsubscribed"),
+        (status = 404, description = "No such message of yours"),
+        (status = 502, description = "The list did not take the request"),
+    )
+)]
+pub async fn unsubscribe(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(request): Json<UnsubscribeMailList>,
+) -> AppResult<axum::http::StatusCode> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE id = $1 AND owner = $2 AND direction = 'inbound')",
+    )
+    .bind(id)
+    .bind(owner)
+    .fetch_one(&state.pool)
+    .await?;
+    if !exists {
+        return Err(AppError::not_found("not found"));
+    }
+    if let Some(url) = request.one_click_url.as_deref() {
+        crate::mail::unsubscribe::one_click(&state, url)
+            .await
+            .map_err(|_| {
+                AppError::new(
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    "the mailing list did not take the request",
+                )
+            })?;
+    }
+    sqlx::query("UPDATE mail_messages SET unsubscribed = true WHERE id = $1 AND owner = $2")
+        .bind(id)
+        .bind(owner)
+        .execute(&state.pool)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/mail/messages/{id}/content` — the stored message: a binary
