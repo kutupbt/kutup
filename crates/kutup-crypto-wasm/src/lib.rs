@@ -2210,6 +2210,94 @@ pub fn open_mail_group_message(
 
 /// [`encrypt_mail_message`] signed by a shared mailbox's key: a member
 /// writing as the group.
+fn decode_keys(recipient_public_keys: &[String]) -> Result<Vec<Vec<u8>>, JsValue> {
+    recipient_public_keys
+        .iter()
+        .map(|key| decode_canonical_base64(key, "recipient public key"))
+        .collect()
+}
+
+/// [`encrypt_mail_message`] without a signature, for a message whose sender
+/// turned Sign off (docs/plans/mail-encrypt-sign.md). Needs no key.
+#[wasm_bindgen(js_name = encryptMailMessageUnsigned)]
+pub fn encrypt_mail_message_unsigned(
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<SealedMailJs, JsValue> {
+    let keys = decode_keys(&recipient_public_keys)?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    let split = kutup_crypto::mail_key::encrypt_split_unsigned(&refs, plaintext)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(SealedMailJs {
+        key_packets: split
+            .key_packets
+            .iter()
+            .map(|p| STANDARD.encode(p))
+            .collect(),
+        data_packet: split.data_packet,
+    })
+}
+
+/// An armored PGP message to outside keys without a signature (Sign off).
+#[wasm_bindgen(js_name = encryptMailPgpUnsigned)]
+pub fn encrypt_mail_pgp_unsigned(
+    recipient_public_keys: Vec<String>,
+    plaintext: &[u8],
+) -> Result<String, JsValue> {
+    let keys = decode_keys(&recipient_public_keys)?;
+    let refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+    kutup_crypto::mail_key::encrypt_armored(&refs, None, plaintext, now_secs())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// A detached, armored signature over a MIME part with the address key, for
+/// a signed but unencrypted message (RFC 3156 `multipart/signed`).
+#[wasm_bindgen(js_name = signMailDetached)]
+pub fn sign_mail_detached(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    content: &[u8],
+) -> Result<String, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::sign_detached(&secret, content)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// [`sign_mail_detached`] with a shared mailbox's key.
+#[wasm_bindgen(js_name = signMailDetachedAsGroup)]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_mail_detached_as_group(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    content: &[u8],
+) -> Result<String, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::sign_detached(&secret, content)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 #[wasm_bindgen(js_name = encryptMailMessageAsGroup)]
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_message_as_group(

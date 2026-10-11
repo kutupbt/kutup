@@ -719,7 +719,12 @@ pub fn encrypt_armored_signed(
     plaintext: &[u8],
     now_secs: u64,
 ) -> Result<String> {
-    encrypt_armored(recipient_public_keys, Some(signer_secret_key), plaintext, now_secs)
+    encrypt_armored(
+        recipient_public_keys,
+        Some(signer_secret_key),
+        plaintext,
+        now_secs,
+    )
 }
 
 /// [`encrypt_armored_signed`] with the signature optional: unsigned when the
@@ -1415,6 +1420,29 @@ mod tests {
         assert!(armor_public_key(&alice.public_key)
             .unwrap()
             .starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
+    }
+
+    #[test]
+    fn detached_signatures_and_unsigned_encryption() {
+        let alice = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
+        let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+        let part = b"Content-Type: text/plain; charset=utf-8\r\n\r\nMerhaba\r\n";
+        let signature = sign_detached(&alice.secret_key, part).unwrap();
+        assert!(signature.starts_with("-----BEGIN PGP SIGNATURE-----"));
+        assert!(verify_detached(signature.as_bytes(), part, &alice.public_key).unwrap());
+        // A changed part, or another signer, does not verify.
+        assert!(!verify_detached(
+            signature.as_bytes(),
+            b"Content-Type: text/plain\r\n\r\nMerhaba!\r\n",
+            &alice.public_key
+        )
+        .unwrap());
+        assert!(!verify_detached(signature.as_bytes(), part, &bob.public_key).unwrap());
+        // Encrypted without a signature (Sign off): opens, and is not signed.
+        let armored = encrypt_armored(&[&bob.public_key], None, b"gizli", 1_790_000_100).unwrap();
+        let opened = decrypt(&bob.secret_key, armored.as_bytes(), Some(&alice.public_key)).unwrap();
+        assert_eq!(&opened.data[..], b"gizli");
+        assert!(!opened.signed && !opened.verified);
     }
 
     #[test]
