@@ -3086,4 +3086,38 @@ fn auto_reply_answers_once_per_sender() {
     wait_answers(&bob, "inbox", 2);
     std::thread::sleep(Duration::from_secs(3));
     assert!(answers(&alice, "inbox").is_empty());
+
+    // Mail a Kutup user sent with Encrypt off (readable on the way) is
+    // answered too.
+    let carol = register(&c, &base);
+    let carol_address = set_up_address(&c, &base, &carol);
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: Okunur\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+        carol_address.address, alice_address.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&carol_address.public_key],
+        &carol_address.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": alice_address.address }],
+        "subject": "Okunur",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [alice_address.address],
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &carol.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+    let reply = wait_answers(&carol, "inbox", 1).remove(0);
+    assert_eq!(reply["subject"], "Auto: Okunur");
 }
