@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useDeleteMessages, useThread, useUpdateMessages, type FolderId, type MailAccount, type MessageChange } from '@kutup/mail-core/api'
+import { usePlaces } from '@kutup/mail-core/places'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -11,8 +12,10 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useMailActions, type MoveTarget } from './mailActions'
+import { LabelChips } from './LabelChips'
 import { useMailboxScope } from './mailboxScope'
 import { MessageView } from './MessageView'
+import { PickerButton } from './PlacePicker'
 
 function Action({ label, onClick, children, disabled }: { label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
   return (
@@ -28,20 +31,25 @@ function Action({ label, onClick, children, disabled }: { label: string; onClick
 export function ThreadView({
   account,
   folder,
+  base,
   threadId,
   onClose,
 }: {
   account: MailAccount
   folder: FolderId
+  /** The list's address, for Back. */
+  base: string
   threadId: string
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const { group, base } = useMailboxScope()
+  // `base` (the list's address) comes from the page, which knows the shared mailbox too.
+  const { group } = useMailboxScope()
   const inMailbox = group ? { group } : {}
   const thread = useThread(threadId, group)
   const update = useUpdateMessages()
   const actions = useMailActions(group)
+  const places = usePlaces()
   const remove = useDeleteMessages()
   const [confirming, setConfirming] = useState(false)
   const messages = useMemo(() => thread.data ?? [], [thread.data])
@@ -109,7 +117,7 @@ export function ThreadView({
     <div className="flex min-h-0 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-2 py-1">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label={t('read.back')}>
-          <Link to={`${base}/${folder}`}>
+          <Link to={base}>
             <ArrowLeft />
           </Link>
         </Button>
@@ -147,6 +155,8 @@ export function ThreadView({
             <Trash2 />
           </Action>
         )}
+        {folder !== 'drafts' ? <PickerButton mode="move" rows={shown} folder={folder} onMoved={onClose} /> : null}
+        <PickerButton mode="label" rows={shown} folder={folder} />
         <span className="flex-1" />
         <Action label={t('actions.markUnread')} onClick={() => apply({ seen: false }, undefined, true)}>
           <MailOpen />
@@ -157,6 +167,12 @@ export function ThreadView({
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <h2 className="font-display text-xl font-semibold">{subject}</h2>
+        <LabelChips
+          ids={[...new Set(shown.flatMap((m) => m.labels))]}
+          places={places.data}
+          onRemove={(id) => actions.mark(shown, { removeLabels: [id] })}
+          className="flex-wrap"
+        />
         {shown.map((message) => (
           <MessageView
             key={message.id}

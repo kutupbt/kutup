@@ -35,6 +35,8 @@ import { Input } from '@kutup/ui/components/input'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
+import { PlacesHost } from '../features/PlacesHost'
+import { PlacesNav } from '../features/PlacesNav'
 import { SaveContactHost } from '../features/SaveContactHost'
 
 // The composer and its editor load the first time someone writes.
@@ -231,6 +233,7 @@ export function MailShell() {
             <SharedMailbox key={group.id} group={group} open={groupId === group.id} />
           ))}
           <SidebarNavLink to="/groups" icon={<Users />} label={t('mailGroups.title')} />
+      <PlacesNav counts={counts.data} />
       </>}
       sidebarFooter={<StorageMeter />}
       headerStart={<SearchBox />}
@@ -247,6 +250,7 @@ export function MailShell() {
     >
       <Outlet />
       <SaveContactHost />
+      <PlacesHost />
       {composing ? (
         <Suspense fallback={null}>
           <Composer />

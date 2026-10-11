@@ -30,12 +30,20 @@ import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
 export type FolderId = 'inbox' | 'drafts' | 'sent' | 'archive' | 'spam' | 'trash' | 'starred' | 'all'
 export const FOLDERS: FolderId[] = ['inbox', 'drafts', 'sent', 'starred', 'archive', 'spam', 'trash']
+/**
+ * What a list shows: a fixed folder, one of the account's own folders
+ * (`folder:<id>`) or a label (`label:<id>`), docs/plans/mail-filters.md.
+ */
+export type PlaceKey = FolderId | `folder:${string}` | `label:${string}`
 
 export interface MailMessage {
   id: string
   threadId: string
   direction: 'inbound' | 'outbound'
-  folder: Exclude<FolderId, 'starred' | 'all'>
+  /** A fixed folder, or `custom` with `customFolder`. */
+  folder: Exclude<FolderId, 'starred' | 'all'> | 'custom'
+  customFolder: string | null
+  labels: string[]
   seen: boolean
   starred: boolean
   protection: 'zero_access' | 'end_to_end'
@@ -64,7 +72,7 @@ interface Page {
 }
 
 export interface FolderCount {
-  folder: FolderId
+  folder: PlaceKey
   unread: number
   total: number
 }
@@ -113,7 +121,7 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: FolderId, q: string, group?: string) => ['mail', 'folder', folder, q, group ?? null] as const
+const folderKey = (folder: PlaceKey, q: string, group?: string) => ['mail', 'folder', folder, q, group ?? null] as const
 const countsKey = (group?: string) => ['mail', 'counts', group ?? null] as const
 const threadKey = (id: string, group?: string) => ['mail', 'thread', id, group ?? null] as const
 const contentKey = (id: string) => ['mail', 'content', id] as const
@@ -166,7 +174,7 @@ export function useMailAccount() {
   })
 }
 
-export function useFolder(folder: FolderId, q = '', group?: string) {
+export function useFolder(folder: PlaceKey, q = '', group?: string) {
   return useInfiniteQuery({
     queryKey: folderKey(folder, q, group),
     initialPageParam: null as string | null,
@@ -353,13 +361,27 @@ function patchCached(queryClient: ReturnType<typeof useQueryClient>, ids: string
   )
 }
 
+/** Labels added and removed at once in the cached lists and threads. */
+function patchLabels(queryClient: ReturnType<typeof useQueryClient>, ids: string[], add: string[], remove: string[]) {
+  const set = new Set(ids)
+  const next = (m: MailMessage) => (set.has(m.id) ? { ...m, labels: [...new Set([...m.labels, ...add])].filter((l) => !remove.includes(l)) } : m)
+  queryClient.setQueriesData<InfiniteData<Page>>({ queryKey: ['mail', 'folder'] }, (data) =>
+    data ? { ...data, pages: data.pages.map((page) => ({ ...page, messages: page.messages.map(next) })) } : data,
+  )
+  queryClient.setQueriesData<MailMessage[]>({ queryKey: ['mail', 'thread'] }, (data) => data?.map(next))
+}
+
 export interface MessageChange {
   ids: string[]
   /** A shared mailbox's id. */
   group?: string
   seen?: boolean
   starred?: boolean
-  folder?: 'inbox' | 'archive' | 'spam' | 'trash' | 'sent'
+  folder?: 'inbox' | 'archive' | 'spam' | 'trash' | 'sent' | 'custom'
+  /** One of the account's folders, with `folder: 'custom'`. */
+  customFolder?: string
+  addLabels?: string[]
+  removeLabels?: string[]
 }
 
 /** Read, star, or file messages; the lists update at once and are fetched again after. */
@@ -367,7 +389,12 @@ export function useUpdateMessages() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (change: MessageChange) => (await api.patch<{ updated: number }>('/mail/messages', change)).data.updated,
-    onMutate: ({ ids, folder: _folder, ...flags }) => patchCached(queryClient, ids, flags),
+    onMutate: ({ ids, folder: _folder, customFolder: _custom, addLabels, removeLabels, ...flags }) => {
+      patchCached(queryClient, ids, flags)
+      if (addLabels?.length || removeLabels?.length) {
+        patchLabels(queryClient, ids, addLabels ?? [], removeLabels ?? [])
+      }
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: mailKey }),
   })
 }

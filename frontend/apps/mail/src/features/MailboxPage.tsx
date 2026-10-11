@@ -1,10 +1,11 @@
-import { Archive, Copy, Inbox as InboxIcon, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { Archive, Check, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, NoAddressKey, useDeleteMessages, useFolder, useMailAccount, type FolderId, type MailMessage } from '@kutup/mail-core/api'
+import { FOLDERS, NoAddressKey, useDeleteMessages, useFolder, useMailAccount, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -29,10 +30,13 @@ import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openComposer } from './composerState'
 import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
+import { LabelChips } from './LabelChips'
 import { Padlock } from './Padlock'
 import { PersonAvatar } from './Person'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
+import { PickerButton, PickerDialog, type PickerMode } from './PlacePicker'
+import { openPlacesDialog } from './placesState'
 import { ShortcutsDialog } from './ShortcutsDialog'
 import { ThreadView } from './ThreadView'
 
@@ -82,7 +86,11 @@ const MOVE_KEY: Record<MoveTarget, string> = { inbox: 'I', archive: 'A', spam: '
 /** A folder: the list beside the open thread, as Proton's column layout. */
 export function MailboxPage() {
   const { t, i18n } = useTranslation()
-  const { folder: folderParam = 'inbox', threadId } = useParams()
+  const { folder: folderParam = 'inbox', threadId, placeId } = useParams()
+  const location = useLocation()
+  // One of the account's folders (`/f/<id>`) or labels (`/l/<id>`), else a fixed folder.
+  const placeKind = location.pathname.startsWith('/f/') ? 'folder' : location.pathname.startsWith('/l/') ? 'label' : null
+  const places = usePlaces()
   const [params] = useSearchParams()
   const q = params.get('q') ?? ''
   const navigate = useNavigate()
@@ -90,10 +98,18 @@ export function MailboxPage() {
   const contacts = useContactLookup()
   const saveContact = useSaveContact()
   const scope = useMailboxScope()
-  const { base, group } = scope
-  // A shared mailbox has no drafts: they are each member's own.
-  const folder = (KNOWN.has(folderParam) && !(group && folderParam === 'drafts') ? folderParam : 'inbox') as FolderId
-  const list = useFolder(folder, q, group)
+  const { group } = scope
+  // A shared mailbox has no drafts (they are each member's own); your own
+  // folders and labels are in your own mailbox only.
+  const fixed = (KNOWN.has(folderParam) && !(group && folderParam === 'drafts') ? folderParam : 'inbox') as FolderId
+  const place: PlaceKey = placeKind && placeId ? `${placeKind}:${placeId}` : fixed
+  // Where the list lives in the address bar.
+  const base = placeKind && placeId ? `/${placeKind === 'folder' ? 'f' : 'l'}/${placeId}` : `${scope.base}/${fixed}`
+  // Own folders and labels act as All mail does: every move is offered.
+  const folder: FolderId = placeKind ? 'all' : fixed
+  const placeName = placeKind === 'folder' ? places.data?.folders.get(placeId ?? '')?.name : placeKind === 'label' ? places.data?.labelsById.get(placeId ?? '')?.name : undefined
+  const title = placeKind ? (placeName ?? '') : t(`folders.${fixed}`)
+  const list = useFolder(place, q, group)
   const actions = useMailActions(group)
   const remove = useDeleteMessages()
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -102,6 +118,8 @@ export function MailboxPage() {
   const [cursor, setCursor] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<string[] | null>(null)
   const [shortcuts, setShortcuts] = useState(false)
+  // Move to / Label as opened from the keyboard, with the rows it acts on.
+  const [picker, setPicker] = useState<{ mode: PickerMode; rows: MailMessage[] } | null>(null)
   // The rows a right-click menu acts on.
   const [menuFor, setMenuFor] = useState<MailMessage[]>([])
   const messages = useMemo(() => list.data?.pages.flatMap((page) => page.messages) ?? [], [list.data])
@@ -114,7 +132,7 @@ export function MailboxPage() {
     setSelected(new Set())
     anchor.current = null
     setCursor(null)
-  }, [folder, q])
+  }, [place, q])
   // Opening a thread puts the keyboard on it.
   useEffect(() => {
     if (openIndex >= 0) setCursor(openIndex)
@@ -155,8 +173,14 @@ export function MailboxPage() {
     actions.move(rows, target, () => {
       setSelected(new Set())
       // Moving the open conversation away closes it.
-      if (threadId && rows.some((m) => m.threadId === threadId)) void navigate(`${base}/${folder}${search}`)
+      if (threadId && rows.some((m) => m.threadId === threadId)) void navigate(`${base}${search}`)
     })
+  }
+
+  /** After a picker moved rows: clear the choice, close their conversation. */
+  function afterPick(rows: MailMessage[]) {
+    setSelected(new Set())
+    if (threadId && rows.some((m) => m.threadId === threadId)) void navigate(`${base}${search}`)
   }
 
   function deleteForever(rows: MailMessage[]) {
@@ -186,7 +210,7 @@ export function MailboxPage() {
       } else {
         anchor.current = next
         setCursor(next)
-        void navigate(`${base}/${folder}/${messages[next].threadId}${search}`)
+        void navigate(`${base}/${messages[next].threadId}${search}`)
       }
     }
     if (meta) {
@@ -230,7 +254,7 @@ export function MailboxPage() {
         break
       case 'Escape':
         if (chosen.length) setSelected(new Set())
-        else if (threadId) void navigate(`${base}/${folder}${search}`)
+        else if (threadId) void navigate(`${base}${search}`)
         break
       case '*': {
         const rows = targets()
@@ -239,7 +263,7 @@ export function MailboxPage() {
       }
       case 'u':
         actions.mark(targets(), { seen: false }, () => {
-          if (threadId) void navigate(`${base}/${folder}${search}`)
+          if (threadId) void navigate(`${base}${search}`)
         })
         break
       case 'r':
@@ -251,6 +275,15 @@ export function MailboxPage() {
       case 't': {
         const to: MoveTarget = key === 'a' ? 'archive' : key === 'i' ? 'inbox' : key === 's' ? (folder === 'spam' ? 'inbox' : 'spam') : 'trash'
         if (movesFor(folder).includes(to)) move(targets(), to)
+        break
+      }
+      case 'm':
+      case 'l': {
+        const rows = targets()
+        if (rows.length && (key === 'l' ? !group : movesFor(folder).length)) {
+          event.preventDefault()
+          setPicker({ mode: key === 'm' ? 'move' : 'label', rows })
+        }
         break
       }
       case 'Delete':
@@ -265,7 +298,7 @@ export function MailboxPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  if (!KNOWN.has(folderParam) || (group && folderParam === 'drafts')) return <Navigate to={`${base}/inbox`} replace />
+  if (!placeKind && (!KNOWN.has(folderParam) || (group && folderParam === 'drafts'))) return <Navigate to={`${scope.base}/inbox`} replace />
 
   if (account.isError) {
     return (
@@ -341,6 +374,65 @@ export function MailboxPage() {
           <Kbd>{folder === 'spam' && target === 'inbox' ? 'S' : MOVE_KEY[target]}</Kbd>
         </ContextMenuItem>
       ))}
+      {moves.length && !group ? (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <FolderInput />
+            {t('places.moveTo')}
+            <Kbd>M</Kbd>
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="max-h-80 w-60 overflow-y-auto">
+            {flattenFolders(places.data?.tree ?? []).map((f) => (
+              <ContextMenuItem key={f.id} onSelect={() => actions.move(menuFor, { folder: f.id, name: f.name }, () => afterPick(menuFor))}>
+                <span style={{ width: `${(f.depth - 1) * 0.75}rem` }} />
+                <FolderIcon style={{ color: f.color }} />
+                <span className="truncate">{f.name}</span>
+              </ContextMenuItem>
+            ))}
+            <ContextMenuItem
+              onSelect={() =>
+                openPlacesDialog({
+                  kind: 'edit',
+                  target: { kind: 'folder' },
+                  onCreated: (id, name) => actions.move(menuFor, { folder: id, name }, () => afterPick(menuFor)),
+                })
+              }
+            >
+              <FolderPlus />
+              {t('places.newFolder')}
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      ) : null}
+      {group ? null : (
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>
+          <Tag />
+          {t('places.labelAs')}
+          <Kbd>L</Kbd>
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent className="max-h-80 w-60 overflow-y-auto">
+          {(places.data?.labels ?? []).map((l) => {
+            const all = menuFor.every((m) => m.labels.includes(l.id))
+            return (
+              <ContextMenuItem key={l.id} onSelect={() => actions.mark(menuFor, all ? { removeLabels: [l.id] } : { addLabels: [l.id] })}>
+                {all ? <Check /> : <span className="w-4" />}
+                <Tag style={{ color: l.color }} />
+                <span className="truncate">{l.name}</span>
+              </ContextMenuItem>
+            )
+          })}
+          <ContextMenuItem
+            onSelect={() =>
+              openPlacesDialog({ kind: 'edit', target: { kind: 'label' }, onCreated: (id) => actions.mark(menuFor, { addLabels: [id] }) })
+            }
+          >
+            <Plus />
+            {t('places.newLabel')}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      )}
       {DELETES_FOREVER.has(folder) ? (
         <>
           <ContextMenuSeparator />
@@ -389,7 +481,7 @@ export function MailboxPage() {
 
   const listPane = (
     <section
-      aria-label={t(`folders.${folder}`)}
+      aria-label={title}
       className={cn('flex min-h-0 flex-1 flex-col border-border md:w-[26rem] md:flex-none md:shrink-0 md:border-r', threadId && 'hidden md:flex')}
     >
       <div className="flex min-h-12 items-center gap-1 border-b border-border px-2">
@@ -409,6 +501,8 @@ export function MailboxPage() {
             <ToolbarButton label={t('actions.markUnread')} onClick={() => actions.mark(chosen, { seen: false }, () => setSelected(new Set()))}>
               <Mail />
             </ToolbarButton>
+            {moves.length ? <PickerButton mode="move" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} /> : null}
+            <PickerButton mode="label" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} />
             {moves.map((target) => (
               <ToolbarButton key={target} label={moveLabel(target)} onClick={() => move(chosen, target)}>
                 {MOVE_ICON[target]}
@@ -423,7 +517,7 @@ export function MailboxPage() {
         ) : (
           <>
             <h1 className="min-w-0 flex-1 truncate px-1 font-display text-base font-semibold">
-              {q ? t('list.searchResults', { q }) : t(`folders.${folder}`)}
+              {q ? t('list.searchResults', { q }) : title}
             </h1>
             <ToolbarButton label={t('shortcuts.title')} onClick={() => setShortcuts(true)}>
               <Keyboard />
@@ -443,7 +537,10 @@ export function MailboxPage() {
         </Alert>
       ) : messages.length === 0 ? (
         <div className="p-3">
-          <EmptyState title={q ? t('list.noMatches') : t(`empty.${folder}`)} description={q ? t('list.noMatchesHint') : t(`emptyHint.${folder}`)} />
+          <EmptyState
+            title={q ? t('list.noMatches') : placeKind ? t(`empty.${placeKind}`) : t(`empty.${folder}`)}
+            description={q ? t('list.noMatchesHint') : placeKind ? t(`emptyHint.${placeKind}`) : t(`emptyHint.${folder}`)}
+          />
         </div>
       ) : (
         <ContextMenu
@@ -467,7 +564,7 @@ export function MailboxPage() {
                     onContextMenu={() => setMenuFor(isChosen ? chosen : [message])}
                     onDragStart={(e) => {
                       const rows = isChosen ? chosen : [message]
-                      const data: Movable[] = rows.map(({ id, folder: from, direction }) => ({ id, folder: from, direction }))
+                      const data: Movable[] = rows.map(({ id, folder: from, direction, customFolder }) => ({ id, folder: from, direction, customFolder }))
                       e.dataTransfer.setData(MAIL_DRAG_TYPE, JSON.stringify(data))
                       e.dataTransfer.setData('text/plain', t('list.dragging', { count: rows.length }))
                       e.dataTransfer.effectAllowed = 'move'
@@ -500,7 +597,7 @@ export function MailboxPage() {
                         />
                       </span>
                       <Link
-                        to={`${base}/${folder}/${message.threadId}${search}`}
+                        to={`${base}/${message.threadId}${search}`}
                         onClick={(e) => onRowClick(e, index)}
                         draggable={false}
                         className="min-w-0 flex-1 py-1"
@@ -528,9 +625,12 @@ export function MailboxPage() {
                           {message.sentBy ? (
                             <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t('list.sentBy', { name: message.sentBy })}</span>
                           ) : null}
-                          {folder === 'all' || folder === 'starred' ? (
-                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t(`folders.${message.folder}`)}</span>
+                          {placeKind !== 'folder' && (folder === 'all' || folder === 'starred') ? (
+                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
+                              {message.folder === 'custom' ? (places.data?.folders.get(message.customFolder ?? '')?.name ?? '…') : t(`folders.${message.folder}`)}
+                            </span>
                           ) : null}
+                          <LabelChips ids={message.labels} places={places.data} />
                         </span>
                       </Link>
                       <button
@@ -566,7 +666,7 @@ export function MailboxPage() {
       {listPane}
       <div className={cn('min-h-0 min-w-0 flex-1 overflow-hidden', !threadId && 'hidden md:block')}>
         {threadId && account.data ? (
-          <ThreadView account={account.data} folder={folder} threadId={threadId} onClose={() => void navigate(`${base}/${folder}${search}`)} />
+          <ThreadView account={account.data} folder={folder} base={base} threadId={threadId} onClose={() => void navigate(`${base}${search}`)} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
             <Mail className="size-10" aria-hidden />
@@ -591,12 +691,13 @@ export function MailboxPage() {
               toast.success(t('toasts.deleted', { count: ids.length }))
               setSelected(new Set())
               setDeleting(null)
-              if (threadId && messages.some((m) => ids.includes(m.id) && m.threadId === threadId)) void navigate(`${base}/${folder}${search}`)
+              if (threadId && messages.some((m) => ids.includes(m.id) && m.threadId === threadId)) void navigate(`${base}${search}`)
             },
           })
         }}
       />
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
+      {picker ? <PickerDialog mode={picker.mode} rows={picker.rows} folder={folder} onClose={() => setPicker(null)} onMoved={() => afterPick(picker.rows)} /> : null}
     </div>
   )
 }

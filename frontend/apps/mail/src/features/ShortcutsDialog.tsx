@@ -38,6 +38,8 @@ const SECTIONS: { id: string; shortcuts: [string, string[]][] }[] = [
       ['archive', ['A']],
       ['spam', ['S']],
       ['trash', ['T / Delete']],
+      ['moveTo', ['M']],
+      ['labelAs', ['L']],
       ['deleteForever', [META, 'Backspace']],
       ['drag', ['Drag']],
     ],
