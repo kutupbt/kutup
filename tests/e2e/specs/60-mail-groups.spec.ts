@@ -101,7 +101,8 @@ test('a shared mailbox and a distribution list, made by an administrator and use
   await bobMail.getByRole('link', { name: new RegExp(hr) }).first().click()
   const bobRow = bobMail.getByRole('listitem').filter({ hasText: subject })
   await expect(bobRow).toBeVisible({ timeout: 60_000 })
-  await expect(bobRow.locator('.font-semibold')).toHaveCount(0)
+  // The sender and subject are no longer bold (the avatar's initials always are).
+  await expect(bobRow.getByRole('link').locator('.font-semibold')).toHaveCount(0)
 
   // Alice answers as the mailbox.
   await aliceMail.getByRole('button', { name: 'Reply', exact: true }).click()
