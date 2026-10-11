@@ -1,4 +1,4 @@
-import { Archive, Check, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { Archive, Ban, Check, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -27,6 +27,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
+import { openBlockSender } from './blockState'
 import { openComposer } from './composerState'
 import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
@@ -466,6 +467,12 @@ export function MailboxPage() {
                 <Copy />
                 {t('person.copy')}
               </ContextMenuItem>
+              {single.direction === 'inbound' && singlePerson.address.toLowerCase() !== account.data?.address.toLowerCase() ? (
+                <ContextMenuItem onSelect={() => openBlockSender([singlePerson.address.toLowerCase()])}>
+                  <Ban />
+                  {t('person.block')}
+                </ContextMenuItem>
+              ) : null}
               {!contacts.find(singlePerson.address) && singlePerson.address.toLowerCase() !== account.data?.address.toLowerCase() ? (
                 <ContextMenuItem onSelect={() => saveContact(singlePerson)}>
                   <UserPlus />
