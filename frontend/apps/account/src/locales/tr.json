@@ -30,7 +30,8 @@
     "storage": "Depolama alanı",
     "keys": "Şifreleme anahtarları",
     "mailSending": "Posta gönderimi",
-    "mailGroups": "Posta grupları"
+    "mailGroups": "Posta grupları",
+    "feedback": "Geri bildirim"
   },
   "auth": {
     "fields": {
@@ -835,6 +836,51 @@
       "addOwner": "Sahip ekle",
       "created": "Grup oluşturuldu.",
       "createFailed": "Grup oluşturulamadı."
+    },
+    "feedback": {
+      "title": "Geri bildirim",
+      "description": "Kişilerin uygulamalardan gönderdiği hatalar, fikirler ve mesajlar. Birini, özel bir şey içermediğini kontrol ettikten sonra herkese açık izleyiciye iletin: gönderenin kim olduğu asla eklenmez.",
+      "open": "Açık",
+      "resolved": "Çözülen",
+      "emptyTitle": "Bekleyen geri bildirim yok",
+      "emptyDescription": "Kişilerin uygulamaların kenar çubuğundan gönderdikleri burada görünür.",
+      "noneResolvedTitle": "Henüz çözülen yok",
+      "noneResolvedDescription": "Tamamlandı olarak işaretlediğiniz, kapattığınız ya da ilettiğiniz geri bildirimler burada listelenir.",
+      "from": "Gönderen",
+      "deletedAccount": "Silinmiş bir hesap",
+      "issue": "Konu",
+      "openOnGitHub": "GitHub'da aç",
+      "dismiss": "Kapat",
+      "done": "Tamamlandı",
+      "delete": "Sil",
+      "deleteTitle": "Bu geri bildirim silinsin mi?",
+      "deleteDescription": "Kalıcı olarak silinir. GitHub'da ondan açılmış bir konu orada kalır.",
+      "deleted": "Geri bildirim silindi.",
+      "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
+      "marked": {
+        "done": "Tamamlandı olarak işaretlendi.",
+        "dismissed": "Kapatıldı.",
+        "forwarded": "İletildi olarak işaretlendi."
+      },
+      "resolution": {
+        "done": "Tamamlandı",
+        "dismissed": "Kapatıldı",
+        "forwarded": "İletildi"
+      },
+      "forwardTitle": "GitHub'a iletildi mi?",
+      "forwardDescription": "{{repository}} üzerinde doldurulmuş bir konu yeni sekmede açıldı. Göndermeden önce özel bir şey içermediğini kontrol edin, sonra ikisini bağlamak için adresini buraya yapıştırın.",
+      "issueUrl": "Konu adresi (isteğe bağlı)",
+      "issueUrlInvalid": "Bir konu adresi {{prefix}}123 gibi görünür.",
+      "markForwarded": "İletildi olarak işaretle",
+      "prepareTitle": "GitHub'a ilet",
+      "prepareDescription": "Konunun ne diyeceğini kontrol edin. GitHub'da bu başlık ve metinle açılır, orada siz gönderirsiniz.",
+      "publicWarningTitle": "Bu herkese açık olacak",
+      "publicWarning": "Bu, {{repository}} üzerinde bir konu açar. Depo herkese açıksa onu herkes okuyabilir, bu geri bildirimdeki kişisel ayrıntılar da dahil: adlar, e-posta adresleri, dosya adları ya da bir mesajdan alıntılanan her şey. Önce bunları çıkarın.",
+      "issueTitle": "Konu başlığı",
+      "issueBody": "Konu metni",
+      "issueBodyHint": "Geri bildirimi kimin gönderdiği eklenmez. Kişisel olan başka her şeyi çıkarın.",
+      "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
+      "openIssue": "Konuyu GitHub'da aç"
     }
   }
 }

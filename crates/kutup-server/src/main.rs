@@ -503,8 +503,8 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
-        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access, identity,
-        link_reports, sessions as session_routes, shares, trash, tus,
+        feedback, file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
+        identity, link_reports, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -607,6 +607,12 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/user/drive-key-binding",
             put(identity::put_drive_key_binding),
+        )
+        .route(
+            "/api/feedback",
+            post(feedback::send_feedback)
+                // A message of 5000 characters and a few details.
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/api/user/identity-pins",
@@ -1798,6 +1804,12 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
                 )
+                .route("/api/admin/feedback", get(feedback::list_feedback))
+                .route(
+                    "/api/admin/feedback/:id/resolve",
+                    post(feedback::resolve_feedback),
+                )
+                .route("/api/admin/feedback/:id", delete(feedback::delete_feedback))
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route(
                     "/api/admin/mail/senders",

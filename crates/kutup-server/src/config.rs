@@ -82,6 +82,11 @@ pub struct Config {
     pub mail_filters_per_account: i64,
     /// Block, spam and allow entries an account may have (`MAIL_SENDER_RULES_PER_ACCOUNT`).
     pub mail_sender_rules_per_account: i64,
+    /// Where an administrator forwards feedback for public tracking
+    /// (`FEEDBACK_GITHUB_REPOSITORY`, `owner/repo`; default `kutupbt/kutup`,
+    /// `off` for none). The apps also offer it to people who want to report
+    /// there themselves; nothing is sent to it by the server.
+    pub feedback_github_repository: Option<String>,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -332,6 +337,10 @@ impl Config {
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),
+            feedback_github_repository: github_repository(&get_env(
+                "FEEDBACK_GITHUB_REPOSITORY",
+                "kutupbt/kutup",
+            )),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
@@ -388,6 +397,25 @@ fn break_glass_email(admin_account: &str) -> String {
 
 fn must_env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("required environment variable not set: {key}"))
+}
+
+/// `owner/repo` on GitHub, or `off`. Anything else stops the server: a
+/// mistyped repository would send people somewhere unexpected.
+fn github_repository(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("off") {
+        return None;
+    }
+    let part = |p: &str| {
+        !p.is_empty()
+            && p.len() <= 100
+            && p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    match value.split_once('/') {
+        Some((owner, repo)) if part(owner) && part(repo) => Some(value.to_string()),
+        _ => panic!("FEEDBACK_GITHUB_REPOSITORY must be owner/repo or off, not {value:?}"),
+    }
 }
 
 fn get_env(key: &str, fallback: &str) -> String {
@@ -546,5 +574,36 @@ mod outside_sending_tests {
         assert!(!OutsideSending::Admins.allows(false));
         assert!(!OutsideSending::Off.allows(true));
         assert!(OutsideSending::On.allows(false));
+    }
+}
+
+#[cfg(test)]
+mod feedback_repository_tests {
+    use super::github_repository;
+
+    #[test]
+    fn owner_slash_repo_or_off() {
+        assert_eq!(
+            github_repository("kutupbt/kutup"),
+            Some("kutupbt/kutup".into())
+        );
+        assert_eq!(
+            github_repository(" my-org/my.repo_2 "),
+            Some("my-org/my.repo_2".into())
+        );
+        assert_eq!(github_repository("off"), None);
+        assert_eq!(github_repository("OFF"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
+    fn a_url_is_refused() {
+        github_repository("https://github.com/kutupbt/kutup");
+    }
+
+    #[test]
+    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
+    fn a_bare_name_is_refused() {
+        github_repository("kutup");
     }
 }

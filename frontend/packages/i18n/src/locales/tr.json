@@ -311,7 +311,14 @@
     "cannotVerifyTitle": "Henüz doğrulanacak bir şey yok",
     "cannotVerify": "{{account}} Drive anahtarlarını henüz imzalamadı. Bir sonraki girişinde imzalar.",
     "lookupFailedTitle": "Bilgileri alınamadı",
-    "lookupFailed": "Kimliği şu anda getirilemedi. Biraz sonra yeniden deneyin."
+    "lookupFailed": "Kimliği şu anda getirilemedi. Biraz sonra yeniden deneyin.",
+    "state": {
+      "verified": "Doğrulandı",
+      "unverified": "Doğrulanmadı",
+      "unproven": "Anahtarlar henüz onaylanmadı",
+      "changed": "Kimlik değişti",
+      "invalid": "Kimlik onaylanamadı"
+    }
   },
   "safetyNumber": {
     "cameraUnavailable": "Kameraya erişilemedi. Onun yerine QR değerini yapıştır.",
@@ -336,5 +343,34 @@
     "triggerWarning": "{{peer}} için güvenlik uyarısı",
     "verifiedToast": "{{peer}} artık bu cihazda doğrulandı",
     "verify": "Birebir eşleşmeyi doğrula"
+  },
+  "feedback": {
+    "open": "Geri bildirim gönder",
+    "title": "Geri bildirim gönder",
+    "description": "Bir sorunu bildirin, bir özellik isteyin ya da bize bir şey söyleyin. Bu sunucunun yöneticilerine gider.",
+    "kind": "Konusu nedir?",
+    "kinds": {
+      "bug": "Bir şey çalışmıyor",
+      "feature": "Bir fikir ya da özellik isteği",
+      "other": "Başka bir şey"
+    },
+    "messageLabel": {
+      "bug": "Ne oldu, ne olmasını bekliyordunuz?",
+      "feature": "Kutup'un ne yapmasını isterdiniz?",
+      "other": "Mesajınız"
+    },
+    "privacy": "Yöneticiler bunu yazdığınız gibi okur. Parolanızı ya da kurtarma ifadenizi asla eklemeyin.",
+    "includeDetails": "Teknik ayrıntıları ekle (aşağıda gösterilir)",
+    "detail": {
+      "version": "Sürüm",
+      "browser": "Tarayıcı",
+      "language": "Dil",
+      "screen": "Pencere"
+    },
+    "github": "Bunun yerine GitHub'da bildir",
+    "githubHint": "GitHub'da metniniz doldurulmuş, herkese açık bir konu sayfası açar; orada gönderene kadar hiçbir şey gönderilmez.",
+    "send": "Gönder",
+    "sent": "Teşekkürler! Geri bildiriminiz yöneticilere gönderildi.",
+    "failed": "Geri bildiriminiz gönderilemedi. Yeniden deneyin."
   }
 }
