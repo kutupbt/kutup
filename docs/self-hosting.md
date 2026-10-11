@@ -973,11 +973,15 @@ complaints and reputation reach you. Stalwart's spam filter does not score
 outgoing mail: its rules judge the connection more than the content, and
 refused ordinary mail in tests.
 
-**Sending outside.** `MAIL_OUTSIDE_SENDING` decides who may send to addresses
-outside Kutup: `off` (the default; Mail offers only Kutup addresses), `admins`
-(for a sending trial from the real Mail app) or `on`. Keep it `off` until
-SPF, DKIM, DMARC and the PTR are in place; receivers judge a new address by
-its first messages. Mail between Kutup users always goes.
+**Sending outside.** Administration → Mail sending decides who may send to
+addresses outside Kutup: nobody (`off`; Mail offers only Kutup addresses),
+administrators only (`admins`, for a sending trial from the real Mail app) or
+everyone (`on`). A change applies at once, without a restart, and is recorded
+in the activity log. `MAIL_OUTSIDE_SENDING` (default `off`) only gives the
+first value, when the server starts without one stored; after that the
+administrators' choice wins, and changing the variable does nothing. Keep it
+off until SPF, DKIM, DMARC and the PTR are in place; receivers judge a new
+address by its first messages. Mail between Kutup users always goes.
 
 **Checking a domain.** `scripts/check-mail-ready.sh example.org
 --dkim-selector <selector> --address you@example.org` prints one line per
@@ -1050,10 +1054,10 @@ list. Check, in order:
    members, or every administrator).
 6. The domain is registered with Google Postmaster Tools and Microsoft
    SNDS.
-7. A sending trial: `MAIL_OUTSIDE_SENDING=admins`, then an administrator
-   sends from Mail to Gmail, Outlook and Proton addresses and checks each
-   arrives in the inbox with SPF, DKIM and DMARC passing (Gmail's "Show
-   original"). Then `MAIL_OUTSIDE_SENDING=on`.
+7. A sending trial: Administration → Mail sending set to "Administrators
+   only", then an administrator sends from Mail to Gmail, Outlook and Proton
+   addresses and checks each arrives in the inbox with SPF, DKIM and DMARC
+   passing (Gmail's "Show original"). Then "Everyone".
 
 Then lower the MX record's TTL (300 seconds) a day ahead, remove the earlier
 service's MX records (with Cloudflare Email Routing, disable it, which removes

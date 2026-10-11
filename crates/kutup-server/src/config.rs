@@ -551,6 +551,25 @@ impl OutsideSending {
         }
     }
 
+    /// The value as stored and sent: `off`, `admins` or `on`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutsideSending::Off => "off",
+            OutsideSending::Admins => "admins",
+            OutsideSending::On => "on",
+        }
+    }
+
+    /// A stored or requested value, exactly `off`, `admins` or `on`.
+    pub fn from_setting(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(OutsideSending::Off),
+            "admins" => Some(OutsideSending::Admins),
+            "on" => Some(OutsideSending::On),
+            _ => None,
+        }
+    }
+
     pub fn allows(self, is_admin: bool) -> bool {
         match self {
             OutsideSending::On => true,
@@ -563,6 +582,19 @@ impl OutsideSending {
 #[cfg(test)]
 mod outside_sending_tests {
     use super::OutsideSending;
+
+    #[test]
+    fn the_stored_setting_is_exact() {
+        for policy in [
+            OutsideSending::Off,
+            OutsideSending::Admins,
+            OutsideSending::On,
+        ] {
+            assert_eq!(OutsideSending::from_setting(policy.as_str()), Some(policy));
+        }
+        assert_eq!(OutsideSending::from_setting("On"), None);
+        assert_eq!(OutsideSending::from_setting("sometimes"), None);
+    }
 
     #[test]
     fn outside_sending_parses_and_fails_closed() {

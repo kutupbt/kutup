@@ -1179,8 +1179,8 @@ unreachable.
 
 Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
 "sentDay", "newAccount", "paused", "outsideAllowed" }`. `outsideAllowed` is
-false while the server does not send outside for you (`MAIL_OUTSIDE_SENDING`
-`off`, or `admins` and you are not one); `POST /api/mail/send` then answers
+false while the server does not send outside for you (the administrators'
+setting is `off`, or `admins` and you are not one); `POST /api/mail/send` then answers
 `403` with `code: outsideSendingOff` for any outside recipient. `paused` is `admin`, `bounces` or `spam`
 while sending outside is paused (mail between Kutup users still goes). New
 accounts may send to 50 outside recipients a day in their first week
@@ -1188,6 +1188,14 @@ accounts may send to 50 outside recipients a day in their first week
 `MAIL_SEND_RECIPIENTS_PER_HOUR` and `…_PER_DAY`. `POST /api/mail/send` answers
 `403` with `code: sendingPaused` while paused, and `429` `sendLimit` (with
 `perHour`, `perDay`, `newAccount`) over a limit.
+
+### GET · PUT /api/admin/mail/outside-sending
+
+Administrators only. Who may send mail to addresses outside Kutup:
+`{ "outsideSending": "off" | "admins" | "on" }`. A `PUT` applies at once,
+without a restart, and writes `mail.outside_sending.update` to the audit log
+(`payload: { from, to }`); anything else is `400`. `MAIL_OUTSIDE_SENDING`
+only seeds the stored value when the server starts without one.
 
 ### GET /api/admin/mail/senders?attention= · PUT /api/admin/users/:id/mail-sending
 

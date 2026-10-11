@@ -32,8 +32,8 @@ pub struct MailSendingStatus {
     /// Why sending to outside addresses is paused (`admin`, `bounces`,
     /// `spam`); absent when it is not.
     pub paused: Option<String>,
-    /// Whether this server sends your mail to addresses outside Kutup
-    /// (`MAIL_OUTSIDE_SENDING`); mail between Kutup users always goes.
+    /// Whether this server sends your mail to addresses outside Kutup (the
+    /// administrators' setting); mail between Kutup users always goes.
     pub outside_allowed: bool,
 }
 
@@ -59,7 +59,12 @@ pub async fn own_status(
         sent_day: standing.sent_day,
         new_account: standing.new_account,
         paused: standing.paused,
-        outside_allowed: state.config.mail_outside_sending.allows(user.is_admin),
+        outside_allowed: crate::site_settings::mail_outside_sending(
+            &state.pool,
+            state.config.mail_outside_sending,
+        )
+        .await?
+        .allows(user.is_admin),
     }))
 }
 
@@ -304,4 +309,78 @@ pub async fn update(
     )
     .await;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Who may send mail to addresses outside Kutup.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutsideSendingPolicy {
+    /// `off`, `admins` or `on`.
+    pub outside_sending: String,
+}
+
+/// `GET /api/admin/mail/outside-sending` — who may send outside Kutup.
+#[utoipa::path(
+    get,
+    path = "/api/admin/mail/outside-sending",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The policy", body = OutsideSendingPolicy))
+)]
+pub async fn outside_sending(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> AppResult<Json<OutsideSendingPolicy>> {
+    let policy =
+        crate::site_settings::mail_outside_sending(&state.pool, state.config.mail_outside_sending)
+            .await?;
+    Ok(Json(OutsideSendingPolicy {
+        outside_sending: policy.as_str().into(),
+    }))
+}
+
+/// `PUT /api/admin/mail/outside-sending` — sets it, at once and without a
+/// restart; recorded in the audit log.
+#[utoipa::path(
+    put,
+    path = "/api/admin/mail/outside-sending",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    request_body = OutsideSendingPolicy,
+    responses(
+        (status = 200, description = "Saved", body = OutsideSendingPolicy),
+        (status = 400, description = "Not off, admins or on"),
+    )
+)]
+pub async fn set_outside_sending(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Json(request): Json<OutsideSendingPolicy>,
+) -> AppResult<Json<OutsideSendingPolicy>> {
+    let policy = crate::config::OutsideSending::from_setting(&request.outside_sending)
+        .ok_or_else(|| AppError::bad_request("outside sending is off, admins or on"))?;
+    let before =
+        crate::site_settings::mail_outside_sending(&state.pool, state.config.mail_outside_sending)
+            .await?;
+    sqlx::query(
+        "INSERT INTO site_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(crate::site_settings::MAIL_OUTSIDE_SENDING)
+    .bind(policy.as_str())
+    .execute(&state.pool)
+    .await?;
+    if before != policy {
+        audit(
+            &state.pool,
+            &admin.user_id,
+            "mail.outside_sending.update",
+            None,
+            json!({ "from": before.as_str(), "to": policy.as_str() }),
+        )
+        .await;
+    }
+    Ok(Json(OutsideSendingPolicy {
+        outside_sending: policy.as_str().into(),
+    }))
 }

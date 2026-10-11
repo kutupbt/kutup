@@ -1066,7 +1066,13 @@ pub async fn send(
         }
     };
     if !external.is_empty() {
-        if !state.config.mail_outside_sending.allows(user.is_admin) {
+        if !crate::site_settings::mail_outside_sending(
+            &state.pool,
+            state.config.mail_outside_sending,
+        )
+        .await?
+        .allows(user.is_admin)
+        {
             return Err(AppError::forbidden(
                 "this server does not send mail to outside addresses yet",
             )

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
@@ -7,11 +7,64 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { toast } from 'sonner'
+import { adminKey } from './api'
 import { LimitsDialog, SendingState } from './MailSending'
 import { sendersKey, useUpdateMailSending, type MailSender } from './mailSendingApi'
+
+type Policy = 'off' | 'admins' | 'on'
+const POLICIES: Policy[] = ['off', 'admins', 'on']
+const policyKey = [...adminKey, 'mail-outside-sending'] as const
+
+/**
+ * Who may send mail to outside addresses: nobody, administrators, or
+ * everyone. Stored by the server and applied at once; MAIL_OUTSIDE_SENDING
+ * only gives its first value (docs/self-hosting.md).
+ */
+function OutsidePolicy() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const policy = useQuery({
+    queryKey: policyKey,
+    queryFn: async () => (await api.get<{ outsideSending: Policy }>('/admin/mail/outside-sending')).data.outsideSending,
+  })
+  const save = useMutation({
+    mutationFn: async (outsideSending: Policy) => (await api.put<{ outsideSending: Policy }>('/admin/mail/outside-sending', { outsideSending })).data.outsideSending,
+    onSuccess: async (value) => {
+      queryClient.setQueryData(policyKey, value)
+      toast.success(t('admin.mailSending.policySaved'))
+      await queryClient.invalidateQueries({ queryKey: ['mail'] })
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+  })
+  if (policy.isError) return <Alert variant="error">{apiErrorMessage(policy.error, t('common.tryAgain'))}</Alert>
+  return (
+    <section className="mb-6 flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+      <span>
+        <label htmlFor="outside-sending" className="block text-sm font-medium">
+          {t('admin.mailSending.policyLabel')}
+        </label>
+        <span className="block text-sm text-muted-foreground">{t('admin.mailSending.policyHint')}</span>
+      </span>
+      <Select value={policy.data ?? ''} disabled={policy.isPending || save.isPending} onValueChange={(value) => save.mutate(value as Policy)}>
+        <SelectTrigger id="outside-sending" className="sm:w-56" aria-label={t('admin.mailSending.policyLabel')}>
+          <SelectValue placeholder={t('common.loading')} />
+        </SelectTrigger>
+        <SelectContent>
+          {POLICIES.map((value) => (
+            <SelectItem key={value} value={value}>
+              {t(`admin.mailSending.policy.${value}`)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </section>
+  )
+}
 
 /**
  * Who sends mail outside the server, and how it goes (docs/plans/mail.md,
@@ -31,6 +84,7 @@ export function MailSendingPage() {
   return (
     <PageBody>
       <PageHeader title={t('admin.mailSending.title')} description={t('admin.mailSending.description')} />
+      <OutsidePolicy />
       <label className="mb-4 flex items-center gap-2 text-sm">
         <Checkbox checked={attention} onCheckedChange={(on) => setAttention(on === true)} />
         {t('admin.mailSending.attentionOnly')}

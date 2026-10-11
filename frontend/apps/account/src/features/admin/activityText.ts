@@ -18,6 +18,7 @@ const ACTION_KEYS: Record<string, string> = {
   'settings.update': 'settingsUpdate',
   'maps.settings.update': 'mapsSettingsUpdate',
   'mail.sending.update': 'mailSendingUpdate',
+  'mail.outside_sending.update': 'mailOutsideSendingUpdate',
   'federation.policy.update': 'federationPolicyUpdate',
   'federation.rule.upsert': 'federationRuleUpsert',
   'federation.rule.delete': 'federationRuleDelete',
@@ -51,6 +52,9 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     domain: text(e.payload.domain),
     feature: text(e.payload.feature),
     mode: text(e.payload.mode),
+    // Outside sending's policy, as the page names it.
+    from: text(e.payload.from) ? t(`admin.mailSending.policy.${text(e.payload.from)}`) : '',
+    to: text(e.payload.to) ? t(`admin.mailSending.policy.${text(e.payload.to)}`) : '',
     action: e.action,
   }
   return key ? t(`admin.activity.actions.${key}`, values) : t('admin.activity.actions.unknown', values)
