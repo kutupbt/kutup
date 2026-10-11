@@ -160,7 +160,7 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: PlaceKey, q: string, group?: string, conversations = false) => ['mail', 'folder', folder, q, group ?? null, conversations] as const
+const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest'] as const
 const countsKey = (group?: string, conversations = false) => ['mail', 'counts', group ?? null, conversations] as const
 const threadKey = (id: string, group?: string) => ['mail', 'thread', id, group ?? null] as const
 const contentKey = (id: string) => ['mail', 'content', id] as const
@@ -289,15 +289,40 @@ export function useSaveAutoReply() {
 }
 
 /** A page of one place; by conversation when `conversations` (the account's View mode). */
-export function useFolder(folder: PlaceKey, q = '', group?: string, conversations = false, enabled = true) {
+/** Proton's list filters: Unread, Read, Has attachments. */
+export type ListFilter = 'unread' | 'read' | 'attachments'
+/** Proton's sort options. */
+export type ListSort = 'newest' | 'oldest' | 'largest' | 'smallest'
+
+/** How a place is listed: searched, in a shared mailbox, by conversation, filtered, sorted. */
+export interface ListView {
+  q?: string
+  group?: string
+  /** One row per conversation (the account's View mode). */
+  conversations?: boolean
+  filter?: ListFilter | null
+  sort?: ListSort
+}
+
+export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true) {
+  const { q, group, conversations, filter, sort } = view
   return useInfiniteQuery({
-    queryKey: folderKey(folder, q, group, conversations),
+    queryKey: folderKey(folder, view),
     enabled,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) =>
       (
         await api.get<Page>('/mail/messages', {
-          params: { folder, ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}), limit: 50, ...scoped(group), ...(conversations ? { conversations: true } : {}) },
+          params: {
+            folder,
+            ...(q ? { q } : {}),
+            ...(pageParam ? { before: pageParam } : {}),
+            limit: 50,
+            ...scoped(group),
+            ...(conversations ? { conversations: true } : {}),
+            ...(filter === 'unread' ? { unread: true } : filter === 'read' ? { unread: false } : filter === 'attachments' ? { attachments: true } : {}),
+            ...(sort && sort !== 'newest' ? { sort } : {}),
+          },
         })
       ).data,
     getNextPageParam: (last) => last.next ?? null,

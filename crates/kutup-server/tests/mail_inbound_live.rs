@@ -3369,3 +3369,124 @@ fn outside_sending_is_set_by_administrators() {
     assert_eq!(set(&admin, "on"), 200);
     assert!(allowed(&user.token));
 }
+
+#[test]
+fn list_filters_and_sorts() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    // Bob writes to Alice: `body` sets the size, `attachments` the count.
+    let send = |subject: &str, body: &str, attachments: i32| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\n{body}\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "attachmentCount": attachments,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let subjects = |query: &str| -> (Vec<String>, Option<String>) {
+        let page: Value = bearer(
+            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        (
+            page["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["subject"].as_str().unwrap().to_string())
+                .collect(),
+            page["next"].as_str().map(str::to_string),
+        )
+    };
+
+    let small = send("küçük", "a", 0);
+    std::thread::sleep(Duration::from_millis(20));
+    let large = send("büyük", &"b".repeat(20_000), 2);
+    std::thread::sleep(Duration::from_millis(20));
+    let middle = send("orta", &"c".repeat(5_000), 0);
+    wait_for(&c, &base, &alice, &small);
+    wait_for(&c, &base, &alice, &large);
+    let middle_row = wait_for(&c, &base, &alice, &middle);
+    for conversations in ["", "&conversations=true"] {
+        assert_eq!(subjects(conversations).0, ["orta", "büyük", "küçük"]);
+        assert_eq!(
+            subjects(&format!("&sort=oldest{conversations}")).0,
+            ["küçük", "büyük", "orta"]
+        );
+        assert_eq!(
+            subjects(&format!("&sort=largest{conversations}")).0,
+            ["büyük", "orta", "küçük"]
+        );
+        assert_eq!(
+            subjects(&format!("&sort=smallest{conversations}")).0,
+            ["küçük", "orta", "büyük"]
+        );
+        assert_eq!(
+            subjects(&format!("&attachments=true{conversations}")).0,
+            ["büyük"]
+        );
+        // Pages follow the sort.
+        let (first, next) = subjects(&format!("&sort=largest&limit=2{conversations}"));
+        assert_eq!(first, ["büyük", "orta"]);
+        let next = next.expect("a next page");
+        assert_eq!(
+            subjects(&format!(
+                "&sort=largest&limit=2&before={next}{conversations}"
+            ))
+            .0,
+            ["küçük"]
+        );
+    }
+    // Read and unread.
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
+        .json(&json!({ "ids": [middle_row["id"]], "seen": true }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(subjects("&unread=true").0, ["büyük", "küçük"]);
+    assert_eq!(subjects("&unread=false").0, ["orta"]);
+    assert_eq!(
+        subjects("&unread=true&conversations=true").0,
+        ["büyük", "küçük"]
+    );
+    let r = bearer(
+        c.get(format!("{base}/api/mail/messages?folder=inbox&sort=random")),
+        &alice.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 400);
+}

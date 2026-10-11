@@ -130,6 +130,67 @@ pub struct MailListQuery {
     /// conversation grouping); the cursor then pages conversations.
     #[serde(default)]
     pub conversations: bool,
+    /// `true`: unread only; `false`: read only (Proton's Unread and Read
+    /// filters); by conversation, one with any unread message counts as
+    /// unread.
+    pub unread: Option<bool>,
+    /// Only messages (or conversations) with attachments.
+    #[serde(default)]
+    pub attachments: bool,
+    /// `newest` (the default), `oldest`, `largest` or `smallest` (Proton's
+    /// sort options); the cursor follows it.
+    pub sort: Option<String>,
+}
+
+/// How a page is ordered, as Proton's sort options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sort {
+    Newest,
+    Oldest,
+    Largest,
+    Smallest,
+}
+
+impl Sort {
+    fn parse(value: Option<&str>) -> AppResult<Self> {
+        Ok(match value.unwrap_or("newest") {
+            "newest" => Sort::Newest,
+            "oldest" => Sort::Oldest,
+            "largest" => Sort::Largest,
+            "smallest" => Sort::Smallest,
+            _ => {
+                return Err(AppError::bad_request(
+                    "sort is newest, oldest, largest or smallest",
+                ))
+            }
+        })
+    }
+
+    fn by_size(self) -> bool {
+        matches!(self, Sort::Largest | Sort::Smallest)
+    }
+
+    fn descending(self) -> bool {
+        matches!(self, Sort::Newest | Sort::Largest)
+    }
+
+    /// `ORDER BY` for `time` and `size` columns (and `id`).
+    fn order(self, time: &str, size: &str, id: &str) -> String {
+        let column = if self.by_size() { size } else { time };
+        let direction = if self.descending() { "DESC" } else { "ASC" };
+        format!("{column} {direction}, {id} {direction}")
+    }
+
+    /// The page's start: past the cursor in the sort's direction ($3 time,
+    /// $9 size, $4 id).
+    fn after(self, time: &str, size: &str, id: &str) -> String {
+        let op = if self.descending() { "<" } else { ">" };
+        if self.by_size() {
+            format!("($9::bigint IS NULL OR ({size}, {id}) {op} ($9, $4))")
+        } else {
+            format!("($3::timestamptz IS NULL OR ({time}, {id}) {op} ($3, $4))")
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -254,19 +315,38 @@ pub(crate) async fn mailbox(
     Ok(Mailbox::Shared(group))
 }
 
-/// A page cursor: the last message's arrival time and id.
-fn cursor(received_at: OffsetDateTime, id: Uuid) -> String {
-    format!("{}_{id}", received_at.unix_timestamp_nanos())
+/// A page cursor: the last row's sort key (arrival time in nanoseconds, or
+/// size in bytes) and id.
+fn cursor(key: i128, id: Uuid) -> String {
+    format!("{key}_{id}")
 }
 
-fn parse_cursor(value: &str) -> AppResult<(OffsetDateTime, Uuid)> {
+/// Where a page starts: an arrival time or a size, with the id after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Cursor {
+    time: Option<OffsetDateTime>,
+    size: Option<i64>,
+    id: Uuid,
+}
+
+fn parse_cursor(value: &str, sort: Sort) -> AppResult<Cursor> {
     let bad = || AppError::bad_request("before is not a cursor");
-    let (nanos, id) = value.split_once('_').ok_or_else(bad)?;
-    let nanos: i128 = nanos.parse().map_err(|_| bad())?;
-    Ok((
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| bad())?,
-        Uuid::parse_str(id).map_err(|_| bad())?,
-    ))
+    let (key, id) = value.split_once('_').ok_or_else(bad)?;
+    let key: i128 = key.parse().map_err(|_| bad())?;
+    let id = Uuid::parse_str(id).map_err(|_| bad())?;
+    Ok(if sort.by_size() {
+        Cursor {
+            time: None,
+            size: Some(i64::try_from(key).map_err(|_| bad())?),
+            id,
+        }
+    } else {
+        Cursor {
+            time: Some(OffsetDateTime::from_unix_timestamp_nanos(key).map_err(|_| bad())?),
+            size: None,
+            id,
+        }
+    })
 }
 
 /// `GET /api/mail/messages?folder=&q=&before=&limit=` — one folder (or
@@ -308,7 +388,17 @@ pub async fn list_messages(
             .await?
             .almost_all_mail;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
-    let before = query.before.as_deref().map(parse_cursor).transpose()?;
+    let sort = Sort::parse(query.sort.as_deref())?;
+    let before = query
+        .before
+        .as_deref()
+        .map(|value| parse_cursor(value, sort))
+        .transpose()?;
+    let filters = Filters {
+        unread: query.unread,
+        attachments: query.attachments,
+        sort,
+    };
     let search = query
         .q
         .as_deref()
@@ -340,26 +430,33 @@ pub async fn list_messages(
                  OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
     if query.conversations {
         return list_conversations(
-            &state, owner, place, place_id, almost_all, search, before, limit, WHERE,
+            &state, owner, place, place_id, almost_all, search, before, limit, WHERE, filters,
         )
         .await;
     }
+    let after = sort.after("received_at", "size_bytes", "id");
+    let order = sort.order("received_at", "size_bytes", "id");
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS}
            FROM mail_messages
           WHERE {WHERE}
-            AND ($3::timestamptz IS NULL OR (received_at, id) < ($3, $4))
-          ORDER BY received_at DESC, id DESC
+            AND ($10::bool IS NULL OR seen <> $10)
+            AND (NOT $11 OR attachment_count > 0)
+            AND {after}
+          ORDER BY {order}
           LIMIT $5"
     ))
     .bind(owner)
     .bind(place)
-    .bind(before.map(|(at, _)| at))
-    .bind(before.map(|(_, id)| id))
+    .bind(before.and_then(|c| c.time))
+    .bind(before.map(|c| c.id))
     .bind(limit + 1)
     .bind(search)
     .bind(place_id)
     .bind(almost_all)
+    .bind(before.and_then(|c| c.size))
+    .bind(filters.unread)
+    .bind(filters.attachments)
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > limit;
@@ -368,11 +465,23 @@ pub async fn list_messages(
         .take(limit as usize)
         .map(MailMessage::from)
         .collect();
-    let next = more
-        .then(|| messages.last())
-        .flatten()
-        .map(|last| cursor(last.received_at, Uuid::parse_str(&last.id).expect("own id")));
+    let next = more.then(|| messages.last()).flatten().map(|last| {
+        let key = if sort.by_size() {
+            i128::from(last.size)
+        } else {
+            last.received_at.unix_timestamp_nanos()
+        };
+        cursor(key, Uuid::parse_str(&last.id).expect("own id"))
+    });
     Ok(Json(MailMessagePage { messages, next }))
+}
+
+/// The list's filters and order beyond the place and the search.
+#[derive(Clone, Copy, Debug)]
+struct Filters {
+    unread: Option<bool>,
+    attachments: bool,
+    sort: Sort,
 }
 
 type ConversationRow = (
@@ -383,10 +492,13 @@ type ConversationRow = (
     bool,
     sqlx::types::Json<Vec<MailMailbox>>,
     i64,
+    i64,
 );
 
 /// [`list_messages`] by conversation: each thread's newest message in the
-/// place, newest conversation first, with what the row stands for.
+/// place, in the sort's order (by its newest arrival, or by its messages'
+/// size together, as Proton sorts conversations), with what the row stands
+/// for.
 #[allow(clippy::too_many_arguments)]
 async fn list_conversations(
     state: &AppState,
@@ -395,14 +507,18 @@ async fn list_conversations(
     place_id: Option<Uuid>,
     almost_all: bool,
     search: Option<String>,
-    before: Option<(OffsetDateTime, Uuid)>,
+    before: Option<Cursor>,
     limit: i64,
     place_filter: &str,
+    filters: Filters,
 ) -> AppResult<Json<MailMessagePage>> {
+    let sort = filters.sort;
+    let after = sort.after("t.last_at", "t.total_size", "t.latest");
+    let order = sort.order("t.last_at", "t.total_size", "t.latest");
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
         "WITH here AS (
              SELECT id, thread_id, folder, direction, custom_folder, received_at, seen, starred,
-                    from_address, from_name, attachment_count
+                    from_address, from_name, attachment_count, size_bytes
                FROM mail_messages
               WHERE {place_filter}
          ), threads AS (
@@ -414,7 +530,8 @@ async fn list_conversations(
                               ORDER BY received_at, id) AS members,
                     count(*) FILTER (WHERE NOT seen) AS unread,
                     bool_or(starred) AS starred,
-                    sum(attachment_count)::bigint AS attachments
+                    sum(attachment_count)::bigint AS attachments,
+                    sum(size_bytes)::bigint AS total_size
                FROM here GROUP BY thread_id
          )
          SELECT t.latest, t.last_at, t.members, t.unread, t.starred,
@@ -424,20 +541,25 @@ async fn list_conversations(
                                          min(received_at) AS first_at
                                     FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
                                    GROUP BY from_address) s), '[]'::jsonb),
-                t.attachments
+                t.attachments, t.total_size
            FROM threads t
-          WHERE ($3::timestamptz IS NULL OR (t.last_at, t.latest) < ($3, $4))
-          ORDER BY t.last_at DESC, t.latest DESC
+          WHERE ($10::bool IS NULL OR (t.unread > 0) = $10)
+            AND (NOT $11 OR t.attachments > 0)
+            AND {after}
+          ORDER BY {order}
           LIMIT $5"
     ))
     .bind(owner)
     .bind(place)
-    .bind(before.map(|(at, _)| at))
-    .bind(before.map(|(_, id)| id))
+    .bind(before.and_then(|c| c.time))
+    .bind(before.map(|c| c.id))
     .bind(limit + 1)
     .bind(search)
     .bind(place_id)
     .bind(almost_all)
+    .bind(before.and_then(|c| c.size))
+    .bind(filters.unread)
+    .bind(filters.attachments)
     .fetch_all(&state.pool)
     .await?;
     let more = threads.len() as i64 > limit;
@@ -452,24 +574,30 @@ async fn list_conversations(
     .await?;
     let mut by_id: std::collections::HashMap<Uuid, Row> =
         rows.into_iter().map(|r| (r.id, r)).collect();
-    let next = more
-        .then(|| threads.last())
-        .flatten()
-        .map(|(id, at, ..)| cursor(*at, *id));
+    let next = more.then(|| threads.last()).flatten().map(|row| {
+        let key = if sort.by_size() {
+            i128::from(row.7)
+        } else {
+            row.1.unix_timestamp_nanos()
+        };
+        cursor(key, row.0)
+    });
     let messages = threads
         .into_iter()
-        .filter_map(|(id, _, members, unread, starred, senders, attachments)| {
-            // Moved or deleted between the two reads: left for the next refresh.
-            let mut message = MailMessage::from(by_id.remove(&id)?);
-            message.conversation = Some(MailConversation {
-                members: members.0,
-                unread,
-                starred,
-                senders: senders.0,
-                attachment_count: attachments,
-            });
-            Some(message)
-        })
+        .filter_map(
+            |(id, _, members, unread, starred, senders, attachments, _)| {
+                // Moved or deleted between the two reads: left for the next refresh.
+                let mut message = MailMessage::from(by_id.remove(&id)?);
+                message.conversation = Some(MailConversation {
+                    members: members.0,
+                    unread,
+                    starred,
+                    senders: senders.0,
+                    attachment_count: attachments,
+                });
+                Some(message)
+            },
+        )
         .collect();
     Ok(Json(MailMessagePage { messages, next }))
 }
@@ -955,8 +1083,31 @@ mod tests {
     fn cursors_round_trip() {
         let at = OffsetDateTime::from_unix_timestamp_nanos(1_791_529_200_123_456_789).unwrap();
         let id = Uuid::new_v4();
-        assert_eq!(parse_cursor(&cursor(at, id)).unwrap(), (at, id));
-        assert!(parse_cursor("nope").is_err());
-        assert!(parse_cursor("1_notauuid").is_err());
+        let by_time = parse_cursor(&cursor(at.unix_timestamp_nanos(), id), Sort::Newest).unwrap();
+        assert_eq!(
+            (by_time.time, by_time.size, by_time.id),
+            (Some(at), None, id)
+        );
+        let by_size = parse_cursor(&cursor(4096, id), Sort::Smallest).unwrap();
+        assert_eq!(
+            (by_size.time, by_size.size, by_size.id),
+            (None, Some(4096), id)
+        );
+        assert!(parse_cursor("nope", Sort::Newest).is_err());
+        assert!(parse_cursor("1_notauuid", Sort::Oldest).is_err());
+    }
+
+    #[test]
+    fn sorts_order_and_page_both_ways() {
+        assert_eq!(Sort::parse(None).unwrap(), Sort::Newest);
+        assert!(Sort::parse(Some("random")).is_err());
+        assert_eq!(Sort::Oldest.order("t", "s", "id"), "t ASC, id ASC");
+        assert_eq!(Sort::Largest.order("t", "s", "id"), "s DESC, id DESC");
+        assert!(Sort::Smallest
+            .after("t", "s", "id")
+            .contains("(s, id) > ($9, $4)"));
+        assert!(Sort::Newest
+            .after("t", "s", "id")
+            .contains("(t, id) < ($3, $4)"));
     }
 }

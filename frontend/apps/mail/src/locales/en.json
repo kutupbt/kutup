@@ -618,5 +618,22 @@
     "densityHint": "How much of the list fits on screen.",
     "comfortable": "Comfortable",
     "compact": "Compact"
+  },
+  "listFilter": {
+    "unread": "Unread",
+    "read": "Read",
+    "attachments": "Has attachments",
+    "filter": "Filter",
+    "filterCount": "Filter ({{count}})",
+    "title": "Filter and sort emails",
+    "sortBy": "Sort by",
+    "sort": {
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "largest": "Largest first",
+      "smallest": "Smallest first"
+    },
+    "reset": "Reset",
+    "empty": "No messages match these filters."
   }
 }
