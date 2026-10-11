@@ -29,6 +29,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openBlockSender } from './blockState'
 import { openComposer } from './composerState'
+import { replyCommand } from './messageCommands'
 import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
@@ -308,7 +309,15 @@ export function MailboxPage() {
         })
         break
       case 'r':
-        actions.mark(targets(), { seen: true })
+        // With a conversation open (and nothing chosen), R replies, as Proton's message keys.
+        if (threadId && chosen.length === 0) replyCommand('reply')
+        else actions.mark(targets(), { seen: true })
+        break
+      case 'R':
+        if (threadId) replyCommand('replyAll')
+        break
+      case 'F':
+        if (threadId) replyCommand('forward')
         break
       case 'a':
       case 'i':

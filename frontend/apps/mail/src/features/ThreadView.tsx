@@ -173,11 +173,12 @@ export function ThreadView({
           onRemove={(id) => actions.mark(shown, { removeLabels: [id] })}
           className="flex-wrap"
         />
-        {shown.map((message) => (
+        {shown.map((message, index) => (
           <MessageView
             key={message.id}
             account={account}
             message={message}
+            latest={index === shown.length - 1}
             expanded={expanded.has(message.id)}
             onToggle={() =>
               setExpanded((now) => {

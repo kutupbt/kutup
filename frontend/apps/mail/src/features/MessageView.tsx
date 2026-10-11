@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Download, Forward, Paperclip, Reply, ReplyAll, UserPlus, X } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, Code, Download, Forward, MoreHorizontal, Paperclip, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useContactLookup, usePinKey } from '@kutup/contacts-core/api'
@@ -9,11 +9,15 @@ import { useOpenedMessage, usePinnedKeys, type MailAccount, type MailMessage, ty
 import type { Mailbox, ParsedAttachment } from '@kutup/mail-core/mime'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Skeleton } from '@kutup/ui/components/skeleton'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { formatBytes, formatInstant, formatFileDate } from '@kutup/ui/lib/format'
 import { cn } from '@kutup/ui/lib/cn'
 import { openComposer } from './composerState'
+import { onReplyCommand } from './messageCommands'
+import { printDocument, printHtml } from './printMessage'
 import { MailBody } from './MailBody'
 import { useGroupScope, useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
@@ -32,6 +36,13 @@ function download(name: string, type: string, bytes: Uint8Array) {
   link.download = name
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
+}
+
+/** The header block of a raw message, as it arrived (Proton's "View headers"). */
+function headerBlock(raw: Uint8Array): string {
+  const text = new TextDecoder().decode(raw.subarray(0, Math.min(raw.length, 512 * 1024)))
+  const end = text.search(/\r?\n\r?\n/)
+  return (end >= 0 ? text.slice(0, end) : text).replace(/\r\n/g, '\n')
 }
 
 type Lookup = ReturnType<typeof useContactLookup>
@@ -186,11 +197,14 @@ export function MessageView({
   message,
   expanded,
   onToggle,
+  latest = false,
 }: {
   account: MailAccount
   message: MailMessage
   expanded: boolean
   onToggle: () => void
+  /** The open conversation's newest message: R, Shift+R and Shift+F answer it. */
+  latest?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const contacts = useContactLookup()
@@ -202,6 +216,25 @@ export function MessageView({
   const parsed = opened.data?.parsed
   const from = parsed?.from ?? message.from
   const draft = message.folder === 'drafts'
+  // Proton's "View HTML": the body's source in place of the body.
+  const [source, setSource] = useState(false)
+  const [headersOpen, setHeadersOpen] = useState(false)
+  const openedData = opened.data
+
+  useEffect(() => {
+    if (!latest || draft || !openedData) return
+    return onReplyCommand((kind) => openComposer({ kind, message, opened: openedData, fromGroup: group }))
+  }, [latest, draft, openedData, message, group])
+
+  function print() {
+    if (!openedData) return
+    const inline = new Map<string, string>()
+    for (const part of openedData.parsed.attachments) {
+      if (part.contentId && part.mimeType.startsWith('image/')) inline.set(part.contentId, URL.createObjectURL(new Blob([part.content as BlobPart], { type: part.mimeType })))
+    }
+    const when = formatInstant(message.sentAt ?? message.receivedAt, i18n.language) ?? ''
+    printHtml(printDocument(openedData.parsed, { from: t('read.from'), to: t('read.to'), cc: t('read.cc'), date: t('read.date') }, when, inline))
+  }
 
   if (!expanded) {
     return (
@@ -223,7 +256,9 @@ export function MessageView({
       <header
         className="flex cursor-pointer items-start gap-3 border-b border-border px-4 py-3"
         onClick={(e) => {
-          // Clicks on people and links open their cards; the rest folds the message.
+          // Clicks on people and links open their cards; the rest folds the message. Clicks in its
+          // menus and dialogs (portals, outside the header) bubble here through React too: not those.
+          if (!e.currentTarget.contains(e.target as Node)) return
           if ((e.target as HTMLElement).closest('button, a') || window.getSelection()?.toString()) return
           onToggle()
         }}
@@ -250,6 +285,36 @@ export function MessageView({
           <span className="text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
             {formatFileDate(message.receivedAt, i18n.language)}
           </span>
+          {openedData ? (
+            <DropdownMenu>
+              <Tooltip label={t('read.more')}>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" aria-label={t('read.more')} className="rounded p-0.5 text-muted-foreground hover:bg-muted">
+                    <MoreHorizontal className="size-4" />
+                  </button>
+                </DropdownMenuTrigger>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem onSelect={() => download(`${(parsed?.subject || 'message').slice(0, 80)}.eml`, 'message/rfc822', openedData.raw)}>
+                  <Download />
+                  {t('read.export')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={print}>
+                  <Printer />
+                  {t('read.print')}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setHeadersOpen(true)}>
+                  <ScrollText />
+                  {t('read.viewHeaders')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setSource((on) => !on)}>
+                  <Code />
+                  {source ? t('read.viewRendered') : t('read.viewHtml')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <Tooltip label={t('read.collapse')}>
             <button type="button" onClick={onToggle} aria-label={t('read.collapse')} aria-expanded className="rounded p-0.5 text-muted-foreground hover:bg-muted">
               <ChevronDown className="size-4" />
@@ -285,7 +350,13 @@ export function MessageView({
               />
             )}
             {opened.data.offeredKey && from ? <OfferedKey address={from.address} name={from.name} offered={opened.data.offeredKey} /> : null}
-            <MailBody parsed={opened.data.parsed} />
+            {source ? (
+              <pre aria-label={t('read.htmlSource')} className="max-h-[32rem] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">
+                {opened.data.parsed.html ?? opened.data.parsed.text ?? ''}
+              </pre>
+            ) : (
+              <MailBody parsed={opened.data.parsed} />
+            )}
             <Attachments list={opened.data.parsed.attachments} />
             <div className="flex flex-wrap gap-2 pt-1">
               {draft ? (
@@ -308,20 +379,28 @@ export function MessageView({
                   </Button>
                 </>
               )}
-              <Tooltip label={t('read.downloadOriginal')}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t('read.downloadOriginal')}
-                  onClick={() => download(`${(parsed?.subject || 'message').slice(0, 80)}.eml`, 'message/rfc822', opened.data.raw)}
-                >
-                  <Download />
-                </Button>
-              </Tooltip>
             </div>
           </>
         )}
       </div>
+      {headersOpen && openedData ? (
+        <Dialog open onOpenChange={(open) => !open && setHeadersOpen(false)}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>{t('read.headersTitle')}</DialogTitle>
+            </DialogHeader>
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">{headerBlock(openedData.raw)}</pre>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setHeadersOpen(false)}>
+                {t('common.close')}
+              </Button>
+              <Button onClick={() => download(`headers - ${(parsed?.subject || 'message').slice(0, 80)}.txt`, 'text/plain', new TextEncoder().encode(headerBlock(openedData.raw)))}>
+                {t('read.download')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </article>
   )
 }
