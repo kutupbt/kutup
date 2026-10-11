@@ -2601,7 +2601,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "signOutside": true })
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
@@ -2628,12 +2628,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30 }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "signOutside": false }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "signOutside": false })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),

@@ -15,6 +15,7 @@ import {
   UnknownRecipient,
   useMailAccount,
   useMailRefresh,
+  useMailSettings,
   usePinnedKeys,
   useSendingStatus,
   type Draft,
@@ -194,6 +195,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const refresh = useMailRefresh()
   const sendingStatus = useSendingStatus()
   const pinned = usePinnedKeys()
+  const mailSettings = useMailSettings()
   // Shared mailboxes this account may write as (docs/plans/mail-groups.md).
   const groups = useMyGroups()
   const sendAsChoices = (groups.data ?? []).filter((group) => group.kind === 'shared' && group.myCanSendAs)
@@ -215,7 +217,12 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [sending, setSending] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
   const [encrypt, setEncrypt] = useState(true)
-  const [sign, setSign] = useState(true)
+  // Sign starts on for Kutup recipients; for outside ones from "Sign outside
+  // mail" or a contact's Sign flag, as Proton's "Sign external messages".
+  // Pressing the button decides it for this message.
+  const [signChoice, setSignChoice] = useState<boolean | undefined>()
+  const signOutside = mailSettings.data?.signOutside ?? true
+  const sign = signChoice ?? (signOutside || outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.sign))
   const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && m.address.toLowerCase().endsWith(`@${account.domain}`))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)
@@ -606,7 +613,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               </Button>
             </Tooltip>
             <Tooltip label={sign ? t('compose.signOn') : t('compose.signOff')}>
-              <Button variant={sign ? 'ghost' : 'outline'} size="sm" aria-pressed={sign} onClick={() => setSign((on) => !on)}>
+              <Button variant={sign ? 'ghost' : 'outline'} size="sm" aria-pressed={sign} onClick={() => setSignChoice(!sign)}>
                 <Signature className={sign ? 'text-primary' : 'text-muted-foreground'} />
                 {t('compose.sign')}
               </Button>

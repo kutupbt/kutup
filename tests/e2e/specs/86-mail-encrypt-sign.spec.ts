@@ -5,6 +5,7 @@ import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 // Encrypt off, a Kutup recipient gets the message readable on the way (the
 // composer says so, the chip shows an open lock), stored zero-access, signed
 // and verified against the sender's key list; with Sign off, end to end but
+// unsigned. With "Sign outside mail" off, mail to an outside address starts
 // unsigned.
 
 const PASSWORD = 'Deneme123*MailEncryptSignPassword'
@@ -71,6 +72,16 @@ test('Encrypt off (readable, signed, verified) and Sign off (end to end, unsigne
   await bobMail.getByRole('link', { name: new RegExp(unsigned) }).click()
   await expect(bobMail.frameLocator('iframe[title="Message"]').last().getByText(`${unsigned} gövdesi`)).toBeVisible({ timeout: 60_000 })
   await expect(bobMail.getByRole('article').getByRole('img', { name: 'End-to-end encrypted' })).toBeVisible()
+
+  // "Sign outside mail" off: an outside recipient starts with Sign off.
+  await mail.goto(appUrl('mail', '/settings/general'))
+  const signOutside = mail.getByRole('checkbox', { name: /Sign outside mail/ })
+  await expect(signOutside).toBeChecked()
+  await signOutside.click()
+  await expect(mail.getByText('Preference saved.').first()).toBeVisible()
+  await expect(signOutside).not.toBeChecked()
+  composer = await compose(mail, `someone-${tag}@example.org`, `Dışarı ${tag}`)
+  await expect(composer.getByRole('button', { name: 'Sign' })).toHaveAttribute('aria-pressed', 'false')
 
   await aliceContext.close()
   await bobContext.close()

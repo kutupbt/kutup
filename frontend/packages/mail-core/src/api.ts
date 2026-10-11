@@ -446,6 +446,8 @@ export interface MailSettings {
   autoDeleteDays: 0 | 30
   /** All mail leaves out Spam and Trash. */
   almostAllMail: boolean
+  /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
+  signOutside: boolean
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const

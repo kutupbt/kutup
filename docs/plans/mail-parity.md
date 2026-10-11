@@ -57,8 +57,8 @@ reference only where Proton has nothing.
 | From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ❌ (suggestions only) |
 | Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
-| Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | 🔶 per-contact flags on pinned keys; no account setting |
-| Per-message Encrypt and Sign toggles in the composer | (none) | 🔶 beyond Proton, in a pull request ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
+| Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ per-contact flags on pinned keys, "Sign outside mail" in General |
+| Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ❌ |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ❌ |
 | Expiring messages | `ComposerExpirationModal.tsx` | ❌ |

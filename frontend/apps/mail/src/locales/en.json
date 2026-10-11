@@ -486,7 +486,9 @@
     "autoDelete": "Auto-delete unwanted messages",
     "autoDeleteHint": "Delete Trash and Spam messages after 30 days. Turning it on counts messages already there from now.",
     "almostAllMail": "Exclude Spam/Trash from All mail",
-    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash."
+    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash.",
+    "signOutside": "Sign outside mail",
+    "signOutsideHint": "New mail to people outside Kutup starts signed with your key, so they can check it came from you. Mail between Kutup users always starts signed. You can still turn Sign off for one message."
   },
   "senders": {
     "title": "Block and allow",

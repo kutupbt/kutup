@@ -1,6 +1,6 @@
 # Mail: Encrypt and Sign per message
 
-**Status:** agreed 2026-10-11; slices 1–3 built on `feat/mail-encrypt-sign`, except the "Sign outside mail" setting, which joins Mail → Settings → General once that page (#101) is on master; until then Sign starts on. ([`mail-parity.md`](mail-parity.md))
+**Status:** agreed 2026-10-11; slices 1–3 built on `feat/mail-encrypt-sign`, the "Sign outside mail" setting in Mail → Settings → General. ([`mail-parity.md`](mail-parity.md))
 Goes beyond Proton, which has no per-message switches.
 
 ## Goal
