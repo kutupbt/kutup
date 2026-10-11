@@ -311,7 +311,14 @@
     "cannotVerifyTitle": "Henüz doğrulanacak bir şey yok",
     "cannotVerify": "{{account}} Drive anahtarlarını henüz imzalamadı. Bir sonraki girişinde imzalar.",
     "lookupFailedTitle": "Bilgileri alınamadı",
-    "lookupFailed": "Kimliği şu anda getirilemedi. Biraz sonra yeniden deneyin."
+    "lookupFailed": "Kimliği şu anda getirilemedi. Biraz sonra yeniden deneyin.",
+    "state": {
+      "verified": "Doğrulandı",
+      "unverified": "Doğrulanmadı",
+      "unproven": "Anahtarlar henüz onaylanmadı",
+      "changed": "Kimlik değişti",
+      "invalid": "Kimlik onaylanamadı"
+    }
   },
   "safetyNumber": {
     "cameraUnavailable": "Kameraya erişilemedi. Onun yerine QR değerini yapıştır.",

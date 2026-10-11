@@ -48,10 +48,14 @@ the type 2 card.
 ### Verified people
 
 For Kutup users, verification already exists: a pin on the account authority
-(gray, green and red shields) kept by Chat and Drive. Phase B shows a contact's
-Kutup address with that account's state where the app holds the pin. A
-contact-held copy of the pin, so every app sees the same shield without asking
-Chat, is part of slice B4. For outside PGP users, the summary pins their key
+(gray, green and red shields) kept by Chat and Drive. Since the pins became one synced list for the
+whole account (docs/plans/drive-identity-pins.md), Contacts reads that list
+directly instead of keeping its own copy: a contact's Kutup address carries
+the shield (`@kutup/drive-ui/IdentityShield`: "Not verified", "Verified",
+"Identity changed"), which opens the safety number to compare in person. It
+shows for an address on this server, or on another Kutup server already in
+the list; an ordinary email address is never looked up. Mail's person card
+can use the same component. For outside PGP users, the summary pins their key
 fingerprint (`pinnedKeys`, with its encrypt and sign preferences), as
 Proton's `KEY` field does, and the sealed vCard holds the key itself in
 Proton's form (`ITEM1.EMAIL`, `ITEM1.KEY:data:application/pgp-keys;base64,…`,

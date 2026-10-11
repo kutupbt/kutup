@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDriveIdentity } from './identity'
-import { acceptIdentity, checkIdentity, IdentityUnproven, personSafetyNumber, verifyPerson, type ClaimedKeys } from './identityPins'
+import { acceptIdentity, checkIdentity, IdentityUnproven, isPinned, personSafetyNumber, verifyPerson, type ClaimedKeys } from './identityPins'
 import type { Folder } from './model'
 
 const statusKey = ['identity-status'] as const
@@ -25,6 +25,24 @@ export function useIdentityStatus(account: string | null | undefined, claimed: C
     staleTime: Infinity,
     queryFn: () => checkIdentity(identity.data!, account!, claimed),
   })
+}
+
+/**
+ * Whether an address is a Kutup account worth a shield: one on this server,
+ * or one in the list of people met before. Others (an ordinary email
+ * address) are never looked up, so no other server learns who is asked about.
+ */
+export function useIsKutupAccount(address: string | null | undefined) {
+  const identity = useDriveIdentity()
+  const account = address?.trim().toLowerCase() ?? ''
+  const local = Boolean(identity.data && account.endsWith(`@${identity.data.account.split('@')[1]}`))
+  const listed = useQuery({
+    queryKey: [...statusKey, 'listed', account],
+    enabled: Boolean(account && identity.data && !local),
+    staleTime: Infinity,
+    queryFn: () => isPinned(identity.data!, account),
+  })
+  return Boolean(account) && (local || listed.data === true)
 }
 
 /** Trust `account`'s new identity from now on (after a reset the user knows about). */

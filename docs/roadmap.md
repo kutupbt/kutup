@@ -854,8 +854,6 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
 Drive, Chat and the CLI share one list of trusted identities and one safety
 number (docs/plans/drive-identity-pins.md). Still to do:
 
-- Contacts shows each person's state from the list (gray, green, red shield)
-  on their page, as the Contacts plan foresaw.
 - The native apps' own screens for the shield and the verification dialog
   (their Chat engine already keeps to the list).
 
