@@ -20,6 +20,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
+import { sanitizeSignature } from './sanitize'
 import { buildBody, buildMessage, buildPgpMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
@@ -81,8 +82,10 @@ export interface FolderCount {
 export interface MailAccount {
   address: string
   domain: string
-  /** The display name outgoing mail carries. */
+  /** The display name outgoing mail carries (Mail → Settings → Identity). */
   name: string
+  /** The signature new messages start with (HTML, sanitised); empty for none. */
+  signature: string
   publicKey: string
   /** The primary key: it signs, and new mail is encrypted to it. */
   key: SealedMailKey
@@ -155,6 +158,10 @@ export function useMailAccount() {
       }
       const primary = address?.keys.find((k) => k.primary)
       if (!address || !primary) throw new NoAddressKey()
+      const identity = await api
+        .get<MailIdentity>('/mail/identity')
+        .then((r) => r.data)
+        .catch(() => null)
       const sealed = (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
         masterKeyBase64: toBase64(session.masterKey),
         loginEmail: session.email,
@@ -165,11 +172,39 @@ export function useMailAccount() {
       return {
         address: address.address,
         domain: address.address.split('@')[1] ?? '',
-        name: session.username ?? '',
+        name: identity?.displayName || session.username || '',
+        signature: sanitizeSignature(identity?.signature ?? ''),
         publicKey: primary.publicKey,
         key: sealed(primary),
         olderKeys: address.keys.filter((k) => k !== primary).map(sealed),
       }
+    },
+  })
+}
+
+/** An address's display name and signature, as Proton's Identity settings. */
+export interface MailIdentity {
+  address: string
+  displayName: string
+  /** HTML from the signature editor. */
+  signature: string
+}
+
+export function useMailIdentity() {
+  return useQuery({
+    queryKey: ['mail', 'identity'],
+    queryFn: async () => (await api.get<MailIdentity>('/mail/identity')).data,
+  })
+}
+
+export function useUpdateMailIdentity() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (change: Partial<Pick<MailIdentity, 'displayName' | 'signature'>>) => (await api.patch<MailIdentity>('/mail/identity', change)).data,
+    onSuccess: (identity) => {
+      queryClient.setQueryData(['mail', 'identity'], identity)
+      // The composer reads both from the account.
+      void queryClient.invalidateQueries({ queryKey: ['mail', 'account'] })
     },
   })
 }

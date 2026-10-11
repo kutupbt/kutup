@@ -458,7 +458,8 @@
     "folders": "Klasörler ve etiketler",
     "filters": "Filtreler",
     "general": "Genel",
-    "senders": "Engelle ve izin ver"
+    "senders": "Engelle ve izin ver",
+    "identity": "Kimlik"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -515,5 +516,18 @@
     "blocked": "{{who}} engellendi.",
     "count_one": "{{count}} gönderici",
     "count_other": "{{count}} gönderici"
+  },
+  "identity": {
+    "title": "Kimlik",
+    "description": "{{address}} adresinden giden postalarınızın nasıl imzalanacağı.",
+    "displayName": "Görünen ad",
+    "displayNameHint": "İnsanların adresinizin yanında gördüğü ad.",
+    "nameTooLong": "Görünen ad en fazla 100 karakter olabilir.",
+    "signature": "İmza",
+    "signatureHint": "Yeni iletilere, yanıtlara ve iletmelere, alıntının üstüne eklenir. Kalın, italik, liste ve bağlantı.",
+    "link": "Bağlantı",
+    "linkPrompt": "Bağlantı adresi (https:// veya mailto:)",
+    "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
+    "addLink": "Bağlantı ekle"
   }
 }

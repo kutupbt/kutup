@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { paintsNothing, plainTextDocument, sanitizeMailHtml } from './sanitize'
+import { paintsNothing, plainTextDocument, sanitizeMailHtml, sanitizeSignature } from './sanitize'
 
 function body(document: string): string {
   return document.slice(document.indexOf('<body>') + 6, document.lastIndexOf('</body>'))
@@ -71,5 +71,13 @@ describe('sanitizeMailHtml', () => {
     expect(sanitizeMailHtml('<p style="color:#111">Hello</p>', { allowRemote: false, look }).dark).toBe(false)
     expect(plainTextDocument('Hello', look)).toContain('color-scheme: dark')
     expect(plainTextDocument('Hello')).not.toContain('color-scheme: dark')
+  })
+
+  it('keeps a signature to formatting and safe links', () => {
+    expect(sanitizeSignature('<p><strong>Ayşe</strong><br>CTO</p><script>x</script><img src="https://t/p.gif"><a href="javascript:x">a</a><a href="https://kutup.dev" onclick="x">site</a>')).toBe(
+      '<p><strong>Ayşe</strong><br>CTO</p><a>a</a><a href="https://kutup.dev">site</a>',
+    )
+    expect(sanitizeSignature('<p></p><p>x</p><p></p>')).toBe('<p>x</p>')
+    expect(sanitizeSignature('  ')).toBe('')
   })
 })

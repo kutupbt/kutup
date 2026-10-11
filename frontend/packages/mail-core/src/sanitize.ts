@@ -261,3 +261,25 @@ function frame(body: string, images: string, look?: FrameLook): string {
   ${theme}
 </style></head><body>${body}</body></html>`
 }
+
+/**
+ * A signature as the composer may hold it (docs/plans/mail-parity.md, P2):
+ * text formatting, line breaks, lists and https/mailto links only. The
+ * server stores what it is given; every browser cleans it again.
+ */
+export function sanitizeSignature(html: string): string {
+  if (!html.trim()) return ''
+  const purify = DOMPurify(window)
+  purify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.nodeName === 'A') {
+      const href = node.getAttribute('href') ?? ''
+      if (!/^(https:|mailto:)/i.test(href.trim())) node.removeAttribute('href')
+    }
+  })
+  const clean = purify.sanitize(html, {
+    ALLOWED_TAGS: ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'a', 'ul', 'ol', 'li', 'blockquote'],
+    ALLOWED_ATTR: ['href'],
+  })
+  purify.removeAllHooks()
+  return clean.replace(/^(<p><\/p>|<p><br><\/p>)+|(<p><\/p>|<p><br><\/p>)+$/g, '')
+}
