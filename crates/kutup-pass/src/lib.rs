@@ -14,6 +14,6 @@ pub mod kdbx;
 pub mod merge;
 mod refs;
 
-pub use kdbx::{open, save, KdbxError, VaultKey};
+pub use kdbx::{key_file_secret, open, save, KdbxError, VaultKey};
 pub use keepass;
 pub use merge::{merge, Conflict, MergeReport, REVIEW_KEY};

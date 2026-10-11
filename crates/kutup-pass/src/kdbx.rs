@@ -61,6 +61,24 @@ impl VaultKey {
     }
 }
 
+/// The largest key file kept as it is in a vault secret
+/// (`kutup_crypto::pass_vault::MAX_KEY_FILE_BYTES`).
+pub const MAX_KEPT_KEY_FILE_BYTES: usize = 2048;
+
+/// A key file as a vault secret keeps it: small files (KeePass's XML, 32-byte
+/// and hex key files) as they are; any larger file as its SHA-256, which
+/// KeePass treats as the same key (it hashes files that are none of those
+/// kinds, and uses a 32-byte file directly). Check that the result opens the
+/// vault before keeping it.
+pub fn key_file_secret(contents: &[u8]) -> Vec<u8> {
+    use sha2::{Digest as _, Sha256};
+    if contents.len() <= MAX_KEPT_KEY_FILE_BYTES {
+        contents.to_vec()
+    } else {
+        Sha256::digest(contents).to_vec()
+    }
+}
+
 /// Why a vault could not be opened or saved.
 #[derive(Debug, thiserror::Error)]
 pub enum KdbxError {
@@ -134,6 +152,18 @@ mod tests {
         let entry = root.entries().next().unwrap();
         assert_eq!(entry.get_password(), Some("çok-gizli-1"));
         assert!(entry.fields["Password"].is_protected());
+    }
+
+    #[test]
+    fn a_large_key_file_is_kept_as_its_hash() {
+        let large: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+        let key = VaultKey::new().with_password("p").with_key_file(&large);
+        let bytes = save(&sample(), &key).unwrap();
+        let kept = key_file_secret(&large);
+        assert_eq!(kept.len(), 32);
+        let reopened = VaultKey::new().with_password("p").with_key_file(&kept);
+        assert!(open(&bytes, &reopened).is_ok());
+        assert_eq!(key_file_secret(b"<KeyFile/>"), b"<KeyFile/>");
     }
 
     #[test]

@@ -805,6 +805,17 @@ assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, 8, resealedPins),
 assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 0, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
+// Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
+const pv = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v1.json`, 'utf8'))
+assert.deepEqual(crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: pv.keyFile })
+const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, pv.password, null)
+assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: null })
+assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, '00000000-0000-4000-8000-000000000000'))
+assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, 'bob@kutup.dev', pv.fileId))
+assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, null, null))
+// The generic account-envelope path cannot open one.
+assert.throws(() => crypto.openAccountEnvelope(pv.sealed, pv.masterKey, 6, pv.loginEmail))
+
 // The safety number every app shows (kutup-crypto safety_number, V1 vector).
 const one = Buffer.alloc(32, 1).toString('base64')
 const two = Buffer.alloc(32, 2).toString('base64')

@@ -66,6 +66,12 @@ address publishes a signed key list (`MailKeyListV1`) signed by the account
 authority, so the pin a contact holds for the account covers its mail keys
 ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)).
 
+Kutup Pass vaults are KeePass files in Drive with their own keys. A person may
+keep a vault's key in an `AccountEnvelopeV1` under the master key (purpose
+`PassVaultSecret`, its payload bound to the vault's file id), so the website
+and `kutup sync` open the vault with the Kutup sign-in
+([`plans/pass.md`](plans/pass.md)).
+
 The canonical implementation is `kutup-crypto` (`dryoc` plus RustCrypto). The
 browser consumes it through WASM; CLI and native clients call the same Rust
 implementation. A primitive-only browser adapter is allowed solely under the

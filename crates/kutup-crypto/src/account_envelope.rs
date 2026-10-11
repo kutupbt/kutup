@@ -55,6 +55,8 @@ pub enum AccountEnvelopePurpose {
     ChatBackupRoot = 4,
     /// A mail address's OpenPGP secret key (`mail_key`).
     MailAddressPrivateKey = 5,
+    /// A Kutup Pass vault's password and key file (`pass_vault`).
+    PassVaultSecret = 6,
 }
 
 impl AccountEnvelopePurpose {
@@ -73,6 +75,7 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
             3 => Ok(Self::DriveHpkePrivateKey),
             4 => Ok(Self::ChatBackupRoot),
             5 => Ok(Self::MailAddressPrivateKey),
+            6 => Ok(Self::PassVaultSecret),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-envelope purpose {value}"
             ))),

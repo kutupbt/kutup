@@ -186,6 +186,11 @@ enum Commands {
         /// Hex color #rrggbb, or "" to clear.
         hex: String,
     },
+    /// Kutup Pass: keep vault keys in your account so sync opens vaults with your sign-in.
+    Pass {
+        #[command(subcommand)]
+        command: commands::pass::PassCmd,
+    },
     /// List, restore, and permanently delete trashed items.
     Trash {
         #[command(subcommand)]
@@ -316,6 +321,7 @@ fn main() {
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
+        Commands::Pass { command } => commands::pass::run(&cli.profile, cli.json, command),
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
