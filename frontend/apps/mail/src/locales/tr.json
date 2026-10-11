@@ -100,7 +100,7 @@
     "trustKeyTitle": "{{address}} açık anahtarını gönderdi",
     "trustKeyDescription": "İletilerinin ondan geldiğini doğrulamak için bu anahtara güvenin. Ona giden e-postalar da bu anahtarla şifrelenir. Parmak izi: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} farklı bir açık anahtar gönderdi",
-    "replaceKeyDescription": "Bu, onun için güvendiğiniz anahtar değil. Yalnızca anahtarını değiştirdiğini biliyorsanız güvenin. Parmak izi: {{fingerprint}}",
+    "replaceKeyDescription": "Kişi için güvendiğiniz bir anahtar değil. Yalnızca anahtarını değiştirdiğini biliyorsanız güvenin: o zaman gönderim için kullanılır, önceden güvendiğiniz anahtarlar geçmiş olarak kalır. Parmak izi: {{fingerprint}}",
     "trustKey": "Anahtara güven",
     "keyTrusted": "{{address}} için anahtara güvenildi.",
     "trustFailed": "Anahtar Kişiler'e kaydedilemedi.",

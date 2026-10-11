@@ -1,12 +1,14 @@
 import ICAL from 'ical.js'
-import { emptyDraft, type ContactDraft, type ContactKey } from './model'
+import { emptyDraft, type ContactDraft, type ContactEmailPgp, type ContactKey } from './model'
 
 // vCard text in and out, with ical.js as Proton does (docs/plans/contacts.md).
 // Kutup writes vCard 4.0; it reads 3.0 and 4.0, one card or many in a file.
-// Pinned OpenPGP keys are written as Proton writes them: each email in its
-// own group (`ITEM1.EMAIL`), its key and preferences in the same group
-// (`ITEM1.KEY:data:application/pgp-keys;base64,…`, `ITEM1.X-PM-ENCRYPT`,
-// `ITEM1.X-PM-SIGN`).
+// Trusted OpenPGP keys are written as Proton writes them
+// (docs/plans/contact-keys.md): each email in its own group (`ITEM1.EMAIL`),
+// its keys in the same group in order (`ITEM1.KEY;PREF=1:data:application/
+// pgp-keys;base64,…`, `PREF=2`, …) and its preferences beside them:
+// `ITEM1.X-PM-ENCRYPT` (or `X-PM-ENCRYPT-UNTRUSTED` without keys),
+// `ITEM1.X-PM-SIGN`, `ITEM1.X-PM-SCHEME`.
 
 const KEY_PREFIX = 'data:application/pgp-keys;base64,'
 
@@ -46,8 +48,9 @@ function componentToDraft(card: ICAL.Component): ContactDraft {
   for (const property of card.getAllProperties('email')) {
     const address = text(property.getFirstValue()).replace(/^mailto:/i, '')
     if (!address) continue
-    draft.emails.push({ address, label: label(property) })
     const group = scalar(property.getParameter('group')).toLowerCase()
+    const pgp = group ? pgpOf(card, group) : undefined
+    draft.emails.push({ address, label: label(property), ...(pgp ? { pgp } : {}) })
     if (group && !groups.has(group)) groups.set(group, address.toLowerCase())
   }
   draft.keys = keysOf(card, groups)
@@ -81,24 +84,38 @@ function componentToDraft(card: ICAL.Component): ContactDraft {
   return draft
 }
 
-/** The first key of each email's group, with its preferences (`fingerprint` is filled in later). */
+/** Each email group's keys in `PREF` order (`fingerprint` is filled in later). */
 function keysOf(card: ICAL.Component, groups: Map<string, string>): ContactKey[] {
   const keys: ContactKey[] = []
-  const flag = (name: string, group: string) =>
-    card.getAllProperties(name).find((p) => scalar(p.getParameter('group')).toLowerCase() === group)
   const byPref = (a: ICAL.Property, b: ICAL.Property) => Number(a.getParameter('pref') ?? 100) - Number(b.getParameter('pref') ?? 100)
   for (const property of [...card.getAllProperties('key')].sort(byPref)) {
     const group = scalar(property.getParameter('group')).toLowerCase()
     const address = groups.get(group)
     const value = text(property.getFirstValue())
-    if (!address || !value.toLowerCase().startsWith(KEY_PREFIX) || keys.some((k) => k.address === address)) continue
+    if (!address || !value.toLowerCase().startsWith(KEY_PREFIX)) continue
     const publicKey = value.slice(KEY_PREFIX.length).replace(/\s/g, '')
-    if (!/^[A-Za-z0-9+/]+=*$/.test(publicKey)) continue
-    // Absent preferences mean yes, as at Proton for a pinned key.
-    const yes = (name: string) => text(flag(name, group)?.getFirstValue()).toLowerCase() !== 'false'
-    keys.push({ address, publicKey, fingerprint: '', encrypt: yes('x-pm-encrypt'), sign: yes('x-pm-sign') })
+    if (!/^[A-Za-z0-9+/]+=*$/.test(publicKey) || keys.some((k) => k.address === address && k.publicKey === publicKey)) continue
+    keys.push({ address, publicKey, fingerprint: '' })
   }
   return keys
+}
+
+/** An email group's preferences, when it has any. */
+function pgpOf(card: ICAL.Component, group: string): ContactEmailPgp | undefined {
+  const value = (name: string) => {
+    const property = card.getAllProperties(name).find((p) => scalar(p.getParameter('group')).toLowerCase() === group)
+    return property ? text(property.getFirstValue()).toLowerCase() : undefined
+  }
+  const flag = (raw: string | undefined) => (raw === 'true' ? true : raw === 'false' ? false : undefined)
+  const pgp: ContactEmailPgp = {}
+  const encrypt = flag(value('x-pm-encrypt')) ?? flag(value('x-pm-encrypt-untrusted'))
+  if (encrypt !== undefined) pgp.encrypt = encrypt
+  const sign = flag(value('x-pm-sign'))
+  if (sign !== undefined) pgp.sign = sign
+  const scheme = value('x-pm-scheme')
+  if (scheme === 'pgp-inline') pgp.scheme = 'inline'
+  else if (scheme === 'pgp-mime') pgp.scheme = 'pgp_mime'
+  return Object.keys(pgp).length ? pgp : undefined
 }
 
 function birthdayText(value: unknown): string {
@@ -157,17 +174,24 @@ export function toVCard(draft: ContactDraft, uid: string, name: string): string 
       const property = typed(new ICAL.Property('email'), email.label)
       property.setParameter('group', group)
       card.addProperty(property).setValue(address)
-      const key = draft.keys.find((k) => k.address === address.toLowerCase())
-      if (!key) return
+      const keys = draft.keys.filter((k) => k.address === address.toLowerCase())
       // A URI in vCard 4.0: its commas are not escaped as text's are.
-      card.addProperty(new ICAL.Property(['key', { group, pref: '1' }, 'uri', `${KEY_PREFIX}${key.publicKey}`], card))
-      for (const [name, on] of [
-        ['x-pm-encrypt', key.encrypt],
-        ['x-pm-sign', key.sign],
-      ] as const) {
+      keys.forEach((key, index) => {
+        card.addProperty(new ICAL.Property(['key', { group, pref: String(index + 1) }, 'uri', `${KEY_PREFIX}${key.publicKey}`], card))
+      })
+      const pgp = email.pgp ?? {}
+      const flags: [string, string | undefined][] = [
+        // Proton: X-PM-ENCRYPT with trusted keys, X-PM-ENCRYPT-UNTRUSTED for found ones only.
+        [keys.length ? 'x-pm-encrypt' : 'x-pm-encrypt-untrusted', pgp.encrypt === undefined ? undefined : String(pgp.encrypt)],
+        // Encrypting signs anyway.
+        ['x-pm-sign', pgp.encrypt === true ? 'true' : pgp.sign === undefined ? undefined : String(pgp.sign)],
+        ['x-pm-scheme', pgp.scheme === 'inline' ? 'pgp-inline' : pgp.scheme === 'pgp_mime' ? 'pgp-mime' : undefined],
+      ]
+      for (const [name, value] of flags) {
+        if (value === undefined) continue
         const flag = new ICAL.Property(name)
         flag.setParameter('group', group)
-        flag.setValue(String(on))
+        flag.setValue(value)
         card.addProperty(flag)
       }
     })
@@ -195,5 +219,8 @@ export function toVCard(draft: ContactDraft, uid: string, name: string): string 
     photo.setValue(draft.photo)
     card.addProperty(photo)
   }
-  return card.toString().replace(/\r?\n/g, '\r\n') + '\r\n'
+  // ical.js escapes the comma of a KEY's data: URI as if it were text; a
+  // URI is not escaped in vCard 4.0, and Proton reads `base64,` as written.
+  const out = card.toString().replace(/^((?:item\d+\.)?KEY[^:]*:data:application\/pgp-keys;base64)\\,/gim, '$1,')
+  return out.replace(/\r?\n/g, '\r\n') + '\r\n'
 }

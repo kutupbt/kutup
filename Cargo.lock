@@ -2834,6 +2834,7 @@ dependencies = [
  "hpke-rs-rust-crypto",
  "pgp",
  "rand 0.8.6",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",

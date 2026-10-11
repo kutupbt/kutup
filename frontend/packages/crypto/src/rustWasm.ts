@@ -207,6 +207,7 @@ export interface CryptoWasmModule {
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   inspectExternalMailKey(publicKey: Uint8Array, address: string): { publicKey: string; fingerprint: string; createdAt: number }
   describeExternalMailKey(publicKey: Uint8Array): { publicKey: string; fingerprint: string; createdAt: number }
+  describeExternalMailKeyDetails(publicKey: Uint8Array, address: string): import('./mailKey').ExternalMailKeyDetails
   encryptMailPgp(
     masterKeyBase64: string,
     loginEmail: string,

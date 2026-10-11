@@ -1,31 +1,39 @@
 import { useQuery } from '@tanstack/react-query'
 import { fromBase64, inspectExternalMailKey } from '@kutup/crypto'
-import type { ContactKey } from '@kutup/contacts-core/model'
+import type { ContactEmailPgp, ContactKey } from '@kutup/contacts-core/model'
 import { outsideKey, type OutsideKey } from './keys'
 
-// How mail to one recipient is protected (docs/plans/mail.md, C3), decided
-// as Proton decides it: Kutup addresses end to end with their key list; an
-// outside address with a key the person pinned to the contact, encrypted
-// to it; else with a key found through WKD, Proton or keys.openpgp.org;
-// else in clear on the way (and zero-access in Sent).
+// How mail to one recipient is protected (docs/plans/mail.md, C3;
+// docs/plans/contact-keys.md), decided as Proton decides it: Kutup
+// addresses end to end with their key list; an outside address with keys
+// the person trusted in Contacts, encrypted to the first of them that can
+// encrypt; else with a key found through WKD, Proton or keys.openpgp.org,
+// unless the address says not to; else in clear on the way (and
+// zero-access in Sent).
 
 export type Protection =
   | { kind: 'kutup' }
   | { kind: 'pinned'; publicKey: string; fingerprint: string }
   | { kind: 'found'; publicKey: string; fingerprint: string; source: OutsideKey['source'] }
-  /** A pinned key that can no longer be used: sending waits until it is updated or removed. */
+  /** Trusted keys, none of which can be used any more: sending waits until one is trusted again or they are removed. */
   | { kind: 'pinnedUnusable'; fingerprint: string }
   | { kind: 'none' }
+
+/** What Contacts say about an outside address (mail-core `PinnedAddress`). */
+export interface Pinned {
+  keys: ContactKey[]
+  pgp: ContactEmailPgp
+}
 
 /** Whether mail to the recipient is encrypted to an OpenPGP key. */
 export function pgpKey(protection: Protection): string | null {
   return protection.kind === 'pinned' || protection.kind === 'found' ? protection.publicKey : null
 }
 
-/** A pinned key that cannot be used any more (expired, revoked). */
+/** Trusted keys that cannot be used any more (expired, revoked). */
 export class PinnedKeyUnusable extends Error {
   constructor(readonly address: string) {
-    super(`the key pinned for ${address} can no longer be used`)
+    super(`the keys trusted for ${address} can no longer be used`)
   }
 }
 
@@ -36,18 +44,23 @@ export class KeyLookupFailed extends Error {
   }
 }
 
-export async function protectionFor(address: string, domain: string, pinned: ContactKey | undefined): Promise<Protection> {
+export async function protectionFor(address: string, domain: string, pinned: Pinned | undefined): Promise<Protection> {
   const lower = address.toLowerCase()
   if (lower.endsWith(`@${domain}`)) return { kind: 'kutup' }
-  if (pinned) {
-    // The person chose not to encrypt to this address.
-    if (!pinned.encrypt) return { kind: 'none' }
-    try {
-      const info = await inspectExternalMailKey(fromBase64(pinned.publicKey), lower)
-      return { kind: 'pinned', publicKey: info.publicKey, fingerprint: info.fingerprint }
-    } catch {
-      return { kind: 'pinnedUnusable', fingerprint: pinned.fingerprint }
+  // The person chose not to encrypt to this address.
+  if (pinned?.pgp.encrypt === false) return { kind: 'none' }
+  const trusted = pinned?.keys ?? []
+  if (trusted.length > 0) {
+    // The first trusted key that can still encrypt is used for sending.
+    for (const key of trusted) {
+      try {
+        const info = await inspectExternalMailKey(fromBase64(key.publicKey), lower)
+        return { kind: 'pinned', publicKey: info.publicKey, fingerprint: info.fingerprint }
+      } catch {
+        // Expired or revoked: the next one.
+      }
     }
+    return { kind: 'pinnedUnusable', fingerprint: trusted[0].fingerprint }
   }
   const found = await outsideKey(lower).catch(() => {
     throw new KeyLookupFailed(lower)
@@ -56,9 +69,9 @@ export async function protectionFor(address: string, domain: string, pinned: Con
 }
 
 /** How mail to `address` would be protected; looked up while the person writes. */
-export function useProtection(address: string, domain: string, pinned: ContactKey | undefined, enabled: boolean) {
+export function useProtection(address: string, domain: string, pinned: Pinned | undefined, enabled: boolean) {
   return useQuery({
-    queryKey: ['mail', 'protection', address.toLowerCase(), pinned?.fingerprint ?? null, pinned?.encrypt ?? null],
+    queryKey: ['mail', 'protection', address.toLowerCase(), pinned?.keys.map((k) => k.fingerprint).join(',') ?? null, pinned?.pgp.encrypt ?? null],
     enabled,
     staleTime: 15 * 60_000,
     retry: false,

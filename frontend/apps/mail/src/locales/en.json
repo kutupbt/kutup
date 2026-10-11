@@ -100,7 +100,7 @@
     "trustKeyTitle": "{{address}} sent their public key",
     "trustKeyDescription": "Trust it to check that their messages are from them. Mail to them is then encrypted to this key. Fingerprint: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} sent a different public key",
-    "replaceKeyDescription": "It is not the key you trust for them. Only trust it if you know they changed their key. Fingerprint: {{fingerprint}}",
+    "replaceKeyDescription": "It is not a key you trust for them. Only trust it if you know they changed their key: it is then used for sending, and the keys you trusted before stay as history. Fingerprint: {{fingerprint}}",
     "trustKey": "Trust key",
     "keyTrusted": "Key trusted for {{address}}.",
     "trustFailed": "The key could not be saved to Contacts.",

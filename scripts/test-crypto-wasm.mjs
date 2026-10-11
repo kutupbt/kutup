@@ -686,6 +686,12 @@ assert.equal(outside.publicKey, splitVectors.bobPublicKey)
 assert.match(outside.fingerprint, /^[0-9a-f]{40}$/)
 assert.throws(() => crypto.inspectExternalMailKey(bobKey, 'eve@kutup.dev'))
 assert.equal(crypto.describeExternalMailKey(bobKey).fingerprint, outside.fingerprint)
+// A key table's details (docs/plans/contact-keys.md): described, never refused.
+const details = crypto.describeExternalMailKeyDetails(bobKey, 'bob@kutup.dev')
+assert.equal(details.fingerprint, outside.fingerprint)
+assert.equal(details.state, 'usable')
+assert.equal(details.algorithm, 'ECC (Curve25519)')
+assert.equal(crypto.describeExternalMailKeyDetails(bobKey, 'eve@kutup.dev').state, 'otherAddress')
 // An address key leaves only locked with a passphrase, and comes back the same.
 const exportedKey = crypto.exportMailAddressKey(
   mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',

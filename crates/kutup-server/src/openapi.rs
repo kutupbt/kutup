@@ -577,6 +577,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::mail::group_keys::NewGroupKey,
         crate::mail::group_keys::ShareInput,
         crate::handlers::mail_keys::OutsideMailKey,
+        crate::handlers::mail_keys::OutsideMailKeyEntry,
         crate::mail::outside_keys::KeySource,
         crate::handlers::mail::MailMailbox,
         crate::handlers::mail::MailMessage,

@@ -6,6 +6,22 @@ export interface ContactEmail {
   address: string
   /** "home", "work", or the person's own word. */
   label?: string
+  /** How mail to this address is protected (Proton's email settings); unset parts follow the defaults. */
+  pgp?: ContactEmailPgp
+}
+
+/**
+ * PGP for one outside address, as Proton keeps it in the email's vCard group
+ * (docs/plans/contact-keys.md): `X-PM-ENCRYPT` (or `X-PM-ENCRYPT-UNTRUSTED`
+ * when only found keys exist), `X-PM-SIGN`, `X-PM-SCHEME`.
+ */
+export interface ContactEmailPgp {
+  /** Encrypt to its keys; unset: yes when it has one. */
+  encrypt?: boolean
+  /** Sign mail to it; unset: the account's "Sign outside mail". Encrypting signs anyway. */
+  sign?: boolean
+  /** PGP/MIME or Inline; unset: the account's default scheme. */
+  scheme?: 'pgp_mime' | 'inline'
 }
 
 export interface ContactPhone {
@@ -23,9 +39,11 @@ export interface ContactAddress {
 }
 
 /**
- * An outside OpenPGP key pinned for one of the contact's addresses
- * (docs/plans/mail.md, C3; Proton's vCard `KEY` with `X-PM-ENCRYPT` and
- * `X-PM-SIGN`). Its fingerprint also goes into the signed summary.
+ * An outside OpenPGP key the person trusts for one of the contact's
+ * addresses (docs/plans/contact-keys.md; Proton's vCard `KEY` with `PREF`).
+ * An address may have several, in order: the first that can encrypt is used
+ * for sending, all of them check signatures, and old ones stay as history.
+ * Each fingerprint also goes into the signed summary.
  */
 export interface ContactKey {
   /** Lowercase; one of the contact's emails. */
@@ -34,10 +52,6 @@ export interface ContactKey {
   publicKey: string
   /** Lowercase hex, 40 digits. */
   fingerprint: string
-  /** Encrypt mail to this address with it. */
-  encrypt: boolean
-  /** Expect mail from this address signed with it. */
-  sign: boolean
 }
 
 export interface ContactDraft {
@@ -58,7 +72,7 @@ export interface ContactDraft {
   photo: string
   /** Contact group ids. */
   groups: string[]
-  /** Pinned OpenPGP keys, at most one per address. */
+  /** Trusted OpenPGP keys of its outside addresses, in order per address. */
   keys: ContactKey[]
 }
 
@@ -120,4 +134,16 @@ export function newUid(): string {
 /** `ABCD 1234 …`: an OpenPGP fingerprint as people compare it. */
 export function formatFingerprint(fingerprint: string): string {
   return (fingerprint.toUpperCase().match(/.{1,4}/g) ?? []).join(' ')
+}
+
+/** An address's trusted keys, in order. */
+export function keysFor(draft: Pick<ContactDraft, 'keys'>, address: string): ContactKey[] {
+  const lower = address.trim().toLowerCase()
+  return draft.keys.filter((key) => key.address === lower)
+}
+
+/** The PGP preferences of one of the contact's addresses. */
+export function pgpFor(draft: Pick<ContactDraft, 'emails'>, address: string): ContactEmailPgp {
+  const lower = address.trim().toLowerCase()
+  return draft.emails.find((email) => email.address.trim().toLowerCase() === lower)?.pgp ?? {}
 }

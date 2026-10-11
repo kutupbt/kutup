@@ -129,15 +129,17 @@ export function addressKeys(address: string): Promise<AddressKeys> {
 export interface OutsideKey {
   address: string
   source: 'wkd' | 'proton' | 'keysOpenpgp'
-  /** Binary, base64. */
+  /** Binary, base64: the newest usable key, the one mail is encrypted to. */
   publicKey: string
   fingerprint: string
+  /** Every usable key the source served, newest first, for a contact's key table (docs/plans/contact-keys.md). */
+  keys: { publicKey: string; fingerprint: string }[]
 }
 
 const outsideCache = new Map<string, Promise<OutsideKey | null>>()
 
 async function loadOutside(address: string): Promise<OutsideKey | null> {
-  let found: { address: string; source: OutsideKey['source']; publicKey: string }
+  let found: { address: string; source: OutsideKey['source']; publicKey: string; keys?: { publicKey: string }[] }
   try {
     found = (await api.get<typeof found>('/mail/keys/outside', { params: { email: address } })).data
   } catch (error) {
@@ -146,7 +148,11 @@ async function loadOutside(address: string): Promise<OutsideKey | null> {
   }
   // The same checks the server made, so a key is never used on its word alone.
   const info = await inspectExternalMailKey(fromBase64(found.publicKey), address)
-  return { address, source: found.source, publicKey: info.publicKey, fingerprint: info.fingerprint }
+  const others = await Promise.all(
+    (found.keys ?? []).map((key) => inspectExternalMailKey(fromBase64(key.publicKey), address).catch(() => null)),
+  )
+  const keys = [info, ...others.filter((key): key is NonNullable<typeof key> => key !== null && key.fingerprint !== info.fingerprint)]
+  return { address, source: found.source, publicKey: info.publicKey, fingerprint: info.fingerprint, keys: keys.map(({ publicKey, fingerprint }) => ({ publicKey, fingerprint })) }
 }
 
 /**

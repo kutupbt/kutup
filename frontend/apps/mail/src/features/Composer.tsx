@@ -234,12 +234,13 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [sending, setSending] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
   const [encrypt, setEncrypt] = useState(true)
-  // Sign starts on for Kutup recipients; for outside ones from "Sign outside
-  // mail" or a contact's Sign flag, as Proton's "Sign external messages".
-  // Pressing the button decides it for this message.
+  // Sign starts on for Kutup recipients; for an outside one from its
+  // contact's Sign choice, else "Sign outside mail", as Proton's "Sign
+  // external messages" (docs/plans/contact-keys.md). Pressing the button
+  // decides it for this message.
   const [signChoice, setSignChoice] = useState<boolean | undefined>()
   const signOutside = mailSettings.data?.signOutside ?? true
-  const sign = signChoice ?? (signOutside || outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.sign))
+  const sign = signChoice ?? (outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.pgp.sign ?? signOutside))
   const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && m.address.toLowerCase().endsWith(`@${account.domain}`))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)

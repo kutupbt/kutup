@@ -21,7 +21,7 @@ import {
   type SealedMailKey,
 } from '@kutup/crypto'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
-import type { ContactKey } from '@kutup/contacts-core/model'
+import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
@@ -371,7 +371,8 @@ export interface OpenedMessage {
   }
   /**
    * A key the sender offers (Autocrypt header or attached key), usable for
-   * their address and not the one already pinned: Mail offers to trust it.
+   * their address and not trusted yet: Mail offers to trust it, first, the
+   * keys trusted before kept after it (`replacesPinned`: there are some).
    */
   offeredKey?: { publicKey: string; fingerprint: string; replacesPinned: boolean }
 }
@@ -385,13 +386,15 @@ function attachedKeys(parsed: ParsedMessage): Uint8Array[] {
     .map((a) => a.content)
 }
 
-async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, pinned: ContactKey | undefined) {
+async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, pinned: PinnedAddress | undefined) {
   const candidates = [autocryptKey(raw, from), ...attachedKeys(parsed)].filter((k): k is Uint8Array => k !== null)
+  const trusted = pinned?.keys ?? []
   for (const candidate of candidates) {
     try {
       const info = await inspectExternalMailKey(candidate, from)
-      if (info.fingerprint === pinned?.fingerprint) return undefined
-      return { publicKey: info.publicKey, fingerprint: info.fingerprint, replacesPinned: !!pinned }
+      // Already trusted, used for sending or kept as history.
+      if (trusted.some((key) => key.fingerprint === info.fingerprint)) return undefined
+      return { publicKey: info.publicKey, fingerprint: info.fingerprint, replacesPinned: trusted.length > 0 }
     } catch {
       // Not a usable key for the sender: offer nothing for it.
     }
@@ -435,10 +438,9 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   if (!outside && !readableFromKutup) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
 
   const pin = outside ? pinned(sender) : undefined
+  // Signatures check against every trusted key, as Proton's (Sign is about sending).
   const signingKeys = outside
-    ? pin?.sign
-      ? [pin.publicKey]
-      : []
+    ? (pin?.keys ?? []).map((key) => key.publicKey)
     : await addressKeys(sender)
         .then((keys) => keys.all)
         .catch(() => [])
@@ -725,12 +727,23 @@ export class UnknownRecipient extends Error {
   }
 }
 
-/** The key pinned in Contacts for an address, if any. */
-export type PinnedKeys = (address: string) => ContactKey | undefined
+/**
+ * What Contacts say about an outside address (docs/plans/contact-keys.md):
+ * its trusted keys in order (the first that can encrypt is used for sending,
+ * all of them check signatures) and its preferences.
+ */
+export interface PinnedAddress {
+  keys: ContactKey[]
+  pgp: ContactEmailPgp
+}
+
+/** What Contacts say about an address, if its contact says anything. */
+export type PinnedKeys = (address: string) => PinnedAddress | undefined
 
 /**
- * The keys pinned in Contacts, by address; `undefined` while Contacts load.
- * When the address book cannot be read, nothing is pinned.
+ * The trusted keys and preferences in Contacts, by address; `undefined`
+ * while Contacts load. When the address book cannot be read, nothing is
+ * pinned.
  */
 export function usePinnedKeys(): PinnedKeys | undefined {
   const account = useAccountAddress()
@@ -739,9 +752,16 @@ export function usePinnedKeys(): PinnedKeys | undefined {
   const data = contacts.data
   return useMemo(() => {
     if (!data && !failed) return undefined
-    const keys = new Map<string, ContactKey>()
-    for (const contact of data?.contacts ?? []) for (const key of contact.draft.keys) keys.set(key.address, key)
-    return (address: string) => keys.get(address.toLowerCase())
+    const byAddress = new Map<string, PinnedAddress>()
+    for (const contact of data?.contacts ?? []) {
+      for (const email of contact.draft.emails) {
+        const address = email.address.trim().toLowerCase()
+        if (byAddress.has(address)) continue
+        const keys = keysFor(contact.draft, address)
+        if (keys.length || email.pgp) byAddress.set(address, { keys, pgp: email.pgp ?? {} })
+      }
+    }
+    return (address: string) => byAddress.get(address.toLowerCase())
   }, [data, failed])
 }
 
@@ -830,21 +850,28 @@ export async function sendDraft(
   const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
   if (unusable) throw new PinnedKeyUnusable(unusable)
   // Encrypt off: no outside recipient gets a PGP message.
+  // Each with its scheme: its contact's, else the account's (Proton's X-PM-SCHEME).
   const keyed = options.encrypt
     ? external.flatMap((address, i) => {
         const key = pgpKey(protections[i])
-        return key ? [{ address, key }] : []
+        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgp_mime'
+        return key ? [{ address, key, inline: scheme === 'inline' }] : []
       })
     : []
-  const groups = [keyed.filter((r) => !bcc.has(r.address)), ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r])].filter((g) => g.length)
+  // To and Cc together per scheme; each Bcc on their own (key IDs would name them).
+  const groups = [
+    keyed.filter((r) => !bcc.has(r.address) && !r.inline),
+    keyed.filter((r) => !bcc.has(r.address) && r.inline),
+    ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r]),
+  ].filter((g) => g.length)
   const plain = external.filter((address) => !keyed.some((r) => r.address === address))
-  const body = groups.length && !inline ? buildBody(content) : null
+  const body = groups.some((g) => !g[0].inline) ? buildBody(content) : null
   const files = attachmentParts.map((part) => ({ ...describePart(part), bytes: partContent(part) }))
   const packages = await Promise.all(
     groups.map(async (group) => {
       const keys = [...group.map((r) => r.key), self.publicKey]
       // Inline: the plain text encrypted, and each file encrypted on its own as `name.pgp`.
-      const message = inline
+      const message = group[0].inline
         ? buildInlineMessage(
             header,
             await sealPgp(keys, encoder.encode(draft.text)),

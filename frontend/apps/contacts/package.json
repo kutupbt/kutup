@@ -15,6 +15,7 @@
     "@kutup/drive-ui": "workspace:*",
     "@kutup/drive-core": "workspace:*",
     "@kutup/i18n": "workspace:*",
+    "@kutup/mail-core": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
     "@tanstack/react-query": "^5",

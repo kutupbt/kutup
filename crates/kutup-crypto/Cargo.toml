@@ -10,7 +10,7 @@ rust-version.workspace = true
 default = ["mnemonic"]
 mnemonic = ["dep:bip39"]
 # OpenPGP mail address keys (`mail_key`); off for clients that do not need rPGP (Chat).
-mail = ["dep:pgp", "dep:rand"]
+mail = ["dep:pgp", "dep:rand", "dep:rsa"]
 
 [dependencies]
 dryoc.workspace = true
@@ -32,6 +32,8 @@ hpke-rs-rust-crypto = { version = "=0.6.1" }
 # OpenPGP for mail (docs/cryptographic-dependencies.md). No bzip2: it needs C.
 pgp = { version = "=0.21.0", default-features = false, optional = true }
 rand = { workspace = true, optional = true }
+# Only for an RSA key's size in the key table; the same version rPGP uses.
+rsa = { version = "=0.9.10", default-features = false, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser clock and randomness for rPGP's signature timestamps.

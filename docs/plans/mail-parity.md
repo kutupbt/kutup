@@ -57,7 +57,8 @@ reference only where Proton has nothing.
 | From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ❌ (suggestions only) |
 | Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
-| Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ per-contact flags on pinned keys, "Sign outside mail" in General |
+| Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ Contacts → Email settings: Encrypt, Sign, PGP scheme per address; "Sign outside mail" in General |
+| Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ❌ |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ❌ |
@@ -91,7 +92,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Address keys: rotate, import, export, retire | `AddressKeysSection.tsx` | ✅ C3 |
-| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; ❌ scheme per contact |
+| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; scheme per contact in Contacts → Email settings |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
 | Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ |
 | Distribution lists, shared mailboxes | (business: groups) | ✅ |
