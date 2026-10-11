@@ -153,6 +153,9 @@ export async function signIn(context: BrowserContext, account: Account): Promise
   await page.close()
 }
 
+/** Failures the account app reports that no retry here can fix. */
+const BROKEN = /Your keys could not be created on this device/
+
 /**
  * Presses a sign-in or registration button until `done` shows. The edge
  * limits these endpoints (nginx: 10 a minute, burst 5); a suite that creates
@@ -161,13 +164,17 @@ export async function signIn(context: BrowserContext, account: Account): Promise
  */
 export async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
   const limited = page.getByRole('alert').filter({ hasText: 'Too many attempts' })
+  // A failure the page reports ends the wait at once, with its own words,
+  // rather than after the timeout.
+  const broken = page.getByRole('alert').filter({ hasText: BROKEN })
   for (let attempt = 1; ; attempt++) {
     const retrying = await limited.isVisible()
     await page.getByRole('button', { name: button, exact: true }).click()
     // The previous attempt's message stays until this one is under way.
     if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })
-    await expect(done.or(limited).first()).toBeVisible({ timeout: 120_000 })
+    await expect(done.or(limited).or(broken).first()).toBeVisible({ timeout: 120_000 })
     if (await done.isVisible()) return
+    if (await broken.isVisible()) throw new Error(`${button}: ${(await broken.first().innerText()).trim()}`)
     if (attempt === 8) throw new Error(`${button}: still rate limited after ${attempt} attempts`)
     await page.waitForTimeout(8_000)
   }
