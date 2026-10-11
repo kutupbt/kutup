@@ -133,7 +133,7 @@ The same rules, plus the one thing KeePassXC lacks: the version both edits start
 ### What the earlier research becomes
 
 - **Still applies**: the field model (§4, now native: the vault *is* KDBX), the KDBX 4.1 codec, TOTP, the security monitor (on the website), the lessons from every product studied.
-- **SSH keys**: KeePassXC and Strongbox already run SSH agents from KDBX entries (`KeeAgent.settings`); a `kutup` CLI agent (§5.8) is an optional later addition that reads the same entries.
+- **SSH keys**: decided below ("SSH agent in the `kutup` CLI").
 - **The per-item record design (§5.1a–§5.15) is the later path**, for when per-item sharing between users or Kutup's own autofill becomes important. Importing a KDBX makes that move straightforward. Until then, a family or team shares a vault by keeping its KDBX file in a shared Drive folder (Drive sharing, with revocation and key rotation, already exists), with the vault password shared out of band.
 
 ### Phases for this direction
@@ -144,7 +144,23 @@ The same rules, plus the one thing KeePassXC lacks: the version both edits start
 | **K1** | `kutup sync` merges KDBX files instead of making conflict copies — the first offline client (desktop with KeePassXC) |
 | **K2** | The Kutup Pass website: open, view, edit and create entries in a KDBX from Drive; local copy and save outbox for offline; version history and rollback; conflict review |
 | **K3** | Phones: the opt-in vault WebDAV address with `If-Match`; divergence detection and re-merge by Kutup clients |
-| **K4 (later)** | Kutup Drive native app with system Files integration (double encryption on phones); `kutup` CLI SSH agent; the per-item path (§5) if sharing items between users becomes important |
+| **K3b** | The opt-in SSH agent in the `kutup` CLI (below); can start right after K1, since it reads the vault `kutup sync` keeps |
+| **K4 (later)** | Kutup Drive native app with system Files integration (double encryption on phones); the per-item path (§5) if sharing items between users becomes important |
+
+### SSH agent in the `kutup` CLI (decided 2026-10-11)
+
+The `kutup` CLI includes an SSH agent, **opt-in**: installing the CLI never starts it or changes SSH settings.
+
+- **Keys are ordinary KeePass entries** in the `KeeAgent.settings` form KeePassXC and Strongbox already use (key as an attachment or file reference, passphrase in the entry password). The same entry works in KeePassXC's agent integration, Strongbox's macOS agent and the `kutup` agent; nothing is Kutup-only.
+- **Offline**: the agent reads the vault from the local folder `kutup sync` keeps, so SSH works without a connection, like the vault itself.
+- **Where it helps most**: terminals, servers and remote machines where no GUI password manager runs.
+- **Starting it**: `kutup ssh-agent` in the foreground, or `kutup ssh-agent install` to set it up as a user service (systemd user unit, launchd agent, Windows service on its own named pipe beside the built-in OpenSSH agent). Installing it never rewrites `SSH_AUTH_SOCK` behind the user's back; it prints what to set. If KeePassXC's or Strongbox's agent is already serving, it says so instead of competing.
+- **Approval per use** (Bitwarden's model, `BWN/ssh_agent/src/authorization.rs`): a desktop notification or terminal prompt shows the requesting process, the destination host (from `session-bind@openssh.com`), whether the request is **forwarded** (`ssh -A`, flagged prominently), and whether it is a login or a git signature (SSHSIG namespace). Choices: allow once, remember for this host until lock, deny; per key, "never ask" for those who want it.
+- **Keys listed while locked** (Strongbox, `SBX/macbox/ssh-agent/SSHAgentRequestHandler.swift:108-145`): SSH sees the public keys; the first signature request asks to unlock.
+- **Memory only**: private keys are decrypted from the vault into memory, never written to disk, and wiped on lock, idle timeout and sleep.
+- **Push mode for people who keep their own agent**: `kutup ssh-add <entry> --lifetime 1h --confirm` adds a key to the system agent with constraints (KeePassXC's way, `KXC/sshagent/SSHAgent.cpp:270-304`).
+- **Unlocking**: in a terminal the agent can ask for the vault password; for background use it is smoother when the vault password is stored under the Kutup account key (open question 1 below).
+- **Crypto**: the RustCrypto `ssh-key` crate in the shared core (generation, import of OpenSSH / PKCS#8 / PKCS#1, fingerprints), the same code the website uses to show and create SSH key entries.
 
 ### Open questions for this direction
 
@@ -791,6 +807,8 @@ Per membership: `expires_at` (Proton has it), `can_autofill`, hidden. Do **not**
 **Groups.** Not in v1. A vault with N members costs N small envelopes per rotation, fine into the hundreds. Org-scale groups would need a group identity whose key is wrapped to members (Proton's group shares); Kutup Chat is moving away from MLS to pairwise structures, so nothing here should build on MLS.
 
 ### 5.8 SSH keys
+
+*For the chosen KDBX direction, the SSH agent is decided in "SSH agent in the `kutup` CLI" at the top; the notes below are the per-item path's version and agree with it.*
 
 - **Item type** `ssh_key` (§4.2). The private key is stored as unencrypted OpenSSH text **inside the sealed blob** (Bitwarden's choice); the optional original passphrase is kept so export can re-encrypt the key file.
 - **Crypto**: the RustCrypto `ssh-key` crate in the core (Bitwarden uses it in `BSDK/bitwarden-ssh`): generate Ed25519 (default), RSA-3072/4096, ECDSA; import OpenSSH (bcrypt-encrypted), PKCS#8 (encrypted or not), PKCS#1 PEM; compute fingerprints. Same code in WASM, UniFFI and the CLI.
