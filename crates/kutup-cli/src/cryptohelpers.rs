@@ -145,30 +145,51 @@ pub fn locate_file(
 /// where the file moves (docs/plans/drive-move.md) — is not readable with a
 /// key a removed member holds. Returns the file as it now is.
 pub fn rekey_if_behind(client: &Client, found: FoundFile) -> Result<FoundFile> {
-    if found.file.key_epoch >= found.collection.key_epoch {
-        return Ok(found);
-    }
-    let metadata = crate::file_crypto::open_metadata(&found.file, &found.file_key)?;
-    let (request, _) = crate::file_crypto::rekey_request(
-        &found.file,
-        &found.file_key,
-        &metadata,
-        found.keys.current(),
+    let (file, file_key) = rekey_file_if_behind(
+        client,
+        found.file,
+        found.file_key,
+        &found.keys,
+        &found.collection.id,
         found.collection.key_epoch,
     )?;
-    // `false`: another editor re-keyed it first; the listing below has it.
-    client.rekey_file(&found.file.id, &request)?;
-    // Whoever moved it, list it again for its current key and history.
-    let file = client
-        .list_files(&found.collection.id)?
-        .into_iter()
-        .find(|f| f.id == found.file.id)
-        .ok_or_else(|| anyhow::anyhow!("file disappeared during re-key"))?;
-    let file_key = crate::file_crypto::open_key(&file, &found.keys)?;
     Ok(FoundFile {
         file,
         file_key,
         keys: found.keys,
         collection: found.collection,
     })
+}
+
+/// [`rekey_if_behind`] for a file in folder `collection_id` (keys `keys`, at
+/// epoch `folder_epoch`): the file and its key as they are after.
+pub fn rekey_file_if_behind(
+    client: &Client,
+    file: File,
+    file_key: [u8; 32],
+    keys: &Keyring,
+    collection_id: &str,
+    folder_epoch: u32,
+) -> Result<(File, [u8; 32])> {
+    if file.key_epoch >= folder_epoch {
+        return Ok((file, file_key));
+    }
+    let metadata = crate::file_crypto::open_metadata(&file, &file_key)?;
+    let (request, _) = crate::file_crypto::rekey_request(
+        &file,
+        &file_key,
+        &metadata,
+        keys.current(),
+        folder_epoch,
+    )?;
+    // `false`: another editor re-keyed it first; the listing below has it.
+    client.rekey_file(&file.id, &request)?;
+    // Whoever moved it, list it again for its current key and history.
+    let file = client
+        .list_files(collection_id)?
+        .into_iter()
+        .find(|f| f.id == file.id)
+        .ok_or_else(|| anyhow::anyhow!("file disappeared during re-key"))?;
+    let file_key = crate::file_crypto::open_key(&file, keys)?;
+    Ok((file, file_key))
 }

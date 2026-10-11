@@ -27,6 +27,9 @@ use crate::cryptohelpers::{decrypt_collection_key, decrypt_file_meta};
 use crate::session::{sync_pair_id, Session, Store, SyncDirState, SyncFileState};
 use crate::transfer::stream_download;
 use crate::uploader::{self, now_unix, Progress, UploadRequest};
+use crate::vaultsync::{
+    describe, is_vault, merge_and_save, recorded, save_version, VaultFile, VaultKeys,
+};
 
 pub struct SyncOptions {
     /// Propagate deletions (both directions). Off = count + skip.
@@ -41,6 +44,8 @@ pub struct SyncResult {
     pub uploaded: usize,
     pub downloaded: usize,
     pub conflicts: usize,
+    /// Vaults merged with their remote side (docs/plans/pass.md, K1).
+    pub merged: usize,
     pub deleted_local: usize,
     pub deleted_remote: usize,
     pub skipped_deletions: usize,
@@ -241,6 +246,7 @@ pub fn sync(
     local_dir: &str,
     collection_id: &str,
     opts: &SyncOptions,
+    vaults: &mut VaultKeys,
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
     let master_key = sess.master_key_bytes().context("master key")?;
@@ -523,6 +529,8 @@ pub fn sync(
             &action,
             &remote_dirs,
             &remote_entries,
+            base_files.get(&rel),
+            vaults,
             opts,
             &mut result,
         );
@@ -579,9 +587,48 @@ fn execute_file_action(
     action: &FileAction,
     remote_dirs: &BTreeMap<String, RemoteDir>,
     remote_entries: &BTreeMap<String, RemoteEntry>,
+    base: Option<&BaseFile>,
+    vaults: &mut VaultKeys,
     opts: &SyncOptions,
     result: &mut SyncResult,
 ) -> Result<()> {
+    if is_vault(rel) && !opts.dry_run {
+        let handled = execute_vault_action(
+            client,
+            store,
+            pair,
+            root,
+            rel,
+            action,
+            remote_entries,
+            remote_dirs,
+            base,
+            vaults,
+            result,
+        )?;
+        match handled {
+            VaultHandled::Done => return Ok(()),
+            VaultHandled::NotHandled => {}
+            // The save lost a race and the vault cannot be merged here: the
+            // remote side is kept as a copy, as for any other file.
+            VaultHandled::AsConflict => {
+                return execute_file_action(
+                    client,
+                    store,
+                    pair,
+                    root,
+                    rel,
+                    &FileAction::Conflict,
+                    remote_dirs,
+                    remote_entries,
+                    None,
+                    vaults,
+                    opts,
+                    result,
+                )
+            }
+        }
+    }
     match action {
         FileAction::Pull => {
             eprintln!("  ↓ {rel}");
@@ -594,8 +641,8 @@ fn execute_file_action(
                 .get(&entry.rel_dir)
                 .context("remote dir vanished")?;
             let dest = root.join(rel);
-            pull_to(client, entry, &dir.keys, &dest)?;
-            record_base(store, pair, rel, &dest, entry, client)?;
+            let version = pull_to(client, entry, &dir.keys, &dest)?;
+            record_base(store, pair, rel, &dest, entry, client, version)?;
         }
         FileAction::PushNew | FileAction::PushUpdate { .. } => {
             eprintln!("  ↑ {rel}");
@@ -713,11 +760,11 @@ fn execute_file_action(
                 .context("remote dir vanished")?;
             let abs = root.join(rel);
             let tmp = temp_path(&abs);
-            download_decrypt(client, entry, &dir.keys, &tmp)?;
+            let version = download_decrypt(client, entry, &dir.keys, &tmp)?;
             let same = files_equal(&abs, &tmp).unwrap_or(false);
             if same {
                 let _ = std::fs::remove_file(&tmp);
-                record_base(store, pair, rel, &abs, entry, client)?;
+                record_base(store, pair, rel, &abs, entry, client, version)?;
             } else {
                 let copy = conflict_name(rel);
                 eprintln!("  ⚠ {rel} (differs from remote; remote copy → {copy})");
@@ -769,37 +816,203 @@ fn execute_file_action(
     Ok(())
 }
 
+/// What [`execute_vault_action`] did.
+enum VaultHandled {
+    Done,
+    /// Not a case vaults treat differently: the ordinary file path runs.
+    NotHandled,
+    /// Run the conflict path instead (a copy of the remote side).
+    AsConflict,
+}
+
+/// `.kdbx` vaults (docs/plans/pass.md, K1): a changed vault is saved as a
+/// version of the same file, made from the version recorded as the base, and
+/// when both sides changed (or a save loses a race) they are merged.
+#[allow(clippy::too_many_arguments)]
+fn execute_vault_action(
+    client: &Client,
+    store: &Store,
+    pair: &str,
+    root: &Path,
+    rel: &str,
+    action: &FileAction,
+    remote_entries: &BTreeMap<String, RemoteEntry>,
+    remote_dirs: &BTreeMap<String, RemoteDir>,
+    base: Option<&BaseFile>,
+    vaults: &mut VaultKeys,
+    result: &mut SyncResult,
+) -> Result<VaultHandled> {
+    let Some(entry) = remote_entries.get(rel) else {
+        return Ok(VaultHandled::NotHandled);
+    };
+    let Some(dir) = remote_dirs.get(&entry.rel_dir) else {
+        return Ok(VaultHandled::NotHandled);
+    };
+    let vault = VaultFile {
+        file_id: &entry.file.id,
+        collection_id: &dir.collection_id,
+        folder_epoch: dir.key_epoch,
+        keys: &dir.keys,
+    };
+    let abs = root.join(rel);
+    let target = VaultTarget {
+        store,
+        pair,
+        rel,
+        abs: &abs,
+        entry,
+        collection_id: &dir.collection_id,
+    };
+    // The recorded remote version is a merge base only if the local copy
+    // started from it; after a conflict copy it did not.
+    let merge_base = base
+        .filter(|b| b.local_size >= 0)
+        .map(|b| (b.file_id.as_str(), b.remote_version_id.as_str()));
+    match action {
+        FileAction::PushUpdate { .. } => {
+            let Some(base) = base.filter(|b| b.file_id == entry.file.id) else {
+                return Ok(VaultHandled::NotHandled);
+            };
+            // Stat before reading: a write after it shows as a change next
+            // time, never as synced.
+            let stat = stat_local(&abs)?;
+            let contents = std::fs::read(&abs).context("read vault")?;
+            match save_version(client, &vault, &contents, &base.remote_version_id)? {
+                Some(version) => {
+                    eprintln!("  ↑ {rel}");
+                    result.uploaded += 1;
+                    target.record(&stat, version)?;
+                    Ok(VaultHandled::Done)
+                }
+                None if merge_vault(client, &target, &vault, merge_base, vaults, result)? => {
+                    Ok(VaultHandled::Done)
+                }
+                None => Ok(VaultHandled::AsConflict),
+            }
+        }
+        FileAction::Conflict => {
+            if merge_vault(client, &target, &vault, merge_base, vaults, result)? {
+                Ok(VaultHandled::Done)
+            } else {
+                Ok(VaultHandled::NotHandled)
+            }
+        }
+        // The same vault on both sides with no base (a second machine joining
+        // with its own copy): merged by KeePassXC's rules.
+        FileAction::AdoptCheck => {
+            if merge_vault(client, &target, &vault, None, vaults, result)? {
+                Ok(VaultHandled::Done)
+            } else {
+                Ok(VaultHandled::NotHandled)
+            }
+        }
+        _ => Ok(VaultHandled::NotHandled),
+    }
+}
+
+/// Where a merged vault is written and recorded.
+struct VaultTarget<'a> {
+    store: &'a Store,
+    pair: &'a str,
+    rel: &'a str,
+    abs: &'a Path,
+    entry: &'a RemoteEntry,
+    collection_id: &'a str,
+}
+
+impl VaultTarget<'_> {
+    fn record(&self, stat: &LocalFile, version: String) -> Result<()> {
+        self.store.put_sync_file(
+            self.pair,
+            self.rel,
+            &SyncFileState {
+                file_id: self.entry.file.id.clone(),
+                collection_id: self.collection_id.to_owned(),
+                local_size: stat.size,
+                local_mtime_secs: stat.mtime_secs,
+                local_mtime_nanos: stat.mtime_nanos,
+                remote_version_id: version,
+                synced_at: now_unix(),
+            },
+        )
+    }
+}
+
+/// Merges the local vault with the remote one and writes the result to both
+/// sides. False: no key opens it; nothing changed.
+fn merge_vault(
+    client: &Client,
+    target: &VaultTarget,
+    vault: &VaultFile,
+    base: Option<(&str, &str)>,
+    vaults: &mut VaultKeys,
+    result: &mut SyncResult,
+) -> Result<bool> {
+    let rel = target.rel;
+    let stat = stat_local(target.abs)?;
+    let local = std::fs::read(target.abs).context("read vault")?;
+    let Some(saved) = merge_and_save(client, vaults, rel, vault, base, &local)? else {
+        eprintln!(
+            "  ⚠ {rel}: merging needs the vault's key (KUTUP_VAULT_PASSWORD or \
+             KUTUP_VAULT_KEY_FILE, or run in a terminal)"
+        );
+        return Ok(false);
+    };
+    result.merged += 1;
+    if saved.uploaded {
+        eprintln!("  ⇄ {rel} (merged: {})", describe(&saved.report));
+    } else {
+        eprintln!("  ⇄ {rel} (Drive already had every local change; local copy updated)");
+    }
+    // Edited again while merging: left alone, and merged again next time
+    // (the base stays as it was, so nothing in the new edit is lost).
+    if stat_local(target.abs)? != stat {
+        result.errors.push(format!(
+            "{rel}: changed during the merge; it is merged again next sync"
+        ));
+        return Ok(true);
+    }
+    let tmp = temp_path(target.abs);
+    std::fs::write(&tmp, &saved.contents).context("write merged vault")?;
+    std::fs::rename(&tmp, target.abs).context("rename into place")?;
+    target.record(&stat_local(target.abs)?, saved.version)?;
+    Ok(true)
+}
+
 // --- helpers ---
 
+/// Downloads `entry` into `dest`; the version it was, when the server says.
 fn pull_to(
     client: &Client,
     entry: &RemoteEntry,
     dir_keys: &crate::keyring::Keyring,
     dest: &Path,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let tmp = temp_path(dest);
-    download_decrypt(client, entry, dir_keys, &tmp)?;
+    let version = download_decrypt(client, entry, dir_keys, &tmp)?;
     std::fs::rename(&tmp, dest).context("rename into place")?;
-    Ok(())
+    Ok(version)
 }
 
-/// Streams the newest content of `entry` decrypted into `tmp` (bounded memory).
+/// Streams the newest content of `entry` decrypted into `tmp` (bounded
+/// memory); the version it was (`original` for the upload), when the server
+/// says.
 fn download_decrypt(
     client: &Client,
     entry: &RemoteEntry,
     dir_keys: &crate::keyring::Keyring,
     tmp: &Path,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let f = &entry.file;
     let file_key = crate::file_crypto::open_key(f, dir_keys).context("decrypt file key")?;
     // What the file holds now (its latest whole-file version, else the
     // upload), sealed at its own key generation.
     let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
-    let stream = client.download_file_stream(&f.id)?;
+    let (stream, version) = client.download_current_stream(&f.id)?;
     let mut out = std::fs::File::create(tmp).context("create temp file")?;
     let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
     match stream_download(stream, &content_key, blob_context, &mut out, |_| {}) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(version),
         Err(e) => {
             drop(out);
             let _ = std::fs::remove_file(tmp);
@@ -815,8 +1028,16 @@ fn record_base(
     local_path: &Path,
     entry: &RemoteEntry,
     client: &Client,
+    downloaded: Option<String>,
 ) -> Result<()> {
     let stat = stat_local(local_path)?;
+    // A vault records the very version it got: its next save is made from
+    // it (`basedOn`). Other files record the newest version of any kind,
+    // which is what planning compares (a note's states are versions too).
+    let remote_version_id = match downloaded {
+        Some(version) if is_vault(rel) => recorded(&version),
+        _ => latest_version_id(client, &entry.file.id),
+    };
     store.put_sync_file(
         pair,
         rel,
@@ -826,7 +1047,7 @@ fn record_base(
             local_size: stat.size,
             local_mtime_secs: stat.mtime_secs,
             local_mtime_nanos: stat.mtime_nanos,
-            remote_version_id: latest_version_id(client, &entry.file.id),
+            remote_version_id,
             synced_at: now_unix(),
         },
     )

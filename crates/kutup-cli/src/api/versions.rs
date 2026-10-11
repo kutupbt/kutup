@@ -19,7 +19,14 @@ pub struct NewVersion {
     pub doc_key_id: i64,
     pub label: String,
     pub keep_forever: bool,
+    /// A conditional save: stored only if the file still holds this version
+    /// (an id, or [`ORIGINAL`]); otherwise `409` with
+    /// `ApiError::version_conflict`.
+    pub based_on: Option<String>,
 }
+
+/// Names the original upload where a version id is expected.
+pub const ORIGINAL: &str = "original";
 
 /// Body for `PATCH /files/:id/versions/:vid`. Absent fields are untouched.
 #[derive(Debug, Default, Serialize)]
@@ -59,6 +66,10 @@ pub struct VersionRow {
     pub created_at: String,
     /// The file key generation it was sealed at.
     pub key_generation: u32,
+    /// A whole-file version: the version it replaced (none: the original
+    /// upload, or not recorded).
+    #[serde(default)]
+    pub parent_version_id: Option<String>,
 }
 
 fn ok_stream(resp: Response, what: &'static str) -> Result<Response> {
@@ -84,6 +95,26 @@ impl Client {
             .upload_request(Method::GET, &format!("/files/{file_id}/download"))
             .send()?;
         ok_stream(resp, "download")
+    }
+
+    /// Streams the file's current content with the version it is: an id, or
+    /// [`ORIGINAL`] (`None` from a server that does not say).
+    pub fn download_current_stream(&self, file_id: &str) -> Result<(Response, Option<String>)> {
+        let resp = self.download_file_stream(file_id)?;
+        let version = resp
+            .headers()
+            .get("x-kutup-version")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        Ok((resp, version))
+    }
+
+    /// The original upload's encrypted bytes, while the server keeps it.
+    pub fn download_original(&self, file_id: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .upload_request(Method::GET, &format!("/files/{file_id}/original"))
+            .send()?;
+        Ok(ok_stream(resp, "download original")?.bytes()?.to_vec())
     }
 
     /// Streams a specific version's blob. Mirrors `DownloadVersionStream`.
@@ -136,6 +167,9 @@ impl Client {
             .text("keepForever", version.keep_forever.to_string());
         if !version.label.is_empty() {
             form = form.text("label", version.label.clone());
+        }
+        if let Some(based_on) = &version.based_on {
+            form = form.text("basedOn", based_on.clone());
         }
         let resp = self
             .request(Method::POST, &format!("/files/{file_id}/versions"))

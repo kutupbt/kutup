@@ -33,6 +33,7 @@ notify.workspace = true
 url.workspace = true
 uuid.workspace = true
 hex.workspace = true
+kutup-pass = { path = "../kutup-pass" }
 
 # OS keychain only where it needs no C deps (Linux uses the file fallback).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

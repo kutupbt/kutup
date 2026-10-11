@@ -839,6 +839,10 @@ struct CreateVersionBody {
     doc_key_id: i64,
     label: Option<String>,
     keep_forever: bool,
+    /// A conditional save's base: a version id, or `original`. Sent only when
+    /// set, so servers without it still accept every other save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    based_on: Option<String>,
     /// The sealed blob, base64.
     blob: String,
 }
@@ -894,6 +898,9 @@ pub async fn versions_create(
             fields.insert("label".to_owned(), label);
         }
         fields.insert("keepForever".to_owned(), request.keep_forever.to_string());
+        if let Some(based_on) = request.based_on {
+            fields.insert("basedOn".to_owned(), based_on);
+        }
         let created = store_version(
             &state,
             request.file_id,
@@ -1183,12 +1190,30 @@ async fn call_home<T: Serialize, R: DeserializeOwned>(
             StatusCode::PAYLOAD_TOO_LARGE,
             "storage quota exceeded",
         )),
-        StatusCode::CONFLICT => Err(AppError::conflict("the file changed; reload")),
+        StatusCode::CONFLICT => Err(version_conflict(&response.body)
+            .unwrap_or_else(|| AppError::conflict("the file changed; reload"))),
         other => Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             format!("the file's server answered {other}"),
         )),
     }
+}
+
+/// A conditional save's `version_conflict` answer from the file's server,
+/// passed on with the version it names (checked: a version id or `original`).
+fn version_conflict(body: &[u8]) -> Option<AppError> {
+    let answer: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if answer.get("code")?.as_str()? != "version_conflict" {
+        return None;
+    }
+    let current = answer.get("current")?.as_str()?;
+    if current != crate::handlers::files::ORIGINAL && Uuid::parse_str(current).is_err() {
+        return None;
+    }
+    Some(
+        AppError::conflict("the file changed since")
+            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })),
+    )
 }
 
 /// Joins (or starts) the bridge for a remote file: subscribes at home, and
@@ -1843,6 +1868,7 @@ async fn relay_version_create(
             doc_key_id: number("docKeyId"),
             label: fields.get("label").cloned(),
             keep_forever: fields.get("keepForever").is_some_and(|v| v == "true"),
+            based_on: fields.get("basedOn").cloned(),
             blob: STANDARD.encode(blob),
         },
         MAX_JSON_RESPONSE,

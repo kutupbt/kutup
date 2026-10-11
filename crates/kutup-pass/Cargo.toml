@@ -16,3 +16,5 @@ zeroize.workspace = true
 
 [dev-dependencies]
 proptest = "1"
+# The `vault` example stamps edits with the current time.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
