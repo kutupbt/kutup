@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBody, buildMessage, buildPgpMessage, parseMessage } from './mime'
+import { buildBody, buildMessage, buildPgpMessage, buildSignedMessage, parseMessage } from './mime'
 import { autocryptKey, openPgp, type PgpCrypto } from './pgp'
 
 const encoder = new TextEncoder()
@@ -61,6 +61,25 @@ describe('pgp', () => {
     expect(opened).toMatchObject({ encrypted: false, signed: true, verified: true })
     expect((await parseMessage(opened!.message)).text?.trim()).toBe('Signed text')
     expect(await openPgp(bytes(raw), fakeCrypto(''), ['eve'])).toMatchObject({ signed: true, verified: false })
+  })
+
+  it('reads back the signed message Kutup sends, over exactly the signed bytes', async () => {
+    const body = buildBody({ text: 'Şifresiz ama imzalı', html: '<p>Şifresiz ama imzalı</p>', attachments: [] })
+    const header = { from: { address: 'alice@kutup.dev', name: 'Alice' }, to: [{ address: 'bob@kutup.dev', name: '' }], cc: [], subject: 'İmzalı', messageId: 'm1@kutup.dev', date: new Date(0) }
+    const raw = buildSignedMessage(header, body, '-----BEGIN PGP SIGNATURE-----\r\nsig\r\n-----END PGP SIGNATURE-----\r\n')
+    let seen: Uint8Array | null = null
+    const crypto: PgpCrypto = {
+      decrypt: () => Promise.reject(new Error('not encrypted')),
+      verifyDetached: (_signature, content, key) => {
+        seen = content
+        return Promise.resolve(key === 'alice')
+      },
+      verifyCleartext: () => Promise.reject(new Error('not cleartext')),
+    }
+    const opened = await openPgp(raw, crypto, ['alice'])
+    expect(opened).toMatchObject({ encrypted: false, signed: true, verified: true })
+    expect(decoder.decode(seen!)).toBe(decoder.decode(body))
+    expect((await parseMessage(opened!.message)).text?.trim()).toBe('Şifresiz ama imzalı')
   })
 
   it('opens inline PGP and cleartext signatures', async () => {
