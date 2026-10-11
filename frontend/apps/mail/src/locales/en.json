@@ -471,7 +471,8 @@
     "folders": "Folders and labels",
     "filters": "Filters",
     "general": "General",
-    "senders": "Block and allow"
+    "senders": "Block and allow",
+    "identity": "Identity"
   },
   "emptyFolder": {
     "action": "Delete all",
@@ -530,5 +531,18 @@
     "blocked": "{{who}} blocked.",
     "count_one": "{{count}} sender",
     "count_other": "{{count}} senders"
+  },
+  "identity": {
+    "title": "Identity",
+    "description": "How your mail from {{address}} is signed off.",
+    "displayName": "Display name",
+    "displayNameHint": "The name people see next to your address.",
+    "nameTooLong": "A display name is 100 characters at most.",
+    "signature": "Signature",
+    "signatureHint": "Added to new messages, replies and forwards, above the quoted message. Bold, italic, lists and links.",
+    "link": "Link",
+    "linkPrompt": "Link address (https:// or mailto:)",
+    "signatureTooLong": "The signature is too long (10 KB at most).",
+    "addLink": "Add link"
   }
 }

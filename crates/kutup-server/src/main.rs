@@ -642,6 +642,10 @@ fn build_router(state: AppState) -> Router {
                 .delete(handlers::mail_folders::delete_folder),
         )
         .route(
+            "/api/mail/identity",
+            get(handlers::mail_identity::get).patch(handlers::mail_identity::update),
+        )
+        .route(
             "/api/mail/settings",
             get(handlers::mail_settings::get).patch(handlers::mail_settings::update),
         )

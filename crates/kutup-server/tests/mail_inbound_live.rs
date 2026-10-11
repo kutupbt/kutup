@@ -2892,3 +2892,55 @@ fn encrypt_off_sign_on_between_kutup_users() {
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
 }
+
+#[test]
+fn display_name_and_signature() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let identity: Value = bearer(c.get(format!("{base}/api/mail/identity")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(identity["address"], address.address.as_str());
+    assert_eq!(
+        identity["displayName"],
+        address.address.split('@').next().unwrap(),
+        "the username until a name is set"
+    );
+    assert_eq!(identity["signature"], "");
+    let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+        .json(&json!({ "displayName": "  Ayşe Yılmaz ", "signature": "<p><strong>Ayşe</strong><br>Kutup</p>" }))
+        .send()
+        .unwrap();
+    let saved: Value = r.json().unwrap();
+    assert_eq!(saved["displayName"], "Ayşe Yılmaz");
+    assert_eq!(saved["signature"], "<p><strong>Ayşe</strong><br>Kutup</p>");
+    for bad in [
+        json!({ "displayName": "x".repeat(101) }),
+        json!({ "displayName": "a\nb" }),
+        json!({ "signature": "x".repeat(10_001) }),
+    ] {
+        let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+            .json(&bad)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 400, "{bad}");
+    }
+    // Only the name: the signature stays.
+    let r = bearer(c.patch(format!("{base}/api/mail/identity")), &user.token)
+        .json(&json!({ "displayName": "" }))
+        .send()
+        .unwrap();
+    let saved: Value = r.json().unwrap();
+    assert_eq!(
+        saved["displayName"],
+        address.address.split('@').next().unwrap()
+    );
+    assert_eq!(saved["signature"], "<p><strong>Ayşe</strong><br>Kutup</p>");
+}
