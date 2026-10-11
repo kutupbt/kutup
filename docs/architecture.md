@@ -293,9 +293,8 @@ content under an existing ID is rejected.
 
 Chat is a separate cryptographic subsystem from drive encryption and
 collaborative editing. It uses the shared Rust `kutup-chat-core` engine in the
-browser through WebAssembly; the work-in-progress Android and iOS clients are
-integrating the same engine through UniFFI. Those native apps are not yet
-release-ready. The normative contract is
+browser through WebAssembly; the native apps (not started; one per product)
+will use the same engine through UniFFI. The normative contract is
 [`chat-protocol.md`](chat-protocol.md).
 
 ```mermaid
