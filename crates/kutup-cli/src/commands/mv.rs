@@ -398,6 +398,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
                     status: 409,
                     message,
                     name_taken: None,
+                    version_conflict: None,
                 })
                 .context("move file (retried once after a conflict)"))
             }

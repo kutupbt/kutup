@@ -1,7 +1,8 @@
 //! Live e2e for Drive versions v2 (`docs/plans/drive-versions-v2.md`).
 //!
 //! One request stores a version, charged by its measured size; downloads
-//! serve the latest whole-file version; the retention setting.
+//! serve the latest whole-file version and name it; conditional saves
+//! (`basedOn`); the retention setting.
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
@@ -255,7 +256,14 @@ fn versions_v2_contract() {
             .unwrap()
             .to_vec()
     };
+    let current_version = |token: &str| -> String {
+        let r = bearer(c.get(format!("{base}/api/files/{file_id}/download")), token)
+            .send()
+            .unwrap();
+        r.headers()["x-kutup-version"].to_str().unwrap().to_owned()
+    };
     let original = download(&token);
+    assert_eq!(current_version(&token), "original");
     let baseline = used(&c, &base, &token);
 
     // Charged by what arrived; a client's size claim is ignored.
@@ -280,6 +288,9 @@ fn versions_v2_contract() {
         .unwrap()
         .ends_with(v["id"].as_str().unwrap()));
     assert_eq!(used(&c, &base, &token), baseline + edited.len() as i64);
+    // It replaced the original upload, and downloads now name it.
+    assert_eq!(v["parentVersionId"], Value::Null);
+    assert_eq!(current_version(&token), v["id"].as_str().unwrap());
 
     // The download is the file as it is now: the latest whole-file version…
     assert_eq!(download(&token), edited);
@@ -347,6 +358,114 @@ fn versions_v2_contract() {
         )
         .status(),
         StatusCode::FORBIDDEN
+    );
+
+    // Conditional saves (docs/plans/pass.md, "Saving without overwriting").
+    let v_id = v["id"].as_str().unwrap().to_owned();
+    let count = || -> usize {
+        bearer(
+            c.get(format!("{base}/api/files/{file_id}/versions")),
+            &token,
+        )
+        .send()
+        .unwrap()
+        .json::<Vec<Value>>()
+        .unwrap()
+        .len()
+    };
+    let stored = count();
+    // Made from the original, which is no longer current: refused, with the
+    // version that is, and nothing stored or charged.
+    let before = used(&c, &base, &token);
+    let r = post_version(
+        &c,
+        &base,
+        &token,
+        &file_id,
+        "file",
+        seal(b"stale"),
+        &[("basedOn", "original")],
+    );
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let body: Value = r.json().unwrap();
+    assert_eq!(body["code"], "version_conflict");
+    assert_eq!(body["current"], v_id.as_str());
+    assert_eq!(count(), stored);
+    assert_eq!(used(&c, &base, &token), before);
+    // Made from the current one: stored, recording what it replaced.
+    let next = seal(b"next");
+    let r = post_version(
+        &c,
+        &base,
+        &token,
+        &file_id,
+        "file",
+        next.clone(),
+        &[("basedOn", &v_id)],
+    );
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let w: Value = r.json().unwrap();
+    let w_id = w["id"].as_str().unwrap().to_owned();
+    assert_eq!(w["parentVersionId"], v_id.as_str());
+    assert_eq!(download(&token), next);
+    assert_eq!(current_version(&token), w_id);
+    // The same base again is now stale.
+    let r = post_version(
+        &c,
+        &base,
+        &token,
+        &file_id,
+        "file",
+        seal(b"lost"),
+        &[("basedOn", &v_id)],
+    );
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert_eq!(r.json::<Value>().unwrap()["current"], w_id.as_str());
+    // Refused: a base that is no version id, a base on a note's state.
+    for (kind, based_on) in [("file", "latest"), ("yjs", w_id.as_str())] {
+        let r = post_version(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            kind,
+            seal(b"x"),
+            &[("basedOn", based_on)],
+        );
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{kind} {based_on}");
+    }
+    // Two saves from one base at once: exactly one lands.
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let saves: Vec<_> = (0..4)
+            .map(|n| {
+                let (c, base, token, file_id, w_id) = (&c, &base, &token, &file_id, &w_id);
+                let blob = seal(format!("racer {n}").as_bytes());
+                scope.spawn(move || {
+                    post_version(c, base, token, file_id, "file", blob, &[("basedOn", w_id)])
+                        .status()
+                })
+            })
+            .collect();
+        saves.into_iter().map(|s| s.join().unwrap()).collect()
+    });
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CREATED)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+    assert!(statuses
+        .iter()
+        .all(|s| *s == StatusCode::CREATED || *s == StatusCode::CONFLICT));
+    // A save without a base still lands, and records what it replaced.
+    let winner = current_version(&token);
+    let r = post_version(&c, &base, &token, &file_id, "file", seal(b"plain"), &[]);
+    assert_eq!(r.status(), StatusCode::CREATED);
+    assert_eq!(
+        r.json::<Value>().unwrap()["parentVersionId"],
+        winner.as_str()
     );
 
     // The retention setting.

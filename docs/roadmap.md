@@ -656,10 +656,12 @@ other KeePass apps still working and a Kutup three-way merge that never loses
 an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 [`research/19-password-manager.md`](research/19-password-manager.md).
 
-- **K0** (in progress): `crates/kutup-pass`, KDBX through the `keepass`
-  crate and the three-way merge, with corpus and property tests.
-- **K1**: conditional version saves (`basedOn`) in Drive; `kutup sync`
-  merges `.kdbx` files instead of making conflict copies.
+- **K0** ✅: `crates/kutup-pass`, KDBX through the `keepass` crate and the
+  three-way merge, with corpus and property tests.
+- **K1** ✅: conditional version saves (`basedOn`, `parentVersionId`,
+  `X-Kutup-Version`) in Drive; `kutup sync` saves `.kdbx` files as versions
+  of the same file and merges them instead of making conflict copies
+  (`scripts/verify-pass-sync.sh`).
 - **K2**: the website, vault secrets sealed under the account key, the
   offline outbox.
 - **K3**: re-merging diverged versions; phone browsers. **K3b**: the opt-in

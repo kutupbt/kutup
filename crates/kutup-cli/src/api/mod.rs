@@ -47,6 +47,10 @@ pub struct ApiError {
     /// A `409 name_taken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
+    /// A `409 version_conflict`: the version the file holds now, which a
+    /// conditional save (`basedOn`) did not start from: a version id, or
+    /// `original` (docs/plans/pass.md, "Saving without overwriting").
+    pub version_conflict: Option<String>,
 }
 
 /// What holds a taken name, as the server says (any part may be missing).
@@ -81,6 +85,12 @@ impl ApiError {
                     content_hash: text("contentHash"),
                 }
             });
+        let version_conflict = parsed
+            .as_ref()
+            .filter(|v| {
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("version_conflict")
+            })
+            .and_then(|v| v.get("current")?.as_str().map(str::to_string));
         let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
@@ -95,6 +105,7 @@ impl ApiError {
             status,
             message,
             name_taken,
+            version_conflict,
         }
     }
 }
@@ -431,6 +442,22 @@ mod tests {
         );
         assert_eq!(e.message, "quota exceeded");
         assert_eq!(e.to_string(), "HTTP 413: quota exceeded");
+    }
+
+    #[test]
+    fn from_parts_reads_a_version_conflict() {
+        let e = ApiError::from_parts(
+            409,
+            "Conflict",
+            r#"{"error":"the file changed since","code":"version_conflict","current":"original"}"#
+                .into(),
+        );
+        assert_eq!(e.version_conflict.as_deref(), Some("original"));
+        assert!(
+            ApiError::from_parts(409, "Conflict", r#"{"error":"x"}"#.into())
+                .version_conflict
+                .is_none()
+        );
     }
 
     #[test]

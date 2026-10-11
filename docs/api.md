@@ -1636,7 +1636,10 @@ Download the encrypted content of a file.
 **Response:** Raw binary (`application/octet-stream`) — the encrypted file
 bytes as the file is now: its latest `kind = file` version when it has one
 (the same sealed format as the upload), otherwise the original upload.
-Public links and federated reads serve the same.
+Public links and federated reads serve the same. The `X-Kutup-Version` header
+names what was served: the version id, or `original` for the upload. A client
+that saves its edit with `basedOn` passes it on (see
+`POST /api/files/:fileId/versions`).
 
 ---
 
@@ -3627,7 +3630,12 @@ Remove both variants and release their bytes to whoever was charged.
 
 ### GET /api/files/:fileId/versions
 List all versions newest-first.
-**Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt}`.
+**Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
+`parentVersionId` is, for a whole-file version, the version it replaced (the
+file's current content when it was stored); `null` for the original upload,
+for notes' states and for versions stored before it was recorded. Two versions
+with the same parent are a divergence; the parent is the base to merge them
+against (docs/plans/pass.md).
 
 ### GET /api/files/:fileId/versions/:vid/download
 Get the encrypted snapshot bytes for a specific version. Returns
@@ -3654,7 +3662,8 @@ Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
 `file` — a complete typed Drive file blob, validated against the exact file,
 collection and current epoch; `kind` — `file` (the whole file: office
 documents, whiteboards, restored copies) or `yjs` (a note's collaboration
-state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`.
+state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`, and
+`basedOn` (below).
 
 The server measures the body and charges **that** size to the author's
 quota (a client's size claim is not read), stores it as an object of its own
@@ -3666,7 +3675,19 @@ to the log's head before the row is stored; truncation happens only when
 `docKeyId` is the file's current document key, and raises the file's log
 floor to that position so the next frame continues after it. **Auth:** write access (`403` for a view-only recipient).
 
-**Response 201:** the version row, including `kind`. `413` over quota.
+**Conditional saves** (`basedOn`, docs/plans/pass.md, "Saving without
+overwriting"): a whole-file save made from a known version names it, as a
+version id or `original`. Whole-file saves of one file are serialized; if
+the file's current content is no longer that version, nothing is stored or
+charged and the answer is `409 {"code": "version_conflict", "current":
+"<version id | original>"}`: the client fetches the current content, merges
+and saves again with `basedOn` set to it. Without `basedOn` a save is stored
+as before. `basedOn` on a `yjs` state is a `400`. Federated saves pass it on
+to the file's server, and its `409` back. Kutup Pass and `kutup sync` save
+KeePass vaults this way.
+
+**Response 201:** the version row, including `kind` and `parentVersionId`.
+`409 version_conflict` as above. `413` over quota.
 
 Versions are kept by the file owner's `versionRetentionDays` (see
 `PATCH /api/user/me`): the last day whole, the last week one per hour, then

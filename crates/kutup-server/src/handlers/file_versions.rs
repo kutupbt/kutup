@@ -47,6 +47,9 @@ pub struct VersionRow {
     /// `authorUserId` then.
     #[serde(skip_serializing_if = "Option::is_none")]
     remote_author: Option<String>,
+    /// A whole-file version: the version it replaced (`null`: the original
+    /// upload, or not recorded). Two versions with one parent diverged.
+    parent_version_id: Option<String>,
 }
 
 pub(crate) type VersionTuple = (
@@ -63,6 +66,7 @@ pub(crate) type VersionTuple = (
     String,
     i32,
     Option<String>,
+    Option<Uuid>,
 );
 
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
@@ -80,6 +84,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         kind,
         key_generation,
         remote_author,
+        parent_version_id,
     ) = t;
     VersionRow {
         id: id.to_string(),
@@ -95,12 +100,13 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         kind,
         key_generation,
         remote_author,
+        parent_version_id: parent_version_id.map(|id| id.to_string()),
     }
 }
 
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-       remote_author
+       remote_author, parent_version_id
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -342,10 +348,11 @@ pub(crate) fn version_storage_path(file_id: Uuid, version_id: Uuid) -> String {
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, and `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content)"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
+        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it"),
         (status = 413, description = "Storage quota exceeded")
     )
 )]
@@ -447,6 +454,18 @@ pub(crate) async fn store_version(
         return Err(AppError::bad_request("label is too long"));
     }
     let keep_forever = fields.get("keepForever").is_some_and(|v| v == "true");
+    // A conditional save (docs/plans/pass.md, "Saving without overwriting"):
+    // stored only if the file still holds the content it was made from.
+    let based_on = match fields.get("basedOn").map(String::as_str) {
+        None => None,
+        Some(_) if kind != "file" => {
+            return Err(AppError::bad_request("basedOn needs kind file"));
+        }
+        Some(crate::handlers::files::ORIGINAL) => Some(None),
+        Some(id) => Some(Some(
+            Uuid::parse_str(id).map_err(|_| AppError::bad_request("invalid basedOn"))?,
+        )),
+    };
 
     // The same typed, file-bound blob as an upload; the server checks only its
     // public header.
@@ -467,6 +486,34 @@ pub(crate) async fn store_version(
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
+    // One whole-file save at a time per file, so the content it replaces is
+    // the content current when it lands. Taken before the key check's shared
+    // lock: upgrading a shared lock would deadlock two saves.
+    let parent = if kind == "file" {
+        sqlx::query("SELECT 1 FROM files WHERE id = $1 FOR UPDATE")
+            .bind(fid)
+            .execute(&mut *tx)
+            .await?;
+        let current: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(fid)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if based_on.is_some_and(|expected| expected != current) {
+            let current = current.map_or_else(
+                || crate::handlers::files::ORIGINAL.to_owned(),
+                |id| id.to_string(),
+            );
+            return Err(AppError::conflict("the file changed since").with_details(
+                serde_json::json!({ "code": "version_conflict", "current": current }),
+            ));
+        }
+        current
+    } else {
+        None
+    };
     // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
@@ -486,14 +533,17 @@ pub(crate) async fn store_version(
     } else {
         0
     };
+    // Stamped when stored, not when the transaction began: a save that waited
+    // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
-                                      key_generation, remote_author)
-           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                      key_generation, remote_author, parent_version_id,
+                                      created_at)
+           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
            RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-                     remote_author"#,
+                     remote_author, parent_version_id"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -507,6 +557,7 @@ pub(crate) async fn store_version(
     .bind(kind)
     .bind(key_generation)
     .bind(remote_author)
+    .bind(parent)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
