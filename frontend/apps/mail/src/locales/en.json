@@ -231,7 +231,8 @@
     "messagesFrom": "Messages from this sender",
     "messagesTo": "Messages to this recipient",
     "chat": "Chat",
-    "call": "Call"
+    "call": "Call",
+    "block": "Block messages from this sender"
   },
   "moved": {
     "inbox_one": "Moved to Inbox.",
@@ -455,6 +456,45 @@
   "settings": {
     "title": "Settings",
     "folders": "Folders and labels",
-    "filters": "Filters"
+    "filters": "Filters",
+    "senders": "Block and allow"
+  },
+  "senders": {
+    "title": "Block and allow",
+    "description": "Decide what happens to mail from an address or a whole domain, before any filter runs.",
+    "kinds": {
+      "spam": "Spam",
+      "block": "Block",
+      "allow": "Allow"
+    },
+    "help": {
+      "spam": "to keep junk mail out of your inbox; it goes to Spam.",
+      "block": "to stop mail you never want: it is not delivered and is deleted, and the sender is not told.",
+      "allow": "so important mail never ends up in Spam (only when the message really comes from that address or domain)."
+    },
+    "placeholder": "Address or domain, like news@shop.example or shop.example",
+    "pattern": "Address or domain",
+    "list": "List",
+    "add": "Add",
+    "all": "All",
+    "invalid": "Enter an address (name@example.com) or a domain (example.com).",
+    "added": {
+      "spam": "Mail from {{who}} will go to Spam.",
+      "block": "{{who}} is blocked.",
+      "allow": "{{who}} is allowed."
+    },
+    "empty": "Nothing here",
+    "emptyHint": "Add an address or domain above, or use \"Block messages from this sender\" on a message.",
+    "moveFor": "List for {{who}}",
+    "remove": "Remove",
+    "removeFor": "Remove {{who}}",
+    "removed": "{{who}} removed.",
+    "blockTitle": "Block sender",
+    "blockDescription": "New emails from {{who}} won’t be delivered and will be permanently deleted.",
+    "manage": "Manage blocked addresses in Settings.",
+    "block": "Block",
+    "blocked": "{{who}} blocked.",
+    "count_one": "{{count}} sender",
+    "count_other": "{{count}} senders"
   }
 }

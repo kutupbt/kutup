@@ -37,6 +37,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
+import { BlockSenderHost } from '../features/BlockSenderHost'
 import { PlacesHost } from '../features/PlacesHost'
 import { PlacesNav } from '../features/PlacesNav'
 import { SaveContactHost } from '../features/SaveContactHost'
@@ -262,6 +263,7 @@ export function MailShell() {
       <Outlet />
       <SaveContactHost />
       <PlacesHost />
+      <BlockSenderHost />
       {composing ? (
         <Suspense fallback={null}>
           <Composer />

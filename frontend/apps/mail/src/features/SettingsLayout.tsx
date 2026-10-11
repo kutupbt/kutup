@@ -5,6 +5,7 @@ import { cn } from '@kutup/ui/lib/cn'
 const TABS = [
   { to: '/settings/folders', key: 'settings.folders' },
   { to: '/settings/filters', key: 'settings.filters' },
+  { to: '/settings/senders', key: 'settings.senders' },
 ] as const
 
 /** Mail → Settings (Proton's mail settings): one page per section, as tabs. */

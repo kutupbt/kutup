@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { BookUser, Copy, MessageSquare, PenSquare, Phone, Search, UserPlus } from 'lucide-react'
+import { Ban, BookUser, Copy, MessageSquare, PenSquare, Phone, Search, UserPlus } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@kutup/ui/components/po
 import { Separator } from '@kutup/ui/components/separator'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { cn } from '@kutup/ui/lib/cn'
+import { openBlockSender } from './blockState'
 import { openComposer } from './composerState'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
@@ -198,6 +199,11 @@ export function Person({
         <Item icon={<Search />} onClick={() => act(() => void navigate(`/all?q=${encodeURIComponent(mailbox.address)}`))}>
           {role === 'sender' ? t('person.messagesFrom') : t('person.messagesTo')}
         </Item>
+        {role === 'sender' && !own ? (
+          <Item icon={<Ban />} onClick={() => act(() => openBlockSender([mailbox.address.toLowerCase()]))}>
+            {t('person.block')}
+          </Item>
+        ) : null}
       </PopoverContent>
     </Popover>
   )

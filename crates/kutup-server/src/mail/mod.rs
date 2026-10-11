@@ -12,6 +12,7 @@ pub mod headers;
 pub mod lmtp;
 pub mod outside_keys;
 pub mod safety;
+pub mod sender_rules;
 pub mod submit;
 
 use std::sync::Arc;
@@ -414,6 +415,19 @@ pub(crate) async fn insert_message(
         .as_ref()
         .map(|m| (m.address.as_str(), m.name.as_str()))
         .unwrap_or_default();
+    // The account's block, spam and allow lists come first
+    // (docs/plans/mail-filters.md, F3); a blocked message is not stored.
+    let mut folder = message.folder;
+    if let (Some(user_id), "inbound", "inbox" | "spam") =
+        (message.user_id, message.direction, folder)
+    {
+        match sender_rules::verdict(tx, user_id, from_address).await? {
+            Some(sender_rules::Kind::Block) => return Ok(false),
+            Some(sender_rules::Kind::Spam) => folder = "spam",
+            Some(sender_rules::Kind::Allow) if readable.from_authenticated => folder = "inbox",
+            _ => {}
+        }
+    }
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
             (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
@@ -431,7 +445,7 @@ pub(crate) async fn insert_message(
     .bind(message.address_id)
     .bind(thread.unwrap_or(message.id))
     .bind(message.direction)
-    .bind(message.folder)
+    .bind(folder)
     .bind(message.seen)
     .bind(message.protection)
     .bind(message.object_key)
@@ -476,8 +490,8 @@ pub(crate) async fn insert_message(
     // spam, or on a shared mailbox's copy, which has no one owner yet
     // (docs/plans/mail-filters.md).
     if let Some(user_id) = message.user_id.filter(|_| {
-        (message.direction == "inbound" && message.folder == "inbox")
-            || (message.direction == "outbound" && message.folder == "sent")
+        (message.direction == "inbound" && folder == "inbox")
+            || (message.direction == "outbound" && folder == "sent")
     }) {
         filters::on_arrival(
             tx,

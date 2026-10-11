@@ -46,6 +46,10 @@ pub struct Readable {
     /// The body is an encrypted OpenPGP message (RFC 3156
     /// `multipart/encrypted`, or inline PGP): end to end from its sender.
     pub pgp_encrypted: bool,
+    /// The From address is the sender's own: DMARC passed in Stalwart's
+    /// topmost `Authentication-Results` header, or a Kutup account sent it.
+    /// An allow-list entry counts only then (docs/plans/mail-filters.md).
+    pub from_authenticated: bool,
 }
 
 /// A delivery failure report.
@@ -80,8 +84,38 @@ impl Readable {
             spam: spam_verdict(raw),
             bounce: bounce(&message),
             pgp_encrypted: pgp_encrypted(&message),
+            from_authenticated: dmarc_passed(raw),
         }
     }
+}
+
+/// Whether Stalwart's own `Authentication-Results` header says DMARC passed.
+/// Stalwart prepends its headers, so only the first one counts: a sender
+/// can write any it likes below it (RFC 8601 §5).
+fn dmarc_passed(raw: &[u8]) -> bool {
+    let end = find_header_end(raw);
+    let text = String::from_utf8_lossy(&raw[..end]);
+    let mut value: Option<String> = None;
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        match &mut value {
+            // A folded continuation of the header being read.
+            Some(v) if line.starts_with([' ', '\t']) => v.push_str(line),
+            Some(_) => break,
+            None => {
+                if let Some((name, rest)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("authentication-results") {
+                        value = Some(rest.to_string());
+                    }
+                }
+            }
+        }
+    }
+    value.is_some_and(|v| {
+        v.split(';')
+            .skip(1)
+            .any(|part| part.trim().to_ascii_lowercase().starts_with("dmarc=pass"))
+    })
 }
 
 /// A `multipart/report; report-type=delivery-status` message: its failed
@@ -452,5 +486,19 @@ Message-ID: <sent-1@kutup.dev>\r\n\
         let quoted = format!("From: dave@example.org\r\n\r\nSee below\r\n{armored}\r\n");
         assert!(!Readable::parse(quoted.as_bytes()).pgp_encrypted);
         assert!(!Readable::parse(b"From: a@b.org\r\n\r\nplain\r\n").pgp_encrypted);
+    }
+
+    #[test]
+    fn dmarc_counts_only_in_the_topmost_authentication_results() {
+        let passed = b"Authentication-Results: mail.kutup.dev;\r\n\tdkim=pass header.d=example.com;\r\n\tdmarc=pass header.from=example.com\r\nFrom: a@example.com\r\n\r\nbody";
+        assert!(dmarc_passed(passed));
+        let failed = b"Authentication-Results: mail.kutup.dev; dmarc=fail header.from=example.com\r\nAuthentication-Results: forged; dmarc=pass\r\n\r\nbody";
+        assert!(!dmarc_passed(failed));
+        // The authserv-id is not a result, even if it reads like one.
+        assert!(!dmarc_passed(
+            b"Authentication-Results: dmarc=pass; spf=pass\r\n\r\n"
+        ));
+        assert!(!dmarc_passed(b"From: a@example.com\r\n\r\nbody"));
+        assert!(Readable::parse(passed).from_authenticated);
     }
 }

@@ -148,9 +148,14 @@ name and the names of the folders and labels it files into do not.
   someone's allow entry (Proton does not say it checks this).
 - *Block*, as Proton ("New emails from … won't be delivered and will be
   permanently deleted", `BlockSenderModal.tsx`): the message is still
-  accepted at SMTP (refusing it would tell the sender) and then dropped,
-  never stored, counted on the entry ("12 blocked"). The block dialog says
-  so before.
+  accepted (refusing it would tell the sender; a Kutup sender is told
+  "delivered") and then dropped, never stored or charged. The block dialog
+  says so before.
+- An address entry wins over one for its domain; one address or domain is
+  on one list at a time (Proton's overwrite).
+- *Allow* trusts DMARC from Stalwart's own, topmost `Authentication-Results`
+  header only (`mail/headers.rs` `dmarc_passed`); mail from a Kutup account
+  is authenticated by the server itself.
 - "Block sender" in the person card, the list's right click and the reading
   pane; "Not spam" offers "Always allow this sender"; Settings lists all
   three, by address or domain.
@@ -177,10 +182,10 @@ managers, in a later slice; until then its mail uses the fixed folders.
 5. **Slices** in the order below, which builds each layer on the one
    before: places first, then what files mail into them.
 
-## Data (migrations 112, 113)
+## Data (migrations 112–114)
 
 110 and 111 are taken by the aliases plan (A0, A1); 112 holds folders and
-labels (F1), 113 filters and their runs (F2).
+labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
 
 - `mail_folders` (id, user_id, parent_id, sealed name, colour, position,
   expanded, notify), depth checked on write.
@@ -229,8 +234,11 @@ labels (F1), 113 filters and their runs (F2).
    on/off, apply to existing (a background run with progress), "Always
    move/label sender's emails" in Move to and Label as. Built on
    `feat/mail-filters-f2`, stacked on F1.
-3. **F3 block, spam and allow** lists, with DMARC for allow, and their
-   menus.
+3. **F3 block, spam and allow** lists (migration 114,
+   `mail/sender_rules.rs`, checked in `insert_message` before filters), with
+   DMARC for allow; "Block messages from this sender" on the person card and
+   the list's right click; Settings → Block and allow. Built on
+   `feat/mail-filters-f3`, stacked on F2.
 4. **F4 Sieve** import and export of the subset; folders, labels and
    filters for shared mailboxes.
 

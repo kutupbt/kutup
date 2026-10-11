@@ -77,6 +77,8 @@ pub struct Config {
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
+    /// Block, spam and allow entries an account may have (`MAIL_SENDER_RULES_PER_ACCOUNT`).
+    pub mail_sender_rules_per_account: i64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -325,6 +327,7 @@ impl Config {
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
+            mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
