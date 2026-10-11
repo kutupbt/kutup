@@ -64,7 +64,8 @@ The product owner set the order after reading this research:
 
 1. **Offline is the number one need.** Kutup Pass must work offline in the client apps, and that offline behaviour must be **stable when the client apps arrive** — not added to them later.
 2. **The product being built now is the website** (`pass.<domain>`). It uses the offline engine too, but the website's own offline use is best-effort (see §5.6: offline unlock is new work, and iOS Safari can evict a site's storage after about a week without use [GK]).
-3. **Sharing is not the most important problem now.** It moves to the end of the plan (§6). Nothing in the data model may block it later: the vault-key epochs, item-key generations and envelopes stay in the format from day one, so sharing is added without a migration.
+3. **Storage: one sealed record per item, in Kutup's own format; KDBX only for import, export and backup; SQLite with SQLCipher only as the local store of native apps and the CLI** (§5.1a).
+4. **Sharing is not the most important problem now.** It moves to the end of the plan (§6). Nothing in the data model may block it later: the vault-key epochs, item-key generations and envelopes stay in the format from day one, so sharing is added without a migration.
 
 What this means for the design: the offline engine — local replica, durable outbox, revision-conditional sync with a change feed, field-level three-way merge, tombstones, resync, offline unlock and the device-key wrapping — is built **first, once, in the shared Rust core**, and proven before any client UI depends on it. The website, the `kutup` CLI and the later native Kutup Pass app (and the extension) all run that same engine, so the native apps add UI and platform glue, not a second offline implementation.
 
@@ -524,6 +525,25 @@ References need care across vaults: a reference whose target the reader cannot d
 - **One Rust core.** Item schema, sealing, merge, KDBX, TOTP, SSH key parsing, passkey signing, URL matching and import parsers live in `kutup-crypto` (or a new `kutup-pass-core` crate beside it), compiled to WASM for the web and extension and exposed via UniFFI (`kutup-client-ffi`) to native apps, and linked into the `kutup` CLI.
 - **The server is a dumb, conditional record store** with ACLs, quotas, jobs and a change feed. It never sees names, URLs, usernames or secrets.
 - **Offline is the normal case**, not a mode.
+
+### 5.1a Storage formats (decided 2026-10-11)
+
+The question was whether Kutup Pass should store vaults as KDBX files, as an encrypted SQLite database, or in its own format.
+
+**The unit of storage and sync is one sealed record per item**, in Kutup's own format (§5.2): each item sealed under its own item key, carrying its revision. The record is identical everywhere; only the container around it differs:
+
+| Where | Container |
+|---|---|
+| Server | Postgres rows, one sealed item each (the server cannot read them) |
+| Website | IndexedDB, as encrypted records ([`16-browser-storage-architecture.md`](16-browser-storage-architecture.md); no SQLite in the browser) |
+| `kutup` CLI and native apps | SQLite with SQLCipher, holding the same sealed records (doc 16's choice for native clients; Kutup's Chat engine already uses SQLite) |
+| Backup and moving to other apps | A KDBX 4.1 file, lossless (§4), or the encrypted Kutup archive (§5.13) |
+
+**Why not KDBX as the storage or sync format.** KDBX is one file holding the whole vault. Syncing it means every device rewrites the whole file and merges copies afterwards, and every product studied that does this loses edits somewhere: whole-entry last-writer-wins on device clocks (KeePassXC `KXC/core/Merger.cpp:439-492`, Strongbox `SBX/model/Sync/DatabaseMerger.m:304-333`), unconditional overwrites (KeePassDX; Strongbox's Dropbox push `SBX/StrongBox/DropboxV2StorageProvider.m:263`), or no merge at all (KeePassium, `keepassium/KeePassium/database/DatabaseSaving.swift:109-135`). A file also cannot share one item with one person without handing over the whole file and its password (KeeShare, §2.1). KDBX's value is that every KeePass app reads it, so it is the way in and out: import from KeePassXC, export a full backup, leave Kutup at any time.
+
+**Why not encrypted SQLite as the sync format.** A SQLite file is still one file per vault, with the same whole-file sync problem, and browsers cannot use it under Kutup's storage decision. As a **local** store it is the right tool on native platforms: queries, an index for search and autofill, transactions for the outbox. SQLCipher additionally hides the local index and counts on a stolen device; the records inside are sealed regardless.
+
+**Why per-item records make offline reliable.** An edit made offline touches one small record, not the vault; it is sent later as "based on revision N" (a conditional write, §5.5); if someone else changed the same item meanwhile, only that item is merged, field by field, with the losing value kept in history. Bitwarden and Proton Pass already store per-item records; neither added offline writes on top. Kutup Pass would.
 
 ### 5.2 Key hierarchy
 
