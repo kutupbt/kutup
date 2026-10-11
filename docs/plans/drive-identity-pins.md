@@ -123,6 +123,10 @@ Built after the first slices, on the same list:
   from the identity banner; scanning (or pasting) the other person's QR marks
   them `verified` in the list, which also accepts a changed identity compared
   in person. A verified person gets a green shield.
+- **In Contacts.** A contact's Kutup address shows the same shield and opens
+  the same dialog (`@kutup/drive-ui/IdentityShield`), for an address on this
+  server or one already in the list; ordinary email addresses are not looked
+  up, so no other server learns who is in the address book.
 - **Chat on the list.** Chat's engine consults and writes the list
   (docs/chat-protocol.md, trust states): a contact the list knows by another
   authority is quarantined, one verified elsewhere is verified in Chat, Chat's

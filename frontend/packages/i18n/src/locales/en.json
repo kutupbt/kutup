@@ -311,7 +311,14 @@
     "cannotVerifyTitle": "Nothing to verify yet",
     "cannotVerify": "{{account}} has not signed their Drive keys yet. They do at their next sign-in.",
     "lookupFailedTitle": "Couldn't look them up",
-    "lookupFailed": "Their identity could not be fetched right now. Try again in a moment."
+    "lookupFailed": "Their identity could not be fetched right now. Try again in a moment.",
+    "state": {
+      "verified": "Verified",
+      "unverified": "Not verified",
+      "unproven": "Keys not confirmed yet",
+      "changed": "Identity changed",
+      "invalid": "Identity not confirmed"
+    }
   },
   "safetyNumber": {
     "cameraUnavailable": "Camera access was unavailable. Paste the QR value instead.",

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAccountAddress, useDeleteContacts } from '@kutup/contacts-core/api'
 import { displayName, type Contact, type ContactGroup } from '@kutup/contacts-core/model'
+import { IdentityShield } from '@kutup/drive-ui/IdentityShield'
 import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -104,6 +105,8 @@ export function ContactView({ contact, groups, backTo }: { contact: Contact; gro
               ) : server ? (
                 <PinnedKey contact={contact} address={email.address} />
               ) : null}
+              {/* Here, or on another Kutup server met before: who they are, compared in person. */}
+              <IdentityShield address={email.address} name={name} />
             </div>
           ))}
         </Section>
