@@ -188,12 +188,40 @@ deletes the draft.
   until the reader allows them for that message (Proton proxies them; Kutup
   has no proxy yet, so blocking is the safe default); links open with
   `noopener noreferrer`. MIME is parsed with postal-mime.
+- **People:** senders and recipients are named as in Contacts, with an
+  avatar (photo or initials) in the list and the header. A name opens a card
+  on hover or click (Proton's recipient dropdown): the address to copy, New
+  message, View contact or Save to contacts, and their other mail; for a
+  Kutup user (their key list, which their account signed, names the account,
+  so a forged From does not count) also Chat and Call, which open their
+  conversation in Chat, Call asking before it rings (`?call=audio`). A message
+  from (or, in Sent, to) someone not in Contacts shows a banner with Save to
+  contacts, dismissable per address on the device. Saving opens a dialog in
+  Mail, not a new tab: a new contact named as their mail named them, or the
+  address added to someone already there; "Add more details in Contacts"
+  opens the full editor.
+- **Dark theme and quotes:** plain text, and HTML that sets no background and
+  no dark text colour (most personal mail, and Kutup's own), take the
+  theme's colours; HTML that paints itself stays on white, as Proton shows
+  it. The quoted earlier message at the end of a reply (`>` lines, Gmail,
+  Proton, Apple and Outlook quotes, a closing blockquote) is folded behind a
+  "…" button, with no script (`<details>`).
 - The composer, docked like Proton's: From, To, Cc, Bcc with contact
   suggestions, subject, a rich-text editor (Tiptap) sent as HTML with a plain
-  text alternative, attachments, autosave, and Proton's shortcuts
-  (Meta+Enter send, Esc close; N new, R reply, Shift+R reply all, Shift+F
-  forward, `*` star, U unread, A archive, S spam, T trash, `/` search,
-  J/K next and previous).
+  text alternative, attachments, autosave, Meta+Enter to send and Esc to
+  close. Maximised, it dims the app behind it (Gmail's full-screen compose):
+  a click on the dimmed app or Esc docks it again, and Tab stays inside.
+- **Working the list** (Proton, Gmail): Shift-click chooses a range,
+  Ctrl/Cmd-click one more, Shift+↑/↓ extends the choice; a right click acts on
+  the chosen rows when it lands on one, else on that row (read/unread, star,
+  move, delete for good, the sender's other mail, copy, Save to contacts);
+  rows can be dragged onto Inbox, Starred, Archive, Spam or Trash; every move
+  has Undo in its toast.
+- **Shortcuts** (Proton's, listed with `?`): J/K or ↑/↓ next and previous,
+  X choose, Ctrl/Cmd+A all, Esc clear or close, N new, `/` search, `*` star,
+  R read, U unread, I inbox (or not spam), A archive, S spam, T or Delete
+  trash, Ctrl/Cmd+Backspace delete for good in Trash, Spam and Drafts. They
+  act on the chosen rows, else the open conversation.
 - New mail is fetched every 30 s while the app is open; web push later.
 
 ### C2 slices

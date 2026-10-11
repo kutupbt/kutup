@@ -13,6 +13,7 @@
     "@kutup/session": "workspace:*",
     "axios": "^1.18.0",
     "ical.js": "2.2.1",
+    "lucide-react": "^1.8.0",
     "@kutup/ui": "workspace:*",
     "react-i18next": "^17.0.4",
     "sonner": "^2.0.7"

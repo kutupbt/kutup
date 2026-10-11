@@ -1,9 +1,24 @@
 import { ImageOff } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
 import type { ParsedMessage } from '@kutup/mail-core/mime'
-import { plainTextDocument, sanitizeMailHtml } from '@kutup/mail-core/sanitize'
+import { plainTextDocument, sanitizeMailHtml, type FrameLook } from '@kutup/mail-core/sanitize'
 import { Button } from '@kutup/ui/components/button'
+import { cn } from '@kutup/ui/lib/cn'
+
+/** The theme's own colours, for a body that follows the theme. */
+function themeColors(): FrameLook['colors'] {
+  const style = getComputedStyle(document.documentElement)
+  const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
+  return {
+    background: read('--background', '#111318'),
+    text: read('--foreground', '#e5e7eb'),
+    muted: read('--muted-foreground', '#9ca3af'),
+    link: read('--primary', '#93c5fd'),
+    border: read('--border', '#374151'),
+  }
+}
 
 /**
  * A message's body in a sandboxed iframe: no scripts, its own CSP, sized to
@@ -12,6 +27,8 @@ import { Button } from '@kutup/ui/components/button'
  */
 export function MailBody({ parsed }: { parsed: ParsedMessage }) {
   const { t } = useTranslation()
+  const { resolvedTheme } = useTheme()
+  const darkTheme = resolvedTheme === 'dark'
   const [allowRemote, setAllowRemote] = useState(false)
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(120)
@@ -29,9 +46,10 @@ export function MailBody({ parsed }: { parsed: ParsedMessage }) {
   useEffect(() => () => inline.forEach((url) => URL.revokeObjectURL(url)), [inline])
 
   const rendered = useMemo(() => {
-    if (parsed.html) return sanitizeMailHtml(parsed.html, { allowRemote, inlineImages: inline })
-    return { document: plainTextDocument(parsed.text ?? ''), remoteBlocked: false }
-  }, [parsed, allowRemote, inline])
+    const look: FrameLook = { dark: darkTheme, colors: themeColors(), quoteLabel: t('read.showQuoted') }
+    if (parsed.html) return sanitizeMailHtml(parsed.html, { allowRemote, inlineImages: inline, look })
+    return { document: plainTextDocument(parsed.text ?? '', look), remoteBlocked: false, dark: darkTheme, themed: true }
+  }, [parsed, allowRemote, inline, darkTheme, t])
 
   useEffect(() => {
     const iframe = frame.current
@@ -69,8 +87,12 @@ export function MailBody({ parsed }: { parsed: ParsedMessage }) {
         srcDoc={rendered.document}
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
-        className="w-full rounded-md border-0 bg-white"
-        style={{ height }}
+        className={cn(
+          'w-full border-0',
+          // Mail that paints itself keeps its sender's look: on white, in a frame, as Proton shows it.
+          rendered.themed ? 'bg-transparent' : darkTheme ? 'rounded-md bg-white p-3' : 'bg-white',
+        )}
+        style={{ height: height + (darkTheme && !rendered.themed ? 24 : 0) }}
       />
     </div>
   )

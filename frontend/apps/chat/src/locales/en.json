@@ -876,7 +876,10 @@
       "micIsOn": "Microphone on",
       "micIsOff": "Microphone off",
       "groupRinging": "{{name}} is calling the group",
-      "verifiedAccount": "Account confirmed by the server"
+      "verifiedAccount": "Account confirmed by the server",
+      "offerVoice": "Call {{name}}?",
+      "offerVideo": "Video call {{name}}?",
+      "offerDescription": "It rings on their devices until they answer."
     },
     "callLinks": {
       "joinTitle": "Join the meeting",

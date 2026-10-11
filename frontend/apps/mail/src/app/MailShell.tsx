@@ -34,6 +34,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
+import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
+import { SaveContactHost } from '../features/SaveContactHost'
 
 // The composer and its editor load the first time someone writes.
 const Composer = lazy(() => import('../features/Composer').then((m) => ({ default: m.Composer })))
@@ -47,6 +49,9 @@ const NAV: { id: FolderId; icon: ReactNode }[] = [
   { id: 'spam', icon: <OctagonAlert /> },
   { id: 'trash', icon: <Trash2 /> },
 ]
+
+/** Folders mail can be dragged onto. */
+const DROPS = new Set<FolderId>(['inbox', 'starred', 'archive', 'spam', 'trash'])
 
 function Count({ value }: { value: number }) {
   return <span className="text-xs font-semibold tabular-nums text-chrome-foreground">{value}</span>
@@ -131,6 +136,7 @@ export function MailShell() {
   const session = useRequiredSession()
   useAccountUiPreferences()
   const counts = useCounts()
+  const actions = useMailActions()
   const groups = useMyGroups()
   const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')
   const { groupId } = useParams()
@@ -184,23 +190,40 @@ export function MailShell() {
           {t('compose.new')}
         </Button>
       }
-      nav={
-        <>
-          {NAV.map(({ id, icon }) => (
-            <SidebarNavLink
-              key={id}
-              to={`/${id}`}
-              icon={icon}
-              label={t(`folders.${id}`)}
-              trailing={
-                id === 'drafts' && total(id) > 0 ? (
-                  <Count value={total(id)} />
-                ) : id !== 'sent' && id !== 'trash' && unread(id) > 0 ? (
-                  <Count value={unread(id)} />
-                ) : undefined
-              }
-            />
-          ))}
+      nav={<>{NAV.map(({ id, icon }) => (
+        <SidebarNavLink
+          key={id}
+          to={`/${id}`}
+          icon={icon}
+          label={t(`folders.${id}`)}
+          drop={
+            DROPS.has(id)
+              ? {
+                  // Your own folders take your own mail, not a shared mailbox's.
+                  accepts: (types) => !groupId && types.includes(MAIL_DRAG_TYPE),
+                  onDrop: (data) => {
+                    // Mail dragged from the list: filed here, or starred on Starred.
+                    let rows: Movable[]
+                    try {
+                      rows = JSON.parse(data.getData(MAIL_DRAG_TYPE)) as Movable[]
+                    } catch {
+                      return
+                    }
+                    if (id === 'starred') actions.mark(rows, { starred: true })
+                    else actions.move(rows, id as MoveTarget)
+                  },
+                }
+              : undefined
+          }
+          trailing={
+            id === 'drafts' && total(id) > 0 ? (
+              <Count value={total(id)} />
+            ) : id !== 'sent' && id !== 'trash' && unread(id) > 0 ? (
+              <Count value={unread(id)} />
+            ) : undefined
+          }
+        />
+      ))}
           {shared.length > 0 ? (
             <li className="px-3 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-chrome-muted">{t('mailGroups.sharedMailboxes')}</li>
           ) : null}
@@ -208,8 +231,7 @@ export function MailShell() {
             <SharedMailbox key={group.id} group={group} open={groupId === group.id} />
           ))}
           <SidebarNavLink to="/groups" icon={<Users />} label={t('mailGroups.title')} />
-        </>
-      }
+      </>}
       sidebarFooter={<StorageMeter />}
       headerStart={<SearchBox />}
       headerEnd={
@@ -224,6 +246,7 @@ export function MailShell() {
       }
     >
       <Outlet />
+      <SaveContactHost />
       {composing ? (
         <Suspense fallback={null}>
           <Composer />

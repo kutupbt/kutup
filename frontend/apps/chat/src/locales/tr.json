@@ -876,7 +876,10 @@
       "micIsOn": "Mikrofon açık",
       "micIsOff": "Mikrofon kapalı",
       "groupRinging": "{{name}} grubu arıyor",
-      "verifiedAccount": "Hesap sunucu tarafından doğrulandı"
+      "verifiedAccount": "Hesap sunucu tarafından doğrulandı",
+      "offerVoice": "{{name}} aransın mı?",
+      "offerVideo": "{{name}} ile görüntülü görüşme başlatılsın mı?",
+      "offerDescription": "Yanıtlayana kadar cihazlarında çalar."
     },
     "callLinks": {
       "joinTitle": "Toplantıya katılın",

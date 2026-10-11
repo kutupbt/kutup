@@ -9,6 +9,7 @@ import type { ChatAttachmentDescriptorV1, ChatCallMedia, ChatGroupCall, Conversa
 import { freshAccessToken } from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -159,6 +160,20 @@ export function ConversationView({
         ? t('chat.calls.noDevices')
         : t('chat.calls.startFailed'))
     }
+  }
+  // "Call" from another app (Mail's person card) opens the conversation with
+  // `?call=audio|video`: asked here first, so a call never rings unasked.
+  const askedCall = params.get('call')
+  const offeredCall: ChatCallMedia | null = conversation.kind === 'direct' && (askedCall === 'audio' || askedCall === 'video') ? askedCall : null
+  function dropCallParam() {
+    setParams(
+      (now) => {
+        const next = new URLSearchParams(now)
+        next.delete('call')
+        return next
+      },
+      { replace: true },
+    )
   }
   const joinRequests = model.group
     ? chat.snapshot.joinRequests.filter((request) => request.conversationId === model.group!.request.genesis.conversationId).length
@@ -748,6 +763,30 @@ export function ConversationView({
         }}
       />
 
+      <Dialog open={offeredCall !== null && !inAnyCall} onOpenChange={(open) => !open && dropCallParam()}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t(offeredCall === 'video' ? 'chat.calls.offerVideo' : 'chat.calls.offerVoice', { name: model.title })}</DialogTitle>
+            <DialogDescription>{t('chat.calls.offerDescription')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={dropCallParam}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              autoFocus
+              onClick={() => {
+                const media = offeredCall
+                dropCallParam()
+                if (media) void placeCall(media)
+              }}
+            >
+              {offeredCall === 'video' ? <Video /> : <Phone />}
+              {offeredCall === 'video' ? t('chat.calls.video') : t('chat.calls.voice')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ConfirmDestructive
         open={exporting}
         onOpenChange={setExporting}
