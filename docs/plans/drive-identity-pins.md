@@ -52,7 +52,7 @@ account the client remembers) and follows Proton's handling of a failure
 
 ## Design
 
-### 1. The Drive key binding (`kutup-crypto::identity`)
+### 1. The Drive key binding (`kutup-crypto::drive_key_binding`)
 
 `DriveKeyBindingV1`: the account authority signs
 
@@ -66,13 +66,13 @@ driveShareSigningPublicKey(32)
 derive from the master key, so a binding is made once per account lifetime
 (an administrative wipe starts a new one). Verification is strict Ed25519
 over these bytes, plus `incarnationId == hash(authority)`. Vectors in
-`tests/vectors/drive_key_binding_v1.json`, exported to WASM.
+`tests/vectors/identity-pins-v1.json`, exported to WASM.
 
 ### 2. Server
 
 - `users.drive_key_binding` (signature, base64), required at registration and
   first-login setup, checked against the stored keys before storage.
-- `PUT /api/auth/drive-key-binding`: an account made before this signs its
+- `PUT /api/user/drive-key-binding`: an account made before this signs its
   binding at its next sign-in (the account app does it).
 - The person lookups (`GET /api/users/by-email/:account`, and the federated
   `GET /api/drive/federation/users/:username`, whose remote server answers
@@ -87,14 +87,14 @@ over these bytes, plus `incarnationId == hash(authority)`. Vectors in
 authorityPublicKey, state: seen | verified, firstSeen, previous[] }`, sealed
 with XChaCha20-Poly1305 under a key derived from the master key
 (`kutup/identity-pins/v1`), bound to the owner's account and a revision.
-Stored by the server, opaque, at `GET / PUT /api/account/identity-pins`
+Stored by the server, opaque, at `GET / PUT /api/user/identity-pins`
 with a compare-and-swap on the revision (two apps writing at once merge and
 retry). Each browser remembers the highest revision it has seen, so the
 server cannot quietly hand back an older list.
 
 ### 4. Checking a person (web)
 
-`checkIdentity(person)` in `@kutup/drive-core/identity`:
+`checkIdentity(me, account, claimed)` in `@kutup/drive-core` (`identityPins.ts`):
 
 | What the server gave | Result |
 |---|---|
