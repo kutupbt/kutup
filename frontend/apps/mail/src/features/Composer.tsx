@@ -225,7 +225,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [subject, setSubject] = useState(start.draft.subject)
   const [attachments, setAttachments] = useState<Attachment[]>(start.attachments)
   const [minimised, setMinimised] = useState(false)
-  const [maximised, setMaximised] = useState(false)
+  // Opens as the Appearance setting says (Proton's ComposerMode); the mailbox has loaded the settings.
+  const [maximised, setMaximised] = useState(() => mailSettings.data?.composerMode === 'maximized')
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const [sending, setSending] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).

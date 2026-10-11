@@ -69,7 +69,11 @@
     "dragging_other": "{{count}} ileti",
     "messages": "İletiler",
     "viaGroup": "{{address}} üzerinden",
-    "sentBy": "{{name}} gönderdi"
+    "sentBy": "{{name}} gönderdi",
+    "resize": "Listeyi yeniden boyutlandır",
+    "me": "ben",
+    "inConversation_one": "Bu konuşmada {{count}} ileti",
+    "inConversation_other": "Bu konuşmada {{count}} ileti"
   },
   "read": {
     "pick": "Okumak için bir posta seçin.",
@@ -474,7 +478,8 @@
     "general": "Genel",
     "senders": "Engelle ve izin ver",
     "identity": "Kimlik",
-    "autoReply": "Otomatik yanıt"
+    "autoReply": "Otomatik yanıt",
+    "appearance": "Görünüm"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -493,6 +498,8 @@
     "autoDeleteHint": "Çöp Kutusu ve İstenmeyen’deki iletileri 30 gün sonra sil. Açıldığında orada olan iletiler şimdiden sayılır.",
     "almostAllMail": "Tüm postalara İstenmeyen/Çöp’ü katma",
     "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir.",
+    "conversations": "Konuşmaları grupla",
+    "conversationsHint": "Aynı konuşmadaki e-postaları posta kutunuzda bir arada gösterin ya da ayrı ayrı listeleyin.",
     "signOutside": "Kutup dışına giden postayı imzala",
     "signOutsideHint": "Kutup dışındaki kişilere giden yeni posta anahtarınızla imzalı başlar; böylece sizden geldiğini doğrulayabilirler. Kutup kullanıcıları arasındaki posta her zaman imzalı başlar. Tek bir ileti için İmzala'yı yine kapatabilirsiniz."
   },
@@ -588,5 +595,20 @@
     "daysRequired": "Haftanın en az bir gününü seçin.",
     "saved": "Otomatik yanıt güncellendi",
     "disabled": "Otomatik yanıt kapatıldı"
+  },
+  "appearance": {
+    "title": "Görünüm",
+    "layout": "Gelen kutusu düzeni",
+    "layoutHint": "İletinin açıldığı yer: listenin yanında ya da altında.",
+    "column": "Sütun",
+    "row": "Satır",
+    "composer": "Yazma penceresi",
+    "composerHint": "Yeni iletinin nasıl açılacağı: postalarınızın üzerinde bir pencere olarak ya da tam ekran.",
+    "popup": "Normal",
+    "maximized": "Tam ekran",
+    "density": "Yoğunluk",
+    "densityHint": "Listenin ne kadarının ekrana sığacağı.",
+    "comfortable": "Rahat",
+    "compact": "Sıkışık"
   }
 }

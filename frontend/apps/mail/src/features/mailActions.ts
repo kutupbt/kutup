@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useUpdateMessages, type FolderId, type MailMessage, type MessageChange } from '@kutup/mail-core/api'
+import { membersOf, useUpdateMessages, type FolderId, type MailConversation, type MailMessage, type MessageChange } from '@kutup/mail-core/api'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 /** Where a move can send mail; Inbox means home: received mail to the Inbox, sent mail to Sent. */
@@ -16,8 +16,8 @@ export function movesFor(folder: FolderId): MoveTarget[] {
   return all.filter((target) => target !== folder && !(folder === 'sent' && target === 'spam'))
 }
 
-/** What a move needs to know of a message (also what a dragged row carries). */
-export type Movable = Pick<MailMessage, 'id' | 'folder' | 'direction'> & { customFolder?: string | null }
+/** What a move needs to know of a message (also what a dragged row carries); a conversation row moves all its messages here. */
+export type Movable = Pick<MailMessage, 'id' | 'folder' | 'direction'> & { customFolder?: string | null; conversation?: MailConversation }
 
 /** Drag data for mail rows dropped on a folder: JSON `Movable[]`. */
 export const MAIL_DRAG_TYPE = 'application/x-kutup-mail'
@@ -50,7 +50,7 @@ export function useMailActions(group?: string) {
 
   function move(messages: Movable[], destination: Destination, after?: () => void) {
     // Drafts stay drafts: they are deleted, not filed.
-    const movable = messages.filter((m) => m.folder !== 'drafts')
+    const movable = membersOf(messages.map((m) => ({ ...m, customFolder: m.customFolder ?? null }))).filter((m) => m.folder !== 'drafts')
     if (movable.length === 0) return
     const forward = new Map<string, { place: Place; ids: string[] }>()
     const back = new Map<string, { place: Place; ids: string[] }>()
@@ -88,10 +88,12 @@ export function useMailActions(group?: string) {
     )
   }
 
-  function mark(messages: Pick<MailMessage, 'id'>[], change: Omit<MessageChange, 'ids' | 'folder' | 'customFolder'>, after?: () => void) {
+  function mark(messages: (Pick<MailMessage, 'id'> & { conversation?: MailConversation })[], change: Omit<MessageChange, 'ids' | 'folder' | 'customFolder'>, after?: () => void) {
     if (messages.length === 0) return
+    // A conversation row marks all its messages here.
+    const ids = messages.flatMap((m) => m.conversation?.members.map((member) => member.id) ?? [m.id])
     // mutateAsync: callers such as a picker may close before this settles.
-    update.mutateAsync({ ids: messages.map((m) => m.id), ...change, ...inMailbox }).then(() => after?.(), failed)
+    update.mutateAsync({ ids, ...change, ...inMailbox }).then(() => after?.(), failed)
   }
 
   return { move, mark, pending: update.isPending }

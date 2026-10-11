@@ -19,7 +19,7 @@ function Setting({ label, hint, checked, onChange }: { label: string; hint: stri
   )
 }
 
-/** Settings → General (Proton's Messages section): auto-delete, All mail, Sign outside mail. */
+/** Settings → General (Proton's Messages section): conversation grouping, auto-delete, All mail, Sign outside mail. */
 export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
@@ -35,6 +35,12 @@ export function GeneralSettingsPage() {
     <PageBody>
       <PageHeader title={t('general.title')} />
       <div className="space-y-3">
+        <Setting
+          label={t('general.conversations')}
+          hint={t('general.conversationsHint')}
+          checked={settings.data.viewMode === 'conversation'}
+          onChange={(on) => save({ viewMode: on ? 'conversation' : 'message' })}
+        />
         <Setting
           label={t('general.autoDelete')}
           hint={t('general.autoDeleteHint')}
