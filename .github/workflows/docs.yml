@@ -54,7 +54,9 @@ jobs:
           CURRENT_SHA: ${{ github.sha }}
         run: |
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            git diff --check "$BASE_SHA" "$HEAD_SHA"
+            # Three dots: the PR's own changes since it branched. Two dots
+            # would also count master's later changes, undone, as the PR's.
+            git diff --check "$BASE_SHA...$HEAD_SHA"
           elif [[ "$EVENT_NAME" == "push" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
             git diff --check "$BEFORE_SHA" "$CURRENT_SHA"
           else
