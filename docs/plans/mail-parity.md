@@ -53,7 +53,7 @@ reference only where Proton has nothing.
 | Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ❌ |
 | Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised) |
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ❌ |
-| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ❌ |
+| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | 🔶 your address: Mail → Settings → Identity (rich signature, display name); shared mailboxes later |
 | From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ❌ (suggestions only) |
 | Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
@@ -100,7 +100,7 @@ reference only where Proton has nothing.
 | Several addresses per account, default address | `AddressesSection.tsx` | ❌ |
 | Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ❌ (Phase E, organisations) |
 | Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ❌ (with filters' actions) |
-| Auto-reply (vacation responder, schedules) | `AutoReplySection.tsx` | ❌ |
+| Auto-reply (vacation responder, schedules) | `AutoReplySection.tsx` | ✅ fixed, daily, weekly, monthly, permanent in a time zone; once per sender every 7 days; never to lists or automatic mail; kept in Sent; Proton's banner on received auto-replies |
 | Save contacts automatically | `AutomaticallySaveContacts.tsx` | ➖ Kutup asks first (contacts plan) |
 
 ## Notifications

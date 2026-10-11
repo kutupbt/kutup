@@ -148,6 +148,14 @@ pub static REPORT: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(3600),
     )
 });
+/// Feedback: 10 / hour / account (`RATE_LIMIT_FEEDBACK_PER_HOUR`). A person
+/// sends a few; more is someone filling the administrators' inbox.
+pub static FEEDBACK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_FEEDBACK_PER_HOUR", 10) as usize,
+        Duration::from_secs(3600),
+    )
+});
 /// Admin API: 120 / minute / IP (`RATE_LIMIT_ADMIN_PER_MIN`). The dashboard fires a
 /// handful of requests per view; 120/min is generous for a human and a wall for a script.
 pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| {

@@ -311,7 +311,14 @@
     "cannotVerifyTitle": "Nothing to verify yet",
     "cannotVerify": "{{account}} has not signed their Drive keys yet. They do at their next sign-in.",
     "lookupFailedTitle": "Couldn't look them up",
-    "lookupFailed": "Their identity could not be fetched right now. Try again in a moment."
+    "lookupFailed": "Their identity could not be fetched right now. Try again in a moment.",
+    "state": {
+      "verified": "Verified",
+      "unverified": "Not verified",
+      "unproven": "Keys not confirmed yet",
+      "changed": "Identity changed",
+      "invalid": "Identity not confirmed"
+    }
   },
   "safetyNumber": {
     "cameraUnavailable": "Camera access was unavailable. Paste the QR value instead.",
@@ -336,5 +343,34 @@
     "triggerWarning": "Security warning for {{peer}}",
     "verifiedToast": "{{peer}} is now verified on this device",
     "verify": "Verify exact match"
+  },
+  "feedback": {
+    "open": "Send feedback",
+    "title": "Send feedback",
+    "description": "Report a problem, ask for a feature or tell us anything. It goes to the administrators of this server.",
+    "kind": "What is it about?",
+    "kinds": {
+      "bug": "Something isn't working",
+      "feature": "An idea or feature request",
+      "other": "Something else"
+    },
+    "messageLabel": {
+      "bug": "What happened, and what did you expect?",
+      "feature": "What would you like Kutup to do?",
+      "other": "Your message"
+    },
+    "privacy": "Administrators read this as you write it. Never include passwords or your recovery phrase.",
+    "includeDetails": "Include technical details (shown below)",
+    "detail": {
+      "version": "Build",
+      "browser": "Browser",
+      "language": "Language",
+      "screen": "Window"
+    },
+    "github": "Report on GitHub instead",
+    "githubHint": "Opens a public issue page on GitHub with your text filled in; nothing is sent until you submit it there.",
+    "send": "Send",
+    "sent": "Thanks! Your feedback was sent to the administrators.",
+    "failed": "Your feedback could not be sent. Try again."
   }
 }

@@ -12,7 +12,7 @@
     "@kutup/session": "workspace:*",
     "yjs": "^13.6.30",
     "y-protocols": "^1.0.7",
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "libsodium-wrappers-sumo": "^0.7.13"
   },
   "devDependencies": {

@@ -503,8 +503,8 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
-        file_assets, file_shares, file_thumbnails, file_versions, files, folder_access, identity,
-        link_reports, sessions as session_routes, shares, trash, tus,
+        feedback, file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
+        identity, link_reports, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -609,6 +609,12 @@ fn build_router(state: AppState) -> Router {
             put(identity::put_drive_key_binding),
         )
         .route(
+            "/api/feedback",
+            post(feedback::send_feedback)
+                // A message of 5000 characters and a few details.
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
             "/api/user/identity-pins",
             get(identity::get_identity_pins)
                 .put(identity::put_identity_pins)
@@ -640,6 +646,14 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/folders/:id",
             patch(handlers::mail_folders::update_folder)
                 .delete(handlers::mail_folders::delete_folder),
+        )
+        .route(
+            "/api/mail/auto-reply",
+            get(handlers::mail_auto_reply::get).put(handlers::mail_auto_reply::put),
+        )
+        .route(
+            "/api/mail/identity",
+            get(handlers::mail_identity::get).patch(handlers::mail_identity::update),
         )
         .route(
             "/api/mail/settings",
@@ -1790,6 +1804,12 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
                 )
+                .route("/api/admin/feedback", get(feedback::list_feedback))
+                .route(
+                    "/api/admin/feedback/:id/resolve",
+                    post(feedback::resolve_feedback),
+                )
+                .route("/api/admin/feedback/:id", delete(feedback::delete_feedback))
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route(
                     "/api/admin/mail/senders",

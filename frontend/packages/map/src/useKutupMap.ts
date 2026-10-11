@@ -1,4 +1,5 @@
-import maplibregl, { type StyleSpecification } from 'maplibre-gl'
+import * as maplibregl from 'maplibre-gl'
+import type { StyleSpecification } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
 import { freshAccessToken } from '@kutup/session/client'
@@ -75,8 +76,11 @@ export function useKutupMap({
     // An expired token fails relayed requests with 401: refresh it once and
     // reload the style so the missing tiles are fetched again.
     let refreshing = false
-    built.on('error', (event: { error?: { status?: number } }) => {
-      if (event.error?.status !== 401 || refreshing || !effective.viaProxy) return
+    built.on('error', (event) => {
+      // A failed request arrives as maplibre's AJAXError, which carries the
+      // HTTP status.
+      const status = event.error instanceof maplibregl.AJAXError ? event.error.status : undefined
+      if (status !== 401 || refreshing || !effective.viaProxy) return
       refreshing = true
       void freshAccessToken()
         .then(load)

@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import { Archive, BookImage, BookUser, EyeOff, FileType, HardDrive, Heart, Images, Mail as MailIcon, Map as MapIcon, MapPinned, MessagesSquare, Settings, Trash2, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -48,7 +50,12 @@ export function PhotosShell({ primaryAction }: { primaryAction?: ReactNode }) {
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('nav.settings')} />
         </>
       }
-      sidebarFooter={<StorageMeter />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="photos" services={feedbackServices} />
+          <StorageMeter />
+        </div>
+      }
       headerEnd={
         <UserMenu
           name={session.username ?? session.email}

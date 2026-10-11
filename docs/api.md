@@ -3021,6 +3021,43 @@ The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
 
 ---
 
+## Feedback
+
+"Send feedback" sits at the foot of every app's sidebar. What people send
+goes to this server's administrators, not to a public page: a description of
+a problem often mentions files, addresses or messages. An administrator may
+forward an item to the public tracker (`FEEDBACK_GITHUB_REPOSITORY`,
+`owner/repo` on GitHub, default `kutupbt/kutup`, `off` for none) by opening a
+prefilled issue there themselves; the server never posts to GitHub, and the
+issue never names who sent it. Before it opens, the admin page warns that a
+public repository shows the issue to anyone, names the repository, and lets
+the administrator edit the title and text; it opens only after they confirm
+they removed personal details. The public settings advertise the tracker as
+`feedback.githubRepository` (absent when off), and the form offers it to
+people who want to report there in public instead.
+
+### POST /api/feedback
+
+**Auth:** Bearer JWT. Rate limit: 10 per hour per account
+(`RATE_LIMIT_FEEDBACK_PER_HOUR`); over it, `429`.
+
+```json
+{
+  "kind": "bug",
+  "app": "drive",
+  "message": "Uploads stop at half way since this morning.",
+  "details": { "version": "index-BsTFsULO", "browser": "Mozilla/5.0 …", "language": "tr-TR", "screen": "1280×800" }
+}
+```
+
+`kind` is `bug`, `feature` or `other`; `app` names the app it was sent from;
+`message` is 1–5000 characters. `details` is optional and takes only those
+four keys, each a string of at most 300 characters: what the form showed
+before sending, never the page's address (it can name a file or a person).
+`204`; `400` for anything else.
+
+---
+
 ## Admin
 
 All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
@@ -3048,6 +3085,27 @@ Take the reported link down (it answers `410 link_removed` from then on) and
 close every open report on it. `204`; `404` for no such open report. Logged as
 `share.remove`. Disabling the owner (`PUT /api/admin/users/:id` with
 `isActive: false`) takes every link of theirs down and closes their reports.
+
+### GET /api/admin/feedback
+
+Feedback: open items oldest first (default, `?status=open`), or the latest 100
+resolved (`?status=resolved`). Each carries `id`, `kind`, `app`, `message`,
+`details`, `createdAt`, who sent it (`userId`, `userEmail`, `userUsername`;
+null once the account is deleted), `resolvedAt`, `resolution` (`done`,
+`dismissed` or `forwarded`) and `githubUrl`.
+
+### POST /api/admin/feedback/:id/resolve
+
+`{ "resolution": "done" | "dismissed" | "forwarded", "githubUrl"?: "…" }`.
+`githubUrl`, only with `forwarded` and optional there, must be an issue of the
+configured tracker (`https://github.com/<owner>/<repo>/issues/<n>`). `204`;
+`400` for an unknown resolution or another address; `404` for no such open
+item. Logged as `feedback.resolve`.
+
+### DELETE /api/admin/feedback/:id
+
+Delete an item for good, open or resolved. `204`; `404` for no such item.
+Logged as `feedback.delete`.
 
 ### GET /api/admin/users
 
