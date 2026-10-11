@@ -36,6 +36,16 @@ pub enum SendOutcome {
     Refused,
 }
 
+/// The account's sealed identity pin list as the server stores it
+/// (`GET/PUT /api/user/identity-pins`; docs/plans/drive-identity-pins.md).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPinsRecord {
+    pub revision: u64,
+    /// Canonical base64 of the sealed list (`kutup_crypto::identity_pins`).
+    pub envelope: String,
+}
+
 /// The chat server, as the engine sees it. Implementations translate these to the
 /// REST endpoints of `docs/chat-protocol.md` §4 and map non-2xx to
 /// [`ChatError::Transport`](crate::ChatError::Transport) — except the 409 send
@@ -149,6 +159,21 @@ pub trait ChatTransport {
     ) -> Result<SendOutcome> {
         Err(crate::ChatError::Transport(
             "transport does not implement sealed delivery".into(),
+        ))
+    }
+
+    /// The account's synced identity pins, shared with Drive and its other
+    /// apps; `None` before the first list. A transport without them answers
+    /// `None`, and Chat keeps to its own pins.
+    async fn fetch_identity_pins(&self) -> Result<Option<IdentityPinsRecord>> {
+        Ok(None)
+    }
+
+    /// Store `record`, whose revision must follow the stored one by one.
+    /// `Ok(false)`: another app stored that revision first.
+    async fn store_identity_pins(&self, _record: &IdentityPinsRecord) -> Result<bool> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement identity pins".into(),
         ))
     }
 

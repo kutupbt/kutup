@@ -259,6 +259,46 @@ export function buildMessage(message: OutgoingMessage): Uint8Array {
 }
 
 /**
+ * A signed but unencrypted message (RFC 3156 `multipart/signed`,
+ * docs/plans/mail-encrypt-sign.md): the header fields, then `body` (as
+ * `buildBody` made it, the exact bytes `signature` signs) and the armored
+ * detached signature. Proton, Thunderbird and GnuPG check it.
+ */
+export function buildSignedMessage(
+  message: Omit<OutgoingMessage, 'html' | 'text' | 'attachments'>,
+  body: Uint8Array,
+  signature: string,
+): Uint8Array {
+  const outer = boundary()
+  return concat([
+    encoder.encode(
+      [
+        ...headerFields({ ...message, html: '', text: '' }),
+        `Content-Type: multipart/signed; micalg=pgp-sha512; protocol="application/pgp-signature"; boundary="${outer}"`,
+        '',
+        'This is an OpenPGP/MIME signed message (RFC 4880 and 3156)',
+        `--${outer}`,
+        '',
+      ].join('\r\n'),
+    ),
+    body,
+    encoder.encode(
+      [
+        '',
+        `--${outer}`,
+        'Content-Type: application/pgp-signature; name="signature.asc"',
+        'Content-Description: OpenPGP digital signature',
+        'Content-Disposition: attachment; filename="signature.asc"',
+        '',
+        signature.trimEnd(),
+        `--${outer}--`,
+        '',
+      ].join('\r\n'),
+    ),
+  ])
+}
+
+/**
  * The message as sent to OpenPGP recipients (RFC 3156 `multipart/encrypted`):
  * the same header fields, and `armored`, the body (`buildBody`) encrypted
  * and signed. The subject stays readable, as at Proton.

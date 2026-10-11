@@ -1903,7 +1903,7 @@ pub async fn wipe_user(
                drive_signing_public_key = '', account_protection_suite = 0,
                account_protection_salt = '', argon_memory_kib = 0,
                argon_iterations = 0, argon_parallelism = 0,
-               recovery_key_verifier = '',
+               recovery_key_verifier = '', drive_key_binding = NULL,
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
@@ -1912,6 +1912,12 @@ pub async fn wipe_user(
     .bind(target)
     .execute(&state.pool)
     .await?;
+
+    // Its pins were sealed under the old master key: nothing can open them now.
+    sqlx::query("DELETE FROM identity_pins WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
 
     // The wiped keys are gone; so is every session that held them.
     crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;

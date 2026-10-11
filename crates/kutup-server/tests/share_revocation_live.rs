@@ -40,10 +40,10 @@ fn named_share(owner: &User, folder_id: &str, key: &[u8; 32], epoch: u32, to: &U
         key,
         folder_id,
         epoch,
-        &format!("{}@{DOMAIN}", owner.username),
+        &owner.account,
         &owner.identity.incarnation_id(),
         owner.identity.drive_signing_key(),
-        &format!("{}@{DOMAIN}", to.username),
+        &to.account,
         &to.identity.incarnation_id(),
         &to.identity.drive_hpke_public_key(),
     )
@@ -221,10 +221,10 @@ fn share_revocation_contract() {
             .open(
                 &folder.id,
                 2,
-                &format!("{}@{DOMAIN}", owner.username),
+                &owner.account,
                 &owner.identity.incarnation_id(),
                 &owner.identity.drive_signing_public_key(),
-                &format!("{}@{DOMAIN}", alice.username),
+                &alice.account,
                 &alice.identity.incarnation_id(),
                 alice.identity.drive_hpke_private_key(),
             )

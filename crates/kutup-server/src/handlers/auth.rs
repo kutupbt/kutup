@@ -59,6 +59,11 @@ pub struct RegisterRequest {
     argon_parallelism: u32,
     #[serde(default)]
     recovery_proof: String,
+    /// The account authority's signature over the Drive keys
+    /// (`kutup_crypto::drive_key_binding`). Optional for older clients: an
+    /// account without one adds it at its next sign-in.
+    #[serde(default)]
+    drive_key_binding: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -216,6 +221,45 @@ fn validate_account_envelope(
         .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
     kutup_crypto::account_envelope::validate(&envelope, purpose, email, 32)
         .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
+}
+
+/// The binding, when given, checked against the keys and `account`.
+fn checked_drive_key_binding(req: &RegisterRequest, account: &str) -> AppResult<Option<String>> {
+    let Some(binding) = req.drive_key_binding.as_deref() else {
+        return Ok(None);
+    };
+    verify_drive_key_binding(
+        account,
+        &req.account_authority_public_key,
+        &req.public_key,
+        &req.drive_signing_public_key,
+        binding,
+    )?;
+    Ok(Some(binding.to_owned()))
+}
+
+/// Checks that the authority vouches for these Drive keys of `account`.
+pub(crate) fn verify_drive_key_binding(
+    account: &str,
+    authority: &str,
+    hpke: &str,
+    signing: &str,
+    binding: &str,
+) -> AppResult<()> {
+    let key = |value: &str, field: &str| -> AppResult<[u8; 32]> {
+        Ok(decode_canonical_base64_exact(value, 32, field)?
+            .try_into()
+            .expect("validated length"))
+    };
+    let signature = decode_canonical_base64_exact(binding, 64, "driveKeyBinding")?;
+    kutup_crypto::drive_key_binding::verify(
+        account,
+        &key(authority, "accountAuthorityPublicKey")?,
+        &key(hpke, "publicKey")?,
+        &key(signing, "driveSigningPublicKey")?,
+        &signature,
+    )
+    .map_err(|_| AppError::bad_request("driveKeyBinding does not match the account's keys"))
 }
 
 fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
@@ -422,6 +466,10 @@ pub async fn register(
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
+    let drive_key_binding = checked_drive_key_binding(
+        &req,
+        &format!("{}@{}", req.username, state.config.chat_server_name),
+    )?;
 
     let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
@@ -439,8 +487,8 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier, storage_quota_bytes
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
+            login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)"#,
     )
     .bind(&req.email)
     .bind(&req.username)
@@ -460,6 +508,7 @@ pub async fn register(
     .bind(&hash)
     .bind(&recovery_verifier)
     .bind(storage_quota_bytes)
+    .bind(&drive_key_binding)
     .execute(&state.pool)
     .await;
 
@@ -965,11 +1014,13 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
         String,
         i32,
+        bool,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days
+                  is_admin, COALESCE(color, ''), version_retention_days,
+                  drive_key_binding IS NOT NULL
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -987,6 +1038,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        has_drive_key_binding,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -1002,6 +1054,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        has_drive_key_binding,
     })
     .into_response())
 }
@@ -1091,11 +1144,20 @@ pub async fn get_user_by_email(
     _user: AuthUser,
     Path(email): Path<String>,
 ) -> AppResult<Response> {
-    type Row = (Uuid, Option<String>, String, String, String);
+    type Row = (
+        Uuid,
+        Option<String>,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    );
     let mut row: Option<Row> = None;
     if let Some(username) = local_account_username(&email, &state.config.chat_server_name) {
         row = sqlx::query_as(
-            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
+            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
+                    account_authority_public_key, drive_key_binding
              FROM users WHERE username = $1 AND is_active = true",
         )
         .bind(&username)
@@ -1104,14 +1166,17 @@ pub async fn get_user_by_email(
     }
     if row.is_none() {
         row = sqlx::query_as(
-            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
+            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
+                    account_authority_public_key, drive_key_binding
              FROM users WHERE email = $1 AND is_active = true",
         )
         .bind(&email)
         .fetch_optional(&state.pool)
         .await?;
     }
-    let Some((id, username, public_key, incarnation_id, signing_public_key)) = row else {
+    let Some((id, username, public_key, incarnation_id, signing_public_key, authority, binding)) =
+        row
+    else {
         return Err(AppError::not_found("user not found"));
     };
     let username = username
@@ -1124,6 +1189,8 @@ pub async fn get_user_by_email(
         drive_hpke_public_key: public_key,
         account_incarnation_id: incarnation_id,
         drive_signing_public_key: signing_public_key,
+        account_authority_public_key: authority,
+        drive_key_binding: binding,
     })
     .into_response())
 }
@@ -1268,12 +1335,12 @@ pub async fn complete_setup(
     let user_id = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| AppError::unauthorized("invalid setup token"))?;
 
-    let account: Option<(bool, String)> =
-        sqlx::query_as("SELECT is_active, email FROM users WHERE id = $1")
+    let account: Option<(bool, String, String)> =
+        sqlx::query_as("SELECT is_active, email, COALESCE(username, '') FROM users WHERE id = $1")
             .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((true, account_email)) = account else {
+    let Some((true, account_email, account_username)) = account else {
         return Err(AppError::unauthorized("account disabled"));
     };
 
@@ -1306,6 +1373,10 @@ pub async fn complete_setup(
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
+    let drive_key_binding = checked_drive_key_binding(
+        &req,
+        &format!("{account_username}@{}", state.config.chat_server_name),
+    )?;
     let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
@@ -1324,6 +1395,7 @@ pub async fn complete_setup(
               account_protection_suite = $10, account_protection_salt = $11,
               argon_memory_kib = $12, argon_iterations = $13,
               argon_parallelism = $14, recovery_key_verifier = $15,
+              drive_key_binding = $17,
               is_first_login = false, updated_at = NOW()
            WHERE id = $16 AND account_protection_salt = ''"#,
     )
@@ -1343,6 +1415,7 @@ pub async fn complete_setup(
     .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
     .bind(&recovery_verifier)
     .bind(uid)
+    .bind(&drive_key_binding)
     .execute(&state.pool)
     .await;
     match res {

@@ -109,6 +109,11 @@ pub struct SendMeta {
     /// `mime`.
     #[serde(default)]
     pub pgp: Vec<PgpPackage>,
+    /// Kutup addresses the sender turned Encrypt off for
+    /// (docs/plans/mail-encrypt-sign.md): no key packet; the server encrypts
+    /// the readable `mime` to each on arrival, as mail from outside.
+    #[serde(default)]
+    pub readable: Vec<String>,
 }
 
 /// One PGP/MIME message and whom it goes to.
@@ -804,6 +809,8 @@ struct LocalCopy {
     key: String,
     version: String,
     size: i64,
+    /// `end_to_end`, or `zero_access` for a copy sent readable.
+    protection: &'static str,
 }
 
 /// `POST /api/mail/send` — sends a message. Multipart: `meta` (JSON:
@@ -886,7 +893,13 @@ pub async fn send(
             .with_details(json!({ "code": "keyChanged", "address": sender.address })));
     }
 
-    // Kutup recipients, each with a key packet for their current key.
+    // Kutup recipients, each with a key packet for their current key, or
+    // sent readable when the sender turned Encrypt off for them.
+    let readable_to: std::collections::BTreeSet<String> = meta
+        .readable
+        .iter()
+        .map(|a| a.trim().to_ascii_lowercase())
+        .collect();
     let mut seen = std::collections::BTreeSet::new();
     let mut local = Vec::new();
     let mut external = Vec::new();
@@ -908,6 +921,11 @@ pub async fn send(
         if let Some(group) =
             crate::mail::groups::find(&state.pool, &mailbox.address.to_ascii_lowercase()).await?
         {
+            if readable_to.contains(&mailbox.address.to_ascii_lowercase()) {
+                return Err(AppError::bad_request(
+                    "lists and shared mailboxes get end-to-end mail only",
+                ));
+            }
             group_targets.push(group);
             continue;
         }
@@ -926,11 +944,15 @@ pub async fn send(
                 .with_details(json!({ "code": "unknownRecipient", "address": mailbox.address })));
             }
         };
-        let packet = key_packet(&mailbox.address)?;
+        let packet = if readable_to.contains(&mailbox.address.to_ascii_lowercase()) {
+            None
+        } else {
+            Some(key_packet(&mailbox.address)?)
+        };
         local.push((mailbox.address.clone(), recipient, packet));
     }
     for (address, recipient, packet) in &local {
-        if let Some(recipient) = recipient {
+        if let (Some(recipient), Some(packet)) = (recipient, packet) {
             let expected = mail_key::encryption_key_id(&recipient.public_key)
                 .map_err(|_| AppError::internal("stored address key does not parse"))?;
             if mail_key::key_packet_key_id(packet).ok() != Some(expected) {
@@ -1021,14 +1043,19 @@ pub async fn send(
         .filter(|address| !packages.iter().any(|(to, _)| to.contains(address)))
         .cloned()
         .collect();
-    let mime = match (plain.is_empty(), parts.get("mime")) {
+    let readable_local = local.iter().any(|(_, _, packet)| packet.is_none());
+    let mime = match (plain.is_empty() && !readable_local, parts.get("mime")) {
         (true, None) => None,
         (true, Some(_)) => {
             return Err(AppError::bad_request(
-                "no plaintext: every outside recipient has a PGP message",
+                "no plaintext: every recipient has an encrypted copy",
             ))
         }
-        (false, None) => return Err(AppError::bad_request("missing mime for outside recipients")),
+        (false, None) => {
+            return Err(AppError::bad_request(
+                "missing mime for outside or readable recipients",
+            ))
+        }
         (false, Some(mime)) => {
             if !same_message(mime, &sender.address, readable) {
                 return Err(AppError::bad_request(
@@ -1068,7 +1095,23 @@ pub async fn send(
             continue;
         };
         let key = crate::mail::object_key(recipient.user_id, Uuid::new_v4());
-        let copy = [packet.as_slice(), data].concat();
+        let (copy, protection) = match &packet {
+            Some(packet) => ([packet.as_slice(), data].concat(), "end_to_end"),
+            // Encrypt was off for them: the readable message, encrypted here
+            // to their key before it is written, as mail from outside.
+            None => {
+                let mime = mime.expect("checked above: mime comes with readable recipients");
+                let public_key = recipient.public_key.clone();
+                let plaintext = mime.to_vec();
+                let sealed = tokio::task::spawn_blocking(move || {
+                    mail_key::encrypt_binary(&public_key, &plaintext)
+                })
+                .await
+                .map_err(|_| AppError::internal("encryption task"))?
+                .map_err(|_| AppError::internal("recipient key does not encrypt"))?;
+                (sealed, "zero_access")
+            }
+        };
         let size = copy.len() as i64;
         let version = match put(&state, &key, copy).await {
             Ok(version) => version,
@@ -1084,6 +1127,7 @@ pub async fn send(
             key,
             version,
             size,
+            protection,
         });
     }
 
@@ -1170,7 +1214,7 @@ pub async fn send(
                     thread_id: None,
                     direction: "inbound",
                     folder: "inbox",
-                    protection: "end_to_end",
+                    protection: copy.protection,
                     seen: false,
                     object_key: &copy.key,
                     object_version: &copy.version,
@@ -1308,7 +1352,10 @@ pub async fn send(
         // plaintext first, the likeliest to be refused: a refusal of the
         // first submission fails the whole send; a later one fails only its
         // recipients, since the others' mail is already on its way.
+        // The readable message goes out only to outside recipients without a
+        // key; readable Kutup recipients were stored above.
         let submissions = mime
+            .filter(|_| !plain.is_empty())
             .map(|mime| (plain.as_slice(), mime.as_slice()))
             .into_iter()
             .chain(

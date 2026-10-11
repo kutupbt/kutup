@@ -325,3 +325,31 @@ export async function encryptMailPgpAsGroup(key: GroupMailKey, recipientPublicKe
     plaintext,
   )
 }
+
+// --- Encrypt and Sign per message (docs/plans/mail-encrypt-sign.md) --------
+
+/** {@link encryptMailMessage} without a signature: the sender turned Sign off. */
+export async function encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
+  const sealed = (await getCryptoWasm()).encryptMailMessageUnsigned(recipientPublicKeys, plaintext)
+  try {
+    return { keyPackets: sealed.keyPackets, dataPacket: sealed.dataPacket }
+  } finally {
+    sealed.free()
+  }
+}
+
+/** {@link encryptMailPgp} without a signature. */
+export async function encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
+  return (await getCryptoWasm()).encryptMailPgpUnsigned(recipientPublicKeys, plaintext)
+}
+
+/** A detached, armored signature over a MIME part, for `multipart/signed`. */
+export async function signMailDetached(key: SealedMailKey, content: Uint8Array): Promise<string> {
+  return (await getCryptoWasm()).signMailDetached(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, content)
+}
+
+/** {@link signMailDetached} with a shared mailbox's key. */
+export async function signMailDetachedAsGroup(key: GroupMailKey, content: Uint8Array): Promise<string> {
+  const m = key.member
+  return (await getCryptoWasm()).signMailDetachedAsGroup(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, content)
+}

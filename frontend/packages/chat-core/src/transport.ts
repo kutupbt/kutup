@@ -118,6 +118,26 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/manifest', manifest).then((response) => response.data)
   }
 
+  /** The account's synced identity pins, shared with Drive (docs/plans/drive-identity-pins.md). */
+  async fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null> {
+    try {
+      return await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      throw error
+    }
+  }
+
+  async storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean> {
+    try {
+      await api.put('/user/identity-pins', record)
+      return true
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) return false
+      throw error
+    }
+  }
+
   async fetchOwnProfile(): Promise<unknown | null> {
     try {
       return await api.get('/chat/profile').then((response) => response.data)

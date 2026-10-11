@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kutup_chat_core::{ChatError, ChatTransport, Result as CoreResult, SendOutcome};
+use kutup_chat_core::{
+    ChatError, ChatTransport, IdentityPinsRecord, Result as CoreResult, SendOutcome,
+};
 use kutup_chat_proto::{
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
     DeviceListMismatch, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest,
@@ -81,6 +83,32 @@ impl ChatTransport for NativeTransport {
         }
         ensure_success(&response)?;
         decode(&response.body_json).map(Some)
+    }
+
+    async fn fetch_identity_pins(&self) -> CoreResult<Option<IdentityPinsRecord>> {
+        let response = self
+            .request(ChatHttpMethod::Get, "/user/identity-pins".into(), None)
+            .await?;
+        if response.status == 404 {
+            return Ok(None);
+        }
+        ensure_success(&response)?;
+        decode(&response.body_json).map(Some)
+    }
+
+    async fn store_identity_pins(&self, record: &IdentityPinsRecord) -> CoreResult<bool> {
+        let response = self
+            .request(
+                ChatHttpMethod::Put,
+                "/user/identity-pins".into(),
+                Some(encode(record)?),
+            )
+            .await?;
+        if response.status == 409 {
+            return Ok(false);
+        }
+        ensure_success(&response)?;
+        Ok(true)
     }
 
     async fn publish_manifest(

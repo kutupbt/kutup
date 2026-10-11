@@ -1,6 +1,7 @@
 //! Mail settings (docs/plans/mail-parity.md), as Proton's mail settings:
 //! auto-delete of Trash and Spam after 30 days, and whether All mail leaves
-//! out Spam and Trash, and the appearance (layout, density, composer).
+//! out Spam and Trash, whether mail outside Kutup starts signed, and the
+//! appearance (layout, density, composer, conversations).
 //! Emptying a folder is here too.
 
 use axum::extract::State;
@@ -23,6 +24,9 @@ pub struct MailSettings {
     pub auto_delete_days: i32,
     /// All mail leaves out Spam and Trash (Proton's `AlmostAllMail`).
     pub almost_all_mail: bool,
+    /// New mail to people outside Kutup starts with Sign on (Proton's "Sign
+    /// external messages"); the composer can still change it per message.
+    pub sign_outside: bool,
     /// `column`: the reading pane beside the list; `row`: below it
     /// (Proton's `ViewLayout`).
     pub view_layout: String,
@@ -39,7 +43,8 @@ pub struct MailSettings {
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
-        "SELECT auto_delete_days, almost_all_mail, view_layout, density, composer_mode, view_mode
+        "SELECT auto_delete_days, almost_all_mail, sign_outside, view_layout, density, composer_mode,
+                view_mode
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -48,6 +53,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
     Ok(row.unwrap_or_else(|| MailSettings {
         auto_delete_days: 0,
         almost_all_mail: false,
+        sign_outside: true,
         view_layout: "column".into(),
         density: "comfortable".into(),
         composer_mode: "popup".into(),
@@ -73,6 +79,7 @@ pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Jso
 pub struct UpdateMailSettings {
     pub auto_delete_days: Option<i32>,
     pub almost_all_mail: Option<bool>,
+    pub sign_outside: Option<bool>,
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
@@ -118,9 +125,10 @@ pub async fn update(
     sqlx::query(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
-              view_mode)
+              view_mode, sign_outside)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
-                 COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'))
+                 COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
+                 COALESCE($8, true))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -128,6 +136,7 @@ pub async fn update(
              density = COALESCE($5, mail_settings.density),
              composer_mode = COALESCE($6, mail_settings.composer_mode),
              view_mode = COALESCE($7, mail_settings.view_mode),
+             sign_outside = COALESCE($8, mail_settings.sign_outside),
              updated_at = now()",
     )
     .bind(user_id)
@@ -137,6 +146,7 @@ pub async fn update(
     .bind(request.density.as_deref())
     .bind(request.composer_mode.as_deref())
     .bind(request.view_mode.as_deref())
+    .bind(request.sign_outside)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

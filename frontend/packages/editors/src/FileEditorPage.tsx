@@ -26,6 +26,9 @@ import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fil
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
+import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
+import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
+import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } from './paths'
 import { contentAt, currentContent } from './content'
@@ -350,9 +353,19 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         shareRole={shareRole(liveFolder, liveFile, sharedFile)}
         sharedBy={
           sharedFile
-            ? { sharer: sharedFile.sharerAccount, owner: sharedFile.ownerAccount }
+            ? {
+                sharer: sharedFile.sharerAccount,
+                owner: sharedFile.ownerAccount,
+                sharerClaim: sharedFile.sharerClaim,
+                ownerClaim: sharedFile.ownerClaim,
+              }
             : liveFolder.source !== 'owned' && liveFolder.ownerAccount
-              ? { sharer: liveFolder.ownerAccount, owner: liveFolder.ownerAccount }
+              ? {
+                  sharer: liveFolder.ownerAccount,
+                  owner: liveFolder.ownerAccount,
+                  sharerClaim: folderOwnerClaim(liveFolder),
+                  ownerClaim: folderOwnerClaim(liveFolder),
+                }
               : null
         }
         mayRename={
@@ -506,7 +519,7 @@ function Workspace({
   /** How this account may share the file from here, if at all. */
   shareRole: ShareRole | null
   /** Someone else's file: who shared it with this account, and whose it is. */
-  sharedBy: { sharer: string; owner: string } | null
+  sharedBy: { sharer: string; owner: string; sharerClaim: ClaimedKeys; ownerClaim: ClaimedKeys } | null
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
@@ -591,7 +604,12 @@ function Workspace({
         ) : (
           <span className="min-w-0 truncate px-1.5 text-sm font-medium">{name}</span>
         )}
-        {sharedBy ? <SharedBy {...sharedBy} /> : null}
+        {sharedBy ? (
+          <>
+            <SharedBy sharer={sharedBy.sharer} owner={sharedBy.owner} />
+            <VerifyPersonButton account={sharedBy.sharer} claimed={sharedBy.sharerClaim} />
+          </>
+        ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {notice ? (
             <span className="hidden rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground sm:inline" title={notice}>
@@ -655,6 +673,9 @@ function Workspace({
           </div>
         </div>
       </header>
+      {/* Who shared it may not be who the server says (docs/plans/drive-identity-pins.md). */}
+      {sharedBy ? <IdentityBanner account={sharedBy.sharer} claimed={sharedBy.sharerClaim} /> : null}
+      {sharedBy && sharedBy.owner !== sharedBy.sharer ? <IdentityBanner account={sharedBy.owner} claimed={sharedBy.ownerClaim} /> : null}
       {liveBlocked && (wholeFile || opened.kind === 'text') ? (
         <div role="status" data-testid="editor-live-blocked" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/60 px-3 py-2 text-sm">
           <WifiOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
