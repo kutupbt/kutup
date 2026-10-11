@@ -91,7 +91,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Address keys: rotate, import, export, retire | `AddressKeysSection.tsx` | ✅ C3 |
-| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | 🔶 fixed defaults, no settings |
+| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; ❌ scheme per contact |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
 | Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ |
 | Distribution lists, shared mailboxes | (business: groups) | ✅ |

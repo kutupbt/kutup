@@ -4,6 +4,8 @@
 // result is the message to show: the outer header fields over the opened
 // body. Signatures count only against keys the person pinned, as at Proton.
 
+import { attachmentPart, describePart } from './mime'
+
 /** Decrypts an OpenPGP message with the address key, checking its signature with `signerKey` (base64) when given. */
 export type Decrypt = (message: Uint8Array, signerKey?: string) => Promise<{ data: Uint8Array; signed: boolean; verified: boolean }>
 
@@ -189,6 +191,46 @@ function wholeArmor(text: string, begin: string, end: string): boolean {
   return trimmed.startsWith(begin) && trimmed.endsWith(end)
 }
 
+/** A plain-text part holding an inline PGP message or a cleartext-signed text: the text, opened; `null` for ordinary text. */
+async function openInlineText(crypto: PgpCrypto, part: Entity, keys: string[]) {
+  const text = decodeBody(part.head, part.body)
+  if (wholeArmor(text, BEGIN_MESSAGE, END_MESSAGE)) {
+    const opened = await decryptChecked(crypto, bytesOf(text.trim()), keys)
+    const plain = new TextDecoder().decode(opened.data)
+    // An inline message may itself be cleartext-signed inside.
+    if (wholeArmor(plain, BEGIN_SIGNED, END_SIGNATURE)) {
+      const result = await verifyCleartext(crypto, plain.trim(), keys)
+      return { text: result.text, encrypted: true, signed: true, verified: result.verified }
+    }
+    return { text: plain, encrypted: true, signed: opened.signed, verified: opened.signed && opened.verified }
+  }
+  if (wholeArmor(text, BEGIN_SIGNED, END_SIGNATURE)) {
+    const charset = contentType(part.head).params.charset?.toLowerCase()
+    const decoded = charset && charset !== 'utf-8' && charset !== 'us-ascii' ? text : new TextDecoder().decode(bytesOf(text))
+    const result = await verifyCleartext(crypto, decoded.trim(), keys)
+    return { text: result.text, encrypted: false, signed: true, verified: result.verified }
+  }
+  return null
+}
+
+/** The outer header fields over a plain text body and files. */
+function rewrapMixed(outerHead: string, text: string, files: { name: string; type: string; bytes: Uint8Array }[]): Uint8Array {
+  if (files.length === 0) return rewrapText(outerHead, text)
+  const boundary = `kutup-opened-${crypto.randomUUID()}`
+  const utf8 = binary(new TextEncoder().encode(text))
+  const pieces = [
+    [...outerFields(outerHead), 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`].join('\r\n'),
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n',
+    utf8,
+    ...files.flatMap((file) => [`--${boundary}`, binary(attachmentPart(file))]),
+    `--${boundary}--`,
+    '',
+  ]
+  return bytesOf(pieces.join('\r\n'))
+}
+
 /**
  * Opens a message that arrived OpenPGP-encrypted or signed; `null` for any
  * other message. `keys` are the sender's pinned keys (base64) that may sign.
@@ -218,23 +260,51 @@ export async function openPgp(raw: Uint8Array, crypto: PgpCrypto, keys: string[]
   }
 
   if (type.type === 'text/plain') {
-    const text = decodeBody(outer.head, outer.body)
-    if (wholeArmor(text, BEGIN_MESSAGE, END_MESSAGE)) {
-      const opened = await decryptChecked(crypto, bytesOf(text.trim()), keys)
-      const plain = new TextDecoder().decode(opened.data)
-      // An inline message may itself be cleartext-signed inside.
-      if (wholeArmor(plain, BEGIN_SIGNED, END_SIGNATURE)) {
-        const result = await verifyCleartext(crypto, plain.trim(), keys)
-        return { message: rewrapText(outer.head, result.text), encrypted: true, signed: true, verified: result.verified }
+    const body = await openInlineText(crypto, outer, keys)
+    return body ? { message: rewrapText(outer.head, body.text), encrypted: body.encrypted, signed: body.signed, verified: body.verified } : null
+  }
+
+  // Inline PGP with files (Proton's Inline scheme): the first part is the
+  // armored text, each file is encrypted on its own (`name.pgp`) or signed
+  // beside it (`name.sig`).
+  if (type.type === 'multipart/mixed' && type.params.boundary) {
+    const [first, ...rest] = parts(outer.body, type.params.boundary)
+    if (first === undefined) return null
+    const text = entity(first)
+    if (contentType(text.head).type !== 'text/plain') return null
+    const body = await openInlineText(crypto, text, keys)
+    if (!body) return null
+    const files = rest.map((raw) => {
+      const part = entity(raw)
+      return { ...describePart(bytesOf(raw)), bytes: bytesOf(decodeBody(part.head, part.body)) }
+    })
+    // Verified only when the text and every file are.
+    let verified = body.verified
+    const shown: { name: string; type: string; bytes: Uint8Array }[] = []
+    if (body.encrypted) {
+      for (const file of files) {
+        const sealed = /\.(pgp|gpg)$/i.test(file.name) || (/\.asc$/i.test(file.name) && binary(file.bytes).includes(BEGIN_MESSAGE))
+        if (!sealed) {
+          // A file sent in clear beside encrypted text.
+          verified = false
+          shown.push(file)
+          continue
+        }
+        const opened = await decryptChecked(crypto, file.bytes, keys)
+        verified &&= opened.signed && opened.verified
+        shown.push({ name: file.name.replace(/\.(pgp|gpg|asc)$/i, ''), type: 'application/octet-stream', bytes: opened.data })
       }
-      return { message: rewrapText(outer.head, plain), encrypted: true, signed: opened.signed, verified: opened.signed && opened.verified }
+    } else {
+      const names = new Set(files.map((file) => file.name))
+      for (const file of files) {
+        // A signature beside its file is checked, not shown.
+        if (/\.sig$/i.test(file.name) && names.has(file.name.slice(0, -4))) continue
+        const signature = files.find((other) => other.name === `${file.name}.sig`)
+        verified &&= !!signature && (await verifyDetached(crypto, signature.bytes, file.bytes, keys))
+        shown.push(file)
+      }
     }
-    if (wholeArmor(text, BEGIN_SIGNED, END_SIGNATURE)) {
-      const charset = type.params.charset?.toLowerCase()
-      const decoded = charset && charset !== 'utf-8' && charset !== 'us-ascii' ? text : new TextDecoder().decode(bytesOf(text))
-      const result = await verifyCleartext(crypto, decoded.trim(), keys)
-      return { message: rewrapText(outer.head, result.text), encrypted: false, signed: true, verified: result.verified }
-    }
+    return { message: rewrapMixed(outer.head, body.text, shown), encrypted: body.encrypted, signed: body.signed, verified }
   }
   return null
 }

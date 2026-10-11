@@ -792,6 +792,24 @@ pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String>
     .map_err(backend)
 }
 
+/// A cleartext-signed message (`-----BEGIN PGP SIGNED MESSAGE-----`) of
+/// `text` by `signer_secret_key` (SHA-512): the body of an Inline PGP message
+/// that is signed but not encrypted (Proton's "Inline" scheme), which GnuPG,
+/// Thunderbird and Proton check.
+pub fn sign_cleartext(signer_secret_key: &[u8], text: &str) -> Result<String> {
+    let signer = SignedSecretKey::from_bytes(signer_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    pgp::composed::CleartextSignedMessage::sign(
+        rand::rngs::OsRng,
+        text,
+        &signer.primary_key,
+        &Password::empty(),
+    )
+    .map_err(backend)?
+    .to_armored_string(ArmorOptions::default())
+    .map_err(backend)
+}
+
 /// Whether `signature` (armored or binary, as in a `multipart/signed`
 /// message's `application/pgp-signature` part) signs `content` with
 /// `signer_public_key` or one of its subkeys.
@@ -1420,6 +1438,26 @@ mod tests {
         assert!(armor_public_key(&alice.public_key)
             .unwrap()
             .starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
+    }
+
+    #[test]
+    fn cleartext_signatures_verify_and_catch_changes() {
+        let alice = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
+        let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
+        let text = "Merhaba Bob,\n\nİmzalı ama şifresiz.\n";
+        let signed = sign_cleartext(&alice.secret_key, text).unwrap();
+        assert!(signed.starts_with("-----BEGIN PGP SIGNED MESSAGE-----"));
+        let (opened, verified) = verify_cleartext(&signed, Some(&alice.public_key)).unwrap();
+        assert!(verified);
+        // Cleartext signatures sign lines with CRLF endings.
+        assert_eq!(opened.replace("\r\n", "\n").trim_end(), text.trim_end());
+        assert!(!verify_cleartext(&signed, Some(&bob.public_key)).unwrap().1);
+        let changed = signed.replace("Bob", "Eve");
+        assert!(
+            !verify_cleartext(&changed, Some(&alice.public_key))
+                .unwrap()
+                .1
+        );
     }
 
     #[test]

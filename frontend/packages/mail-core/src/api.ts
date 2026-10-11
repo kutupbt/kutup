@@ -7,6 +7,8 @@ import {
   encryptMailPgpAsGroup,
   encryptMailMessageUnsigned,
   encryptMailPgpUnsigned,
+  signMailCleartext,
+  signMailCleartextAsGroup,
   signMailDetached,
   signMailDetachedAsGroup,
   inspectExternalMailKey,
@@ -25,7 +27,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
-import { buildBody, buildMessage, buildPgpMessage, buildSignedMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
+import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
@@ -581,6 +583,10 @@ export interface MailSettings {
   viewMode: 'conversation' | 'message'
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
+  /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
+  attachPublicKey: boolean
+  /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
+  pgpScheme: 'pgp_mime' | 'inline'
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const
@@ -762,9 +768,17 @@ export interface SendAs {
  * arrival) and outside ones plain mail; lists and shared mailboxes stay end
  * to end. Sign off leaves the signature out.
  */
+const encoder = new TextEncoder()
+
 export interface SendOptions {
   encrypt: boolean
   sign: boolean
+  /**
+   * How outside OpenPGP recipients get it (Proton's PGP scheme): PGP/MIME,
+   * or Inline, plain text with each attachment encrypted (or signed) on its
+   * own. Kutup recipients are not affected.
+   */
+  pgpScheme?: 'pgp_mime' | 'inline'
 }
 
 export async function sendDraft(
@@ -791,6 +805,8 @@ export async function sendDraft(
         ? encryptMailPgpAsGroup(as.key, keys, plaintext)
         : encryptMailPgp(account.key, keys, plaintext)
   const signDetached = (content: Uint8Array) => (as ? signMailDetachedAsGroup(as.key, content) : signMailDetached(account.key, content))
+  const signCleartext = (text: string) => (as ? signMailCleartextAsGroup(as.key, text) : signMailCleartext(account.key, text))
+  const inline = options.pgpScheme === 'inline'
   const header = {
     from: { address: self.address, name: self.name },
     to: draft.to,
@@ -822,24 +838,40 @@ export async function sendDraft(
     : []
   const groups = [keyed.filter((r) => !bcc.has(r.address)), ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r])].filter((g) => g.length)
   const plain = external.filter((address) => !keyed.some((r) => r.address === address))
-  const body = groups.length ? buildBody(content) : null
+  const body = groups.length && !inline ? buildBody(content) : null
+  const files = attachmentParts.map((part) => ({ ...describePart(part), bytes: partContent(part) }))
   const packages = await Promise.all(
-    groups.map(async (group) => ({
-      recipients: group.map((r) => r.address),
-      message: buildPgpMessage(header, await sealPgp([...group.map((r) => r.key), self.publicKey], body!)),
-    })),
+    groups.map(async (group) => {
+      const keys = [...group.map((r) => r.key), self.publicKey]
+      // Inline: the plain text encrypted, and each file encrypted on its own as `name.pgp`.
+      const message = inline
+        ? buildInlineMessage(
+            header,
+            await sealPgp(keys, encoder.encode(draft.text)),
+            await Promise.all(files.map(async (file) => attachmentPart({ name: `${file.name}.pgp`, type: 'application/pgp-encrypted', bytes: encoder.encode(await sealPgp(keys, file.bytes)) }))),
+          )
+        : buildPgpMessage(header, await sealPgp(keys, body!))
+      return { recipients: group.map((r) => r.address), message }
+    }),
   )
 
   // The readable message, for outside recipients without a PGP message and
   // Kutup recipients with Encrypt off: signed (multipart/signed) when Sign is on.
   let readableMessage: Promise<Uint8Array> | null = null
   const readableFor = (): Promise<Uint8Array> => {
-    readableMessage ??= options.sign
-      ? (async () => {
-          const signedBody = buildBody(content)
-          return buildSignedMessage(header, signedBody, await signDetached(signedBody))
-        })()
-      : Promise.resolve(message)
+    readableMessage ??= !options.sign
+      ? Promise.resolve(message)
+      : inline
+        ? // Inline: the plain text cleartext-signed, each file with its detached `name.sig`.
+          (async () =>
+            buildInlineMessage(header, await signCleartext(draft.text), [
+              ...attachmentParts,
+              ...(await Promise.all(files.map(async (file) => attachmentPart({ name: `${file.name}.sig`, type: 'application/pgp-signature', bytes: encoder.encode(await signDetached(file.bytes)) })))),
+            ]))()
+        : (async () => {
+            const signedBody = buildBody(content)
+            return buildSignedMessage(header, signedBody, await signDetached(signedBody))
+          })()
     return readableMessage
   }
 

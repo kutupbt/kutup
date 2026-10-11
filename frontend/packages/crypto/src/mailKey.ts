@@ -348,6 +348,17 @@ export async function signMailDetached(key: SealedMailKey, content: Uint8Array):
   return (await getCryptoWasm()).signMailDetached(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, content)
 }
 
+/** A cleartext signature of `text` (`-----BEGIN PGP SIGNED MESSAGE-----`): an Inline PGP body that is signed, not encrypted. */
+export async function signMailCleartext(key: SealedMailKey, text: string): Promise<string> {
+  return (await getCryptoWasm()).signMailCleartext(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, text)
+}
+
+/** {@link signMailCleartext} with a shared mailbox's key. */
+export async function signMailCleartextAsGroup(key: GroupMailKey, text: string): Promise<string> {
+  const m = key.member
+  return (await getCryptoWasm()).signMailCleartextAsGroup(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, text)
+}
+
 /** {@link signMailDetached} with a shared mailbox's key. */
 export async function signMailDetachedAsGroup(key: GroupMailKey, content: Uint8Array): Promise<string> {
   const m = key.member

@@ -105,6 +105,17 @@ export interface CryptoWasmModule {
   encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): string
   signMailDetached(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
+  signMailCleartext(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
+  signMailCleartextAsGroup(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    text: string,
+  ): string
   signMailDetachedAsGroup(
     masterKeyBase64: string,
     loginEmail: string,

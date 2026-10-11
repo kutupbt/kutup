@@ -222,7 +222,8 @@
     "signOn": "Anahtarınızla imzalı; alıcılar sizden geldiğini doğrulayabilir. Bu ileti için kapatın.",
     "signOff": "İmzasız. Açın.",
     "notEncryptedKutup": "Uçtan uca şifreli değil: Kutup bu iletiyi Kutup alıcılarına teslim ederken okuyabilir, sonra şifreli saklar. Listeler ve ortak posta kutuları yine uçtan uca alır.",
-    "notEncrypted": "Şifreli değil: Kutup dışındaki alıcılar düz posta alır."
+    "notEncrypted": "Şifreli değil: Kutup dışındaki alıcılar düz posta alır.",
+    "publicKeyFailed": "Açık anahtarınız eklenemedi."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -501,7 +502,14 @@
     "conversations": "Konuşmaları grupla",
     "conversationsHint": "Aynı konuşmadaki e-postaları posta kutunuzda bir arada gösterin ya da ayrı ayrı listeleyin.",
     "signOutside": "Kutup dışına giden postayı imzala",
-    "signOutsideHint": "Kutup dışındaki kişilere giden yeni posta anahtarınızla imzalı başlar; böylece sizden geldiğini doğrulayabilirler. Kutup kullanıcıları arasındaki posta her zaman imzalı başlar. Tek bir ileti için İmzala'yı yine kapatabilirsiniz."
+    "signOutsideHint": "Kutup dışındaki kişilere giden yeni posta anahtarınızla imzalı başlar; böylece sizden geldiğini doğrulayabilirler. Kutup kullanıcıları arasındaki posta her zaman imzalı başlar. Tek bir ileti için İmzala'yı yine kapatabilirsiniz.",
+    "pgpTitle": "Kutup dışındaki kişiler için PGP",
+    "pgpHint": "Bunları yalnızca Kutup dışında PGP kullanan kişilere yazıyorsanız değiştirin. Kutup kullanıcıları arasındaki posta her zaman uçtan uca şifrelidir.",
+    "attachPublicKey": "Açık anahtarı ekle",
+    "attachPublicKeyHint": "Her yeni ileti açık anahtarınızı dosya olarak taşır; böylece kişiler imzalarınızı doğrulayabilir ve size şifreli yazabilir. Bir iletiden kaldırabilirsiniz.",
+    "pgpScheme": "Varsayılan PGP biçimi",
+    "pgpSchemeHint": "Dışarıdaki PGP kullanıcılarına giden postanın nasıl şifreleneceği ya da imzalanacağı. Satır içi PGP yalnızca düz metin gönderir; her ek ayrı ayrı işlenir.",
+    "inline": "Satır içi"
   },
   "senders": {
     "title": "Engelle ve izin ver",
