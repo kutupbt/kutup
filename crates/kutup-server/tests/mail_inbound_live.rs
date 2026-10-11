@@ -2944,3 +2944,191 @@ fn display_name_and_signature() {
     );
     assert_eq!(saved["signature"], "<p><strong>Ayşe</strong><br>Kutup</p>");
 }
+
+#[test]
+fn auto_reply_answers_once_per_sender() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let put = |body: Value| {
+        bearer(c.put(format!("{base}/api/mail/auto-reply")), &alice.token)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    let settings = |repeat: &str| {
+        json!({
+            "enabled": true, "repeat": repeat, "zone": "Europe/Istanbul",
+            "messageHtml": "<p>Dışarıdayım.</p>", "messageText": "Dışarıdayım.",
+        })
+    };
+
+    // Nothing saved yet.
+    let none: Value = bearer(c.get(format!("{base}/api/mail/auto-reply")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(none, json!({ "settings": null, "active": false }));
+    // Refused: an unknown zone, an end before the start, an empty message.
+    let mut bad = settings("permanent");
+    bad["zone"] = json!("Mars/Olympus");
+    assert_eq!(put(bad).status(), 400);
+    let mut bad = settings("fixed");
+    bad["start"] = json!("2026-10-12T09:00");
+    bad["end"] = json!("2026-10-12T08:00");
+    assert_eq!(put(bad).status(), 400);
+    let mut bad = settings("permanent");
+    bad["messageText"] = json!(" ");
+    assert_eq!(put(bad).status(), 400);
+    let mut bad = settings("daily");
+    bad["days"] = json!([7]);
+    bad["startMinute"] = json!(0);
+    bad["endMinute"] = json!(0);
+    assert_eq!(put(bad).status(), 400);
+
+    // On until turned off.
+    let saved: Value = put(settings("permanent")).json().unwrap();
+    assert_eq!(saved["active"], true, "{saved}");
+    assert_eq!(saved["settings"]["repeat"], "permanent");
+
+    // Bob writes to Alice, as Mail does.
+    let send = |subject: &str| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let answers = |user: &User, name: &str| -> Vec<Value> {
+        folder(&c, &base, &user.token, name)
+            .into_iter()
+            .filter(|m| {
+                m["subject"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("Auto: ")
+            })
+            .collect()
+    };
+    let wait_answers = |user: &User, name: &str, count: usize| -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let found = answers(user, name);
+            if found.len() >= count {
+                return found;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{count} answers never reached {name}"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    };
+
+    let first = send("Toplantı");
+    let reply = wait_answers(&bob, "inbox", 1).remove(0);
+    assert_eq!(reply["subject"], "Auto: Toplantı");
+    assert_eq!(reply["inReplyTo"], first.as_str());
+    assert_eq!(reply["protection"], "zero_access");
+    assert_eq!(reply["from"]["address"], alice_address.address.as_str());
+    let content = open_row(&c, &base, &bob, &bob_address, &reply);
+    assert!(
+        content.contains("Auto-Submitted: auto-replied"),
+        "{content}"
+    );
+    // Alice keeps it in Sent, in the same thread as Bob's message.
+    let kept = wait_answers(&alice, "sent", 1).remove(0);
+    let original = wait_for(&c, &base, &alice, &first);
+    assert_eq!(kept["threadId"], original["threadId"]);
+
+    // Once per sender: a second message gets no answer.
+    send("Yine ben");
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(answers(&bob, "inbox").len(), 1);
+    // Bob's own auto-reply does not answer Alice's automatic one.
+    let bob_put = bearer(c.put(format!("{base}/api/mail/auto-reply")), &bob.token)
+        .json(&settings("permanent"))
+        .send()
+        .unwrap();
+    assert!(bob_put.status().is_success());
+
+    // Saving starts it over; outside its period, nothing is sent.
+    let mut past = settings("fixed");
+    past["start"] = json!("2020-01-01T00:00");
+    past["end"] = json!("2020-01-08T00:00");
+    let saved: Value = put(past).json().unwrap();
+    assert_eq!(saved["active"], false);
+    assert_eq!(saved["settings"]["start"], "2020-01-01T00:00");
+    send("Geçmiş");
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(answers(&bob, "inbox").len(), 1);
+    // Back on: Bob is answered again, and Bob's auto-reply stays quiet.
+    put(settings("permanent"));
+    send("Yeniden");
+    wait_answers(&bob, "inbox", 2);
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(answers(&alice, "inbox").is_empty());
+
+    // Mail a Kutup user sent with Encrypt off (readable on the way) is
+    // answered too.
+    let carol = register(&c, &base);
+    let carol_address = set_up_address(&c, &base, &carol);
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: Okunur\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+        carol_address.address, alice_address.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&carol_address.public_key],
+        &carol_address.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": alice_address.address }],
+        "subject": "Okunur",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [alice_address.address],
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &carol.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+    let reply = wait_answers(&carol, "inbox", 1).remove(0);
+    assert_eq!(reply["subject"], "Auto: Okunur");
+}

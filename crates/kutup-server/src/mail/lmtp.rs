@@ -32,7 +32,7 @@ impl Reply {
         format!("{} {} {}\r\n", self.code, self.status, self.text)
     }
 
-    fn is_success(&self) -> bool {
+    pub(crate) fn is_success(&self) -> bool {
         (200..300).contains(&self.code)
     }
 }
