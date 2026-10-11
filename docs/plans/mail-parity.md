@@ -78,7 +78,7 @@ reference only where Proton has nothing.
 | Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ❌ |
 | Custom folders (nested), labels | `FoldersSection.tsx` | 🔶 [`mail-filters.md`](mail-filters.md) F1 |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | 🔶 F2 |
-| Block, spam, allow lists | `SpamFiltersSection.tsx` | 🔶 F3 (#98 pending) |
+| Block, spam, allow lists | `SpamFiltersSection.tsx` | 🔶 F3 (#100) |
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ❌ |
