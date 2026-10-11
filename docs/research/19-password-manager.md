@@ -58,6 +58,16 @@ What the product owner asked for, and where this document answers it:
 
 **Recommended direction in one paragraph.** Build Kutup Pass as a new web app on its own origin, backed by a new `pass` area of `kutup-server` and new modules in `kutup-crypto` (WASM for web, UniFFI for native, used by the `kutup` CLI). Each item is one encrypted record under its own item key; item keys are wrapped by a vault key that is a Drive-style signed epoch chain; vault keys reach members as HPKE named-share envelopes checked against identity pins, locally and across federation. Clients keep a full encrypted replica (IndexedDB on the web) and write offline into an outbox; the server accepts revision-conditional writes and publishes a change feed; conflicts are merged per field, with losing values kept in history. The item model is a typed superset of Bitwarden, Proton Pass and KeePassXC, and KDBX 4.1 export/import is lossless. SSH keys get an agent in the CLI; the browser extension and the native Kutup Pass app come later and reuse the same core.
 
+## Priorities (decided 2026-10-11)
+
+The product owner set the order after reading this research:
+
+1. **Offline is the number one need.** Kutup Pass must work offline in the client apps, and that offline behaviour must be **stable when the client apps arrive** — not added to them later.
+2. **The product being built now is the website** (`pass.<domain>`). It uses the offline engine too, but the website's own offline use is best-effort (see §5.6: offline unlock is new work, and iOS Safari can evict a site's storage after about a week without use [GK]).
+3. **Sharing is not the most important problem now.** It moves to the end of the plan (§6). Nothing in the data model may block it later: the vault-key epochs, item-key generations and envelopes stay in the format from day one, so sharing is added without a migration.
+
+What this means for the design: the offline engine — local replica, durable outbox, revision-conditional sync with a change feed, field-level three-way merge, tombstones, resync, offline unlock and the device-key wrapping — is built **first, once, in the shared Rust core**, and proven before any client UI depends on it. The website, the `kutup` CLI and the later native Kutup Pass app (and the extension) all run that same engine, so the native apps add UI and platform glue, not a second offline implementation.
+
 ---
 
 ## 2. Products studied
@@ -750,24 +760,28 @@ Items, history revisions, attachments and links count against the account's sing
 
 | Phase | Contents | Unlocks |
 |---|---|---|
-| **P0 core** | Item schema (CBOR, versioned, test vectors); sealing and key formats with new purposes; merge engine; KDBX 4.1 codec with the KeePassXC corpus as a round-trip test; TOTP; URL matching; all in Rust with WASM + UniFFI bindings | Everything else; parity can be proven before any UI exists |
-| **P1 web vault** | `pass.<domain>` app; personal vaults, folders, all item types, attachments, history, trash; server tables, conditional writes, change feed, push hint; IndexedDB replica, outbox, offline unlock; KDBX import/export, Kutup archive, Bitwarden/Proton/CSV importers; generator with policies; `kutup pass` CLI read/write | A usable offline password manager that can replace KeePassXC for one person |
-| **P2 sharing** | Shared vaults with roles and expiry; item shares; identity-pinned invites, local and federated; rotation on removal; "exposed to former member" report; deferred invites; secure links; monitor (weak, reused, 2FA, k-anonymity breaches) | Families and teams; shared accounts |
-| **P3 SSH and passkey storage** | SSH key type, generation and import; CLI agent with approval, session-bind, git namespace, locked listing; push-to-system-agent; KeeAgent round-trip; passkey fields and import/export (KDBX, Bitwarden, CXF later) | Developers use Kutup Pass daily; passkeys migrate in without loss |
-| **P4 browser extension** | Autofill, save prompts, inline menu, TOTP fill, WebAuthn authenticator, native messaging to the CLI | Use on other websites; passkeys usable on desktop |
-| **P5 native Kutup Pass** | Separate repository; iOS AutoFill extension, Android Autofill + Credential Manager, biometric device key, offline store | Phones, after the web apps are done (per mobile-build.md) |
+Ordered by the priorities above: offline first and proven before any UI relies on it; the website is the product being built; sharing last.
+
+| Phase | Contents | Unlocks |
+|---|---|---|
+| **P0 offline core** | In the shared Rust core (WASM + UniFFI + CLI): item schema (CBOR, versioned, test vectors); sealing and key formats, **with vault epochs and item-key generations in the format from day one** (so sharing needs no migration later); the offline engine — local replica store interface, durable outbox with idempotent `op_id`s, revision-conditional sync client, change-feed cursor and resync, field-level three-way merge with losing values kept in history, tombstones and trash; offline unlock and the device-key wrapping format; KDBX 4.1 codec round-tripping the KeePassXC corpus; TOTP; URL matching. Server: the record store, conditional writes, change feed. | The behaviour every client will share, before any UI exists |
+| **P0 proof** | An **offline test harness**: several simulated clients (WASM and native builds of the same core) edit the same vault while disconnected, reconnect in random orders, crash mid-outbox and replay; property tests that no edit is lost and every client converges; the merge test vectors shared across WASM and UniFFI. The `kutup pass` CLI is the **first real offline client**: a full encrypted replica on disk, working with no network, run against a live server in CI. | Confidence that offline is stable before the website or any app depends on it — the native app later reuses a proven engine instead of inventing one |
+| **P1 website** | `pass.<domain>`: personal vaults, folders, all item types, attachments, history, trash, generator with policies; IndexedDB replica and outbox through the P0 engine; installable (service worker app shell); opt-in offline unlock per browser; conflict review UI; KDBX import/export, Kutup archive, Bitwarden / Proton / CSV importers; security monitor (weak, reused, 2FA, k-anonymity breaches) | The product: a password manager on the web that keeps working when the connection drops (best-effort offline on the web, §5.6) |
+| **P2 SSH and passkey storage** | SSH key type, generation and import; CLI agent with approval, session-bind, git namespace, locked listing; push-to-system-agent; KeeAgent round-trip; passkey fields and import/export (KDBX, Bitwarden, CXF later) | Developers use Kutup Pass daily; passkeys migrate in without loss |
+| **P3 client apps** | Browser extension (autofill, save prompts, TOTP fill, WebAuthn authenticator, native messaging to the CLI) and the native Kutup Pass app in its own repository (iOS AutoFill extension, Android Autofill + Credential Manager, SQLCipher store, biometric device key) — **both on the P0 offline engine**, so offline is stable on arrival | Offline on phones and autofill everywhere; timing follows the native-apps decision in mobile-build.md |
+| **P4 sharing** | Shared vaults with roles and expiry; item shares; identity-pinned invites, local and federated; rotation on removal; "exposed to former member" report; deferred invites; secure links | Families, teams and shared accounts — no data migration, because the key structure was in place from P0 |
 | Later | Emergency access, aliases with Mail, CXF, groups, travel mode / duress, desktop app | |
 
-Aliases depend on Mail aliases landing; they can join P2 or P4.
+Aliases depend on Mail aliases landing; they can join P1 or later.
 
 ---
 
 ## 7. Risks and open questions
 
 **Decisions for the product owner.**
-1. **Vault shares only, or item shares too, in P2?** Item shares need the item-key generation chain and a "Shared with me" view; recommended, but they can follow vault shares.
+1. **Vault shares only, or item shares too, when sharing comes (P4)?** Item shares need the item-key generation chain (already in the P0 format) and a "Shared with me" view; recommended, but they can follow vault shares. Not urgent: sharing is last by priority.
 2. **Re-wrap on accept?** Proton re-wraps the vault key under the recipient's own key on accept. Does Drive do the same for folder shares? Pass should match Drive unless there is a reason not to.
-3. **Offline unlock on the web**: cache the master-key envelope (option 1, simpler, offline guessing at 64 MiB per guess if the profile is stolen) or a separate Proton-style offline key (option 2)? Per-device opt-in in both cases?
+3. **Offline unlock on the web** (needed in P1; the native device-key format is fixed in P0): cache the master-key envelope (option 1, simpler, offline guessing at 64 MiB per guess if the profile is stolen) or a separate Proton-style offline key (option 2)? Per-device opt-in in both cases?
 4. **Author signatures on every item write?** They give verifiable "changed by" and stop server forgery under a member's name, at the cost of one signature per write and a key-lookup per verify.
 5. **"Exposed" report scope**: all items in the vault at removal time (default, no tracking), or only items the person opened (needs view events reported to the server)?
 6. **Who pays quota for a shared vault**: the owner, or each writer for what they add?
