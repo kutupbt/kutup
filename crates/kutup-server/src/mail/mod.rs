@@ -212,8 +212,10 @@ pub async fn store(state: &AppState, recipient: &Recipient, raw: &[u8]) -> Reply
 async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> anyhow::Result<Reply> {
     let owned = raw.to_vec();
     let public_key = recipient.public_key.clone();
+    let authserv = state.config.mail_hostname.clone();
     let (readable, ciphertext) = tokio::task::spawn_blocking(move || {
-        let readable = Readable::parse(&owned);
+        let mut readable = Readable::parse(&owned);
+        readable.from_authenticated = headers::dmarc_passed(&owned, &authserv);
         kutup_crypto::mail_key::encrypt_binary(&public_key, &owned).map(|c| (readable, c))
     })
     .await??;

@@ -921,7 +921,10 @@ has signed in to the Account app once, which creates its address key.
    `MAIL_INBOUND_TOKEN` and `STALWART_ADMIN_SECRET` (each
    `openssl rand -hex 32`). With `docker-compose.acme.yml`, add
    `MAIL_HOSTNAME` to `KUTUP_ACME_EXTRA_DOMAINS` so port 25 offers a trusted
-   certificate.
+   certificate. The backend gets `MAIL_HOSTNAME` too: it trusts DMARC only
+   from the `Authentication-Results` header Stalwart writes under that name
+   (people's allow lists rely on it), so leave Stalwart's
+   `add-auth-results-header` at its default, on for port 25.
 2. Open TCP port 25 inbound and outbound. Many hosting providers block
    outbound port 25 until asked; mail to people outside Kutup needs it.
 3. Start with the mail file added:

@@ -73,6 +73,9 @@ pub struct Config {
     pub mail_new_account_per_day: i64,
     /// Folders and labels an account may make (`MAIL_FOLDERS_PER_ACCOUNT`,
     /// `MAIL_LABELS_PER_ACCOUNT`), the levers a priced plan would use.
+    /// Stalwart's host name (`MAIL_HOSTNAME`): the authserv-id of the
+    /// Authentication-Results it writes, the only one trusted for DMARC.
+    pub mail_hostname: String,
     pub mail_folders_per_account: i64,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
@@ -324,6 +327,7 @@ impl Config {
             mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
+            mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),

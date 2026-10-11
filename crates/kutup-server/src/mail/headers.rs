@@ -46,9 +46,10 @@ pub struct Readable {
     /// The body is an encrypted OpenPGP message (RFC 3156
     /// `multipart/encrypted`, or inline PGP): end to end from its sender.
     pub pgp_encrypted: bool,
-    /// The From address is the sender's own: DMARC passed in Stalwart's
-    /// topmost `Authentication-Results` header, or a Kutup account sent it.
-    /// An allow-list entry counts only then (docs/plans/mail-filters.md).
+    /// The From address is the sender's own: DMARC passed in the
+    /// `Authentication-Results` our Stalwart wrote ([`dmarc_passed`], set by
+    /// the receiver), or a Kutup account sent it. An allow-list entry counts
+    /// only then (docs/plans/mail-filters.md).
     pub from_authenticated: bool,
 }
 
@@ -84,15 +85,26 @@ impl Readable {
             spam: spam_verdict(raw),
             bounce: bounce(&message),
             pgp_encrypted: pgp_encrypted(&message),
-            from_authenticated: dmarc_passed(raw),
+            // Needs the server's own name: set by the receiver.
+            from_authenticated: false,
         }
     }
 }
 
-/// Whether Stalwart's own `Authentication-Results` header says DMARC passed.
-/// Stalwart prepends its headers, so only the first one counts: a sender
-/// can write any it likes below it (RFC 8601 §5).
-fn dmarc_passed(raw: &[u8]) -> bool {
+/// Whether our Stalwart's `Authentication-Results` says DMARC passed.
+///
+/// Stalwart prepends the header it writes, with its host name as the
+/// authserv-id, to mail arriving on port 25 (`add-auth-results-header`, on by
+/// default there), and it does not remove headers a sender wrote, which may
+/// claim anything (RFC 8601 §5). So only the topmost header counts, and only
+/// when its authserv-id is `authserv` (`MAIL_HOSTNAME`): a sender's forged
+/// header is then either below ours, or names another host. Should Stalwart
+/// ever write none, a forgery naming our host would be topmost, so that
+/// setting must stay on (docs/self-hosting.md, "Mail").
+pub fn dmarc_passed(raw: &[u8], authserv: &str) -> bool {
+    if authserv.is_empty() {
+        return false;
+    }
     let end = find_header_end(raw);
     let text = String::from_utf8_lossy(&raw[..end]);
     let mut value: Option<String> = None;
@@ -111,11 +123,40 @@ fn dmarc_passed(raw: &[u8]) -> bool {
             }
         }
     }
-    value.is_some_and(|v| {
-        v.split(';')
-            .skip(1)
-            .any(|part| part.trim().to_ascii_lowercase().starts_with("dmarc=pass"))
-    })
+    let Some(value) = value else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    // `authserv-id [version]`, comments aside.
+    let id = parts
+        .next()
+        .map(strip_comments)
+        .and_then(|id| id.split_whitespace().next().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    id == authserv.to_ascii_lowercase()
+        && parts.any(|part| {
+            strip_comments(part)
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("dmarc=pass")
+        })
+}
+
+fn strip_comments(text: &str) -> String {
+    let mut depth = 0usize;
+    text.chars()
+        .filter(|c| match c {
+            '(' => {
+                depth += 1;
+                false
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect()
 }
 
 /// A `multipart/report; report-type=delivery-status` message: its failed
@@ -489,16 +530,30 @@ Message-ID: <sent-1@kutup.dev>\r\n\
     }
 
     #[test]
-    fn dmarc_counts_only_in_the_topmost_authentication_results() {
+    fn dmarc_counts_only_in_our_stalwarts_authentication_results() {
+        const OURS: &str = "mail.kutup.dev";
         let passed = b"Authentication-Results: mail.kutup.dev;\r\n\tdkim=pass header.d=example.com;\r\n\tdmarc=pass header.from=example.com\r\nFrom: a@example.com\r\n\r\nbody";
-        assert!(dmarc_passed(passed));
-        let failed = b"Authentication-Results: mail.kutup.dev; dmarc=fail header.from=example.com\r\nAuthentication-Results: forged; dmarc=pass\r\n\r\nbody";
-        assert!(!dmarc_passed(failed));
+        assert!(dmarc_passed(passed, OURS));
+        // A version and comments after the authserv-id.
+        assert!(dmarc_passed(
+            b"Authentication-Results: mail.kutup.dev 1 (Stalwart); dmarc=pass (p=reject)\r\n\r\n",
+            OURS
+        ));
+        // Ours says fail; a forged pass below it, even claiming our name, is ignored.
+        let below = b"Authentication-Results: mail.kutup.dev; dmarc=fail header.from=example.com\r\nAuthentication-Results: mail.kutup.dev; dmarc=pass\r\n\r\nbody";
+        assert!(!dmarc_passed(below, OURS));
+        // Stalwart wrote none: the sender's own header names another host.
+        let forged = b"Authentication-Results: mx.attacker.example; dmarc=pass header.from=bank.example\r\nFrom: ceo@bank.example\r\n\r\nbody";
+        assert!(!dmarc_passed(forged, OURS));
         // The authserv-id is not a result, even if it reads like one.
         assert!(!dmarc_passed(
-            b"Authentication-Results: dmarc=pass; spf=pass\r\n\r\n"
+            b"Authentication-Results: dmarc=pass; spf=pass\r\n\r\n",
+            OURS
         ));
-        assert!(!dmarc_passed(b"From: a@example.com\r\n\r\nbody"));
-        assert!(Readable::parse(passed).from_authenticated);
+        assert!(!dmarc_passed(b"From: a@example.com\r\n\r\nbody", OURS));
+        // No name configured: nothing is trusted.
+        assert!(!dmarc_passed(passed, ""));
+        // Parsing alone never trusts it; the receiver decides with the server's name.
+        assert!(!Readable::parse(passed).from_authenticated);
     }
 }
