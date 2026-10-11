@@ -12,8 +12,36 @@ use rand::RngCore;
 use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
-pub const DOMAIN: &str = "kutup.localhost";
+/// The domain the server under test names its accounts with
+/// (`CHAT_SERVER_NAME`, advertised as `chat.serverName` in the public
+/// settings). Read from the server, not assumed: the gates run servers named
+/// `kutup.localhost`, `kutup.test`, `backup.test`, `a.test` and `b.test`, and
+/// a Drive key binding or a named share made for another domain is refused.
+pub fn server_domain(c: &Client, base: &str) -> String {
+    static DOMAINS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let domains = DOMAINS.get_or_init(Default::default);
+    if let Some(domain) = domains.lock().unwrap().get(base) {
+        return domain.clone();
+    }
+    let settings: Value = c
+        .get(format!("{base}/api/auth/settings"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let domain = settings["chat"]["serverName"]
+        .as_str()
+        .expect("the server advertises its name")
+        .to_string();
+    domains
+        .lock()
+        .unwrap()
+        .insert(base.to_string(), domain.clone());
+    domain
+}
 
 pub fn b64(b: &[u8]) -> String {
     STANDARD.encode(b)
@@ -34,6 +62,8 @@ pub struct User {
     pub token: String,
     pub identity: AccountIdentityKeysV1,
     pub master_key: [u8; 32],
+    /// `username@domain`, with the domain of the server it was made on.
+    pub account: String,
 }
 
 pub fn register(c: &Client, base: &str) -> User {
@@ -88,7 +118,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
             "recoveryProof": b64(recovery_proof.as_slice()),
     });
     if binding {
-        let account = format!("{username}@{DOMAIN}");
+        let account = format!("{username}@{}", server_domain(c, base));
         body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
             &identity, &account
         )
@@ -119,10 +149,12 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         .as_str()
         .unwrap()
         .to_string();
+    let account = format!("{username}@{}", server_domain(c, base));
     User {
         id,
         email,
         username,
+        account,
         token,
         identity,
         master_key,
@@ -177,10 +209,10 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
         &folder.key,
         &folder.id,
         1,
-        &format!("{}@{DOMAIN}", owner.username),
+        &owner.account,
         &owner.identity.incarnation_id(),
         owner.identity.drive_signing_key(),
-        &format!("{}@{DOMAIN}", to.username),
+        &to.account,
         &to.identity.incarnation_id(),
         &to.identity.drive_hpke_public_key(),
     )

@@ -28,8 +28,8 @@ fn drive_key_bindings() {
     let base = base.trim_end_matches('/').to_string();
     let c = Client::new();
     let (alice, bob) = (register(&c, &base), register_without_binding(&c, &base));
-    let alice_account = format!("{}@{DOMAIN}", alice.username);
-    let bob_account = format!("{}@{DOMAIN}", bob.username);
+    let alice_account = alice.account.clone();
+    let bob_account = bob.account.clone();
 
     // A lookup carries the authority and the binding, which verifies.
     let found = lookup(&c, &base, &bob.token, &alice_account);
@@ -88,7 +88,7 @@ fn drive_key_bindings() {
 
     // Many people at once: the ones here, by exact address.
     let found: Value = bearer(c.post(format!("{base}/api/users/drive-identities")), &alice.token)
-        .json(&json!({ "accounts": [alice_account, bob_account, "nobody@kutup.localhost", "x@elsewhere.example"] }))
+        .json(&json!({ "accounts": [alice_account, bob_account, format!("nobody@{}", server_domain(&c, &base)), "x@elsewhere.example"] }))
         .send()
         .unwrap()
         .json()
@@ -140,7 +140,7 @@ fn identity_pins_sync_by_revision() {
     let base = base.trim_end_matches('/').to_string();
     let c = Client::new();
     let owner = register(&c, &base);
-    let account = format!("{}@{DOMAIN}", owner.username);
+    let account = owner.account.clone();
     let key = identity_pins::derive_key(&owner.master_key).unwrap();
     let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
     let list = IdentityPinsV1 {
