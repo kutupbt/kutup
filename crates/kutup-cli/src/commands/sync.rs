@@ -10,6 +10,7 @@ use notify::{RecursiveMode, Watcher};
 use crate::context::require_session;
 use crate::errors::UsageError;
 use crate::syncengine::{self, SyncOptions};
+use crate::vaultsync::VaultKeys;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -35,15 +36,17 @@ pub fn run(
         return Err(UsageError("--poll only applies to --watch mode".to_string()).into());
     }
     let opts = SyncOptions { delete, dry_run };
+    // Vault keys are asked for once and kept in memory for every pass.
+    let mut vaults = VaultKeys::from_env()?;
 
     std::fs::create_dir_all(local_dir).context("create local dir")?;
 
     if !watch {
-        return do_sync(profile, json, local_dir, collection_id, &opts);
+        return do_sync(profile, json, local_dir, collection_id, &opts, &mut vaults);
     }
 
     // Initial sync before entering the watch loop.
-    if let Err(e) = do_sync(profile, false, local_dir, collection_id, &opts) {
+    if let Err(e) = do_sync(profile, false, local_dir, collection_id, &opts, &mut vaults) {
         eprintln!("sync error: {e:#}");
     }
 
@@ -99,7 +102,7 @@ pub fn run(
         } else {
             eprintln!("\nPolling for remote changes…");
         }
-        if let Err(e) = do_sync(profile, false, local_dir, collection_id, &opts) {
+        if let Err(e) = do_sync(profile, false, local_dir, collection_id, &opts, &mut vaults) {
             eprintln!("sync error: {e:#}");
         }
     }
@@ -122,6 +125,7 @@ fn do_sync(
     local_dir: &str,
     collection_id: &str,
     opts: &SyncOptions,
+    vaults: &mut VaultKeys,
 ) -> Result<()> {
     let ctx = require_session(profile)?;
     let result = syncengine::sync(
@@ -131,6 +135,7 @@ fn do_sync(
         local_dir,
         collection_id,
         opts,
+        vaults,
     )?;
     if json {
         crate::output::print_json(&serde_json::json!({
@@ -138,6 +143,7 @@ fn do_sync(
             "uploaded": result.uploaded,
             "downloaded": result.downloaded,
             "conflicts": result.conflicts,
+            "merged": result.merged,
             "deletedLocal": result.deleted_local,
             "deletedRemote": result.deleted_remote,
             "skippedDeletions": result.skipped_deletions,
@@ -153,6 +159,9 @@ fn do_sync(
             "{prefix}: ↑ {} uploaded, ↓ {} downloaded, ⚠ {} conflicts",
             result.uploaded, result.downloaded, result.conflicts
         );
+        if result.merged > 0 {
+            line.push_str(&format!(", ⇄ {} vaults merged", result.merged));
+        }
         if result.deleted_local + result.deleted_remote > 0 {
             line.push_str(&format!(
                 ", ✗ {} deleted",

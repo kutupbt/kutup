@@ -197,7 +197,10 @@ kutup download <file-id> ./local/path/
 # Bidirectional sync: recursive (sub-folders ↔ sub-collections), with
 # real change detection — local edits re-upload, remote changes
 # re-download, and concurrent edits produce a name.sync-conflict-<ts>
-# copy instead of silently overwriting. Deletions propagate only with
+# copy instead of silently overwriting. KeePass vaults (.kdbx) are saved
+# as versions of the same file and concurrent edits are merged entry by
+# entry (Kutup Pass); the vault key comes from KUTUP_VAULT_PASSWORD /
+# KUTUP_VAULT_KEY_FILE or a prompt. Deletions propagate only with
 # --delete; --dry-run previews without touching anything.
 kutup sync ./local-folder <folder-id>
 kutup sync ./local-folder <folder-id> --watch          # live fsnotify sync

@@ -145,6 +145,7 @@ fn file_meta(
             created_at: String::new(),
             // Only the name is read here: no content, no older keys.
             content_key_generation: f.key_generation,
+            original_key_generation: f.key_generation,
             key_history: Vec::new(),
         };
         // Older keys only if the file predates the folder's last rotation.

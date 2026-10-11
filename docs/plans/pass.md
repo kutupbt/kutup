@@ -1,6 +1,7 @@
 # Kutup Pass (password manager)
 
-**Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`) built. The research and every product
+**Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`) and K1 (conditional
+saves, `kutup sync` merging vaults) built. The research and every product
 decision are in
 [`../research/19-password-manager.md`](../research/19-password-manager.md)
 ("Priorities", "Direction", "SSH agent in the `kutup` CLI", "Unlocking, key
@@ -137,9 +138,17 @@ one database, plus a report of what happened.
   migration numbered one above the highest on master and in open PRs at the
   time). Two versions with the same parent are a divergence; clients fetch
   the parent as the merge base.
-- Kept versions follow Drive's retention; a vault's base version is protected
-  from thinning while a divergence from it is unresolved (or the client keeps
-  its own copy of the base; decided in K1).
+- Downloads name what they serve (`X-Kutup-Version`: a version id or
+  `original`), so a client records the exact version its copy came from.
+- Whole-file saves of one file are serialized (a row lock on the file) and
+  stamped when stored, so "current" is well defined and two saves from one
+  base cannot both land (the live test races four).
+- Federated saves carry `basedOn` to the file's server and its `409` back.
+- Kept versions follow Drive's retention, unchanged (decided in K1). A merge
+  fetches its base from Drive; if retention pruned it, the merge runs
+  without a base by KeePassXC's rules (the newer whole entry wins, the other
+  goes to history), which loses no field either. Clients keep no copy of
+  their own.
 
 ## Clients
 
@@ -150,11 +159,26 @@ one database, plus a report of what happened.
   KeePassXC users on other machines.
 - On a conflict (`409`, or a local and a remote change since the base), sync
   merges the three versions with `kutup-pass` instead of writing a
-  `.sync-conflict` copy, saves the result with `basedOn = current`, and
-  writes it locally. KeePassXC notices the file changed and reloads.
-- It needs the vault's composite key: the vault secret (K2) when the account
-  has stored it, otherwise a prompt in the terminal, otherwise it falls back to
-  today's conflict copy and says so.
+  `.sync-conflict` copy, saves the result with `basedOn = current` (merging
+  again on top if another save lands first, up to five times), and writes it
+  locally. KeePassXC notices the file changed and reloads. If Drive already
+  holds everything the local copy changed, nothing is uploaded.
+- The base is the version the local copy was synced from. After a fallback
+  conflict copy the local copy did not start from the recorded version, so
+  the next merge runs without a base. A vault on both sides with no base (a
+  second machine joining with its own copy) is merged by KeePassXC's rules.
+- A vault edited again during the merge is left alone and merged again on
+  the next pass (the base is not moved, so the new edit is not lost).
+- It needs the vault's composite key: `KUTUP_VAULT_PASSWORD` and/or
+  `KUTUP_VAULT_KEY_FILE`, otherwise a prompt in the terminal (remembered in
+  memory for the run and every `--watch` pass), otherwise it falls back to
+  today's conflict copy and says so. A key changed on one side since the base
+  wins like any other change. The vault secret stored in the account comes in
+  K2.
+- Checked live by `scripts/verify-pass-sync.sh`: two machines (two CLI
+  profiles) edit one vault offline; disjoint edits, the same field on both
+  sides, the stable file id and the keyless fallback. The vaults it edits
+  are made with `cargo run -p kutup-pass --example vault`.
 
 ### The website (K2, `pass.<domain>`)
 
@@ -200,7 +224,7 @@ keeps, approval per use, keys listed while locked, memory only,
 |---|---|---|
 | **K0a** ✅ | `crates/kutup-pass`: KDBX open/save through `keepass`, upgrade to 4.1, composite keys; the corpus round-trip test | every corpus vault in a supported format round-trips equal |
 | **K0b** ✅ | Three-way merge with the report and review marks; fixtures and property tests | all merge cases and properties pass |
-| **K1** | `basedOn` and parent versions on the server (+ migration); `kutup sync` saves `.kdbx` as versions and merges on conflict | two machines editing one vault offline, then syncing, lose nothing (live test) |
+| **K1** ✅ | `basedOn` and parent versions on the server (+ migration); `kutup sync` saves `.kdbx` as versions and merges on conflict | two machines editing one vault offline, then syncing, lose nothing (live test) |
 | **K2** | `kutup-pass-wasm`; the `pass.<domain>` app; vault secrets; editing; offline outbox | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
 | **K3** | Divergence handling and re-merge; the website on phone browsers | diverged versions are merged by the next client that opens the vault |
 | **K3b** | The `kutup` SSH agent | `ssh` and `git commit -S` work through it with approvals |

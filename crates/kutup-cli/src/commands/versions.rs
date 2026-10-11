@@ -206,6 +206,7 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
             doc_key_id: src.doc_key_id,
             label: format!("Restored from {now}"),
             keep_forever: false,
+            based_on: None,
         },
     )?;
 

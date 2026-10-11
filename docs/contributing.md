@@ -135,6 +135,7 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 ./scripts/test-chat-backup-integration.sh        # real Postgres/SeaweedFS backup lifecycle
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
 ./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
+KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
 ```
 
 The backup integration script owns a disposable Compose project and covers the
