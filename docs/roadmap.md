@@ -874,13 +874,14 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
 
 ### Drive · identity pins: what is left
 
-Drive, Chat and the CLI share one list of trusted identities and one safety
-number (docs/plans/drive-identity-pins.md). Still to do:
+Drive, Chat, Contacts and the CLI share one list of trusted identities and
+one safety number (docs/plans/drive-identity-pins.md). Nothing is left on
+the web.
 
-- Contacts shows each person's state from the list (gray, green, red shield)
-  on their page, as the Contacts plan foresaw.
-- The native apps' own screens for the shield and the verification dialog
-  (their Chat engine already keeps to the list).
+- Deferred: the native apps' screens for the shield and the verification
+  dialog. The native apps are not started; each product will be its own app
+  in its own repository (docs/mobile-build.md), and these screens come with
+  them. Their shared Chat engine already keeps to the list.
 
 ### Drive · share dialogs: what is left
 

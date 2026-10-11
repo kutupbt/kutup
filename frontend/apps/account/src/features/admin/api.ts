@@ -237,6 +237,48 @@ export interface LinkReport {
   openReportsOnLink: number
 }
 
+// --- feedback ------------------------------------------------------------
+
+export interface FeedbackItem {
+  id: string
+  kind: 'bug' | 'feature' | 'other'
+  app: string
+  message: string
+  details: Partial<Record<'version' | 'browser' | 'language' | 'screen', string>> | null
+  createdAt: string
+  /** Null when the account was deleted since. */
+  userId: string | null
+  userEmail: string | null
+  userUsername: string | null
+  resolvedAt: string | null
+  resolution: 'done' | 'dismissed' | 'forwarded' | null
+  githubUrl: string | null
+}
+
+export const feedbackKey = [...adminKey, 'feedback'] as const
+
+export function useFeedback(status: 'open' | 'resolved') {
+  return useQuery({
+    queryKey: [...feedbackKey, status],
+    queryFn: async () => (await api.get<FeedbackItem[]>('/admin/feedback', { params: { status } })).data,
+  })
+}
+
+export function useResolveFeedback() {
+  return useAdminMutation(async (input: { id: string; resolution: 'done' | 'dismissed' | 'forwarded'; githubUrl?: string }) => {
+    await api.post(`/admin/feedback/${encodeURIComponent(input.id)}/resolve`, {
+      resolution: input.resolution,
+      ...(input.githubUrl ? { githubUrl: input.githubUrl } : {}),
+    })
+  })
+}
+
+export function useDeleteFeedback() {
+  return useAdminMutation(async (id: string) => {
+    await api.delete(`/admin/feedback/${encodeURIComponent(id)}`)
+  })
+}
+
 export const reportsKey = [...adminKey, 'reports'] as const
 
 export function useLinkReports(status: 'open' | 'resolved') {

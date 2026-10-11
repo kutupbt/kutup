@@ -54,6 +54,15 @@ pub struct SettingsResponse {
     pub chat: kutup_chat_proto::ChatCapabilities,
     /// Where each Kutup web app lives (server config; see docs/self-hosting.md).
     pub apps: crate::config::AppOrigins,
+    pub feedback: FeedbackSettings,
+}
+
+/// What the feedback form offers besides sending to the administrators.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackSettings {
+    /// The public tracker, `owner/repo` on GitHub; absent when the server has none.
+    pub github_repository: Option<String>,
 }
 
 /// Authenticated global settings managed by a server administrator.

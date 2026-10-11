@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import { BookUser, FileType, HardDrive, Images, Mail as MailIcon, Map as MapIcon, MessagesSquare, Settings, Share2, Trash2, UserRound, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -49,7 +51,12 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
           <SidebarNavLink to="/settings" icon={<Settings />} label={t('nav.settings')} />
         </>
       }
-      sidebarFooter={<StorageMeter />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="drive" services={feedbackServices} />
+          <StorageMeter />
+        </div>
+      }
       headerStart={<SearchBox />}
       headerEnd={
         <UserMenu
