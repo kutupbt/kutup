@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentPart, buildMessage, describePart, encodeHeaderText, formatMailbox, isAutoReply, parseMessage } from './mime'
+import { attachmentPart, buildInlineMessage, buildMessage, describePart, encodeHeaderText, formatMailbox, isAutoReply, parseMessage, partContent } from './mime'
 
 const decoder = new TextDecoder()
 
@@ -88,5 +88,36 @@ describe('auto-replies', () => {
     expect(isAutoReply([{ key: 'subject', value: 'Auto: hi' }])).toBe(false)
     const raw = new TextEncoder().encode('From: a@b.c\r\nTo: d@e.f\r\nSubject: Auto: hi\r\nAuto-Submitted: auto-replied\r\n\r\nAway.\r\n')
     expect((await parseMessage(raw)).autoReply).toBe(true)
+  })
+})
+
+describe('Inline PGP', () => {
+  const header = {
+    from: { address: 'ayse@kutup.dev', name: 'Ayşe' },
+    to: [{ address: 'bob@example.org', name: '' }],
+    cc: [],
+    subject: 'Satır içi',
+    messageId: 'm1@kutup.dev',
+  }
+  const armored = '-----BEGIN PGP MESSAGE-----\n\nwcBMA0…\n-----END PGP MESSAGE-----\n'
+
+  it('is a plain-text body holding the armored text', async () => {
+    const parsed = await parseMessage(buildInlineMessage(header, armored, []))
+    expect(parsed.subject).toBe('Satır içi')
+    expect(parsed.text?.replace(/\r\n/g, '\n').trim()).toBe(armored.trim())
+    expect(parsed.html).toBeNull()
+    expect(parsed.attachments).toHaveLength(0)
+  })
+
+  it('carries each file on its own after the text', async () => {
+    const file = attachmentPart({ name: 'rapor.pdf.pgp', type: 'application/pgp-encrypted', bytes: new TextEncoder().encode(armored) })
+    const parsed = await parseMessage(buildInlineMessage(header, armored, [file]))
+    expect(parsed.text?.trim().startsWith('-----BEGIN PGP MESSAGE-----')).toBe(true)
+    expect(parsed.attachments.map((a) => a.filename)).toEqual(['rapor.pdf.pgp'])
+  })
+
+  it('reads a part back to its file', () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 255])
+    expect(partContent(attachmentPart({ name: 'a.bin', type: 'application/octet-stream', bytes }))).toEqual(bytes)
   })
 })

@@ -7,6 +7,8 @@ import {
   encryptMailPgpAsGroup,
   encryptMailMessageUnsigned,
   encryptMailPgpUnsigned,
+  signMailCleartext,
+  signMailCleartextAsGroup,
   signMailDetached,
   signMailDetachedAsGroup,
   inspectExternalMailKey,
@@ -25,7 +27,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
-import { buildBody, buildMessage, buildPgpMessage, buildSignedMessage, newMessageId, parseMessage, type Mailbox, type ParsedMessage } from './mime'
+import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
@@ -69,7 +71,37 @@ export interface MailMessage {
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
   sentBy: string | null
+  /** Listed by conversation: the thread this row stands for, in the place listed (Proton's conversation grouping). */
+  conversation?: MailConversation
 }
+
+/** What moving or marking one message of a conversation needs. */
+export interface ConversationMember {
+  id: string
+  folder: MailMessage['folder']
+  direction: MailMessage['direction']
+  customFolder: string | null
+}
+
+/** A conversation in one place, as Proton's ContextNumMessages and ContextNumUnread. */
+export interface MailConversation {
+  /** Its messages here, oldest first. */
+  members: ConversationMember[]
+  unread: number
+  starred: boolean
+  /** Who wrote them, each once, in the order they first wrote. */
+  senders: Mailbox[]
+  attachmentCount: number
+}
+
+/** The messages a row stands for: a conversation's members here, else the message itself. */
+export function membersOf<T extends Pick<MailMessage, 'id' | 'folder' | 'direction' | 'customFolder'> & { conversation?: MailConversation }>(rows: T[]): ConversationMember[] {
+  return rows.flatMap((row) => row.conversation?.members ?? [{ id: row.id, folder: row.folder, direction: row.direction, customFolder: row.customFolder }])
+}
+
+/** A row read as a whole: a conversation is unread while any of its messages is, starred when any is. */
+export const rowSeen = (row: MailMessage) => (row.conversation ? row.conversation.unread === 0 : row.seen)
+export const rowStarred = (row: MailMessage) => row.conversation?.starred ?? row.starred
 
 interface Page {
   messages: MailMessage[]
@@ -128,8 +160,8 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: PlaceKey, q: string, group?: string) => ['mail', 'folder', folder, q, group ?? null] as const
-const countsKey = (group?: string) => ['mail', 'counts', group ?? null] as const
+const folderKey = (folder: PlaceKey, q: string, group?: string, conversations = false) => ['mail', 'folder', folder, q, group ?? null, conversations] as const
+const countsKey = (group?: string, conversations = false) => ['mail', 'counts', group ?? null, conversations] as const
 const threadKey = (id: string, group?: string) => ['mail', 'thread', id, group ?? null] as const
 const contentKey = (id: string) => ['mail', 'content', id] as const
 const scoped = (group?: string) => (group ? { group } : {})
@@ -256,14 +288,16 @@ export function useSaveAutoReply() {
   })
 }
 
-export function useFolder(folder: PlaceKey, q = '', group?: string) {
+/** A page of one place; by conversation when `conversations` (the account's View mode). */
+export function useFolder(folder: PlaceKey, q = '', group?: string, conversations = false, enabled = true) {
   return useInfiniteQuery({
-    queryKey: folderKey(folder, q, group),
+    queryKey: folderKey(folder, q, group, conversations),
+    enabled,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) =>
       (
         await api.get<Page>('/mail/messages', {
-          params: { folder, ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}), limit: 50, ...scoped(group) },
+          params: { folder, ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}), limit: 50, ...scoped(group), ...(conversations ? { conversations: true } : {}) },
         })
       ).data,
     getNextPageParam: (last) => last.next ?? null,
@@ -292,10 +326,14 @@ export function useSendingStatus(enabled = true) {
   })
 }
 
+/** Unread and total per place: conversations or messages, as the list shows them (Proton's counters follow View mode). */
 export function useCounts(group?: string) {
+  const settings = useMailSettings()
+  const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
   return useQuery({
-    queryKey: countsKey(group),
-    queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: scoped(group) })).data,
+    queryKey: countsKey(group, conversations),
+    enabled: !settings.isPending,
+    queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: { ...scoped(group), ...(conversations ? { conversations: true } : {}) } })).data,
     refetchInterval: POLL_MS,
   })
 }
@@ -444,10 +482,21 @@ export function useOpenedMessage(
 
 function patchCached(queryClient: ReturnType<typeof useQueryClient>, ids: string[], change: Partial<MailMessage>) {
   const set = new Set(ids)
+  // A conversation row changes as a whole when all its messages do; otherwise the refetch after the change tells.
+  const patch = (m: MailMessage): MailMessage => {
+    const row = set.has(m.id) ? { ...m, ...change } : m
+    if (!m.conversation || !m.conversation.members.every((member) => set.has(member.id))) return row
+    return {
+      ...row,
+      conversation: {
+        ...m.conversation,
+        ...(change.seen !== undefined ? { unread: change.seen ? 0 : m.conversation.members.length } : {}),
+        ...(change.starred !== undefined ? { starred: change.starred } : {}),
+      },
+    }
+  }
   queryClient.setQueriesData<InfiniteData<Page>>({ queryKey: ['mail', 'folder'] }, (data) =>
-    data
-      ? { ...data, pages: data.pages.map((page) => ({ ...page, messages: page.messages.map((m) => (set.has(m.id) ? { ...m, ...change } : m)) })) }
-      : data,
+    data ? { ...data, pages: data.pages.map((page) => ({ ...page, messages: page.messages.map(patch) })) } : data,
   )
   queryClient.setQueriesData<MailMessage[]>({ queryKey: ['mail', 'thread'] }, (data) =>
     data?.map((m) => (set.has(m.id) ? { ...m, ...change } : m)),
@@ -524,8 +573,20 @@ export interface MailSettings {
   autoDeleteDays: 0 | 30
   /** All mail leaves out Spam and Trash. */
   almostAllMail: boolean
+  /** The reading pane beside the list, or below it (Proton's ViewLayout). */
+  viewLayout: 'column' | 'row'
+  /** List rows: Proton's Density. */
+  density: 'comfortable' | 'compact'
+  /** How the composer opens (Proton's ComposerMode). */
+  composerMode: 'popup' | 'maximized'
+  /** One row per conversation, or per message (Proton's ViewMode). */
+  viewMode: 'conversation' | 'message'
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
+  /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
+  attachPublicKey: boolean
+  /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
+  pgpScheme: 'pgp_mime' | 'inline'
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const
@@ -707,9 +768,17 @@ export interface SendAs {
  * arrival) and outside ones plain mail; lists and shared mailboxes stay end
  * to end. Sign off leaves the signature out.
  */
+const encoder = new TextEncoder()
+
 export interface SendOptions {
   encrypt: boolean
   sign: boolean
+  /**
+   * How outside OpenPGP recipients get it (Proton's PGP scheme): PGP/MIME,
+   * or Inline, plain text with each attachment encrypted (or signed) on its
+   * own. Kutup recipients are not affected.
+   */
+  pgpScheme?: 'pgp_mime' | 'inline'
 }
 
 export async function sendDraft(
@@ -736,6 +805,8 @@ export async function sendDraft(
         ? encryptMailPgpAsGroup(as.key, keys, plaintext)
         : encryptMailPgp(account.key, keys, plaintext)
   const signDetached = (content: Uint8Array) => (as ? signMailDetachedAsGroup(as.key, content) : signMailDetached(account.key, content))
+  const signCleartext = (text: string) => (as ? signMailCleartextAsGroup(as.key, text) : signMailCleartext(account.key, text))
+  const inline = options.pgpScheme === 'inline'
   const header = {
     from: { address: self.address, name: self.name },
     to: draft.to,
@@ -767,24 +838,40 @@ export async function sendDraft(
     : []
   const groups = [keyed.filter((r) => !bcc.has(r.address)), ...keyed.filter((r) => bcc.has(r.address)).map((r) => [r])].filter((g) => g.length)
   const plain = external.filter((address) => !keyed.some((r) => r.address === address))
-  const body = groups.length ? buildBody(content) : null
+  const body = groups.length && !inline ? buildBody(content) : null
+  const files = attachmentParts.map((part) => ({ ...describePart(part), bytes: partContent(part) }))
   const packages = await Promise.all(
-    groups.map(async (group) => ({
-      recipients: group.map((r) => r.address),
-      message: buildPgpMessage(header, await sealPgp([...group.map((r) => r.key), self.publicKey], body!)),
-    })),
+    groups.map(async (group) => {
+      const keys = [...group.map((r) => r.key), self.publicKey]
+      // Inline: the plain text encrypted, and each file encrypted on its own as `name.pgp`.
+      const message = inline
+        ? buildInlineMessage(
+            header,
+            await sealPgp(keys, encoder.encode(draft.text)),
+            await Promise.all(files.map(async (file) => attachmentPart({ name: `${file.name}.pgp`, type: 'application/pgp-encrypted', bytes: encoder.encode(await sealPgp(keys, file.bytes)) }))),
+          )
+        : buildPgpMessage(header, await sealPgp(keys, body!))
+      return { recipients: group.map((r) => r.address), message }
+    }),
   )
 
   // The readable message, for outside recipients without a PGP message and
   // Kutup recipients with Encrypt off: signed (multipart/signed) when Sign is on.
   let readableMessage: Promise<Uint8Array> | null = null
   const readableFor = (): Promise<Uint8Array> => {
-    readableMessage ??= options.sign
-      ? (async () => {
-          const signedBody = buildBody(content)
-          return buildSignedMessage(header, signedBody, await signDetached(signedBody))
-        })()
-      : Promise.resolve(message)
+    readableMessage ??= !options.sign
+      ? Promise.resolve(message)
+      : inline
+        ? // Inline: the plain text cleartext-signed, each file with its detached `name.sig`.
+          (async () =>
+            buildInlineMessage(header, await signCleartext(draft.text), [
+              ...attachmentParts,
+              ...(await Promise.all(files.map(async (file) => attachmentPart({ name: `${file.name}.sig`, type: 'application/pgp-signature', bytes: encoder.encode(await signDetached(file.bytes)) })))),
+            ]))()
+        : (async () => {
+            const signedBody = buildBody(content)
+            return buildSignedMessage(header, signedBody, await signDetached(signedBody))
+          })()
     return readableMessage
   }
 

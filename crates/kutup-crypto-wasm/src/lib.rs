@@ -2272,6 +2272,54 @@ pub fn sign_mail_detached(
         .map_err(|error| js_error(&error.to_string()))
 }
 
+/// A cleartext signature of `text` with the address key: the body of an
+/// Inline PGP message that is signed but not encrypted.
+#[wasm_bindgen(js_name = signMailCleartext)]
+pub fn sign_mail_cleartext(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    text: &str,
+) -> Result<String, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::sign_cleartext(&secret, text)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// [`sign_mail_cleartext`] with a shared mailbox's key.
+#[wasm_bindgen(js_name = signMailCleartextAsGroup)]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_mail_cleartext_as_group(
+    master_key_base64: &str,
+    login_email: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    share_base64: &str,
+    group_fingerprint_hex: &str,
+    text: &str,
+) -> Result<String, JsValue> {
+    let secret = open_group_secret(
+        master_key_base64,
+        login_email,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+        share_base64,
+        group_fingerprint_hex,
+    )?;
+    kutup_crypto::mail_key::sign_cleartext(&secret, text)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// [`sign_mail_detached`] with a shared mailbox's key.
 #[wasm_bindgen(js_name = signMailDetachedAsGroup)]
 #[allow(clippy::too_many_arguments)]

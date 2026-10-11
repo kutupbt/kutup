@@ -738,6 +738,13 @@ const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.logi
 assert.match(detached, /^-----BEGIN PGP SIGNATURE-----/)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), signedPart, mailVectors.publicKey), true)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), new TextEncoder().encode('changed'), mailVectors.publicKey), false)
+// Inline PGP, signed only: a cleartext signature that verifies.
+const cleartext = crypto.signMailCleartext(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'İmzalı metin.\n')
+assert.match(cleartext, /^-----BEGIN PGP SIGNED MESSAGE-----/)
+const checkedCleartext = crypto.verifyMailCleartext(cleartext, mailVectors.publicKey)
+assert.equal(checkedCleartext.verified, true)
+assert.equal(checkedCleartext.text.trim(), 'İmzalı metin.')
+assert.equal(crypto.verifyMailCleartext(cleartext.replace('metin', 'yazı'), mailVectors.publicKey).verified, false)
 
 // Contacts (docs/plans/contacts.md).
 const contactVectors = JSON.parse(

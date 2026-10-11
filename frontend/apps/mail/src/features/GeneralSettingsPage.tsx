@@ -4,6 +4,7 @@ import { useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutu
 import { Alert } from '@kutup/ui/components/alert'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 
@@ -19,7 +20,7 @@ function Setting({ label, hint, checked, onChange }: { label: string; hint: stri
   )
 }
 
-/** Settings → General (Proton's Messages section): auto-delete, All mail, Sign outside mail. */
+/** Settings → General (Proton's Messages section, and its External PGP settings): conversation grouping, auto-delete, All mail; signing, the attached key and the PGP scheme for outside mail. */
 export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
@@ -36,6 +37,12 @@ export function GeneralSettingsPage() {
       <PageHeader title={t('general.title')} />
       <div className="space-y-3">
         <Setting
+          label={t('general.conversations')}
+          hint={t('general.conversationsHint')}
+          checked={settings.data.viewMode === 'conversation'}
+          onChange={(on) => save({ viewMode: on ? 'conversation' : 'message' })}
+        />
+        <Setting
           label={t('general.autoDelete')}
           hint={t('general.autoDeleteHint')}
           checked={settings.data.autoDeleteDays === 30}
@@ -47,13 +54,42 @@ export function GeneralSettingsPage() {
           checked={settings.data.almostAllMail}
           onChange={(on) => save({ almostAllMail: on })}
         />
+      </div>
+      <section className="mt-8 space-y-3" aria-labelledby="pgp-heading">
+        <h2 id="pgp-heading" className="text-sm font-medium">
+          {t('general.pgpTitle')}
+        </h2>
+        <p className="text-sm text-muted-foreground">{t('general.pgpHint')}</p>
         <Setting
           label={t('general.signOutside')}
           hint={t('general.signOutsideHint')}
           checked={settings.data.signOutside}
           onChange={(on) => save({ signOutside: on })}
         />
-      </div>
+        <Setting
+          label={t('general.attachPublicKey')}
+          hint={t('general.attachPublicKeyHint')}
+          checked={settings.data.attachPublicKey}
+          onChange={(on) => save({ attachPublicKey: on })}
+        />
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            <label htmlFor="pgp-scheme" className="block text-sm font-medium">
+              {t('general.pgpScheme')}
+            </label>
+            <span className="block text-sm text-muted-foreground">{t('general.pgpSchemeHint')}</span>
+          </span>
+          <Select value={settings.data.pgpScheme} onValueChange={(pgpScheme) => save({ pgpScheme: pgpScheme as MailSettings['pgpScheme'] })}>
+            <SelectTrigger id="pgp-scheme" className="sm:w-48" aria-label={t('general.pgpScheme')}>
+              <SelectValue placeholder={t('general.pgpScheme')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="pgp_mime">PGP/MIME</SelectItem>
+              <SelectItem value="inline">{t('general.inline')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </section>
     </PageBody>
   )
 }

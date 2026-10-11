@@ -1,6 +1,8 @@
 //! Mail settings (docs/plans/mail-parity.md), as Proton's mail settings:
 //! auto-delete of Trash and Spam after 30 days, and whether All mail leaves
-//! out Spam and Trash, and whether mail outside Kutup starts signed.
+//! out Spam and Trash, PGP for mail outside Kutup (sign, attach the key,
+//! PGP/MIME or Inline), and the appearance (layout, density, composer,
+//! conversations).
 //! Emptying a folder is here too.
 
 use axum::extract::State;
@@ -15,7 +17,7 @@ use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailSettings {
     /// 30 to delete Trash and Spam after 30 days, 0 not to (Proton's
@@ -26,22 +28,46 @@ pub struct MailSettings {
     /// New mail to people outside Kutup starts with Sign on (Proton's "Sign
     /// external messages"); the composer can still change it per message.
     pub sign_outside: bool,
+    /// Every new message carries your public key as an attachment (Proton's
+    /// `AttachPublicKey`).
+    pub attach_public_key: bool,
+    /// `pgp_mime` or `inline`: how mail to outside OpenPGP users is
+    /// encrypted or signed (Proton's `PGPScheme`); Inline is plain text.
+    pub pgp_scheme: String,
+    /// `column`: the reading pane beside the list; `row`: below it
+    /// (Proton's `ViewLayout`).
+    pub view_layout: String,
+    /// `comfortable` or `compact` list rows (Proton's `Density`).
+    pub density: String,
+    /// `popup` or `maximized`: how the composer opens (Proton's
+    /// `ComposerMode`).
+    pub composer_mode: String,
+    /// `conversation`: the list groups each thread in one row; `message`:
+    /// one row per message (Proton's `ViewMode`).
+    pub view_mode: String,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
-    let row: Option<(i32, bool, bool)> = sqlx::query_as(
-        "SELECT auto_delete_days, almost_all_mail, sign_outside FROM mail_settings WHERE user_id = $1",
+    let row: Option<MailSettings> = sqlx::query_as(
+        "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
+                view_layout, density, composer_mode, view_mode
+           FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (auto_delete_days, almost_all_mail, sign_outside) = row.unwrap_or((0, false, true));
-    Ok(MailSettings {
-        auto_delete_days,
-        almost_all_mail,
-        sign_outside,
-    })
+    Ok(row.unwrap_or_else(|| MailSettings {
+        auto_delete_days: 0,
+        almost_all_mail: false,
+        sign_outside: true,
+        attach_public_key: false,
+        pgp_scheme: "pgp_mime".into(),
+        view_layout: "column".into(),
+        density: "comfortable".into(),
+        composer_mode: "popup".into(),
+        view_mode: "conversation".into(),
+    }))
 }
 
 /// `GET /api/mail/settings`.
@@ -63,6 +89,12 @@ pub struct UpdateMailSettings {
     pub auto_delete_days: Option<i32>,
     pub almost_all_mail: Option<bool>,
     pub sign_outside: Option<bool>,
+    pub attach_public_key: Option<bool>,
+    pub pgp_scheme: Option<String>,
+    pub view_layout: Option<String>,
+    pub density: Option<String>,
+    pub composer_mode: Option<String>,
+    pub view_mode: Option<String>,
 }
 
 /// `PATCH /api/mail/settings`.
@@ -74,7 +106,7 @@ pub struct UpdateMailSettings {
     request_body = UpdateMailSettings,
     responses(
         (status = 200, description = "Saved", body = MailSettings),
-        (status = 400, description = "Auto-delete is 0 or 30 days"),
+        (status = 400, description = "Auto-delete is 0 or 30 days; an unknown layout, density or composer mode"),
     )
 )]
 pub async fn update(
@@ -89,19 +121,48 @@ pub async fn update(
     {
         return Err(AppError::bad_request("auto-delete is 0 or 30 days"));
     }
+    let one_of = |value: &Option<String>, allowed: [&str; 2]| {
+        value.as_deref().is_none_or(|v| allowed.contains(&v))
+    };
+    if !one_of(&request.view_layout, ["column", "row"])
+        || !one_of(&request.density, ["comfortable", "compact"])
+        || !one_of(&request.composer_mode, ["popup", "maximized"])
+        || !one_of(&request.view_mode, ["conversation", "message"])
+        || !one_of(&request.pgp_scheme, ["pgp_mime", "inline"])
+    {
+        return Err(AppError::bad_request(
+            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message, PGP pgp_mime or inline",
+        ));
+    }
     sqlx::query(
-        "INSERT INTO mail_settings (user_id, auto_delete_days, almost_all_mail, sign_outside)
-         VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, true))
+        "INSERT INTO mail_settings
+             (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
+              view_mode, sign_outside, attach_public_key, pgp_scheme)
+         VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
+                 COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
+                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
-             sign_outside = COALESCE($4, mail_settings.sign_outside),
+             view_layout = COALESCE($4, mail_settings.view_layout),
+             density = COALESCE($5, mail_settings.density),
+             composer_mode = COALESCE($6, mail_settings.composer_mode),
+             view_mode = COALESCE($7, mail_settings.view_mode),
+             sign_outside = COALESCE($8, mail_settings.sign_outside),
+             attach_public_key = COALESCE($9, mail_settings.attach_public_key),
+             pgp_scheme = COALESCE($10, mail_settings.pgp_scheme),
              updated_at = now()",
     )
     .bind(user_id)
     .bind(request.auto_delete_days)
     .bind(request.almost_all_mail)
+    .bind(request.view_layout.as_deref())
+    .bind(request.density.as_deref())
+    .bind(request.composer_mode.as_deref())
+    .bind(request.view_mode.as_deref())
     .bind(request.sign_outside)
+    .bind(request.attach_public_key)
+    .bind(request.pgp_scheme.as_deref())
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

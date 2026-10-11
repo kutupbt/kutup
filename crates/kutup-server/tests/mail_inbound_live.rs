@@ -2601,10 +2601,15 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "signOutside": true })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime" })
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "density": "tiny" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
@@ -2628,12 +2633,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "signOutside": false }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline" }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "signOutside": false })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline" })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3131,6 +3136,135 @@ fn auto_reply_answers_once_per_sender() {
     assert!(r.status().is_success(), "send: {}", r.status());
     let reply = wait_answers(&carol, "inbox", 1).remove(0);
     assert_eq!(reply["subject"], "Auto: Okunur");
+}
+
+#[test]
+fn conversations_group_a_thread_in_one_row() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    // Bob writes to Alice; `parent` makes it a reply in that thread.
+    let send = |subject: &str, parent: Option<&str>| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let mut meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        if let Some(parent) = parent {
+            meta["inReplyTo"] = json!(parent);
+            meta["references"] = json!([parent]);
+        }
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let list = |query: &str| -> Value {
+        bearer(
+            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
+    };
+
+    let first = send("Konu", None);
+    let second = send("Re: Konu", Some(&first));
+    let other = send("Başka", None);
+    wait_for(&c, &base, &alice, &other);
+    wait_for(&c, &base, &alice, &second);
+
+    // By message: three rows, no conversation block.
+    let messages = list("");
+    assert_eq!(messages["messages"].as_array().unwrap().len(), 3);
+    assert!(messages["messages"][0].get("conversation").is_none());
+    // By conversation: two rows, newest conversation first.
+    let page = list("&conversations=true");
+    let rows = page["messages"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{page}");
+    assert_eq!(rows[0]["messageId"], other.as_str());
+    let thread = &rows[1];
+    assert_eq!(
+        thread["messageId"],
+        second.as_str(),
+        "the newest of the thread"
+    );
+    let conversation = &thread["conversation"];
+    assert_eq!(conversation["members"].as_array().unwrap().len(), 2);
+    assert_eq!(conversation["unread"], 2);
+    assert_eq!(conversation["starred"], false);
+    assert_eq!(
+        conversation["senders"],
+        json!([{ "address": bob_address.address, "name": "" }])
+    );
+    // Reading one leaves one unread.
+    let first_id = conversation["members"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
+        .json(&json!({ "ids": [first_id], "seen": true }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(
+        list("&conversations=true")["messages"][1]["conversation"]["unread"],
+        1
+    );
+    // Pages count conversations.
+    let one = list("&conversations=true&limit=1");
+    assert_eq!(one["messages"].as_array().unwrap().len(), 1);
+    let next = one["next"].as_str().unwrap().to_string();
+    let rest = list(&format!("&conversations=true&limit=1&before={next}"));
+    assert_eq!(rest["messages"][0]["messageId"], second.as_str());
+    assert!(rest["next"].is_null());
+    // The counts follow: two unread messages, one unread conversation.
+    let counts = |query: &str| -> Value {
+        let all: Value = bearer(
+            c.get(format!("{base}/api/mail/counts{query}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["folder"] == "inbox")
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(counts("")["unread"], 2);
+    assert_eq!(counts("")["total"], 3);
+    assert_eq!(counts("?conversations=true")["unread"], 2);
+    assert_eq!(counts("?conversations=true")["total"], 2);
 }
 
 #[test]

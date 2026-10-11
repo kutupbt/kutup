@@ -23,8 +23,8 @@ reference only where Proton has nothing.
 | End-to-end mail between users, zero-access for the rest, padlocks | `EncryptionStatusIcon.tsx` | ✅ C2, C3 |
 | OpenPGP with outside users: WKD, Autocrypt, trusting a sender's key | `TrustPublicKeyModal.tsx` | ✅ C3 |
 | Threads in the reading pane | `MessageView.tsx` | ✅ |
-| Conversation or message mode in the list | `ViewModeToggle.tsx` | ❌ (the list shows messages) |
-| Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ❌ |
+| Conversation or message mode in the list | `ViewModeToggle.tsx` | ✅ conversation grouping on by default, as Proton's (Settings → General); a row stands for the thread's messages there: count, senders, unread and starred as a whole, actions on all; counters count conversations |
+| Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ✅ Settings → Appearance: column or row, comfortable or compact, composer normal or maximized; the list resizes (drag or arrow keys), remembered per browser |
 | Quick filters (unread, has attachments), sort (date, size) | `FilterList.tsx` | ❌ |
 | Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | 🔶 "load more" only |
 | Selection pane for several messages | `SelectionPane.tsx` | ❌ |
@@ -91,7 +91,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Address keys: rotate, import, export, retire | `AddressKeysSection.tsx` | ✅ C3 |
-| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | 🔶 fixed defaults, no settings |
+| PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; ❌ scheme per contact |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
 | Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ |
 | Distribution lists, shared mailboxes | (business: groups) | ✅ |
@@ -126,7 +126,7 @@ reference only where Proton has nothing.
 | Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ❌ |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
-| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Folders and labels, Filters, Block and allow; keys in Account |
+| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |
 
 ## Order
 

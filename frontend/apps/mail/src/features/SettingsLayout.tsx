@@ -4,6 +4,7 @@ import { cn } from '@kutup/ui/lib/cn'
 
 const TABS = [
   { to: '/settings/general', key: 'settings.general' },
+  { to: '/settings/appearance', key: 'settings.appearance' },
   { to: '/settings/identity', key: 'settings.identity' },
   { to: '/settings/auto-reply', key: 'settings.autoReply' },
   { to: '/settings/folders', key: 'settings.folders' },

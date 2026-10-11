@@ -23,6 +23,7 @@ import {
   type SendAs,
 } from '@kutup/mail-core/api'
 import { GroupNotAllowed } from '@kutup/mail-core/keys'
+import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
 import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
 import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
@@ -52,6 +53,8 @@ interface Attachment {
   /** The MIME part, when this browser has it. */
   part?: Uint8Array
   status: 'uploading' | 'ready' | 'failed'
+  /** Your public key, attached by the setting (Proton's Attach public key): sent from here, never uploaded with the draft. */
+  publicKey?: true
 }
 
 function escapeHtml(text: string): string {
@@ -225,7 +228,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [subject, setSubject] = useState(start.draft.subject)
   const [attachments, setAttachments] = useState<Attachment[]>(start.attachments)
   const [minimised, setMinimised] = useState(false)
-  const [maximised, setMaximised] = useState(false)
+  // Opens as the Appearance setting says (Proton's ComposerMode); the mailbox has loaded the settings.
+  const [maximised, setMaximised] = useState(() => mailSettings.data?.composerMode === 'maximized')
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const [sending, setSending] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
@@ -328,6 +332,31 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     [account, save],
   )
 
+  // Attach public key (Proton's): a new message, reply or forward starts with
+  // your key attached, `publickey - <address> - 0x<fingerprint>.asc`, which
+  // you may remove.
+  const keyAttached = useRef(false)
+  useEffect(() => {
+    if (keyAttached.current || target.kind === 'draft' || !mailSettings.data?.attachPublicKey) return
+    keyAttached.current = true
+    void armorMailPublicKey(account.publicKey).then(
+      (armored) => {
+        const name = `publickey - ${account.address} - 0x${account.key.fingerprint.slice(0, 8).toUpperCase()}.asc`
+        const bytes = new TextEncoder().encode(armored)
+        const attachment: Attachment = {
+          key: crypto.randomUUID(),
+          name,
+          size: bytes.length,
+          part: attachmentPart({ name, type: 'application/pgp-keys', bytes }),
+          status: 'ready',
+          publicKey: true,
+        }
+        setAttachments((now) => [attachment, ...now])
+      },
+      () => toast.error(t('compose.publicKeyFailed')),
+    )
+  }, [account, mailSettings.data?.attachPublicKey, t, target.kind])
+
   // Forwarded files go up with the draft once.
   const forwarded = useRef(false)
   useEffect(() => {
@@ -368,7 +397,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     if (attachment.id && draftId.current) await removeDraftAttachment(draftId.current, attachment.id).catch(() => undefined)
   }
 
-  const hasContent = to.length + cc.length + bcc.length > 0 || subject.trim() !== '' || !!editor?.getText().trim() || attachments.length > 0
+  const hasContent = to.length + cc.length + bcc.length > 0 || subject.trim() !== '' || !!editor?.getText().trim() || attachments.some((a) => !a.publicKey)
 
   async function close() {
     if (hasContent && !sending) {
@@ -415,7 +444,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign })
+      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
       const full = results.filter((r) => r.status === 'full').map((r) => r.address)
       const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
       if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
