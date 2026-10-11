@@ -8,8 +8,8 @@ import { uploadUnderFreeName } from '@kutup/drive-core/names'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { documentKindOf, newDocument, type DocumentKind } from '@kutup/drive-core/documents'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
-import { appUrl } from '@kutup/session/apps'
 import { freshAccessToken } from '@kutup/session/client'
+import { filePath } from '@kutup/editors/paths'
 
 // A document (a note, an office document, a whiteboard) is a Drive file.
 // The Office home shows every one this account can open in an editor: its
@@ -23,17 +23,10 @@ export interface DocumentEntry {
   kind: DocumentKind
   /** The owner's account, when the document is someone else's. */
   owner: string | null
-  /** Where it opens: Drive's editor. */
+  /** Who shared it with this account (the owner, or an editor the owner lets share). */
+  sharer: string | null
+  /** Where it opens: the file page, here in Office. */
   href: string
-}
-
-/**
- * Drive's editor page for a file (apps/drive: features/drive/paths.ts),
- * marked as opened from Office so that its back button returns here.
- */
-export function editorUrl(folder: Pick<Folder, 'id' | 'source'>, fileId: string): string {
-  const path = folder.source === 'file' ? `/shared/file/${fileId}` : `/file/${folder.id}/${fileId}`
-  return appUrl('drive', `${path}?from=office`)
 }
 
 export function useDocuments() {
@@ -83,7 +76,8 @@ function collectDocuments(
         file,
         kind,
         owner: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
-        href: editorUrl(folder, file.id),
+        sharer: folder.source === 'owned' ? null : (folder.ownerAccount ?? null),
+        href: filePath(folder, file.id),
       })
     }
   })
@@ -102,7 +96,8 @@ function collectDocuments(
       file: shared.file,
       kind,
       owner: shared.ownerAccount,
-      href: editorUrl(shared.container, shared.file.id),
+      sharer: shared.sharerAccount,
+      href: filePath(shared.container, shared.file.id),
     })
   }
   return documents
@@ -129,7 +124,7 @@ export function filterDocuments(documents: DocumentEntry[], kind: DocumentKind |
   )
 }
 
-/** Make an empty document in `folder`; returns where it opens. */
+/** Make an empty document in `folder`; returns where it opens (a path here). */
 export function useCreateDocument() {
   const queryClient = useQueryClient()
   return async (folder: Folder, kind: DocumentKind, title: string): Promise<string> => {
@@ -149,6 +144,6 @@ export function useCreateDocument() {
       queryClient.invalidateQueries({ queryKey: ['files'] }),
       queryClient.invalidateQueries({ queryKey: foldersKey }),
     ])
-    return editorUrl(folder, uploaded.fileId)
+    return filePath(folder, uploaded.fileId)
   }
 }

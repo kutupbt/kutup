@@ -10,6 +10,7 @@ function entry(name: string, updatedAt: string): DocumentEntry {
     file: { id: name, name, updatedAt } as DriveFile,
     kind: documentKindOf(name)!,
     owner: null,
+    sharer: null,
     href: '',
   }
 }

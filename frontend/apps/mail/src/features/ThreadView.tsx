@@ -13,6 +13,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useMailActions, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
+import { useMailboxScope } from './mailboxScope'
 import { MessageView } from './MessageView'
 import { PickerButton } from './PlacePicker'
 
@@ -42,9 +43,12 @@ export function ThreadView({
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const thread = useThread(threadId)
+  // `base` (the list's address) comes from the page, which knows the shared mailbox too.
+  const { group } = useMailboxScope()
+  const inMailbox = group ? { group } : {}
+  const thread = useThread(threadId, group)
   const update = useUpdateMessages()
-  const actions = useMailActions()
+  const actions = useMailActions(group)
   const places = usePlaces()
   const remove = useDeleteMessages()
   const [confirming, setConfirming] = useState(false)
@@ -66,7 +70,7 @@ export function ThreadView({
   // Opening a thread reads it.
   const unseen = shown.filter((m) => !m.seen).map((m) => m.id)
   useEffect(() => {
-    if (unseen.length > 0) update.mutate({ ids: unseen, seen: true })
+    if (unseen.length > 0) update.mutate({ ids: unseen, seen: true, ...inMailbox })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unseen.join(',')])
 
@@ -82,7 +86,7 @@ export function ThreadView({
 
   function apply(change: Omit<MessageChange, 'ids'>, done?: string, close = true) {
     update.mutate(
-      { ids, ...change },
+      { ids, ...change, ...inMailbox },
       {
         onSuccess: () => {
           if (done) toast.success(done)
@@ -196,7 +200,7 @@ export function ThreadView({
         error={remove.error}
         errorFallback={t('common.tryAgain')}
         onConfirm={() =>
-          remove.mutate(ids, {
+          remove.mutate({ ids, group }, {
             onSuccess: () => {
               setConfirming(false)
               toast.success(t('toasts.deleted', { count: ids.length }))

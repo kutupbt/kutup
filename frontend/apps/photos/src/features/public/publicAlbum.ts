@@ -18,7 +18,7 @@ import { newestFirst } from '../library/timeline'
 // a link key that lives only in the URL fragment, so the server never holds
 // it; the page opens the album and its photos in the browser.
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'badKey' | 'notAlbum' | 'other'
+export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'notAlbum' | 'other'
 
 export class PublicAlbumError extends Error {
   constructor(public readonly failure: PublicFailure) {
@@ -32,6 +32,8 @@ interface ShareInfo {
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
   ownerUserId: string
+  /** Who shared it (`alice@example.org`): the page says so. */
+  ownerAccount: string
   expiresAt: string | null
   collectionKind?: string
   nameEnvelope?: string
@@ -51,6 +53,8 @@ export type PublicPhoto = Photo
 
 export interface PublicAlbum {
   name: string
+  /** Who shared it (`alice@example.org`). */
+  owner: string
   photos: PublicPhoto[]
 }
 
@@ -74,8 +78,11 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   try {
     share = (await api.get<ShareInfo>(base(token))).data
   } catch (error) {
-    const status = (error as { response?: { status?: number } }).response?.status
-    throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? 'expired' : 'other')
+    const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
+    const status = response?.status
+    // Taken down by the server's administrators: `410` `link_removed`.
+    const gone = response?.data?.code === 'link_removed' ? 'removed' : 'expired'
+    throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? gone : 'other')
   }
   if (share.collectionKind !== 'album' || !share.nameEnvelope || !share.nameRevision) throw new PublicAlbumError('notAlbum')
   let albumKey: Uint8Array
@@ -136,7 +143,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
       }
     }),
   )
-  return { name, photos: newestFirst(joinLivePhotos(photos.filter((p): p is PublicPhoto => Boolean(p)))) }
+  return { name, owner: share.ownerAccount, photos: newestFirst(joinLivePhotos(photos.filter((p): p is PublicPhoto => Boolean(p)))) }
 }
 
 /** A photo's thumbnail through the link. */

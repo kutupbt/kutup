@@ -28,6 +28,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatFileDate, formatInstant } from '@kutup/ui/lib/format'
 import { openComposer } from './composerState'
+import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
 import { Padlock } from './Padlock'
@@ -96,16 +97,20 @@ export function MailboxPage() {
   const account = useMailAccount()
   const contacts = useContactLookup()
   const saveContact = useSaveContact()
-  const fixed = (KNOWN.has(folderParam) ? folderParam : 'inbox') as FolderId
+  const scope = useMailboxScope()
+  const { group } = scope
+  // A shared mailbox has no drafts (they are each member's own); your own
+  // folders and labels are in your own mailbox only.
+  const fixed = (KNOWN.has(folderParam) && !(group && folderParam === 'drafts') ? folderParam : 'inbox') as FolderId
   const place: PlaceKey = placeKind && placeId ? `${placeKind}:${placeId}` : fixed
   // Where the list lives in the address bar.
-  const base = placeKind && placeId ? `/${placeKind === 'folder' ? 'f' : 'l'}/${placeId}` : `/${fixed}`
+  const base = placeKind && placeId ? `/${placeKind === 'folder' ? 'f' : 'l'}/${placeId}` : `${scope.base}/${fixed}`
   // Own folders and labels act as All mail does: every move is offered.
   const folder: FolderId = placeKind ? 'all' : fixed
   const placeName = placeKind === 'folder' ? places.data?.folders.get(placeId ?? '')?.name : placeKind === 'label' ? places.data?.labelsById.get(placeId ?? '')?.name : undefined
   const title = placeKind ? (placeName ?? '') : t(`folders.${fixed}`)
-  const list = useFolder(place, q)
-  const actions = useMailActions()
+  const list = useFolder(place, q, group)
+  const actions = useMailActions(group)
   const remove = useDeleteMessages()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // Where Shift extends a selection from, and the row the keyboard is on.
@@ -221,7 +226,7 @@ export function MailboxPage() {
     switch (key) {
       case 'n':
         event.preventDefault()
-        openComposer({ kind: 'new' })
+        openComposer({ kind: 'new', fromGroup: group })
         break
       case '/':
         event.preventDefault()
@@ -275,7 +280,7 @@ export function MailboxPage() {
       case 'm':
       case 'l': {
         const rows = targets()
-        if (rows.length && (key === 'l' || movesFor(folder).length)) {
+        if (rows.length && (key === 'l' ? !group : movesFor(folder).length)) {
           event.preventDefault()
           setPicker({ mode: key === 'm' ? 'move' : 'label', rows })
         }
@@ -293,7 +298,7 @@ export function MailboxPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  if (!placeKind && !KNOWN.has(folderParam)) return <Navigate to="/inbox" replace />
+  if (!placeKind && (!KNOWN.has(folderParam) || (group && folderParam === 'drafts'))) return <Navigate to={`${scope.base}/inbox`} replace />
 
   if (account.isError) {
     return (
@@ -369,7 +374,7 @@ export function MailboxPage() {
           <Kbd>{folder === 'spam' && target === 'inbox' ? 'S' : MOVE_KEY[target]}</Kbd>
         </ContextMenuItem>
       ))}
-      {moves.length ? (
+      {moves.length && !group ? (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <FolderInput />
@@ -399,6 +404,7 @@ export function MailboxPage() {
           </ContextMenuSubContent>
         </ContextMenuSub>
       ) : null}
+      {group ? null : (
       <ContextMenuSub>
         <ContextMenuSubTrigger>
           <Tag />
@@ -426,6 +432,7 @@ export function MailboxPage() {
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
+      )}
       {DELETES_FOREVER.has(folder) ? (
         <>
           <ContextMenuSeparator />
@@ -610,6 +617,14 @@ export function MailboxPage() {
                           <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>
                             {message.subject || t('list.noSubject')}
                           </span>
+                          {message.groupAddress && !group ? (
+                            <span className="shrink-0 truncate rounded bg-muted px-1.5 text-[11px] text-muted-foreground" title={t('list.viaGroup', { address: message.groupAddress })}>
+                              {message.groupAddress.split('@')[0]}
+                            </span>
+                          ) : null}
+                          {message.sentBy ? (
+                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t('list.sentBy', { name: message.sentBy })}</span>
+                          ) : null}
                           {placeKind !== 'folder' && (folder === 'all' || folder === 'starred') ? (
                             <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
                               {message.folder === 'custom' ? (places.data?.folders.get(message.customFolder ?? '')?.name ?? '…') : t(`folders.${message.folder}`)}
@@ -671,7 +686,7 @@ export function MailboxPage() {
         errorFallback={t('common.tryAgain')}
         onConfirm={() => {
           const ids = deleting ?? []
-          remove.mutate(ids, {
+          remove.mutate({ ids, group }, {
             onSuccess: () => {
               toast.success(t('toasts.deleted', { count: ids.length }))
               setSelected(new Set())

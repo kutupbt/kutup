@@ -67,7 +67,9 @@
     "noMatchesHint": "Search looks at subjects, senders and recipients.",
     "dragging_one": "1 message",
     "dragging_other": "{{count}} messages",
-    "messages": "Messages"
+    "messages": "Messages",
+    "viaGroup": "Through {{address}}",
+    "sentBy": "by {{name}}"
   },
   "read": {
     "pick": "Choose a message to read it.",
@@ -104,7 +106,8 @@
     "saveToContacts": "Save to contacts",
     "dismiss": "Dismiss",
     "unknownSender": "Unknown sender",
-    "collapse": "Collapse message"
+    "collapse": "Collapse message",
+    "sentBy": "Sent by {{name}}"
   },
   "actions": {
     "archive": "Archive",
@@ -202,7 +205,9 @@
       }
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
-    "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses."
+    "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
+    "groupNotAllowed": "{{address}} only takes mail from its members or managers.",
+    "noGroupShare": "You hold no copy of this mailbox's current key. Ask one of its managers to add you again."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",

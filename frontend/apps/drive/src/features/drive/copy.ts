@@ -1,16 +1,12 @@
 import { createOwnedCollectionV1 } from '@kutup/crypto'
-import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
-import { resolveApiBase } from '@kutup/session/apiBase'
 import api from '@kutup/session/client'
-import { freshAccessToken } from '@kutup/session/client'
-import { currentContent } from '../editor/content'
+import { readFile } from '@kutup/editors/content'
 import { uploadCreating } from '../uploads/useUploadActions'
-import { copyEmbedded, embeddingKind } from './embedded'
-import { sealedAt } from '@kutup/drive-core/keyring'
+import { copyEmbedded, embeddingKind } from '@kutup/editors/files/embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
-import { contentPath, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { canonicalName, inFolder, nameHashIn } from '@kutup/drive-core/names'
 
 // Copying, end to end encrypted: the server never holds a readable file, so
@@ -77,22 +73,6 @@ export function isWithin(index: FolderIndex, candidate: Folder, folder: Folder):
     at = at.parentId ? index.byId.get(at.parentId) : undefined
   }
   return false
-}
-
-/** The file's current plaintext (its latest edit, for documents), as a Blob. */
-export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSignal): Promise<Blob> {
-  if (!file.fileKey) throw new Error('file is not open')
-  const content = await currentContent(folder, file)
-  if (content.kind === 'plain') return new Blob([content.bytes as BlobPart], { type: file.mimeType })
-  const base = await resolveApiBase()
-  const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
-  const parts: BlobPart[] = []
-  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
-  for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {
-    // Blobs, not one growing buffer: the browser may keep large ones on disk.
-    parts.push(new Blob([plain as BlobPart]))
-  }
-  return new Blob(parts, { type: file.mimeType })
 }
 
 /** Names already used directly in `dest` (its files and subfolders). */

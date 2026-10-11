@@ -59,7 +59,8 @@ No runtime font, decorative image, or tracking request is permitted.
 - `chat/ConversationRow.tsx` and `chat/MessageScroller.tsx` own reusable
   Messages presentation behavior; `pages/Chat.tsx` retains protocol/service
   ownership.
-- `pages/FileEditorPage.tsx` is the focused editor/viewer frame.
+- `packages/editors` (`FileEditorPage`) is the focused editor/viewer frame,
+  shared by Office (documents) and Drive (other files).
 
 Viewport changes must not duplicate network services, clear drafts, reset a
 folder, interrupt uploads, or issue mutations. Prefer CSS responsive classes.

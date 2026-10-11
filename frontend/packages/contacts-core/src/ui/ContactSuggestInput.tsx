@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { forwardRef, useEffect, useId, useState, type InputHTMLAttributes } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Input } from '@kutup/ui/components/input'
@@ -9,6 +10,8 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> &
   onValueChange: (value: string) => void
   /** Called when a suggestion is picked (the value is already set). */
   onPick?: (match: ContactEmailMatch) => void
+  /** More suggestions after the contacts' (Mail's groups), by the same query. */
+  extraSuggestions?: { key: string; search: (query: string) => Promise<ContactEmailMatch[]> }
 }
 
 /** The text before suggestions are asked for: a moment's pause, and two letters. */
@@ -28,7 +31,7 @@ function useSettled(value: string, ms = 150) {
  * Enter picks, Escape closes; typing anything else still works.
  */
 export const ContactSuggestInput = forwardRef<HTMLInputElement, Props>(function ContactSuggestInput(
-  { value, onValueChange, onPick, className, onKeyDown, onBlur, ...props },
+  { value, onValueChange, onPick, extraSuggestions, className, onKeyDown, onBlur, ...props },
   ref,
 ) {
   const { t } = useTranslation()
@@ -37,7 +40,16 @@ export const ContactSuggestInput = forwardRef<HTMLInputElement, Props>(function 
   const [active, setActive] = useState(0)
   const query = useSettled(value.trim())
   const search = useContactEmailSearch(query, open && query.length >= 2)
-  const matches = (search.data ?? []).filter((match) => match.address !== value.trim().toLowerCase()).slice(0, 8)
+  const extra = useQuery({
+    queryKey: ['suggestions', extraSuggestions?.key, query],
+    enabled: !!extraSuggestions && open && query.length >= 2,
+    staleTime: 30_000,
+    queryFn: () => extraSuggestions!.search(query),
+  })
+  const contacts = search.data ?? []
+  const matches = [...contacts, ...(extra.data ?? []).filter((match) => !contacts.some((c) => c.address === match.address))]
+    .filter((match) => match.address !== value.trim().toLowerCase())
+    .slice(0, 8)
   const showing = open && query.length >= 2 && matches.length > 0
 
   useEffect(() => setActive(0), [query])

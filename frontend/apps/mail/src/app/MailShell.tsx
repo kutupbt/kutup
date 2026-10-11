@@ -16,12 +16,14 @@ import {
   Star,
   Trash2,
   UserRound,
+  Users,
 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { useCounts, type FolderId } from '@kutup/mail-core/api'
+import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
@@ -55,6 +57,47 @@ const DROPS = new Set<FolderId>(['inbox', 'starred', 'archive', 'spam', 'trash']
 
 function Count({ value }: { value: number }) {
   return <span className="text-xs font-semibold tabular-nums text-chrome-foreground">{value}</span>
+}
+
+/** A shared mailbox's folders (no drafts: those are each member's own). */
+const SHARED_NAV: { id: FolderId; icon: ReactNode }[] = [
+  { id: 'inbox', icon: <Inbox /> },
+  { id: 'sent', icon: <Send /> },
+  { id: 'archive', icon: <Archive /> },
+  { id: 'spam', icon: <OctagonAlert /> },
+  { id: 'trash', icon: <Trash2 /> },
+]
+
+/** One shared mailbox in the sidebar, with its unread count; its folders while it is open. */
+function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
+  const { t } = useTranslation()
+  const counts = useCounts(group.id)
+  const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
+  return (
+    <>
+      <SidebarNavLink
+        to={`/g/${group.id}/inbox`}
+        icon={<Users />}
+        label={group.displayName || group.address}
+        trailing={unread('inbox') > 0 ? <Count value={unread('inbox')} /> : undefined}
+      />
+      {open ? (
+        <li>
+          <ul className="space-y-0.5 pl-4" aria-label={t('mailGroups.foldersOf', { name: group.displayName || group.address })}>
+            {SHARED_NAV.filter(({ id }) => id !== 'inbox').map(({ id, icon }) => (
+              <SidebarNavLink
+                key={id}
+                to={`/g/${group.id}/${id}`}
+                icon={icon}
+                label={t(`folders.${id}`)}
+                trailing={id === 'spam' && unread(id) > 0 ? <Count value={unread(id)} /> : undefined}
+              />
+            ))}
+          </ul>
+        </li>
+      ) : null}
+    </>
+  )
 }
 
 /** Searches subjects and addresses in all mail, as Proton's search box does. */
@@ -96,6 +139,9 @@ export function MailShell() {
   useAccountUiPreferences()
   const counts = useCounts()
   const actions = useMailActions()
+  const groups = useMyGroups()
+  const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')
+  const { groupId } = useParams()
   const composing = useComposer().target !== null
   const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
   const total = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.total ?? 0
@@ -141,7 +187,7 @@ export function MailShell() {
       }
       flush
       primaryAction={
-        <Button className="w-full" onClick={() => openComposer({ kind: 'new' })}>
+        <Button className="w-full" onClick={() => openComposer({ kind: 'new', fromGroup: groupId })}>
           <PenSquare />
           {t('compose.new')}
         </Button>
@@ -155,7 +201,8 @@ export function MailShell() {
           drop={
             DROPS.has(id)
               ? {
-                  accepts: (types) => types.includes(MAIL_DRAG_TYPE),
+                  // Your own folders take your own mail, not a shared mailbox's.
+                  accepts: (types) => !groupId && types.includes(MAIL_DRAG_TYPE),
                   onDrop: (data) => {
                     // Mail dragged from the list: filed here, or starred on Starred.
                     let rows: Movable[]
@@ -179,6 +226,13 @@ export function MailShell() {
           }
         />
       ))}
+          {shared.length > 0 ? (
+            <li className="px-3 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-chrome-muted">{t('mailGroups.sharedMailboxes')}</li>
+          ) : null}
+          {shared.map((group) => (
+            <SharedMailbox key={group.id} group={group} open={groupId === group.id} />
+          ))}
+          <SidebarNavLink to="/groups" icon={<Users />} label={t('mailGroups.title')} />
       <PlacesNav counts={counts.data} />
       </>}
       sidebarFooter={<StorageMeter />}

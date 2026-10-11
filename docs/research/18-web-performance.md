@@ -349,7 +349,25 @@ Tried and set aside (measured):
   normal speed, ~100 ms on a slow phone); they are now made once per locale
   and options.
 
+- **The editor on the Office site (item 18, done).** Every document opens
+  at `office.<domain>/file/…`, one address per file: notes and code, office
+  documents, PDFs and whiteboards, whichever app they are opened from. Drive
+  keeps photos, videos, audio and other files, and sends documents to Office;
+  an old `drive.<domain>/file/…` link to a document is replaced by the Office
+  one. The file page became a package (`@kutup/editors`) that both apps
+  mount, loaded only when a file is opened. Opening from the Office home is
+  now a navigation inside Office (its session, keys and query cache stay),
+  not a cold start of Drive with its own restore. Start-up JS, gzip: Office
+  228 → 219 KB, Drive 330 → 249 KB (the file page left Drive's start).
+- **A minified OnlyOffice build (item 4), measured by swapping in a
+  minified `sdk-all.js` and `sdk-all-min.js` on the local stack (medians of
+  three rounds, disk profile):** first open 1.61 → 1.51 s unthrottled,
+  4.96 → 4.76 s at 40 Mbps, 7.03 → 6.65 s at 40 Mbps with the CPU slowed 4×;
+  second opens about 0.1 s faster. Main-thread time did not change (parsing
+  is not the cost) and 1.14 MB less is downloaded compressed: about 3–6%.
+  Left for the fork's release process rather than done here.
+
 Still open:
-- **OnlyOffice release build** in the fork (minified `sdk-all.js`, built web-apps).
+- **OnlyOffice release build** in the fork (minified `sdk-all.js`, built web-apps): low value, see above.
 - **Cross-folder listing and change feed**, the encrypted local catalog, a crypto worker, and a shared static origin or CDN (Tier 3).
 - **HTTP/3:** needs UDP 443 open in the host firewall.

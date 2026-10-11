@@ -136,14 +136,6 @@
     "dropHere": "{{name}} klasörüne yüklemek için bırakın"
   },
   "dialogs": {
-    "name": {
-      "label": "Ad",
-      "required": "Bir ad girin.",
-      "tooLong": "En fazla {{max}} karakter kullanın.",
-      "slash": "Adlarda / ya da \\ bulunamaz.",
-      "taken": "Burada bu adda bir şey zaten var.",
-      "failed": "Ad kaydedilemedi."
-    },
     "rename": {
       "title": "Yeniden adlandır",
       "submit": "Yeniden adlandır"
@@ -182,7 +174,7 @@
     },
     "publicLink": {
       "title": "Herkese açık bağlantı",
-      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir.",
+      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir. Sayfa, paylaşan olarak adresinizi gösterir.",
       "warning": "Bu bağlantıya sahip olan herkes bu dosyaları açabilir. Bağlantıyı klasörün Paylaş penceresinden yeniden kopyalayabilir ya da kaldırabilirsiniz."
     },
     "invite": {
@@ -261,6 +253,7 @@
     "emptyTitle": "Henüz sizinle bir şey paylaşılmadı",
     "emptyDescription": "Başkalarının sizinle paylaştığı klasörler ve dosyalar, diğer Kutup sunucularından gelen klasörler dahil, burada görünür.",
     "from": "{{account}} tarafından",
+    "ownedBy": "sahibi {{account}}",
     "addInvite": "Davet bağlantısından ekle",
     "invite": {
       "title": "Davet bağlantısından ekle",
@@ -330,6 +323,10 @@
         "title": "Bu bağlantının süresi doldu",
         "description": "Paylaşan kişiden yenisini isteyin."
       },
+      "removed": {
+        "title": "Bu bağlantı kaldırıldı",
+        "description": "Sunucunun yöneticileri onu kaldırdı. Gösterdikleri artık burada yok."
+      },
       "badKey": {
         "title": "Bu bağlantının anahtarı uymuyor",
         "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."
@@ -343,242 +340,6 @@
         "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Depo’yu açtığında yeniden çalışır."
       }
     }
-  },
-  "editor": {
-    "status": {
-      "connecting": "Bağlanıyor…",
-      "ready": "Canlı",
-      "error": "Çevrimdışı — yeniden bağlanıyor"
-    },
-    "save": "Kaydet",
-    "saving": "Kaydediliyor…",
-    "saved": "Kaydedildi",
-    "saveHint": "Geçerli durumu kaydet (Ctrl+S)",
-    "saveVersion": "Sürüm kaydet",
-    "saveVersionHint": "Süresiz saklanan adlandırılmış bir sürüm kaydet",
-    "nameVersion": {
-      "title": "Bu sürümü adlandır",
-      "description": "Adlandırılmış sürümler süresiz saklanır ve geçmişin en üstünde görünür.",
-      "label": "Sürüm adı"
-    },
-    "history": "Geçmiş",
-    "historyTitle": "Sürüm geçmişi",
-    "closeHistory": "Geçmişi kapat",
-    "shortcutsButton": "Klavye kısayolları",
-    "cursorColor": "İmleç rengi",
-    "useColor": "{{color}} kullan",
-    "customColor": "Özel renk…",
-    "colorSaveFailed": "İmleç rengin kaydedilemedi",
-    "restoreFailed": "Bu sürüm geri yüklenemedi",
-    "restored": "Sürüm geri yüklendi",
-    "preRestoreLabel": "Geri yüklemeden önce, {{time}}",
-    "restoredLabel": "{{time}} sürümünden geri yüklendi",
-    "quotaSave": "Depolama kotası aşıldı — kaydedilemedi",
-    "mode": {
-      "label": "Görünüm",
-      "edit": "Düzenle",
-      "split": "Böl",
-      "read": "Oku"
-    },
-    "code": {
-      "copy": "Kodu kopyala",
-      "copied": "Kopyalandı"
-    },
-    "unfold": "Aç",
-    "notePlaceholder": "Yazmaya başla… Markdown çalışır: # başlıklar, - listeler, ``` kod.",
-    "palette": {
-      "title": "Komut paleti",
-      "placeholder": "Bir komut yaz…",
-      "empty": "Eşleşen komut yok.",
-      "switcher": "Bir dosya ya da klasör aç",
-      "switcherPlaceholder": "Dosya ya da klasör bul…",
-      "livePreview": "Canlı önizleme: notu okunduğu gibi göster",
-      "sourceMode": "Kaynak modu: düz Markdown göster",
-      "switcherEmpty": "Bu adla bir şey yok.",
-      "fold": "İmleçte katla",
-      "unfold": "İmleçte aç",
-      "foldAll": "Her şeyi katla",
-      "unfoldAll": "Her şeyi aç",
-      "groups": {
-        "view": "Görünüm",
-        "file": "Dosya",
-        "fold": "Katlama"
-      }
-    },
-    "focus": {
-      "enter": "Odak modu (Ctrl/⌘+Shift+F)",
-      "exit": "Odak modundan çık (Esc)"
-    },
-    "callout": {
-      "note": "Not",
-      "abstract": "Özet",
-      "info": "Bilgi",
-      "todo": "Yapılacak",
-      "tip": "İpucu",
-      "success": "Başarılı",
-      "question": "Soru",
-      "warning": "Uyarı",
-      "failure": "Başarısız",
-      "danger": "Tehlike",
-      "bug": "Hata",
-      "example": "Örnek",
-      "quote": "Alıntı"
-    },
-    "menu": {
-      "addLink": "Bağlantı ekle",
-      "addExternalLink": "Dış bağlantı ekle",
-      "format": "Biçim",
-      "paragraph": "Paragraf",
-      "insert": "Ekle",
-      "highlight": "Vurgu",
-      "callout": "Bilgi kutusu",
-      "strikethrough": "Üstü çizili",
-      "math": "Matematik",
-      "bullet": "Madde işaretli liste",
-      "numbered": "Numaralı liste",
-      "task": "Görev listesi",
-      "heading": "Başlık {{level}}",
-      "quote": "Alıntı",
-      "body": "Gövde metni",
-      "table": "Tablo",
-      "codeBlock": "Kod bloğu",
-      "mathBlock": "Matematik bloğu",
-      "rule": "Yatay çizgi",
-      "picture": "Görsel…",
-      "cut": "Kes",
-      "copy": "Kopyala",
-      "paste": "Yapıştır",
-      "pastePlain": "Düz metin olarak yapıştır",
-      "selectAll": "Tümünü seç",
-      "clipboardBlocked": "Tarayıcın burada panoya izin vermedi. Bunun yerine Ctrl+C / Ctrl+V (Mac’te ⌘) kullan."
-    },
-    "links": {
-      "noAccess": "Bu öğeye erişimin yok ya da öğe artık yok",
-      "loading": "Öğe aranıyor…"
-    },
-    "image": {
-      "adding_one": "Görsel ekleniyor…",
-      "adding_other": "{{count}} görsel ekleniyor…",
-      "loading": "Görsel yükleniyor",
-      "unavailable": "Görsel kullanılamıyor",
-      "tooLarge": "En fazla {{limit}} boyutunda görseller eklenebilir.",
-      "unsupported": "Bu tür görsel eklenemez: PNG, JPEG, GIF, WebP ya da AVIF kullan.",
-      "failed": "Görsel eklenemedi. Yeniden dene."
-    },
-    "outline": {
-      "title": "Ana hat",
-      "hint": "Notun başlıkları; oraya gitmek için birine tıkla",
-      "close": "Ana hattı kapat",
-      "empty": "Henüz başlık yok. Eklemek için bir satıra # ile başla."
-    },
-    "statusBar": {
-      "selected": "{{words}} · {{chars}} seçili",
-      "cursor": "Satır {{line}}, Sütun {{col}}",
-      "words_one": "{{count}} kelime",
-      "words_other": "{{count}} kelime",
-      "chars_one": "{{count}} karakter",
-      "chars_other": "{{count}} karakter",
-      "collaborators_one": "Burada {{count}} kişi daha var",
-      "collaborators_other": "Burada {{count}} kişi daha var"
-    },
-    "shortcuts": {
-      "bold": "Kalın",
-      "italic": "İtalik",
-      "code": "Satır içi kod",
-      "link": "Bağlantı (seçim yoksa: bir dosya ya da klasör bağla)",
-      "focusMode": "Odak modu (çıkmak için Esc)",
-      "fold": "İmleçteki bölümü katla ya da aç",
-      "foldAll": "Her şeyi katla ya da aç",
-      "palette": "Komut paleti",
-      "switcher": "Bir dosya ya da klasör aç",
-      "kutupLink": "Depo'ndaki bir dosyayı ya da klasörü bağla (![[ görsel gösterir)",
-      "continueList": "Listeyi sürdür (bitirmek için boş öğede tekrar)",
-      "title": "Düzenleyici klavye kısayolları",
-      "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
-      "save": "Kaydet",
-      "search": "Belgede bul",
-      "undo": "Geri al",
-      "redo": "Yinele",
-      "comment": "Satır yorumunu aç/kapat",
-      "cycleMode": "Düzenle / Böl / Oku arasında geç",
-      "cycleModeRev": "Modlar arasında geriye geç",
-      "addCursor": "Tıklanan yere imleç ekle",
-      "rectSelect": "Dikdörtgen seçim"
-    },
-    "versions": {
-      "loading": "Sürümler yükleniyor…",
-      "loadFailed": "Sürüm geçmişi yüklenemedi.",
-      "empty": "Henüz sürüm yok",
-      "emptyHint": "Sürümler sen düzenledikçe ya da Sürüm kaydet'i seçtiğinde otomatik kaydedilir.",
-      "kept": "Saklanıyor",
-      "today": "Bugün, {{time}}",
-      "yesterday": "Dün, {{time}}",
-      "meta": "{{size}} · anahtar {{key}}",
-      "name": "Adlandır",
-      "namePlaceholder": "Sürüm adı",
-      "keep": "Süresiz sakla",
-      "unkeep": "Saklamayı bırak",
-      "restore": "Geri yükle",
-      "updateFailed": "Bu sürüm güncellenemedi",
-      "delete": "Sil",
-      "deleteTitle": "Bu sürüm silinsin mi?",
-      "deleteDescription": "{{version}} sürüm geçmişinden silinecek ve {{size}} yer açılacak.",
-      "deleteWarning": "Bu işlem geri alınamaz. Diğer sürümler kalır.",
-      "deleteKept": "Bu sürüm Süresiz sakla olarak işaretli. Silmek geri alınamaz.",
-      "deleteSubmit": "Kalıcı olarak sil",
-      "deleted": "Sürüm silindi",
-      "deleteFailed": "Bu sürüm silinemedi",
-      "current": "Güncel"
-    },
-    "restore": {
-      "title": "Bu sürüm geri yüklensin mi?",
-      "description": "Önce geçerli durumu yedek sürüm olarak kaydet ya da yedeklemeden doğrudan geri yükle.",
-      "restoreOnly": "Yalnızca geri yükle",
-      "saveAndRestore": "Kaydet ve geri yükle"
-    },
-    "whiteboard": {
-      "loading": "Beyaz tahta yükleniyor…",
-      "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi"
-    },
-    "office": {
-      "loading": "Belge düzenleyici yükleniyor…",
-      "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
-      "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir.",
-      "notPdf": "Bu dosya bir PDF gibi görünmüyor, bu yüzden PDF düzenleyici açamıyor. Dosyayı indir ya da görüntüleyicide aç.",
-      "openFailed": "Düzenleyici bu belgeyi açamadı. Yeniden dene ya da dosyayı indir.",
-      "about": {
-        "open": "Bu düzenleyici hakkında",
-        "title": "Bu düzenleyici hakkında",
-        "developer": "Belgeler, tablolar ve sunular, özgün geliştiricisi Ascensio System SIA olan ONLYOFFICE ile düzenlenir.",
-        "modified": "Bu, değiştirilmiş bir sürümdür: CryptPad, ONLYOFFICE'i tamamen tarayıcıda çalışacak şekilde uyarladı; Kutup bunun üzerinde kendi değişikliklerini sürdürür.",
-        "licence": "ONLYOFFICE'in ek koşullarıyla birlikte GNU AGPL v3 altında özgür bir yazılımdır. Değişiklikler ve tarihleriyle birlikte kaynak kodu herkese açıktır.",
-        "licenceLink": "Lisans ve bildirimler",
-        "termsLink": "ONLYOFFICE ek koşulları",
-        "editorSource": "Düzenleyicinin kaynak kodu",
-        "converterSource": "Dosya dönüştürücünün (x2t) kaynak kodu",
-        "trademark": "ONLYOFFICE, Ascensio System SIA'nın ticari markasıdır. Kutup, ONLYOFFICE ile bağlantılı değildir ve onun tarafından onaylanmamıştır."
-      }
-    },
-    "viewOnly": "Yalnızca görüntüleme"
-  },
-  "file": {
-    "opening": "Açılıyor…",
-    "liveBlocked": "Bu ağ canlı düzenlemeyi engelliyor.",
-    "liveBlockedBody": "Dosyayı son kaydedildiği haliyle, salt okunur görüyorsunuz. Bir kopya üzerinde çalışmak için indirin ya da düzenlemek için başka bir ağdan açın.",
-    "liveBlockedUnsent": "Son değişiklikleriniz sunucuya ulaşmadı. Bu sekmede tutuluyor ve bağlantı geri gelirse gönderiliyor; sekmeyi kapatmayın. Ya da dosyanın son kaydedilmiş halini indirin.",
-    "failedTitle": "Bu dosya açılamıyor",
-    "backToDrive": "Depo'ya dön",
-    "backToOffice": "Ofis'e dön",
-    "backTo": "{{folder}} klasörüne dön",
-    "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
-    "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
-    "tooLarge": "{{size}} boyutuyla tarayıcıda açılamayacak kadar büyük (sınır {{limit}}). Bunun yerine indir.",
-    "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
-    "noPreviewTitle": "Bu dosya türü için önizleme yok",
-    "noPreview": "Cihazında açmak için indir.",
-    "restoring": "Geri yükleniyor…",
-    "waitingForOwner": "Bu dosya yeni bir anahtara geçti ve sahibi erişiminizi henüz güncellemedi. Sahibi Kutup Depo’yu yeniden açtığında açılır.",
-    "editsWait": "Sahibi erişimi güncelleyene kadar yalnızca görüntüleme"
   },
   "search": {
     "label": "Depo'da ara",
@@ -606,9 +367,6 @@
       "type": "Önizleme görseli. Tamamını görmek ve düzenlemek için dosyayı aç.",
       "size": "Önizleme görseli: dosya burada gösterilemeyecek kadar büyük. Aç ya da indir."
     }
-  },
-  "viewer": {
-    "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
   },
   "settings": {
     "title": "Depo ayarları",

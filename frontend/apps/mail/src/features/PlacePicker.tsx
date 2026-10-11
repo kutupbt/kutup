@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@kutup/ui/components/po
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { cn } from '@kutup/ui/lib/cn'
 import { movesFor, useMailActions, type MoveTarget } from './mailActions'
+import { useMailboxScope } from './mailboxScope'
 import { openPlacesDialog } from './placesState'
 
 export type PickerMode = 'move' | 'label'
@@ -54,7 +55,9 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
   // A label's wanted state, once changed: true (all), false (none).
   const [changed, setChanged] = useState<Map<string, boolean>>(new Map())
   const q = query.trim().toLocaleLowerCase()
-  const folders = useMemo(() => (places.data ? flattenFolders(places.data.tree) : []), [places.data])
+  // Your own folders are for your own mailbox, not a shared one.
+  const { group } = useMailboxScope()
+  const folders = useMemo(() => (places.data && !group ? flattenFolders(places.data.tree) : []), [places.data, group])
   const shownFolders = q ? folders.filter((f) => f.name.toLocaleLowerCase().includes(q)) : folders
   const labels = places.data?.labels ?? []
   const shownLabels = q ? labels.filter((l) => l.name.toLocaleLowerCase().includes(q)) : labels
@@ -145,7 +148,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
             )
           })
         )}
-        {q && !exact ? (
+        {q && !exact && !group ? (
           <Row onClick={create}>
             <Plus />
             <span className="truncate">{t(mode === 'move' ? 'places.createFolderNamed' : 'places.createLabelNamed', { name: query.trim() })}</span>
@@ -174,6 +177,9 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
 export function PickerButton({ mode, rows, folder, onMoved }: { mode: PickerMode; rows: MailMessage[]; folder: FolderId; onMoved?: () => void }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const { group } = useMailboxScope()
+  // Labels are your own mailbox's; a shared mailbox has none yet.
+  if (mode === 'label' && group) return null
   const label = t(mode === 'move' ? 'places.moveTo' : 'places.labelAs')
   return (
     <Popover open={open} onOpenChange={setOpen}>
