@@ -160,14 +160,26 @@ The `kutup` CLI includes an SSH agent, **opt-in**: installing the CLI never star
 - **Keys listed while locked** (Strongbox, `SBX/macbox/ssh-agent/SSHAgentRequestHandler.swift:108-145`): SSH sees the public keys; the first signature request asks to unlock.
 - **Memory only**: private keys are decrypted from the vault into memory, never written to disk, and wiped on lock, idle timeout and sleep.
 - **Push mode for people who keep their own agent**: `kutup ssh-add <entry> --lifetime 1h --confirm` adds a key to the system agent with constraints (KeePassXC's way, `KXC/sshagent/SSHAgent.cpp:270-304`).
-- **Unlocking**: in a terminal the agent can ask for the vault password; for background use it is smoother when the vault password is stored under the Kutup account key (open question 1 below).
+- **Unlocking**: in a terminal the agent can ask for the vault password; for background use it is smoother with the vault password stored under the Kutup account key, as decided in "Unlocking, key files and several vaults" below.
 - **Crypto**: the RustCrypto `ssh-key` crate in the shared core (generation, import of OpenSSH / PKCS#8 / PKCS#1, fingerprints), the same code the website uses to show and create SSH key entries.
 
-### Open questions for this direction
+### Unlocking, key files and several vaults (decided 2026-10-11)
 
-1. **Where the vault password lives.** Pure KeePass: the user types it (one more password). Convenience: Kutup stores it wrapped by the account master key, so the website and `kutup sync` unlock with the Kutup sign-in; the KeePass apps still ask for it.
-2. **Key files and YubiKey challenge-response**: support them in the website and `kutup sync`, or password-only for vaults Kutup merges?
-3. **One vault file per user, or several** (personal, shared family vault in a shared folder)?
+**Unlocking follows Proton Pass.** Proton Pass has no separate vault password: vault keys are encrypted to the account key, so signing in to Proton opens every vault, and day-to-day locking is a lock mode on the device (`PPW/lib/auth/lock/types.ts:4-15`: a PIN checked by the server, the account password — offline-capable when offline mode is on, `PPW/lib/cache/crypto.ts:61-105` — biometrics in the apps, or none). Kutup Pass does the same, with one difference that keeps the vault a standard KeePass file:
+
+- **Each vault keeps its own KDBX composite key** (a password, optionally with a key file or a YubiKey), so KeePassXC, Strongbox and any other KeePass app can open it, with or without Kutup.
+- **Kutup stores the vault password sealed under the account master key** (a small per-vault record beside the file; the server cannot read it). The Kutup Pass website and `kutup sync` therefore unlock every vault with the Kutup sign-in, with no second prompt, and `kutup sync` can merge in the background.
+- **KeePass apps ask for the vault password as usual.** The user chooses a memorable one, or lets Kutup generate a strong one and view or copy it in Kutup Pass when setting up KeePassXC or Strongbox.
+- **Device locking** as in Proton: lock after idle; offline unlock with the account password (§5.6); biometrics when the native apps arrive.
+
+**Key files and YubiKey are supported.**
+- **Key file**: Kutup can keep it sealed under the account key as well, so the website and `kutup sync` still unlock with the sign-in; KeePass apps use their own copy of the file.
+- **YubiKey challenge-response**: the key must be present for every unlock and every save, because KDBX 4 uses the KDF seed, which changes on each save, as the challenge (`KXC/keys/CompositeKey.cpp:85-160`). Consequences: merges of a YubiKey vault run only when the user is at the machine with the key inserted, never in the background; `kutup sync` supports it fully on desktop; the website can reach the key only through WebHID, which only Chromium-based browsers offer [GK], so YubiKey vaults are desktop-first on the web.
+
+**Several vaults per account**, as in Strongbox: each vault is its own KDBX file.
+- A personal vault in the user's Drive; a family or team vault in a **shared Drive folder**, using Drive's existing sharing with removal and key rotation; each vault with its own composite key.
+- Kutup Pass lists every vault the account can reach and unlocks each with the sign-in (the sealed vault-password records, one per vault and per member who has stored it).
+- In a shared vault, each member stores the vault password under their own account key; removing a member from the folder removes their access to the file, and the vault password should then be changed (Kutup Pass offers it, re-sealing the new password for the remaining members), since the removed person knew it.
 
 ---
 

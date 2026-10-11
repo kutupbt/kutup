@@ -160,7 +160,9 @@ jobs:
       - web
       - chat-backup-integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Chat recovery plus the Mail and Contacts browser lines on one stack;
+    # 30 minutes ran out on 2026-10-11 (run 38163154713).
+    timeout-minutes: 60
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
