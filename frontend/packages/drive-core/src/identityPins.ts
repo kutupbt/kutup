@@ -281,6 +281,15 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   return { kind: 'ok', verified: false }
 }
 
+/**
+ * Whether `account` is in the list (met before in Drive, Chat or the CLI).
+ * Tells a Kutup account on another server from an ordinary email address
+ * without asking that server: only a listed one is worth looking up.
+ */
+export async function isPinned(me: DriveIdentity, account: string): Promise<boolean> {
+  return (await pinStore(me)).pins.has(account)
+}
+
 /** Sharing to someone whose identity is in doubt, before the user said to go on. */
 export class IdentityNotConfirmed extends Error {
   constructor(

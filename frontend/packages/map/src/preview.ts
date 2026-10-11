@@ -1,4 +1,4 @@
-import maplibregl from 'maplibre-gl'
+import * as maplibregl from 'maplibre-gl'
 import type { EffectiveMap } from './config'
 import type { Place } from './list'
 import { absoluteStyle, relayRequest } from './relay'

@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import {
   Archive,
   BookUser,
@@ -240,7 +242,12 @@ export function MailShell() {
           <SidebarNavLink to="/groups" icon={<Users />} label={t('mailGroups.title')} />
       <PlacesNav counts={counts.data} />
       </>}
-      sidebarFooter={<StorageMeter />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="mail" services={feedbackServices} />
+          <StorageMeter />
+        </div>
+      }
       headerStart={<SearchBox />}
       headerEnd={
         <>

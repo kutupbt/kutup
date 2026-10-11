@@ -391,6 +391,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         registration_enabled: val.as_deref() != Some("false"),
         chat,
         apps: state.config.apps.clone(),
+        feedback: crate::models::FeedbackSettings {
+            github_repository: state.config.feedback_github_repository.clone(),
+        },
     })
     .into_response())
 }

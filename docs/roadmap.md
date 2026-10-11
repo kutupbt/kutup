@@ -150,6 +150,26 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | Backend: `POST /admin/actions/purge-trash` (forces the trash retention sweeper — `jobs::trash_sweep_once` — to run now) | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
 
+### Admin · its own app at `admin.<domain>`
+
+Administration lives in the Account app today, on the same origin as every
+user's account pages. Moving it to its own app and hostname (like Proton's or
+Google Workspace's separate admin consoles) would:
+
+- keep a script injected into a user-facing app (Drive, Mail, Maps…) away
+  from the admin interface: a separate origin with its own session;
+- let an operator restrict `admin.<domain>` to known addresses or a VPN
+  (Tailscale, WireGuard) in nginx, without touching `account.<domain>`;
+- allow stricter sign-in for administrators only (a required second factor or
+  WebAuthn, short sessions);
+- shrink the Account app.
+
+| What's needed | Where |
+|---|---|
+| Frontend: an `admin` app (the current Admin pages move there), its hostname in the host list, certificate and `KUTUP_ADMIN_URL` | `frontend/apps`, `40-kutup-hosts.sh`, `acme.sh` |
+| Backend: admin endpoints accept only sessions issued to the admin origin, and enforce an optional `ADMIN_ALLOWED_IPS` themselves (an nginx rule alone leaves the API reachable through the other hostnames) | `handlers/admin*`, auth |
+| Docs: self-hosting (IP allow-list, VPN), threat model | `docs/` |
+
 ### Native iOS and Android apps
 
 Not started, and deferred until the web apps are done. Each product is its
@@ -854,13 +874,14 @@ Done (October 2026): docs/plans/drive-unique-names.md, browser spec 50,
 
 ### Drive · identity pins: what is left
 
-Drive, Chat and the CLI share one list of trusted identities and one safety
-number (docs/plans/drive-identity-pins.md). Still to do:
+Drive, Chat, Contacts and the CLI share one list of trusted identities and
+one safety number (docs/plans/drive-identity-pins.md). Nothing is left on
+the web.
 
-- Contacts shows each person's state from the list (gray, green, red shield)
-  on their page, as the Contacts plan foresaw.
-- The native apps' own screens for the shield and the verification dialog
-  (their Chat engine already keeps to the list).
+- Deferred: the native apps' screens for the shield and the verification
+  dialog. The native apps are not started; each product will be its own app
+  in its own repository (docs/mobile-build.md), and these screens come with
+  them. Their shared Chat engine already keeps to the list.
 
 ### Drive · share dialogs: what is left
 
@@ -968,6 +989,23 @@ make the next such failure diagnosable from CI alone.
 One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
+
+### Security · dependency advisories left open
+
+Recorded 2026-10-11 with the dependency security update; recheck when any of
+these move.
+
+- **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
+  overlong ciphertext buffer, a crash rather than a disclosure). It reaches
+  `kutup-chat-core` and `kutup-client-ffi` through `hpke-rs =0.6.1`, which
+  OpenMLS `=0.8.1` pins. Updating means a new OpenMLS and its HPKE stack.
+  Groups are moving off MLS to pairwise sessions, which removes it; if that
+  takes long, upgrade OpenMLS on its own.
+- **`braces` 3.0.3** (no fixed release): build time only, through
+  Excalidraw's `sass` → `chokidar`.
+- **`postcss-selector-parser` 6.0.10** (fixed in 7.1.6, a major release):
+  build time only, through `@tailwindcss/typography`, which only parses
+  Kutup's own CSS.
 
 ### Federation polish
 
