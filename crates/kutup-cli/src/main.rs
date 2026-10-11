@@ -20,6 +20,7 @@ mod session;
 mod syncengine;
 mod transfer;
 mod uploader;
+mod vaultsync;
 mod whiteboard;
 
 use clap::{Parser, Subcommand};
@@ -411,6 +412,7 @@ mod tests {
                 status,
                 message: "x".into(),
                 name_taken: None,
+                version_conflict: None,
             })
             .context("outer")
             .context("outermost");

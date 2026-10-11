@@ -250,6 +250,10 @@ pub struct RenameCollectionRequest {
 
 // --- Files ---
 
+fn first_generation() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct File {
@@ -275,6 +279,9 @@ pub struct File {
     /// The key generation of what `/files/{id}/download` serves (its latest
     /// whole-file version, else the upload).
     pub content_key_generation: u32,
+    /// The key generation the original upload was sealed at.
+    #[serde(default = "first_generation")]
+    pub original_key_generation: u32,
     /// The file's older keys, each sealed under the next (generations 2 to
     /// `key_generation`, in order); absent for most files.
     #[serde(default)]

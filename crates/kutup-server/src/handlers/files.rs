@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::extract::{Multipart, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
@@ -400,7 +400,7 @@ pub async fn upload(
     operation_id = "downloadFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
-    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+    responses((status = 200, description = "The encrypted current content (application/octet-stream); `x-kutup-version` names it: a version id, or `original`"))
 )]
 pub async fn download(
     State(state): State<AppState>,
@@ -431,8 +431,23 @@ pub async fn download(
         .open(&state.storage)
         .await
         .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(body, size, &[]))
+    // Which content this is, for a later save's `basedOn`
+    // (docs/plans/pass.md, "Saving without overwriting").
+    let version = content
+        .version
+        .map_or_else(|| ORIGINAL.to_owned(), |id| id.to_string());
+    Ok(octet_stream_response(
+        body,
+        size,
+        &[(HeaderName::from_static(VERSION_HEADER), version)],
+    ))
 }
+
+/// The download header naming the content served: a version id, or
+/// [`ORIGINAL`].
+pub(crate) const VERSION_HEADER: &str = "x-kutup-version";
+/// Names the original upload where a version id is expected.
+pub(crate) const ORIGINAL: &str = "original";
 
 /// `GET /api/files/{id}/original` — the original upload, while it is kept:
 /// the base of an office editing session that began before the file's first

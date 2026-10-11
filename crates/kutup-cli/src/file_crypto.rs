@@ -315,6 +315,7 @@ mod tests {
                 encrypted_size_bytes: 0,
                 created_at: String::new(),
                 content_key_generation: 1,
+                original_key_generation: 1,
                 key_history: Vec::new(),
             },
             created.file_key,
