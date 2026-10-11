@@ -648,6 +648,25 @@ later.
   Kutup server only. With maps off, nothing is requested.
 - **Open questions:** in docs/plans/maps.md.
 
+### Pass (KeePass vaults in Drive)
+
+A password manager at `pass.<domain>` whose vaults are standard KeePass
+(KDBX 4.1) files in Drive, edited offline everywhere, with KeePassXC and the
+other KeePass apps still working and a Kutup three-way merge that never loses
+an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
+[`research/19-password-manager.md`](research/19-password-manager.md).
+
+- **K0** (in progress): `crates/kutup-pass`, KDBX through the `keepass`
+  crate and the three-way merge, with corpus and property tests.
+- **K1**: conditional version saves (`basedOn`) in Drive; `kutup sync`
+  merges `.kdbx` files instead of making conflict copies.
+- **K2**: the website, vault secrets sealed under the account key, the
+  offline outbox.
+- **K3**: re-merging diverged versions; phone browsers. **K3b**: the opt-in
+  SSH agent in the `kutup` CLI.
+- **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
+  single items between users (research 19 §5).
+
 ---
 
 ## Polish / smaller items (future)
