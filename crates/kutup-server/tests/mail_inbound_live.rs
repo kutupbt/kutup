@@ -2663,3 +2663,122 @@ fn mail_settings_all_mail_and_emptying() {
     assert_eq!(r.status().as_u16(), 400);
     assert_eq!(folder(&c, &base, &user.token, "inbox").len(), 1);
 }
+
+#[test]
+fn block_spam_and_allow_lists() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let rules = |patterns: &[&str], kind: &str| {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/sender-rules")),
+            &alice.token,
+        )
+        .json(&json!({ "patterns": patterns, "kind": kind }))
+        .send()
+        .unwrap();
+        assert!(r.status().is_success(), "rules: {}", r.status());
+        r.json::<Value>().unwrap()
+    };
+    let subjects = |folder_name: &str| -> Vec<String> {
+        folder(&c, &base, &alice.token, folder_name)
+            .iter()
+            .filter(|m| m["from"]["address"] == bob_address.address.as_str())
+            .map(|m| m["subject"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    // Bob writes to Alice, encrypted to her key and his own, as Mail does.
+    let send = |body: &str| {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: lists\r\nMessage-ID: <{message_id}>\r\n\r\n{body}\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": "lists",
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        // The sender is told it was delivered, blocked or not (as Proton).
+        let result = send_result(r);
+        assert_eq!(result["recipients"][0]["status"], "delivered", "{result}");
+    };
+
+    // Blocked: accepted and not stored, nothing charged.
+    let used_before = common::used(&c, &base, &alice.token);
+    let blocked = rules(&[&bob_address.address.to_uppercase()], "block");
+    assert_eq!(blocked[0]["pattern"], bob_address.address.as_str());
+    send("blocked");
+    assert!(
+        subjects("inbox").is_empty() && subjects("spam").is_empty() && subjects("trash").is_empty()
+    );
+    assert_eq!(common::used(&c, &base, &alice.token), used_before);
+
+    // Moved to spam (one entry per address: the block becomes spam).
+    let spam = rules(&[&bob_address.address], "spam");
+    assert_eq!(spam[0]["id"], blocked[0]["id"]);
+    send("spam");
+    assert_eq!(subjects("spam").len(), 1);
+    assert!(subjects("inbox").is_empty());
+
+    // The whole domain blocked, but Bob's address allowed: the address wins.
+    rules(&[&format!("@{domain}")], "block");
+    rules(&[&bob_address.address], "allow");
+    send("allowed");
+    assert_eq!(subjects("inbox").len(), 1);
+
+    // Unblock (delete the entries): mail arrives as usual.
+    let list: Value = bearer(c.get(format!("{base}/api/mail/sender-rules")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    let ids: Vec<Value> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/sender-rules/delete")),
+        &alice.token,
+    )
+    .json(&json!({ "ids": ids }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    send("after");
+    assert_eq!(subjects("inbox").len(), 2);
+    // Not an address or domain: refused.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/sender-rules")),
+        &alice.token,
+    )
+    .json(&json!({ "patterns": ["not a domain"], "kind": "block" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+}

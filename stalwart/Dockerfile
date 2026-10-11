@@ -3,6 +3,8 @@
 FROM stalwartlabs/cli:1.0.12 AS cli
 
 FROM alpine:3.22
+# jq reads Stalwart's settings back to check what Kutup relies on (setup.sh).
+RUN apk add --no-cache jq
 COPY --from=cli /usr/local/bin/stalwart-cli /usr/local/bin/stalwart-cli
 COPY plan.ndjson certificate.ndjson reload.ndjson reload-certificates.ndjson setup.sh /etc/kutup-stalwart/
 # Root, to hand Stalwart (uid 2000) a readable copy of the root-only

@@ -24,6 +24,7 @@ pub mod mail_folders;
 pub mod mail_groups;
 pub mod mail_keys;
 pub mod mail_send;
+pub mod mail_sender_rules;
 pub mod mail_sending;
 pub mod mail_settings;
 pub mod name_hashes;

@@ -231,7 +231,8 @@
     "messagesFrom": "Bu göndericiden gelen iletiler",
     "messagesTo": "Bu alıcıya giden iletiler",
     "chat": "Sohbet",
-    "call": "Ara"
+    "call": "Ara",
+    "block": "Bu göndericiden gelenleri engelle"
   },
   "moved": {
     "inbox_one": "Gelen Kutusuna taşındı.",
@@ -456,7 +457,8 @@
     "title": "Ayarlar",
     "folders": "Klasörler ve etiketler",
     "filters": "Filtreler",
-    "general": "Genel"
+    "general": "Genel",
+    "senders": "Engelle ve izin ver"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -475,5 +477,43 @@
     "autoDeleteHint": "Çöp Kutusu ve İstenmeyen’deki iletileri 30 gün sonra sil. Açıldığında orada olan iletiler şimdiden sayılır.",
     "almostAllMail": "Tüm postalara İstenmeyen/Çöp’ü katma",
     "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir."
+  },
+  "senders": {
+    "title": "Engelle ve izin ver",
+    "description": "Bir adresten ya da tüm bir alan adından gelen postaya, herhangi bir filtre çalışmadan önce ne olacağını belirleyin.",
+    "kinds": {
+      "spam": "İstenmeyen",
+      "block": "Engelle",
+      "allow": "İzin ver"
+    },
+    "help": {
+      "spam": "gereksiz postaları gelen kutunuzun dışında tutmak için; İstenmeyen klasörüne gider.",
+      "block": "hiç istemediğiniz postaları durdurmak için: teslim edilmez ve silinir, göndericiye bildirilmez.",
+      "allow": "önemli postalar asla İstenmeyen’e düşmesin diye (yalnızca ileti gerçekten o adresten ya da alan adından geliyorsa)."
+    },
+    "placeholder": "Adres ya da alan adı, örneğin news@shop.example veya shop.example",
+    "pattern": "Adres ya da alan adı",
+    "list": "Liste",
+    "add": "Ekle",
+    "all": "Tümü",
+    "invalid": "Bir adres (ad@ornek.com) ya da alan adı (ornek.com) girin.",
+    "added": {
+      "spam": "{{who}} gönderdiği postalar İstenmeyen’e gidecek.",
+      "block": "{{who}} engellendi.",
+      "allow": "{{who}} için izin verildi."
+    },
+    "empty": "Burada bir şey yok",
+    "emptyHint": "Yukarıdan bir adres ya da alan adı ekleyin veya bir iletide \"Bu göndericiden gelenleri engelle\"yi kullanın.",
+    "moveFor": "{{who}} için liste",
+    "remove": "Kaldır",
+    "removeFor": "{{who}} kaldır",
+    "removed": "{{who}} kaldırıldı.",
+    "blockTitle": "Göndericiyi engelle",
+    "blockDescription": "{{who}} gönderdiği yeni e-postalar teslim edilmeyecek ve kalıcı olarak silinecek.",
+    "manage": "Engellenen adresleri Ayarlar’dan yönetin.",
+    "block": "Engelle",
+    "blocked": "{{who}} engellendi.",
+    "count_one": "{{count}} gönderici",
+    "count_other": "{{count}} gönderici"
   }
 }

@@ -11,6 +11,7 @@ import { MailboxPage } from './features/MailboxPage'
 import { FiltersSettingsPage } from './features/FiltersSettingsPage'
 import { GeneralSettingsPage } from './features/GeneralSettingsPage'
 import { PlacesSettingsPage } from './features/PlacesSettingsPage'
+import { SendersSettingsPage } from './features/SendersSettingsPage'
 import { SettingsLayout } from './features/SettingsLayout'
 import { NotFoundPage } from './NotFoundPage'
 
@@ -43,6 +44,7 @@ export function App() {
                 <Route path="general" element={<GeneralSettingsPage />} />
                 <Route path="folders" element={<PlacesSettingsPage />} />
                 <Route path="filters" element={<FiltersSettingsPage />} />
+                <Route path="senders" element={<SendersSettingsPage />} />
               </Route>
               {/* A shared mailbox (docs/plans/mail-groups.md). */}
               <Route path="/g/:groupId" element={<Navigate to="inbox" replace />} />

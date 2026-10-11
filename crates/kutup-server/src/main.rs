@@ -637,6 +637,18 @@ fn build_router(state: AppState) -> Router {
             post(handlers::mail_settings::empty),
         )
         .route(
+            "/api/mail/sender-rules",
+            get(handlers::mail_sender_rules::list).post(handlers::mail_sender_rules::set),
+        )
+        .route(
+            "/api/mail/sender-rules/delete",
+            post(handlers::mail_sender_rules::delete),
+        )
+        .route(
+            "/api/mail/sender-rules/:id",
+            patch(handlers::mail_sender_rules::update),
+        )
+        .route(
             "/api/mail/filters",
             get(handlers::mail_filters::list).post(handlers::mail_filters::create),
         )

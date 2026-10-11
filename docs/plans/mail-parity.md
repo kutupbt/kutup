@@ -78,7 +78,7 @@ reference only where Proton has nothing.
 | Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; ❌ keep moved messages in Sent |
 | Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
-| Block, spam, allow lists | `SpamFiltersSection.tsx` | 🔶 F3 (#100) |
+| Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ❌ |
@@ -132,7 +132,7 @@ reference only where Proton has nothing.
 
 Each is its own plan and pull request, Proton first:
 
-1. **What is in flight:** #100 block lists, aliases A0–A3.
+1. **What is in flight:** aliases A0–A3.
 2. **P1 organising:** folders, labels, filters, block lists
    ([`mail-filters.md`](mail-filters.md) F1–F3), with the Mail → Settings
    area they need, auto-empty Spam and Trash, Empty folder, Almost all mail.
