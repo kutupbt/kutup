@@ -1088,7 +1088,6 @@ offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` o
 
 These live in `docs/research/` because the design hasn't been chosen yet:
 
-- **WebDAV mount** — `docs/research/06-webdav-support.md`. Client-side proxy is the only viable path because server-side WebDAV breaks E2EE. Long-term work.
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
 - **Chat open questions** — the post-RFC post-quantum MLS suite transition and
   advanced traffic-obfuscation profiles. Direct/MLS retention, continuous

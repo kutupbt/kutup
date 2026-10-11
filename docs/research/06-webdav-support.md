@@ -1,7 +1,7 @@
 # Research: Adding WebDAV Support to kutup (forward-looking, not yet planned)
 
 **Captured:** 2026-05-04
-**Status:** Exploratory note — no spec yet, no committed scope. Captured because the user asked to keep the option in mind for a future iteration.
+**Status:** **Not planned** (decided 2026-10-11): Proton Drive offers no WebDAV, and Kutup follows it; no WebDAV, CalDAV or CardDAV, on desktop or phones. Phones use the web apps until Kutup's native apps arrive. Kept as the record of what was considered.
 **Scope:** What it would take to let users mount their kutup drive as a native filesystem on macOS / Windows / Linux while preserving end-to-end encryption.
 
 ---
