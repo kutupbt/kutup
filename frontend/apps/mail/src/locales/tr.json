@@ -618,5 +618,22 @@
     "densityHint": "Listenin ne kadarının ekrana sığacağı.",
     "comfortable": "Rahat",
     "compact": "Sıkışık"
+  },
+  "listFilter": {
+    "unread": "Okunmamış",
+    "read": "Okunmuş",
+    "attachments": "Eki olanlar",
+    "filter": "Filtre",
+    "filterCount": "Filtre ({{count}})",
+    "title": "E-postaları filtrele ve sırala",
+    "sortBy": "Sırala",
+    "sort": {
+      "newest": "Önce en yeni",
+      "oldest": "Önce en eski",
+      "largest": "Önce en büyük",
+      "smallest": "Önce en küçük"
+    },
+    "reset": "Sıfırla",
+    "empty": "Bu filtrelere uyan ileti yok."
   }
 }

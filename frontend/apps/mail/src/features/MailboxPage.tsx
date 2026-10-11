@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -32,6 +32,7 @@ import { openComposer } from './composerState'
 import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
+import { ListFilters } from './ListFilters'
 import { Padlock } from './Padlock'
 import { PaneSplitter } from './PaneSplitter'
 import { usePaneSize } from './paneSize'
@@ -44,6 +45,8 @@ import { ShortcutsDialog } from './ShortcutsDialog'
 import { ThreadView } from './ThreadView'
 
 const KNOWN = new Set<string>([...FOLDERS, 'all'])
+const FILTERS: ListFilter[] = ['unread', 'read', 'attachments']
+const SORTS: ListSort[] = ['newest', 'oldest', 'largest', 'smallest']
 
 type Lookup = ReturnType<typeof useContactLookup>
 
@@ -99,8 +102,23 @@ export function MailboxPage() {
   // One of the account's folders (`/f/<id>`) or labels (`/l/<id>`), else a fixed folder.
   const placeKind = location.pathname.startsWith('/f/') ? 'folder' : location.pathname.startsWith('/l/') ? 'label' : null
   const places = usePlaces()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
+  // Proton's filter and sort, kept in the address bar.
+  const filter = FILTERS.find((f) => f === params.get('filter')) ?? null
+  const sort = SORTS.find((s) => s === params.get('sort')) ?? 'newest'
+  const setView = (change: { filter?: ListFilter | null; sort?: ListSort }) => {
+    const next = new URLSearchParams(params)
+    if ('filter' in change) {
+      if (change.filter) next.set('filter', change.filter)
+      else next.delete('filter')
+    }
+    if ('sort' in change) {
+      if (change.sort && change.sort !== 'newest') next.set('sort', change.sort)
+      else next.delete('sort')
+    }
+    setParams(next, { replace: true })
+  }
   const navigate = useNavigate()
   const account = useMailAccount()
   const contacts = useContactLookup()
@@ -129,7 +147,7 @@ export function MailboxPage() {
   const oneLine = layout === 'row'
   const [paneSize, setPaneSize] = usePaneSize(layout)
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
-  const list = useFolder(place, q, group, (settings.data?.viewMode ?? 'conversation') === 'conversation', !settings.isPending)
+  const list = useFolder(place, { q, group, conversations: (settings.data?.viewMode ?? 'conversation') === 'conversation', filter, sort }, !settings.isPending)
   const own = account.data?.address.toLowerCase() ?? ''
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
@@ -146,7 +164,8 @@ export function MailboxPage() {
   const [menuFor, setMenuFor] = useState<MailMessage[]>([])
   const messages = useMemo(() => list.data?.pages.flatMap((page) => page.messages) ?? [], [list.data])
   const chosen = messages.filter((m) => selected.has(m.id))
-  const search = q ? `?q=${encodeURIComponent(q)}` : ''
+  // The list's search, filter and sort go along to an opened conversation and back.
+  const search = params.toString() ? `?${params.toString()}` : ''
   const openIndex = messages.findIndex((m) => m.threadId === threadId)
   const here = cursor ?? (openIndex >= 0 ? openIndex : null)
 
@@ -560,6 +579,7 @@ export function MailboxPage() {
           </>
         )}
       </div>
+      {chosen.length === 0 ? <ListFilters filter={filter} sort={sort} onChange={setView} /> : null}
       {unwanted && !group && settings.data ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">{settings.data.autoDeleteDays ? t('emptyFolder.autoDeleteOn') : t('emptyFolder.autoDeleteOffer')}</span>
@@ -594,8 +614,8 @@ export function MailboxPage() {
       ) : messages.length === 0 ? (
         <div className="p-3">
           <EmptyState
-            title={q ? t('list.noMatches') : placeKind ? t(`empty.${placeKind}`) : t(`empty.${folder}`)}
-            description={q ? t('list.noMatchesHint') : placeKind ? t(`emptyHint.${placeKind}`) : t(`emptyHint.${folder}`)}
+            title={q ? t('list.noMatches') : filter ? t('listFilter.empty') : placeKind ? t(`empty.${placeKind}`) : t(`empty.${folder}`)}
+            description={q ? t('list.noMatchesHint') : filter ? '' : placeKind ? t(`emptyHint.${placeKind}`) : t(`emptyHint.${folder}`)}
           />
         </div>
       ) : (
