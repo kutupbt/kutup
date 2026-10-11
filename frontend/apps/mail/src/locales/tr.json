@@ -96,7 +96,6 @@
     "replyAll": "Tümünü yanıtla",
     "forward": "İlet",
     "editDraft": "Taslağı düzenle",
-    "downloadOriginal": "Özgün postayı indir (.eml)",
     "trustKeyTitle": "{{address}} açık anahtarını gönderdi",
     "trustKeyDescription": "İletilerinin ondan geldiğini doğrulamak için bu anahtara güvenin. Ona giden e-postalar da bu anahtarla şifrelenir. Parmak izi: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} farklı bir açık anahtar gönderdi",
@@ -112,7 +111,18 @@
     "unknownSender": "Bilinmeyen gönderici",
     "collapse": "İletiyi daralt",
     "sentBy": "{{name}} gönderdi",
-    "autoReply": "Bu ileti, önceki bir iletiye yanıt olarak otomatik yazıldı."
+    "autoReply": "Bu ileti, önceki bir iletiye yanıt olarak otomatik yazıldı.",
+    "more": "Diğer işlemler",
+    "export": "Dışa aktar (.eml)",
+    "print": "Yazdır",
+    "viewHeaders": "Üst bilgileri göster",
+    "viewHtml": "HTML'i göster",
+    "viewRendered": "İşlenmiş HTML'i göster",
+    "htmlSource": "HTML kaynağı",
+    "headersTitle": "İleti üst bilgileri",
+    "download": "İndir",
+    "from": "Kimden",
+    "date": "Tarih"
   },
   "actions": {
     "archive": "Arşivle",
@@ -297,7 +307,10 @@
       "send": "Gönder",
       "closeComposer": "Yazma penceresini kapat",
       "moveTo": "Taşı…",
-      "labelAs": "Etiketle…"
+      "labelAs": "Etiketle…",
+      "reply": "Yanıtla (açık bir konuşmada)",
+      "replyAll": "Tümünü yanıtla",
+      "forward": "İlet"
     },
     "mouse": {
       "click": "Tıkla",

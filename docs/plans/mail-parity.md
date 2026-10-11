@@ -30,10 +30,10 @@ reference only where Proton has nothing.
 | Selection pane for several messages | `SelectionPane.tsx` | ❌ |
 | Right-click menu, Shift/Ctrl selection, drag to folders, undo | `ItemContextMenu.tsx` | ✅ |
 | Sender card, Save to contacts, Chat and Call | recipient dropdown | ✅ (Chat, Call are Kutup's) |
-| Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | ✅ list keys; ❌ message keys R, Shift+R, F |
+| Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | ✅ list keys; message keys R (reply), Shift+R (reply all), Shift+F (forward) with a conversation open |
 | Dark mode body, folded quotes | `ExtraDarkStyle.tsx`, blockquote toggle | ✅ |
 | Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ❌ (download one by one) |
-| Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | 🔶 .eml only |
+| Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | ✅ a message's More actions: Export, Print, View headers (and download), View HTML / rendered |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
 | Link confirmation | `LinkConfirmationModal.tsx` | ❌ |

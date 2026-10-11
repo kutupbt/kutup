@@ -96,7 +96,6 @@
     "replyAll": "Reply all",
     "forward": "Forward",
     "editDraft": "Edit draft",
-    "downloadOriginal": "Download the original (.eml)",
     "trustKeyTitle": "{{address}} sent their public key",
     "trustKeyDescription": "Trust it to check that their messages are from them. Mail to them is then encrypted to this key. Fingerprint: {{fingerprint}}",
     "replaceKeyTitle": "{{address}} sent a different public key",
@@ -112,7 +111,18 @@
     "unknownSender": "Unknown sender",
     "collapse": "Collapse message",
     "sentBy": "Sent by {{name}}",
-    "autoReply": "This message was written automatically in answer to an earlier message."
+    "autoReply": "This message was written automatically in answer to an earlier message.",
+    "more": "More actions",
+    "export": "Export (.eml)",
+    "print": "Print",
+    "viewHeaders": "View headers",
+    "viewHtml": "View HTML",
+    "viewRendered": "View rendered HTML",
+    "htmlSource": "HTML source",
+    "headersTitle": "Message headers",
+    "download": "Download",
+    "from": "From",
+    "date": "Date"
   },
   "actions": {
     "archive": "Archive",
@@ -297,7 +307,10 @@
       "send": "Send",
       "closeComposer": "Close the composer",
       "moveTo": "Move to…",
-      "labelAs": "Label as…"
+      "labelAs": "Label as…",
+      "reply": "Reply (an open conversation)",
+      "replyAll": "Reply all",
+      "forward": "Forward"
     },
     "mouse": {
       "click": "Click",
