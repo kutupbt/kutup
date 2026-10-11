@@ -856,8 +856,8 @@ one safety number (docs/plans/drive-identity-pins.md). Nothing is left on
 the web.
 
 - Deferred: the native apps' screens for the shield and the verification
-  dialog. The iOS and Android apps are not built yet and will live in their
-  own repositories (`kutup-ios`, `kutup-android`); these screens come with
+  dialog. The native apps are not started; each product will be its own app
+  in its own repository (docs/mobile-build.md), and these screens come with
   them. Their shared Chat engine already keeps to the list.
 
 ### Drive · share dialogs: what is left
