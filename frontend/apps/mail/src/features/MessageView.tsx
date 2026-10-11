@@ -1,20 +1,22 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Code, Download, Forward, MoreHorizontal, Paperclip, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
+import { ChevronDown, Code, Download, Forward, MoreHorizontal, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useContactLookup, usePinKey } from '@kutup/contacts-core/api'
 import { formatFingerprint } from '@kutup/contacts-core/model'
 import { useOpenedMessage, usePinnedKeys, type MailAccount, type MailMessage, type OpenedMessage } from '@kutup/mail-core/api'
-import type { Mailbox, ParsedAttachment } from '@kutup/mail-core/mime'
+import type { Mailbox } from '@kutup/mail-core/mime'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Skeleton } from '@kutup/ui/components/skeleton'
 import { Tooltip } from '@kutup/ui/components/tooltip'
-import { formatBytes, formatInstant, formatFileDate } from '@kutup/ui/lib/format'
+import { formatInstant, formatFileDate } from '@kutup/ui/lib/format'
 import { cn } from '@kutup/ui/lib/cn'
+import { AttachmentList } from './AttachmentList'
+import { download } from './attachments'
 import { openComposer } from './composerState'
 import { onReplyCommand } from './messageCommands'
 import { printDocument, printHtml } from './printMessage'
@@ -30,14 +32,6 @@ function who(mailbox: Mailbox | null | undefined): string {
   return mailbox ? mailbox.name || mailbox.address : ''
 }
 
-function download(name: string, type: string, bytes: Uint8Array) {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 30_000)
-}
 
 /** The header block of a raw message, as it arrived (Proton's "View headers"). */
 function headerBlock(raw: Uint8Array): string {
@@ -127,31 +121,6 @@ function writeDismissed(addresses: Set<string>) {
   } catch {
     // Private windows: dismissed for this page only.
   }
-}
-
-function Attachments({ list }: { list: ParsedAttachment[] }) {
-  const { t, i18n } = useTranslation()
-  const files = list.filter((a) => !(a.inline && a.contentId))
-  if (files.length === 0) return null
-  return (
-    <section aria-label={t('read.attachments', { count: files.length })} className="flex flex-wrap gap-2">
-      {files.map((file, i) => (
-        <button
-          key={`${file.filename}-${i}`}
-          type="button"
-          onClick={() => download(file.filename || t('read.unnamed'), file.mimeType, file.content)}
-          className="flex max-w-xs items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm hover:bg-muted/60"
-        >
-          <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0">
-            <span className="block truncate font-medium">{file.filename || t('read.unnamed')}</span>
-            <span className="block text-xs text-muted-foreground">{formatBytes(file.content.length, i18n.language)}</span>
-          </span>
-          <Download className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        </button>
-      ))}
-    </section>
-  )
 }
 
 /**
@@ -359,7 +328,7 @@ export function MessageView({
             ) : (
               <MailBody parsed={opened.data.parsed} suspicious={message.folder === 'spam'} />
             )}
-            <Attachments list={opened.data.parsed.attachments} />
+            <AttachmentList list={opened.data.parsed.attachments} subject={opened.data.parsed.subject || message.subject} />
             <div className="flex flex-wrap gap-2 pt-1">
               {draft ? (
                 <Button size="sm" onClick={() => openComposer({ kind: 'draft', message, opened: opened.data })}>

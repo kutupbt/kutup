@@ -678,5 +678,16 @@
     "requestSent": "Unsubscribe request sent.",
     "done": "Mailing list unsubscribed.",
     "failed": "The unsubscribe request did not go through."
+  },
+  "attachments": {
+    "count_one": "{{count}} file attached",
+    "count_other": "{{count}} files attached",
+    "downloadAll": "Download all attachments",
+    "download": "Download",
+    "downloadNamed": "Download {{name}}",
+    "preview": "Preview",
+    "position": "{{index}} of {{count}}",
+    "previous": "Previous file",
+    "next": "Next file"
   }
 }
