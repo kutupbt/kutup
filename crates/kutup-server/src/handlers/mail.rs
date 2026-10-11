@@ -22,7 +22,7 @@ const MAX_BATCH: usize = 500;
 const DEFAULT_PAGE: i64 = 50;
 const MAX_PAGE: i64 = 200;
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MailMailbox {
     pub address: String,
@@ -72,6 +72,36 @@ pub struct MailMessage {
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
     pub sent_by: Option<String>,
+    /// Listed by conversation: the thread this message is the newest of, in
+    /// the place listed (Proton's conversation grouping).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<MailConversation>,
+}
+
+/// A conversation in one place: its messages there, as Proton's
+/// `ContextNumMessages` and `ContextNumUnread`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MailConversation {
+    /// Its messages here, oldest first: what an action on the row acts on.
+    pub members: Vec<ConversationMember>,
+    pub unread: i64,
+    /// Any of them starred.
+    pub starred: bool,
+    /// Who wrote them, each once, in the order they first wrote.
+    pub senders: Vec<MailMailbox>,
+    /// Attachments across them.
+    pub attachment_count: i64,
+}
+
+/// What moving or marking one message of a conversation needs.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMember {
+    pub id: String,
+    pub folder: String,
+    pub direction: String,
+    pub custom_folder: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -96,6 +126,10 @@ pub struct MailListQuery {
     pub limit: Option<i64>,
     /// A shared mailbox (its group id) instead of your own.
     pub group: Option<String>,
+    /// One row per conversation, its newest message here (Proton's
+    /// conversation grouping); the cursor then pages conversations.
+    #[serde(default)]
+    pub conversations: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -166,6 +200,7 @@ impl From<Row> for MailMessage {
             attachment_count: row.attachment_count,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
+            conversation: None,
         }
     }
 }
@@ -290,10 +325,8 @@ pub async fn list_messages(
                 .collect();
             format!("%{escaped}%")
         });
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS}
-           FROM mail_messages
-          WHERE owner = $1
+    // The place and the search, shared by both listings.
+    const WHERE: &str = "owner = $1
             AND CASE $2
                   WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
                   WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
@@ -303,9 +336,19 @@ pub async fn list_messages(
                        WHERE l.message_id = mail_messages.id AND l.label_id = $7)
                   ELSE folder = $2
                 END
-            AND ($3::timestamptz IS NULL OR (received_at, id) < ($3, $4))
             AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
-                 OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)
+                 OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
+    if query.conversations {
+        return list_conversations(
+            &state, owner, place, place_id, almost_all, search, before, limit, WHERE,
+        )
+        .await;
+    }
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS}
+           FROM mail_messages
+          WHERE {WHERE}
+            AND ($3::timestamptz IS NULL OR (received_at, id) < ($3, $4))
           ORDER BY received_at DESC, id DESC
           LIMIT $5"
     ))
@@ -329,6 +372,105 @@ pub async fn list_messages(
         .then(|| messages.last())
         .flatten()
         .map(|last| cursor(last.received_at, Uuid::parse_str(&last.id).expect("own id")));
+    Ok(Json(MailMessagePage { messages, next }))
+}
+
+type ConversationRow = (
+    Uuid,
+    OffsetDateTime,
+    sqlx::types::Json<Vec<ConversationMember>>,
+    i64,
+    bool,
+    sqlx::types::Json<Vec<MailMailbox>>,
+    i64,
+);
+
+/// [`list_messages`] by conversation: each thread's newest message in the
+/// place, newest conversation first, with what the row stands for.
+#[allow(clippy::too_many_arguments)]
+async fn list_conversations(
+    state: &AppState,
+    owner: Uuid,
+    place: &str,
+    place_id: Option<Uuid>,
+    almost_all: bool,
+    search: Option<String>,
+    before: Option<(OffsetDateTime, Uuid)>,
+    limit: i64,
+    place_filter: &str,
+) -> AppResult<Json<MailMessagePage>> {
+    let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
+        "WITH here AS (
+             SELECT id, thread_id, folder, direction, custom_folder, received_at, seen, starred,
+                    from_address, from_name, attachment_count
+               FROM mail_messages
+              WHERE {place_filter}
+         ), threads AS (
+             SELECT thread_id,
+                    (array_agg(id ORDER BY received_at DESC, id DESC))[1] AS latest,
+                    max(received_at) AS last_at,
+                    jsonb_agg(jsonb_build_object('id', id, 'folder', folder, 'direction', direction,
+                                                 'customFolder', custom_folder)
+                              ORDER BY received_at, id) AS members,
+                    count(*) FILTER (WHERE NOT seen) AS unread,
+                    bool_or(starred) AS starred,
+                    sum(attachment_count)::bigint AS attachments
+               FROM here GROUP BY thread_id
+         )
+         SELECT t.latest, t.last_at, t.members, t.unread, t.starred,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('address', s.from_address, 'name', s.from_name)
+                                           ORDER BY s.first_at)
+                            FROM (SELECT from_address, (array_agg(from_name ORDER BY received_at))[1] AS from_name,
+                                         min(received_at) AS first_at
+                                    FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
+                                   GROUP BY from_address) s), '[]'::jsonb),
+                t.attachments
+           FROM threads t
+          WHERE ($3::timestamptz IS NULL OR (t.last_at, t.latest) < ($3, $4))
+          ORDER BY t.last_at DESC, t.latest DESC
+          LIMIT $5"
+    ))
+    .bind(owner)
+    .bind(place)
+    .bind(before.map(|(at, _)| at))
+    .bind(before.map(|(_, id)| id))
+    .bind(limit + 1)
+    .bind(search)
+    .bind(place_id)
+    .bind(almost_all)
+    .fetch_all(&state.pool)
+    .await?;
+    let more = threads.len() as i64 > limit;
+    let threads: Vec<ConversationRow> = threads.into_iter().take(limit as usize).collect();
+    let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
+    ))
+    .bind(owner)
+    .bind(&latest)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut by_id: std::collections::HashMap<Uuid, Row> =
+        rows.into_iter().map(|r| (r.id, r)).collect();
+    let next = more
+        .then(|| threads.last())
+        .flatten()
+        .map(|(id, at, ..)| cursor(*at, *id));
+    let messages = threads
+        .into_iter()
+        .filter_map(|(id, _, members, unread, starred, senders, attachments)| {
+            // Moved or deleted between the two reads: left for the next refresh.
+            let mut message = MailMessage::from(by_id.remove(&id)?);
+            message.conversation = Some(MailConversation {
+                members: members.0,
+                unread,
+                starred,
+                senders: senders.0,
+                attachment_count: attachments,
+            });
+            Some(message)
+        })
+        .collect();
     Ok(Json(MailMessagePage { messages, next }))
 }
 
@@ -697,41 +839,60 @@ pub struct MailFolderCount {
     pub total: i64,
 }
 
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct MailCountsQuery {
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+    /// Count conversations, not messages (Proton's conversation grouping).
+    #[serde(default)]
+    pub conversations: bool,
+}
+
 /// `GET /api/mail/counts` — unread and total per folder, for Starred, and
 /// for each of the account's folders (`folder:<id>`) and labels
-/// (`label:<id>`, outside Spam and Trash).
+/// (`label:<id>`, outside Spam and Trash); by conversation when asked.
 #[utoipa::path(
     get,
     path = "/api/mail/counts",
     tag = "mail",
     security(("BearerAuth" = [])),
-    params(MailboxQuery),
+    params(MailCountsQuery),
     responses((status = 200, description = "Per folder", body = [MailFolderCount]))
 )]
 pub async fn counts(
     State(state): State<AppState>,
     user: AuthUser,
-    Query(scope): Query<MailboxQuery>,
+    Query(scope): Query<MailCountsQuery>,
 ) -> AppResult<Json<Vec<MailFolderCount>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let owner = mailbox(&state, user_id, scope.group.as_deref())
         .await?
         .owner();
-    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT folder, COUNT(*) FILTER (WHERE NOT seen), COUNT(*)
-           FROM mail_messages WHERE owner = $1 AND folder <> 'custom' GROUP BY folder
+    // What one counts: a message, or a conversation with any message there.
+    let (unread, total) = if scope.conversations {
+        (
+            "COUNT(DISTINCT m.thread_id) FILTER (WHERE NOT m.seen)",
+            "COUNT(DISTINCT m.thread_id)",
+        )
+    } else {
+        ("COUNT(*) FILTER (WHERE NOT m.seen)", "COUNT(*)")
+    };
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(&format!(
+        "SELECT m.folder, {unread}, {total}
+           FROM mail_messages m WHERE m.owner = $1 AND m.folder <> 'custom' GROUP BY m.folder
          UNION ALL
-         SELECT 'starred', COUNT(*) FILTER (WHERE NOT seen), COUNT(*)
-           FROM mail_messages
-          WHERE owner = $1 AND starred AND folder NOT IN ('spam', 'trash')
+         SELECT 'starred', {unread}, {total}
+           FROM mail_messages m
+          WHERE m.owner = $1 AND m.starred AND m.folder NOT IN ('spam', 'trash')
          UNION ALL
-         SELECT 'folder:' || custom_folder, COUNT(*) FILTER (WHERE NOT seen), COUNT(*)
-           FROM mail_messages WHERE owner = $1 AND folder = 'custom' GROUP BY custom_folder
+         SELECT 'folder:' || m.custom_folder, {unread}, {total}
+           FROM mail_messages m WHERE m.owner = $1 AND m.folder = 'custom' GROUP BY m.custom_folder
          UNION ALL
-         SELECT 'label:' || l.label_id, COUNT(*) FILTER (WHERE NOT m.seen), COUNT(*)
+         SELECT 'label:' || l.label_id, {unread}, {total}
            FROM mail_message_labels l JOIN mail_messages m ON m.id = l.message_id
-          WHERE m.owner = $1 AND m.folder NOT IN ('spam', 'trash') GROUP BY l.label_id",
-    )
+          WHERE m.owner = $1 AND m.folder NOT IN ('spam', 'trash') GROUP BY l.label_id"
+    ))
     .bind(owner)
     .fetch_all(&state.pool)
     .await?;

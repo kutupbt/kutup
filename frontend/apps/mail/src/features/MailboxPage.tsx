@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, NoAddressKey, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -48,7 +48,12 @@ const KNOWN = new Set<string>([...FOLDERS, 'all'])
 type Lookup = ReturnType<typeof useContactLookup>
 
 /** Who a row names: the sender for received mail, the recipients for sent mail and drafts; by their contact names. */
-function correspondent(message: MailMessage, t: (key: string) => string, contacts: Lookup): string {
+function correspondent(message: MailMessage, t: (key: string) => string, contacts: Lookup, own: string): string {
+  // A conversation names everyone who wrote in it, you as "me" (Proton's senders), unless only you did.
+  const senders = message.conversation?.senders ?? []
+  if (senders.some((m) => m.address.toLowerCase() !== own)) {
+    return senders.map((m) => (m.address.toLowerCase() === own ? t('list.me') : nameFor(m, contacts.find(m.address)))).join(', ')
+  }
   if (message.direction === 'outbound') {
     const names = [...message.to, ...message.cc].map((m) => nameFor(m, contacts.find(m.address)))
     return names.length ? `${t('list.to')} ${names.join(', ')}` : t('list.noRecipients')
@@ -112,7 +117,6 @@ export function MailboxPage() {
   const folder: FolderId = placeKind ? 'all' : fixed
   const placeName = placeKind === 'folder' ? places.data?.folders.get(placeId ?? '')?.name : placeKind === 'label' ? places.data?.labelsById.get(placeId ?? '')?.name : undefined
   const title = placeKind ? (placeName ?? '') : t(`folders.${fixed}`)
-  const list = useFolder(place, q, group)
   const actions = useMailActions(group)
   const remove = useDeleteMessages()
   const emptyFolder = useEmptyFolder()
@@ -124,6 +128,9 @@ export function MailboxPage() {
   // The row layout has room for one line per message, as Proton's.
   const oneLine = layout === 'row'
   const [paneSize, setPaneSize] = usePaneSize(layout)
+  // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
+  const list = useFolder(place, q, group, (settings.data?.viewMode ?? 'conversation') === 'conversation', !settings.isPending)
+  const own = account.data?.address.toLowerCase() ?? ''
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
   const unwanted = !placeKind && (fixed === 'trash' || fixed === 'spam') ? fixed : null
@@ -199,7 +206,7 @@ export function MailboxPage() {
   }
 
   function deleteForever(rows: MailMessage[]) {
-    if (rows.length) setDeleting(rows.map((m) => m.id))
+    if (rows.length) setDeleting(membersOf(rows).map((m) => m.id))
   }
 
   // Proton's list shortcuts (`packages/shared/lib/shortcuts/mail.ts`), kept
@@ -273,7 +280,7 @@ export function MailboxPage() {
         break
       case '*': {
         const rows = targets()
-        actions.mark(rows, { starred: !rows.every((m) => m.starred) })
+        actions.mark(rows, { starred: !rows.every(rowStarred) })
         break
       }
       case 'u':
@@ -354,21 +361,21 @@ export function MailboxPage() {
 
   const menu = (
     <ContextMenuContent className="w-64">
-      {menuFor.some((m) => !m.seen) ? (
+      {menuFor.some((m) => !rowSeen(m)) ? (
         <ContextMenuItem onSelect={() => actions.mark(menuFor, { seen: true })}>
           <MailOpen />
           {t('actions.markRead')}
           <Kbd>R</Kbd>
         </ContextMenuItem>
       ) : null}
-      {menuFor.some((m) => m.seen) ? (
+      {menuFor.some(rowSeen) ? (
         <ContextMenuItem onSelect={() => actions.mark(menuFor, { seen: false })}>
           <Mail />
           {t('actions.markUnread')}
           <Kbd>U</Kbd>
         </ContextMenuItem>
       ) : null}
-      {menuFor.every((m) => m.starred) ? (
+      {menuFor.every(rowStarred) ? (
         <ContextMenuItem onSelect={() => actions.mark(menuFor, { starred: false })}>
           <StarOff />
           {t('actions.unstar')}
@@ -604,12 +611,16 @@ export function MailboxPage() {
                 const isChosen = selected.has(message.id)
                 const inMenu = menuFor.some((m) => m.id === message.id)
                 const person = avatarOf(message)
+                const seen = rowSeen(message)
+                const starred = rowStarred(message)
+                const attachments = message.conversation?.attachmentCount ?? message.attachmentCount
+                const count = message.conversation?.members.length ?? 1
                 const sender = (size: string) => (
-                  <span className={cn(size, 'truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>{correspondent(message, t, contacts)}</span>
+                  <span className={cn(size, 'truncate text-sm', !seen ? 'font-semibold' : 'text-muted-foreground')}>{correspondent(message, t, contacts, own)}</span>
                 )
                 const meta = (
                   <>
-                    {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
+                    {attachments > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
                     <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
                       {formatFileDate(message.receivedAt, i18n.language)}
                     </span>
@@ -618,7 +629,12 @@ export function MailboxPage() {
                 const subjectLine = (
                   <>
                     <Padlock message={message} className="[&_svg]:size-3.5" />
-                    <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>{message.subject || t('list.noSubject')}</span>
+                    <span className={cn('min-w-0 flex-1 truncate text-sm', !seen && 'font-medium')}>{message.subject || t('list.noSubject')}</span>
+                    {count > 1 ? (
+                      <span className="shrink-0 rounded border border-border px-1 text-[11px] tabular-nums text-muted-foreground" aria-label={t('list.inConversation', { count })}>
+                        {count}
+                      </span>
+                    ) : null}
                     {message.groupAddress && !group ? (
                       <span className="shrink-0 truncate rounded bg-muted px-1.5 text-[11px] text-muted-foreground" title={t('list.viaGroup', { address: message.groupAddress })}>
                         {message.groupAddress.split('@')[0]}
@@ -642,14 +658,14 @@ export function MailboxPage() {
                     onContextMenu={() => setMenuFor(isChosen ? chosen : [message])}
                     onDragStart={(e) => {
                       const rows = isChosen ? chosen : [message]
-                      const data: Movable[] = rows.map(({ id, folder: from, direction, customFolder }) => ({ id, folder: from, direction, customFolder }))
+                      const data: Movable[] = membersOf(rows)
                       e.dataTransfer.setData(MAIL_DRAG_TYPE, JSON.stringify(data))
                       e.dataTransfer.setData('text/plain', t('list.dragging', { count: rows.length }))
                       e.dataTransfer.effectAllowed = 'move'
                     }}
                     className={cn(
                       'group border-b border-border/60',
-                      open ? 'bg-accent' : isChosen || inMenu ? 'bg-primary/10' : !message.seen && 'bg-primary/5',
+                      open ? 'bg-accent' : isChosen || inMenu ? 'bg-primary/10' : !seen && 'bg-primary/5',
                       here === index && 'shadow-[inset_3px_0_0_var(--primary)]',
                     )}
                   >
@@ -699,12 +715,12 @@ export function MailboxPage() {
                       </Link>
                       <button
                         type="button"
-                        className={cn('m-1 rounded p-1 hover:bg-muted', !message.starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
-                        aria-label={message.starred ? t('actions.unstar') : t('actions.star')}
-                        aria-pressed={message.starred}
-                        onClick={() => actions.mark([message], { starred: !message.starred })}
+                        className={cn('m-1 rounded p-1 hover:bg-muted', !starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
+                        aria-label={starred ? t('actions.unstar') : t('actions.star')}
+                        aria-pressed={starred}
+                        onClick={() => actions.mark([message], { starred: !starred })}
                       >
-                        <Star className={cn('size-4', message.starred ? 'fill-status-warn text-status-warn' : 'text-muted-foreground')} />
+                        <Star className={cn('size-4', starred ? 'fill-status-warn text-status-warn' : 'text-muted-foreground')} />
                       </button>
                     </div>
                   </li>

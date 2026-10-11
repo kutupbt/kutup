@@ -23,7 +23,7 @@ reference only where Proton has nothing.
 | End-to-end mail between users, zero-access for the rest, padlocks | `EncryptionStatusIcon.tsx` | ✅ C2, C3 |
 | OpenPGP with outside users: WKD, Autocrypt, trusting a sender's key | `TrustPublicKeyModal.tsx` | ✅ C3 |
 | Threads in the reading pane | `MessageView.tsx` | ✅ |
-| Conversation or message mode in the list | `ViewModeToggle.tsx` | ❌ (the list shows messages) |
+| Conversation or message mode in the list | `ViewModeToggle.tsx` | ✅ conversation grouping on by default, as Proton's (Settings → General); a row stands for the thread's messages there: count, senders, unread and starred as a whole, actions on all; counters count conversations |
 | Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ✅ Settings → Appearance: column or row, comfortable or compact, composer normal or maximized; the list resizes (drag or arrow keys), remembered per browser |
 | Quick filters (unread, has attachments), sort (date, size) | `FilterList.tsx` | ❌ |
 | Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | 🔶 "load more" only |

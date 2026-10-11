@@ -70,7 +70,10 @@
     "messages": "Messages",
     "viaGroup": "Through {{address}}",
     "sentBy": "by {{name}}",
-    "resize": "Resize the list"
+    "resize": "Resize the list",
+    "me": "me",
+    "inConversation_one": "{{count}} message in this conversation",
+    "inConversation_other": "{{count}} messages in this conversation"
   },
   "read": {
     "pick": "Choose a message to read it.",
@@ -481,7 +484,9 @@
     "autoDelete": "Auto-delete unwanted messages",
     "autoDeleteHint": "Delete Trash and Spam messages after 30 days. Turning it on counts messages already there from now.",
     "almostAllMail": "Exclude Spam/Trash from All mail",
-    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash."
+    "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash.",
+    "conversations": "Conversation grouping",
+    "conversationsHint": "Group emails in the same conversation together in your mailbox, or display them separately."
   },
   "senders": {
     "title": "Block and allow",

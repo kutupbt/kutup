@@ -31,12 +31,15 @@ pub struct MailSettings {
     /// `popup` or `maximized`: how the composer opens (Proton's
     /// `ComposerMode`).
     pub composer_mode: String,
+    /// `conversation`: the list groups each thread in one row; `message`:
+    /// one row per message (Proton's `ViewMode`).
+    pub view_mode: String,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
-        "SELECT auto_delete_days, almost_all_mail, view_layout, density, composer_mode
+        "SELECT auto_delete_days, almost_all_mail, view_layout, density, composer_mode, view_mode
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -48,6 +51,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         view_layout: "column".into(),
         density: "comfortable".into(),
         composer_mode: "popup".into(),
+        view_mode: "conversation".into(),
     }))
 }
 
@@ -72,6 +76,7 @@ pub struct UpdateMailSettings {
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
+    pub view_mode: Option<String>,
 }
 
 /// `PATCH /api/mail/settings`.
@@ -104,22 +109,25 @@ pub async fn update(
     if !one_of(&request.view_layout, ["column", "row"])
         || !one_of(&request.density, ["comfortable", "compact"])
         || !one_of(&request.composer_mode, ["popup", "maximized"])
+        || !one_of(&request.view_mode, ["conversation", "message"])
     {
         return Err(AppError::bad_request(
-            "layout is column or row, density comfortable or compact, the composer popup or maximized",
+            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message",
         ));
     }
     sqlx::query(
         "INSERT INTO mail_settings
-             (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode)
+             (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
+              view_mode)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
-                 COALESCE($5, 'comfortable'), COALESCE($6, 'popup'))
+                 COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
              view_layout = COALESCE($4, mail_settings.view_layout),
              density = COALESCE($5, mail_settings.density),
              composer_mode = COALESCE($6, mail_settings.composer_mode),
+             view_mode = COALESCE($7, mail_settings.view_mode),
              updated_at = now()",
     )
     .bind(user_id)
@@ -128,6 +136,7 @@ pub async fn update(
     .bind(request.view_layout.as_deref())
     .bind(request.density.as_deref())
     .bind(request.composer_mode.as_deref())
+    .bind(request.view_mode.as_deref())
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))
