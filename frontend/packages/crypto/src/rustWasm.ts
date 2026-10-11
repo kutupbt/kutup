@@ -1,6 +1,8 @@
 // One loader for Kutup-owned browser cryptography. Feature adapters expose
 // typed operations; this module owns only generated-module initialization.
 
+import { freshUrl, retryLoad } from './retry'
+
 // The runtime's directory is named for its content hash (the build passes
 // it in, @kutup/config/vite), so a new build is a new URL and the files can
 // be cached for good. Without it (tests) the files are looked for directly
@@ -571,11 +573,18 @@ let modulePromise: Promise<CryptoWasmModule> | null = null
 
 export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {
-    modulePromise = (async () => {
-      const module = (await import(/* @vite-ignore */ MODULE_URL)) as CryptoWasmModule
+    // A fetch cut off by a network change is tried again, the script under
+    // a fresh URL (the browser remembers a failed module); a failure is not
+    // kept, so a later call starts over.
+    modulePromise = retryLoad(async (n) => {
+      const url = n === 0 ? MODULE_URL : freshUrl(MODULE_URL, n)
+      const module = (await import(/* @vite-ignore */ url)) as CryptoWasmModule
       await module.default({ module_or_path: WASM_URL })
       return module
-    })()
+    })
+    modulePromise.catch(() => {
+      modulePromise = null
+    })
   }
   return modulePromise
 }
