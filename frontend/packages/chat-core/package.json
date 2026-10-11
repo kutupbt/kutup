@@ -11,7 +11,7 @@
     "@kutup/crypto": "workspace:*",
     "@kutup/session": "workspace:*",
     "@kutup/files": "workspace:*",
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "tus-js-client": "^4"
   },
   "devDependencies": {

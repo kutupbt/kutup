@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "typescript": "^5.4.5",
-    "vitest": "^4.1.5",
+    "vitest": "^4.1.11",
     "jsdom": "^25",
     "@types/node": "^25.4.0",
     "@testing-library/jest-dom": "^6",
@@ -45,10 +45,14 @@
   },
   "pnpm": {
     "overrides": {
-      "postcss": "^8.5.14",
+      "postcss": "^8.5.23",
       "esbuild": "^0.25.10",
       "@tiptap/extension-bubble-menu": "3.31.3",
-      "@tiptap/extension-floating-menu": "3.31.3"
+      "@tiptap/extension-floating-menu": "3.31.3",
+      "nanoid@<3.3.18": "^3.3.20",
+      "nanoid@>=4 <5.1.16": "^5.1.16",
+      "lodash-es@<4.18.0": "^4.18.1",
+      "katex@<0.18.2": "^0.18.2"
     },
     "patchedDependencies": {
       "@radix-ui/react-dismissable-layer@1.1.19": "patches/@radix-ui__react-dismissable-layer@1.1.19.patch",
