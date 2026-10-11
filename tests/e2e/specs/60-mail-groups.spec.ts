@@ -68,7 +68,7 @@ test('a shared mailbox and a distribution list, made by an administrator and use
     await dialog.getByRole('button', { name: 'Add owner' }).click()
     await expect(dialog.getByText(`${alice.username}@${domain}`)).toBeVisible()
     await dialog.getByRole('button', { name: 'New group' }).click()
-    await expect(admin.getByText('Group created.')).toBeVisible({ timeout: 60_000 })
+    await expect(admin.getByText('Group created.').last()).toBeVisible({ timeout: 60_000 })
     await expect(admin.getByText(`${name}@${domain}`).first()).toBeVisible()
   }
 
@@ -83,7 +83,8 @@ test('a shared mailbox and a distribution list, made by an administrator and use
     await expect(dialog.getByText(`${bob.username}@${domain}`)).toBeVisible()
     if (name === hr) await dialog.getByRole('checkbox', { name: 'May send as it' }).click()
     await dialog.getByRole('button', { name: 'Save' }).click()
-    await expect(aliceMail.getByText('Group saved.')).toBeVisible({ timeout: 60_000 })
+    // The first group's toast may still be showing when the second is saved.
+    await expect(aliceMail.getByText('Group saved.').last()).toBeVisible({ timeout: 60_000 })
   }
 
   // Bob writes to the shared mailbox; both members see it there.

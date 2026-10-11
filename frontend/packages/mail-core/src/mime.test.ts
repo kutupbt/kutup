@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentPart, buildMessage, describePart, encodeHeaderText, formatMailbox, parseMessage } from './mime'
+import { attachmentPart, buildMessage, describePart, encodeHeaderText, formatMailbox, isAutoReply, parseMessage } from './mime'
 
 const decoder = new TextDecoder()
 
@@ -77,5 +77,16 @@ describe('mime', () => {
   it('describes an attachment part from its headers', () => {
     const part = attachmentPart({ name: 'şirket raporu.pdf', type: 'application/pdf', bytes: new Uint8Array(1000) })
     expect(describePart(part)).toEqual({ name: 'şirket raporu.pdf', type: 'application/pdf', size: 1000 })
+  })
+})
+
+describe('auto-replies', () => {
+  it('are known by their headers, as Proton reads them', async () => {
+    expect(isAutoReply([{ key: 'x-autoreply', value: 'yes' }])).toBe(true)
+    expect(isAutoReply([{ key: 'auto-submitted', value: 'auto-replied' }])).toBe(true)
+    expect(isAutoReply([{ key: 'auto-submitted', value: 'auto-generated' }])).toBe(false)
+    expect(isAutoReply([{ key: 'subject', value: 'Auto: hi' }])).toBe(false)
+    const raw = new TextEncoder().encode('From: a@b.c\r\nTo: d@e.f\r\nSubject: Auto: hi\r\nAuto-Submitted: auto-replied\r\n\r\nAway.\r\n')
+    expect((await parseMessage(raw)).autoReply).toBe(true)
   })
 })

@@ -107,7 +107,8 @@
     "dismiss": "Kapat",
     "unknownSender": "Bilinmeyen gönderici",
     "collapse": "İletiyi daralt",
-    "sentBy": "{{name}} gönderdi"
+    "sentBy": "{{name}} gönderdi",
+    "autoReply": "Bu ileti, önceki bir iletiye yanıt olarak otomatik yazıldı."
   },
   "actions": {
     "archive": "Arşivle",
@@ -471,7 +472,9 @@
     "folders": "Klasörler ve etiketler",
     "filters": "Filtreler",
     "general": "Genel",
-    "senders": "Engelle ve izin ver"
+    "senders": "Engelle ve izin ver",
+    "identity": "Kimlik",
+    "autoReply": "Otomatik yanıt"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -530,5 +533,60 @@
     "blocked": "{{who}} engellendi.",
     "count_one": "{{count}} gönderici",
     "count_other": "{{count}} gönderici"
+  },
+  "identity": {
+    "title": "Kimlik",
+    "description": "{{address}} adresinden giden postalarınızın nasıl imzalanacağı.",
+    "displayName": "Görünen ad",
+    "displayNameHint": "İnsanların adresinizin yanında gördüğü ad.",
+    "nameTooLong": "Görünen ad en fazla 100 karakter olabilir.",
+    "signature": "İmza",
+    "signatureHint": "Yeni iletilere, yanıtlara ve iletmelere, alıntının üstüne eklenir. Kalın, italik, liste ve bağlantı.",
+    "link": "Bağlantı",
+    "linkPrompt": "Bağlantı adresi (https:// veya mailto:)",
+    "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
+    "addLink": "Bağlantı ekle"
+  },
+  "autoReply": {
+    "title": "Otomatik yanıt",
+    "description": "Uzaktayken ya da yanıt veremediğinizde postaları otomatik olarak yanıtlayın.",
+    "toggle": "Otomatik yanıt",
+    "off": "Kapalı. Ne zaman yanıtlayacağını ve ne diyeceğini seçmek için açın.",
+    "answeringNow": "Açık: şu anda gelen kutunuza ulaşan postalar bu yanıtı alır; her gönderene 7 günde bir.",
+    "outsideSchedule": "Açık, ancak şu anda zamanlamasının dışında: sonraki dönem başlayınca yeniden yanıtlar.",
+    "duration": "Süre",
+    "repeat": {
+      "fixed": "Belirli süre",
+      "daily": "Her gün tekrarla",
+      "weekly": "Her hafta tekrarla",
+      "monthly": "Her ay tekrarla",
+      "permanent": "Kalıcı"
+    },
+    "explain": {
+      "fixed": "Otomatik yanıt başlangıç zamanından bitiş zamanına kadar etkindir.",
+      "daily": "Otomatik yanıt seçtiğiniz günlerde, seçilen saatler arasında her zaman etkindir.",
+      "weekly": "Otomatik yanıt her hafta seçilen başlangıç ve bitiş zamanı arasında etkindir.",
+      "monthly": "Otomatik yanıt her ay seçilen başlangıç ve bitiş zamanı arasında etkindir.",
+      "permanent": "Otomatik yanıt siz kapatana kadar etkindir."
+    },
+    "startDate": "Başlangıç tarihi",
+    "startTime": "Başlangıç saati",
+    "endDate": "Bitiş tarihi",
+    "endTime": "Bitiş saati",
+    "days": "Haftanın günleri",
+    "startWeekday": "Başlangıç günü",
+    "endWeekday": "Bitiş günü",
+    "startDayOfMonth": "Ayın başlangıç günü",
+    "endDayOfMonth": "Ayın bitiş günü",
+    "dayOfMonth": "{{day}}. gün",
+    "zone": "Saat dilimi",
+    "message": "İleti",
+    "readableHint": "Kutup bu yanıtı siz uzaktayken sizin yerinize gönderir; bu yüzden sunucu metnini Proton'daki gibi okunabilir tutar. Görseller çıkarılır.",
+    "defaultMessage": "Ofis dışındayım ve e-postalarıma erişimim kısıtlı.",
+    "tooLong": "İleti çok uzun. 10 KB'a sığacak şekilde kısaltın.",
+    "messageRequired": "Yanıt olarak gönderilecek iletiyi yazın.",
+    "daysRequired": "Haftanın en az bir gününü seçin.",
+    "saved": "Otomatik yanıt güncellendi",
+    "disabled": "Otomatik yanıt kapatıldı"
   }
 }

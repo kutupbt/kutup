@@ -1193,6 +1193,8 @@ pub async fn send(
         let mut results = Vec::new();
         // Copies a recipient's block list dropped: their objects go after the commit.
         let mut blocked: Vec<(String, String)> = Vec::new();
+        // Copies delivered: answered after the commit when their auto-reply is on.
+        let mut delivered = Vec::new();
         for copy in &copies {
             let pool = pools.get_mut(&copy.recipient.user_id).expect("locked");
             if !pool.fits(copy.size, 0) {
@@ -1202,10 +1204,11 @@ pub async fn send(
                 });
                 continue;
             }
+            let copy_id = Uuid::new_v4();
             let stored = insert_message(
                 &mut tx,
                 NewMessage {
-                    id: Uuid::new_v4(),
+                    id: copy_id,
                     user_id: Some(copy.recipient.user_id),
                     address_id: copy.recipient.address_id,
                     thread_id: None,
@@ -1227,6 +1230,10 @@ pub async fn send(
             .await?;
             if stored {
                 pool.used += copy.size;
+                delivered.push(crate::mail::auto_reply::Delivered {
+                    user_id: copy.recipient.user_id,
+                    message: copy_id,
+                });
             } else {
                 blocked.push((copy.key.clone(), copy.version.clone()));
             }
@@ -1389,6 +1396,9 @@ pub async fn send(
             }));
         }
         tx.commit().await?;
+        for copy in delivered {
+            crate::mail::auto_reply::spawn(&state, copy);
+        }
         for (key, version) in &blocked {
             if let Err(error) = state.storage.delete_stored(key, version).await {
                 tracing::warn!(error = %error, "mail: a blocked copy's object left for the sweep");
