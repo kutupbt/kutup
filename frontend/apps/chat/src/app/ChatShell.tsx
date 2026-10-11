@@ -17,6 +17,7 @@ import { CallHost } from '../features/calls/CallScreen'
 import { JoinGroupHost } from '../features/groupLink/JoinGroupDialog'
 import { SharedPlaceHost } from '../features/thread/ForwardDialog'
 import { NewChatDialog } from '../features/list/NewChatDialog'
+import { SaveContactHost } from '../features/contacts/SaveContactHost'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
 import { BackupIndicator } from '../features/settings/BackupIndicator'
 import { useNow } from '../lib/useNow'
@@ -156,6 +157,7 @@ export function ChatShell() {
     >
       <Outlet />
       <NewChatDialog open={newChat} onOpenChange={setNewChat} />
+      <SaveContactHost />
       <JoinGroupHost />
       <SharedPlaceHost />
       <ChatNotifier unread={unread} />

@@ -356,7 +356,10 @@
     "foldersSorted": "Folders sorted.",
     "labelsSorted": "Labels sorted.",
     "unreadable_one": "{{count}} name could not be opened with your account key.",
-    "unreadable_other": "{{count}} names could not be opened with your account key."
+    "unreadable_other": "{{count}} names could not be opened with your account key.",
+    "customColor": "Custom colour",
+    "colorCode": "Colour code",
+    "colorCodeInvalid": "Use a colour code like #4d85e0."
   },
   "filters": {
     "title": "Filters",

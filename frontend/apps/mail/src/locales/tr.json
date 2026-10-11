@@ -356,7 +356,10 @@
     "foldersSorted": "Klasörler sıralandı.",
     "labelsSorted": "Etiketler sıralandı.",
     "unreadable_one": "{{count}} ad hesap anahtarınızla açılamadı.",
-    "unreadable_other": "{{count}} ad hesap anahtarınızla açılamadı."
+    "unreadable_other": "{{count}} ad hesap anahtarınızla açılamadı.",
+    "customColor": "Özel renk",
+    "colorCode": "Renk kodu",
+    "colorCodeInvalid": "#4d85e0 gibi bir renk kodu girin."
   },
   "filters": {
     "title": "Filtreler",

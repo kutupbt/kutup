@@ -456,8 +456,8 @@ arrival, and direct sending. Phases, each with its own plan before code:
   `contacts.` ([`plans/contacts.md`](plans/contacts.md)): names and emails
   readable and signed by the account, everything else sealed; groups, vCard
   import and export, storage-pool accounting; suggestions in Drive, Photos
-  and Chat pickers with "Add to contacts". Mail and Calendar use it when
-  they arrive.
+  pickers, "Add to contacts" after a Drive share, and Save to contacts in
+  Chat (banner, details, group members) and Mail, saved in place.
 - **C. Mail** ([`plans/mail.md`](plans/mail.md)): C1 infrastructure,
   done: Stalwart 0.16 beside Kutup (`docker-compose.mail.yml`, its settings
   applied by `stalwart-setup`), the RCPT hook, the LMTP receiver, encryption

@@ -7,7 +7,6 @@ import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
-import { offerAddToContacts } from '@kutup/contacts-core/addToContacts'
 import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import { useChat } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
@@ -47,11 +46,9 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     }
     close()
     const address = withHomeServer(parsed, chat.capabilities?.serverName)
+    // Someone not in the address book is offered Save to contacts in the
+    // conversation itself, where it stays until saved or dismissed.
     void navigate(pathForAddress(address))
-    if (address.server) {
-      const text = `${address.username}@${address.server}`
-      void offerAddToContacts(text, { message: t('contactSuggest.offer', { address: text }), action: t('contactSuggest.add') })
-    }
   }
 
   return (
