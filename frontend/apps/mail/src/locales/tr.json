@@ -455,6 +455,25 @@
   "settings": {
     "title": "Ayarlar",
     "folders": "Klasörler ve etiketler",
-    "filters": "Filtreler"
+    "filters": "Filtreler",
+    "general": "Genel"
+  },
+  "emptyFolder": {
+    "action": "Tümünü sil",
+    "trashTitle": "Çöp Kutusundakilerin tümü silinsin mi?",
+    "spamTitle": "İstenmeyendekilerin tümü silinsin mi?",
+    "description": "Hepsi kalıcı olarak silinir ve depolama alanı boşalır. Bu geri alınamaz.",
+    "autoDeleteOffer": "Çöp Kutusu ve İstenmeyen’de 30 günden uzun duran iletileri otomatik sil.",
+    "autoDeleteOn": "Çöp Kutusu ve İstenmeyen’de 30 günden uzun duran iletiler otomatik silinecek.",
+    "enable": "Aç",
+    "autoDeleteEnabled": "Otomatik silme açık."
+  },
+  "general": {
+    "title": "Genel",
+    "saved": "Tercih kaydedildi.",
+    "autoDelete": "İstenmeyen iletileri otomatik sil",
+    "autoDeleteHint": "Çöp Kutusu ve İstenmeyen’deki iletileri 30 gün sonra sil. Açıldığında orada olan iletiler şimdiden sayılır.",
+    "almostAllMail": "Tüm postalara İstenmeyen/Çöp’ü katma",
+    "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir."
   }
 }

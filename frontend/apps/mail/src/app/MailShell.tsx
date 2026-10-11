@@ -8,6 +8,7 @@ import {
   Inbox,
   Mail as MailIcon,
   Map as MapIcon,
+  Mails,
   MessagesSquare,
   OctagonAlert,
   PenSquare,
@@ -52,6 +53,7 @@ const NAV: { id: FolderId; icon: ReactNode }[] = [
   { id: 'archive', icon: <Archive /> },
   { id: 'spam', icon: <OctagonAlert /> },
   { id: 'trash', icon: <Trash2 /> },
+  { id: 'all', icon: <Mails /> },
 ]
 
 /** Folders mail can be dragged onto. */

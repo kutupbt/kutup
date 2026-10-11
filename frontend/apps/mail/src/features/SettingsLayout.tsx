@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
 
 const TABS = [
+  { to: '/settings/general', key: 'settings.general' },
   { to: '/settings/folders', key: 'settings.folders' },
   { to: '/settings/filters', key: 'settings.filters' },
 ] as const

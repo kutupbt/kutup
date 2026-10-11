@@ -73,9 +73,9 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Inbox, Drafts, Sent, Starred, Archive, Spam, Trash, All mail | `MailSidebarSystemFolders.tsx` | ✅ |
-| Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | 🔶 delete chosen; "Empty" missing |
-| Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ❌ (C2f) |
-| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ❌ |
+| Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | ✅ delete chosen, "Delete all" in Trash and Spam |
+| Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ✅ "Auto-delete unwanted messages" (off by default, as Proton), banner with Enable |
+| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; ❌ keep moved messages in Sent |
 | Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | 🔶 F3 (#100) |
@@ -126,7 +126,7 @@ reference only where Proton has nothing.
 | Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ❌ |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
-| Settings for mail (one place) | mail routes | ❌ (keys in Account only) |
+| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Folders and labels, Filters, Block and allow; keys in Account |
 
 ## Order
 

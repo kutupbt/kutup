@@ -266,6 +266,12 @@ pub async fn list_messages(
         _ if FOLDERS.contains(&folder) || folder == "starred" || folder == "all" => (folder, None),
         _ => return Err(AppError::bad_request("unknown folder")),
     };
+    // All mail leaves out Spam and Trash only when the account asks
+    // (Proton's "Exclude Spam/Trash from All mail"); a search always does.
+    let almost_all = query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
+        || crate::handlers::mail_settings::settings_of(&state, user_id)
+            .await?
+            .almost_all_mail;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
     let before = query.before.as_deref().map(parse_cursor).transpose()?;
     let search = query
@@ -290,7 +296,7 @@ pub async fn list_messages(
           WHERE owner = $1
             AND CASE $2
                   WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
-                  WHEN 'all' THEN folder NOT IN ('spam', 'trash')
+                  WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
                   WHEN 'folder' THEN custom_folder = $7
                   WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
                       SELECT 1 FROM mail_message_labels l
@@ -310,6 +316,7 @@ pub async fn list_messages(
     .bind(limit + 1)
     .bind(search)
     .bind(place_id)
+    .bind(almost_all)
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > limit;

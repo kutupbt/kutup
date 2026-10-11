@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, NoAddressKey, useDeleteMessages, useFolder, useMailAccount, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { FOLDERS, NoAddressKey, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -112,6 +112,12 @@ export function MailboxPage() {
   const list = useFolder(place, q, group)
   const actions = useMailActions(group)
   const remove = useDeleteMessages()
+  const emptyFolder = useEmptyFolder()
+  const settings = useMailSettings()
+  const updateSettings = useUpdateMailSettings()
+  const [emptying, setEmptying] = useState(false)
+  // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
+  const unwanted = !placeKind && (fixed === 'trash' || fixed === 'spam') ? fixed : null
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // Where Shift extends a selection from, and the row the keyboard is on.
   const anchor = useRef<number | null>(null)
@@ -519,12 +525,39 @@ export function MailboxPage() {
             <h1 className="min-w-0 flex-1 truncate px-1 font-display text-base font-semibold">
               {q ? t('list.searchResults', { q }) : title}
             </h1>
+            {unwanted && messages.length > 0 ? (
+              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setEmptying(true)}>
+                <Trash2 />
+                {t('emptyFolder.action')}
+              </Button>
+            ) : null}
             <ToolbarButton label={t('shortcuts.title')} onClick={() => setShortcuts(true)}>
               <Keyboard />
             </ToolbarButton>
           </>
         )}
       </div>
+      {unwanted && !group && settings.data ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1">{settings.data.autoDeleteDays ? t('emptyFolder.autoDeleteOn') : t('emptyFolder.autoDeleteOffer')}</span>
+          {settings.data.autoDeleteDays ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              disabled={updateSettings.isPending}
+              onClick={() =>
+                updateSettings.mutate(
+                  { autoDeleteDays: 30 },
+                  { onSuccess: () => toast.success(t('emptyFolder.autoDeleteEnabled')), onError: (e) => toast.error(apiErrorMessage(e, t('common.tryAgain'))) },
+                )
+              }
+            >
+              {t('emptyFolder.enable')}
+            </Button>
+          )}
+        </div>
+      ) : null}
       {list.isPending || account.isPending ? (
         <div className="space-y-2 p-3">
           {[0, 1, 2, 3, 4].map((i) => (
@@ -697,6 +730,30 @@ export function MailboxPage() {
         }}
       />
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
+      <ConfirmDestructive
+        open={emptying}
+        onOpenChange={setEmptying}
+        title={t(unwanted === 'spam' ? 'emptyFolder.spamTitle' : 'emptyFolder.trashTitle')}
+        description={t('emptyFolder.description')}
+        submit={t('emptyFolder.action')}
+        pending={emptyFolder.isPending}
+        error={emptyFolder.error}
+        errorFallback={t('common.tryAgain')}
+        onConfirm={() => {
+          if (!unwanted) return
+          emptyFolder.mutate(
+            { folder: unwanted, group },
+            {
+              onSuccess: (count) => {
+                toast.success(t('toasts.deleted', { count }))
+                setEmptying(false)
+                setSelected(new Set())
+                if (threadId) void navigate(`${base}${search}`)
+              },
+            },
+          )
+        }}
+      />
       {picker ? <PickerDialog mode={picker.mode} rows={picker.rows} folder={folder} onClose={() => setPicker(null)} onMoved={() => afterPick(picker.rows)} /> : null}
     </div>
   )

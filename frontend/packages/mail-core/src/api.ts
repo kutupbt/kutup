@@ -412,6 +412,49 @@ export function useDeleteMessages() {
   })
 }
 
+/** Deletes everything in Trash or Spam for good (Proton's "Delete all"). */
+export function useEmptyFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ folder, group }: { folder: 'trash' | 'spam'; group?: string }) =>
+      (await api.post<{ updated: number }>('/mail/messages/empty', { folder, ...scoped(group) })).data.updated,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: mailKey })
+      void queryClient.invalidateQueries({ queryKey: ['storage'] })
+    },
+  })
+}
+
+/** The account's mail settings (docs/plans/mail-parity.md), as Proton's. */
+export interface MailSettings {
+  /** 30 to delete Trash and Spam after 30 days, 0 not to. */
+  autoDeleteDays: 0 | 30
+  /** All mail leaves out Spam and Trash. */
+  almostAllMail: boolean
+}
+
+export const mailSettingsKey = ['mail', 'settings'] as const
+
+export function useMailSettings() {
+  return useQuery({
+    queryKey: mailSettingsKey,
+    staleTime: 5 * 60_000,
+    queryFn: async () => (await api.get<MailSettings>('/mail/settings')).data,
+  })
+}
+
+export function useUpdateMailSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (change: Partial<MailSettings>) => (await api.patch<MailSettings>('/mail/settings', change)).data,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(mailSettingsKey, settings)
+      // All mail may now show Spam and Trash, or not.
+      void queryClient.invalidateQueries({ queryKey: ['mail', 'folder', 'all'] })
+    },
+  })
+}
+
 // --- Writing ---------------------------------------------------------------
 
 export interface Draft {

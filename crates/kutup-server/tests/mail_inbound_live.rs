@@ -2582,3 +2582,84 @@ fn wkd_hash(local: &str) -> String {
     }
     out
 }
+
+#[test]
+fn mail_settings_all_mail_and_emptying() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let me = vec![address.address.clone()];
+    // The defaults, as Proton's: no auto-delete, All mail with Spam and Trash.
+    let settings: Value = bearer(c.get(format!("{base}/api/mail/settings")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        settings,
+        json!({ "autoDeleteDays": 0, "almostAllMail": false })
+    );
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "autoDeleteDays": 7 }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+
+    // Two messages to self (two copies each); one received copy into the Trash.
+    for body in ["one", "two"] {
+        assert!(send_plain(&c, &base, &user, &address, &me, body)
+            .status()
+            .is_success());
+    }
+    let inbox = folder(&c, &base, &user.token, "inbox");
+    let trashed = inbox[0]["id"].as_str().unwrap().to_string();
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [trashed], "folder": "trash" }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    let all = |c: &Client| folder(c, &base, &user.token, "all");
+    assert!(
+        all(&c).iter().any(|m| m["id"] == trashed.as_str()),
+        "All mail has the Trash by default"
+    );
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30 }))
+        .send()
+        .unwrap();
+    assert_eq!(
+        r.json::<Value>().unwrap(),
+        json!({ "autoDeleteDays": 30, "almostAllMail": true })
+    );
+    assert!(
+        all(&c).iter().all(|m| m["id"] != trashed.as_str()),
+        "Almost all mail leaves the Trash out"
+    );
+
+    // Empty the Trash: the message is gone for good and its storage freed.
+    let used = common::used(&c, &base, &user.token);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/empty")),
+        &user.token,
+    )
+    .json(&json!({ "folder": "trash" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    assert!(folder(&c, &base, &user.token, "trash").is_empty());
+    assert!(common::used(&c, &base, &user.token) < used);
+    // Only Trash and Spam are emptied.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/empty")),
+        &user.token,
+    )
+    .json(&json!({ "folder": "inbox" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    assert_eq!(folder(&c, &base, &user.token, "inbox").len(), 1);
+}
