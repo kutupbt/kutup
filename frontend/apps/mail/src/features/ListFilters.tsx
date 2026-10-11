@@ -1,4 +1,5 @@
 import { ArrowDownNarrowWide, ArrowDownWideNarrow, Check, ListFilter as FilterIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ListFilter, ListSort } from '@kutup/mail-core/api'
 import { Button } from '@kutup/ui/components/button'
@@ -11,13 +12,28 @@ const SORTS: ListSort[] = ['newest', 'oldest', 'largest', 'smallest']
 /**
  * Proton's list filters (FilterList): Unread at hand, Read and Has
  * attachments with the sort options in Filter, and Reset while any is on.
- * Choosing an active one again turns it off.
+ * Choosing an active one again turns it off. `children` (the paging) sit
+ * at the end; with rows chosen only they show.
  */
-export function ListFilters({ filter, sort, onChange }: { filter: ListFilter | null; sort: ListSort; onChange: (change: { filter?: ListFilter | null; sort?: ListSort }) => void }) {
+export function ListFilters({
+  filter,
+  sort,
+  onChange,
+  filtersHidden = false,
+  children,
+}: {
+  filter: ListFilter | null
+  sort: ListSort
+  onChange: (change: { filter?: ListFilter | null; sort?: ListSort }) => void
+  filtersHidden?: boolean
+  children?: ReactNode
+}) {
   const { t } = useTranslation()
   const inMenu = (filter && filter !== 'unread' ? 1 : 0) + (sort !== 'newest' ? 1 : 0)
   return (
     <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+      {filtersHidden ? null : (
+        <>
       <Button
         size="sm"
         variant={filter === 'unread' ? 'default' : 'outline'}
@@ -58,6 +74,10 @@ export function ListFilters({ filter, sort, onChange }: { filter: ListFilter | n
           {t('listFilter.reset')}
         </Button>
       ) : null}
+        </>
+      )}
+      <span className="ml-auto" />
+      {children}
     </div>
   )
 }

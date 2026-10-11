@@ -108,6 +108,8 @@ export const rowStarred = (row: MailMessage) => row.conversation?.starred ?? row
 interface Page {
   messages: MailMessage[]
   next?: string | null
+  /** With a numbered page: how many the place holds with these filters. */
+  total?: number | null
 }
 
 export interface FolderCount {
@@ -162,7 +164,9 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest'] as const
+const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest', view.page ?? 0, view.pageSize ?? DEFAULT_PAGE_SIZE] as const
+/** Two list keys for one place and view, whatever their page. */
+const samePlace = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((part, i) => i === a.length - 2 || part === b[i])
 const countsKey = (group?: string, conversations = false) => ['mail', 'counts', group ?? null, conversations] as const
 const threadKey = (id: string, group?: string) => ['mail', 'thread', id, group ?? null] as const
 const contentKey = (id: string) => ['mail', 'content', id] as const
@@ -304,22 +308,35 @@ export interface ListView {
   conversations?: boolean
   filter?: ListFilter | null
   sort?: ListSort
+  /** Page number from 0 (Proton's paging). */
+  page?: number
+  /** The account's page size: 50, 100 or 200. */
+  pageSize?: number
 }
 
+/** Proton's default page size (`DEFAULT_MAIL_PAGE_SIZE`). */
+export const DEFAULT_PAGE_SIZE = 50
+/** Proton's page sizes (`MAIL_PAGE_SIZE`). */
+export const PAGE_SIZES = [50, 100, 200] as const
+
 export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true) {
-  const { q, group, conversations, filter, sort } = view
-  return useInfiniteQuery({
+  const { q, group, conversations, filter, sort, page = 0, pageSize = DEFAULT_PAGE_SIZE } = view
+  // One numbered page per key, kept in the infinite shape the cache
+  // updates (patchMessages, patchLabels) work on.
+  return useInfiniteQuery<Page, Error, InfiniteData<Page, number>, ReturnType<typeof folderKey>, number>({
     queryKey: folderKey(folder, view),
     enabled,
-    initialPageParam: null as string | null,
+    initialPageParam: page,
+    // The page before stays while the next loads, within one view only.
+    placeholderData: (previous, previousQuery) => (previousQuery && samePlace(previousQuery.queryKey, folderKey(folder, view)) ? previous : undefined),
     queryFn: async ({ pageParam }) =>
       (
         await api.get<Page>('/mail/messages', {
           params: {
             folder,
             ...(q ? { q } : {}),
-            ...(pageParam ? { before: pageParam } : {}),
-            limit: 50,
+            page: pageParam,
+            limit: pageSize,
             ...scoped(group),
             ...(conversations ? { conversations: true } : {}),
             ...(filter === 'unread' ? { unread: true } : filter === 'read' ? { unread: false } : filter === 'attachments' ? { attachments: true } : {}),
@@ -327,7 +344,7 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
           },
         })
       ).data,
-    getNextPageParam: (last) => last.next ?? null,
+    getNextPageParam: () => null,
     refetchInterval: POLL_MS,
   })
 }
@@ -629,6 +646,8 @@ export interface MailSettings {
   viewMode: 'conversation' | 'message'
   /** A link that leads outside Kutup asks first (Proton's ConfirmLink). */
   confirmLink: boolean
+  /** Rows on a page of the list: 50, 100 or 200 (Proton's PageSize). */
+  pageSize: number
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */

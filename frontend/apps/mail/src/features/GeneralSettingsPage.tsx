@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
+import { PAGE_SIZES, useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
 import { Alert } from '@kutup/ui/components/alert'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
@@ -20,7 +20,7 @@ function Setting({ label, hint, checked, onChange }: { label: string; hint: stri
   )
 }
 
-/** Settings → General (Proton's Messages section, and its External PGP settings): conversation grouping, auto-delete, All mail; signing, the attached key and the PGP scheme for outside mail. */
+/** Settings → General (Proton's Messages section, and its External PGP settings): conversation grouping, page size, auto-delete, All mail; signing, the attached key and the PGP scheme for outside mail. */
 export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
@@ -42,6 +42,23 @@ export function GeneralSettingsPage() {
           checked={settings.data.viewMode === 'conversation'}
           onChange={(on) => save({ viewMode: on ? 'conversation' : 'message' })}
         />
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <label htmlFor="page-size" className="block text-sm font-medium">
+            {settings.data.viewMode === 'conversation' ? t('general.pageSizeConversations') : t('general.pageSizeMessages')}
+          </label>
+          <Select value={String(settings.data.pageSize)} onValueChange={(size) => save({ pageSize: Number(size) })}>
+            <SelectTrigger id="page-size" className="sm:w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Setting
           label={t('general.confirmLink')}
           hint={t('general.confirmLinkHint')}
