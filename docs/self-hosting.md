@@ -923,8 +923,9 @@ has signed in to the Account app once, which creates its address key.
    `MAIL_HOSTNAME` to `KUTUP_ACME_EXTRA_DOMAINS` so port 25 offers a trusted
    certificate. The backend gets `MAIL_HOSTNAME` too: it trusts DMARC only
    from the `Authentication-Results` header Stalwart writes under that name
-   (people's allow lists rely on it), so leave Stalwart's
-   `add-auth-results-header` at its default, on for port 25.
+   (people's allow lists rely on it). `stalwart-setup` turns Stalwart's
+   `addAuthResultsHeader` on for port 25 and stops with a `FATAL` line if
+   Stalwart reports it off.
 2. Open TCP port 25 inbound and outbound. Many hosting providers block
    outbound port 25 until asked; mail to people outside Kutup needs it.
 3. Start with the mail file added:

@@ -99,8 +99,8 @@ impl Readable {
 /// claim anything (RFC 8601 §5). So only the topmost header counts, and only
 /// when its authserv-id is `authserv` (`MAIL_HOSTNAME`): a sender's forged
 /// header is then either below ours, or names another host. Should Stalwart
-/// ever write none, a forgery naming our host would be topmost, so that
-/// setting must stay on (docs/self-hosting.md, "Mail").
+/// ever write none, a forgery naming our host would be topmost, so
+/// `stalwart/setup.sh` sets it on and refuses to go on when it is off.
 pub fn dmarc_passed(raw: &[u8], authserv: &str) -> bool {
     if authserv.is_empty() {
         return false;
