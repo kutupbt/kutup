@@ -50,6 +50,54 @@ export interface CryptoWasmModule {
   ): import('./contactCard').ContactSummary
   sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
   openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
+  generateMailGroupKey(
+    groupAddress: string,
+    createdAtSecs: number,
+    memberPublicKeys: string[],
+  ): { publicKey: string; fingerprint: string; sha256Fingerprint: string; shares: string[] }
+  reshareMailGroupKey(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    memberPublicKeys: string[],
+  ): string[]
+  openMailGroupMessage(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    message: Uint8Array,
+    senderPublicKeyBase64?: string,
+  ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
+  encryptMailMessageAsGroup(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    recipientPublicKeys: string[],
+    plaintext: Uint8Array,
+  ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
+  encryptMailPgpAsGroup(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    recipientPublicKeys: string[],
+    plaintext: Uint8Array,
+  ): string
   exportMailAddressKey(
     masterKeyBase64: string,
     loginEmail: string,

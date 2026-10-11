@@ -43,7 +43,9 @@ const ActivityPage = page(() => import('./features/admin/ActivityPage').then((m)
 const FederationPage = page(() => import('./features/admin/FederationPage').then((m) => ({ default: m.FederationPage })))
 const NewUserPage = page(() => import('./features/admin/NewUserPage').then((m) => ({ default: m.NewUserPage })))
 const MailSendingPage = page(() => import('./features/admin/MailSendingPage').then((m) => ({ default: m.MailSendingPage })))
+const MailGroupsPage = page(() => import('./features/admin/MailGroupsPage').then((m) => ({ default: m.MailGroupsPage })))
 const MapsSettingsPage = page(() => import('./features/admin/MapsSettingsPage').then((m) => ({ default: m.MapsSettingsPage })))
+const ReportsPage = page(() => import('./features/admin/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPage').then((m) => ({ default: m.ServerSettingsPage })))
 const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
 const UsersPage = page(() => import('./features/admin/UsersPage').then((m) => ({ default: m.UsersPage })))
@@ -93,11 +95,13 @@ export function App() {
               <Route path="/admin/users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
               <Route path="/admin/users/new" element={<RequireAdmin><NewUserPage /></RequireAdmin>} />
               <Route path="/admin/users/:id" element={<RequireAdmin><UserPage /></RequireAdmin>} />
+              <Route path="/admin/reports" element={<RequireAdmin><ReportsPage /></RequireAdmin>} />
               <Route path="/admin/activity" element={<RequireAdmin><ActivityPage /></RequireAdmin>} />
               <Route path="/admin/federation" element={<RequireAdmin><FederationPage /></RequireAdmin>} />
               <Route path="/admin/settings" element={<RequireAdmin><ServerSettingsPage /></RequireAdmin>} />
               <Route path="/admin/maps" element={<RequireAdmin><MapsSettingsPage /></RequireAdmin>} />
               <Route path="/admin/mail" element={<RequireAdmin><MailSendingPage /></RequireAdmin>} />
+              <Route path="/admin/mail/groups" element={<RequireAdmin><MailGroupsPage /></RequireAdmin>} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

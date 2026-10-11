@@ -52,7 +52,8 @@
       "name": "Name"
     },
     "changed": "Changed {{when}}",
-    "changedBy": "Changed {{when}} · {{owner}}",
+    "sharedBy": "From {{sharer}} · changed {{when}}",
+    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}",
     "unnamed": "A document that could not be read",
     "loading": "Loading your documents…",
     "loadFailedTitle": "Your documents could not be loaded",

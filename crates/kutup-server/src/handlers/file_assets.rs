@@ -264,20 +264,31 @@ pub async fn download(
     if !can_access_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
+    asset_response(&state, fid, &asset_id).await
+}
 
-    // The key generation it was sealed at: the file key that opens it
-    // (docs/plans/drive-move.md).
+/// One stored asset envelope, streamed, with the key generation it was
+/// sealed at (the file key that opens it, docs/plans/drive-move.md). The
+/// caller has checked the right to read the file.
+pub(crate) async fn asset_response(
+    state: &AppState,
+    fid: Uuid,
+    asset_id: &str,
+) -> AppResult<Response> {
+    if !valid_asset_id(asset_id) {
+        return Err(AppError::bad_request("invalid assetId"));
+    }
     let key_generation: i32 = sqlx::query_scalar(
         "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
-    .bind(&asset_id)
+    .bind(asset_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::not_found("not found"))?;
     let (body, size) = state
         .storage
-        .get_object(&asset_storage_path(fid, &asset_id))
+        .get_object(&asset_storage_path(fid, asset_id))
         .await
         .map_err(|_| AppError::not_found("not found"))?;
     Ok(octet_stream_response(

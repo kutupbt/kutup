@@ -1,9 +1,10 @@
 import { expect, type Browser, type BrowserContext, type Frame, type Page } from '@playwright/test'
 import { newAccount, openDrive, registerAccount } from './apps'
+import { waitForFilePage } from './drive'
 
 /**
  * ONLYOFFICE runs client-side in the editor sandbox's own origin, framed by
- * Drive's editor page (docs/onlyoffice.md). Its bridge (inner.html) logs
+ * the file page on the Office site (docs/onlyoffice.md). Its bridge (inner.html) logs
  * `[kutup-bridge]` lines the specs read: outbound changes, applied remote
  * changes, cursor frames, and document readiness.
  */
@@ -23,11 +24,11 @@ function collectBridgeLogs(page: Page): string[] {
   return logs
 }
 
-/** Creates an office file from Drive's New menu; returns its editor URL. */
+/** Creates an office file from Drive's New menu; returns its editor URL (in Office). */
 export async function createOffice(drive: Page, kind: OfficeKind): Promise<string> {
   await drive.getByRole('button', { name: 'New' }).first().click()
   await drive.getByRole('menuitem', { name: kind, exact: true }).click()
-  await drive.waitForURL(/\/file\//, { timeout: 60_000 })
+  await waitForFilePage(drive)
   return drive.url()
 }
 

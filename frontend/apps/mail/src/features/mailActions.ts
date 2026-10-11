@@ -27,14 +27,16 @@ export const MAIL_DRAG_TYPE = 'application/x-kutup-mail'
  * A move can be undone from its toast (Proton's "Undo"): each message goes
  * back to the folder it came from.
  */
-export function useMailActions() {
+export function useMailActions(group?: string) {
   const { t } = useTranslation()
   const update = useUpdateMessages()
+  // A shared mailbox's messages are filed in it (mail groups).
+  const inMailbox = group ? { group } : {}
 
   const failed = (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain')))
 
   async function moveEach(groups: Map<Folder, string[]>) {
-    await Promise.all([...groups].map(([folder, ids]) => update.mutateAsync({ ids, folder })))
+    await Promise.all([...groups].map(([folder, ids]) => update.mutateAsync({ ids, folder, ...inMailbox })))
   }
 
   function move(messages: Movable[], target: MoveTarget, after?: () => void) {
@@ -65,7 +67,7 @@ export function useMailActions() {
 
   function mark(messages: Pick<MailMessage, 'id'>[], change: Omit<MessageChange, 'ids' | 'folder'>, after?: () => void) {
     if (messages.length === 0) return
-    update.mutate({ ids: messages.map((m) => m.id), ...change }, { onSuccess: () => after?.(), onError: failed })
+    update.mutate({ ids: messages.map((m) => m.id), ...change, ...inMailbox }, { onSuccess: () => after?.(), onError: failed })
   }
 
   return { move, mark, pending: update.isPending }

@@ -702,6 +702,20 @@ const reimported = crypto.importMailAddressKey(
   mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
 )
 assert.equal(reimported.fingerprint, mailVectors.fingerprint)
+// A shared mailbox's key: Alice gets a share, opens group mail with it,
+// shares it with Bob's key, and signs as the group.
+const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', 1_790_000_000, [mailVectors.publicKey])
+assert.equal(groupKey.shares.length, 1)
+const aliceArgs = [mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint]
+const toGroup = crypto.encryptMailMessageAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
+const groupMessage = new Uint8Array([...b64bytes(toGroup.keyPackets[0]), ...toGroup.dataPacket])
+const openedGroup = crypto.openMailGroupMessage(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, groupMessage, groupKey.publicKey)
+assert.equal(new TextDecoder().decode(openedGroup.data), 'hr mail')
+assert.ok(openedGroup.signed && openedGroup.verified)
+const bobShares = crypto.reshareMailGroupKey(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [splitVectors.bobPublicKey])
+assert.equal(bobShares.length, 1)
+assert.throws(() => crypto.openMailGroupMessage(...aliceArgs, bobShares[0], groupKey.fingerprint, groupMessage))
+assert.match(crypto.encryptMailPgpAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('x')), /^-----BEGIN PGP MESSAGE-----/)
 const armoredPgp = crypto.encryptMailPgp(
   mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),

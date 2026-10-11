@@ -19,6 +19,7 @@
     "devices": "Düzenleme cihazları",
     "admin": "Yönetim",
     "users": "Kullanıcılar",
+    "reports": "Bildirimler",
     "activity": "Etkinlik",
     "federation": "Federasyon",
     "serverSettings": "Sunucu ayarları",
@@ -28,7 +29,8 @@
     "adminMaps": "Haritalar",
     "storage": "Depolama alanı",
     "keys": "Şifreleme anahtarları",
-    "mailSending": "Posta gönderimi"
+    "mailSending": "Posta gönderimi",
+    "mailGroups": "Posta grupları"
   },
   "auth": {
     "fields": {
@@ -517,6 +519,40 @@
       "deleted": "{{email}} silindi",
       "actionFailed": "İşlem başarısız oldu."
     },
+    "reports": {
+      "title": "Bildirimler",
+      "description": "İnsanların bildirdiği herkese açık bağlantılar. Sunucu bir bağlantının gösterdiğini göremez: bildiren eklediyse bağlantıyı açın, ardından bildirimi kapatın, bağlantıyı kaldırın ya da onu oluşturan hesabı devre dışı bırakın (bu, hesabın tüm bağlantılarını kaldırır).",
+      "open": "Açık",
+      "resolved": "Çözülen",
+      "emptyTitle": "Açık bildirim yok",
+      "emptyDescription": "Herkesin herkese açık bir bağlantının sayfasından yaptığı bildirimler burada görünür.",
+      "noneResolvedTitle": "Henüz çözülen yok",
+      "noneResolvedDescription": "Kapattığınız ya da işlem yaptığınız bildirimler burada listelenir.",
+      "more_one": "ve bu bağlantıda {{count}} bildirim daha",
+      "more_other": "ve bu bağlantıda {{count}} bildirim daha",
+      "owner": "Paylaşan",
+      "link": "Bağlantı",
+      "fileLink": "Tek bir dosyaya bağlantı, {{date}} tarihinde oluşturuldu",
+      "folderLink": "Bir klasöre ya da albüme bağlantı, {{date}} tarihinde oluşturuldu",
+      "linkRemoved": "kaldırıldı",
+      "openLink": "Bağlantıyı aç",
+      "noLink": "Bildiren bağlantıyı eklemedi.",
+      "dismiss": "Kapat",
+      "dismissed": "Bildirim kapatıldı",
+      "remove": "Bağlantıyı kaldır",
+      "removeTitle": "Bu bağlantı kaldırılsın mı?",
+      "removeDescription": "Bağlantıyı açan herkese kaldırıldığı söylenir. {{email}} dosyayı tutar ve yeniden paylaşabilir; bu bağlantıdaki tüm açık bildirimler kapatılır.",
+      "removed": "Bağlantı kaldırıldı",
+      "disableTitle": "Bu hesap devre dışı bırakılsın mı?",
+      "disableDescription": "{{email}} her yerden çıkış yapar ve giriş yapamaz; herkese açık tüm bağlantıları da hesabı yeniden etkinleştirene kadar çalışmaz. Verileri saklanır.",
+      "disabled": "Hesap devre dışı bırakıldı",
+      "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
+      "resolution": {
+        "dismissed": "Kapatıldı",
+        "removed": "Bağlantı kaldırıldı",
+        "disabled": "Hesap devre dışı"
+      }
+    },
     "activity": {
       "title": "Etkinlik",
       "description": "Yöneticilerin yaptığı değişiklikler, en yenisi önce.",
@@ -551,7 +587,9 @@
         "federationPeerRetry": "{{admin}}, {{domain}} için keşfi yeniden denedi",
         "federationPeerRetryBulk": "{{admin}} birkaç sunucu için keşfi yeniden denedi",
         "unknown": "{{admin}}: {{action}}",
-        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi"
+        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
+        "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı"
       }
     },
     "settings": {
@@ -759,6 +797,44 @@
       "serverLimit": "Sunucunun sınırı",
       "saved": "Kaydedildi",
       "cardHint": "Bu hesabın dış adreslere gönderdikleri. Buradan duraklatın ya da kendi sınırlarını verin."
+    },
+    "mailGroups": {
+      "title": "Posta grupları",
+      "description": "Her biri kendi depolama alanına sahip dağıtım listeleri ve paylaşılan posta kutuları. Rol adresleri hep buradadır: onları okuyacak kişileri ekleyin.",
+      "create": "Yeni grup",
+      "emptyTitle": "Grup yok",
+      "emptyDescription": "Bir dağıtım listesi ya da paylaşılan posta kutusu oluşturun.",
+      "address": "Adres",
+      "kind": "Tür",
+      "members": "Üyeler",
+      "storage": "Depolama",
+      "quota": "Depolama",
+      "deleteOne": "{{address}} sil",
+      "role": {
+        "postmaster": "teslim sorunları",
+        "abuse": "spam ve kötüye kullanım şikâyetleri",
+        "security": "güvenlik açığı bildirimleri",
+        "hostmaster": "DNS"
+      },
+      "deleteTitle": "{{address}} silinsin mi?",
+      "deleteShared": "Paylaşılan posta kutusu tüm e-postalarıyla silinir ve adresi boşa çıkar. Bu geri alınamaz.",
+      "deleteList": "Liste silinir ve adresi boşa çıkar. Üyeler daha önce aldıkları e-postaları tutar.",
+      "delete": "Grubu sil",
+      "quotaTitle": "{{address}} depolama alanı",
+      "quotaDescription": "Grubun e-postaları burada sayılır, üyelerinin alanından asla düşülmez.",
+      "quotaGib": "Depolama (GB)",
+      "createTitle": "Yeni grup",
+      "createDescription": "Bu sunucuda bir ekip için bir adres.",
+      "name": "@ işaretinden önceki ad",
+      "nameHint": "Adresi: {{address}}",
+      "kindHint": {
+        "list": "Her üye e-postayı kendi gelen kutusunda alır ve kendi başına yönetir.",
+        "shared": "Üyelerin birlikte okuyup yanıtladığı tek bir posta kutusu; biri bir iletiyi okuduğunda herkes için okunmuş olur. Anahtarı şimdi, bu tarayıcıda oluşturulur."
+      },
+      "owners": "Sahipler",
+      "addOwner": "Sahip ekle",
+      "created": "Grup oluşturuldu.",
+      "createFailed": "Grup oluşturulamadı."
     }
   }
 }

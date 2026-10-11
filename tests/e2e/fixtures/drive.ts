@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { appUrl } from './apps'
+import { appOrigin, appUrl } from './apps'
 
 /** Drive's primary navigation: My files, Shared, Trash, … */
 export async function openSection(page: Page, name: 'My files' | 'Shared with me' | 'Shared by me' | 'Trash') {
@@ -22,25 +22,33 @@ export async function openItem(page: Page, name: string) {
   await page.getByText(name, { exact: true }).first().dblclick()
 }
 
+/**
+ * Waits for a file's page: in Office for what is edited (notes, office
+ * documents, PDFs, whiteboards), in Drive for anything else.
+ */
+export async function waitForFilePage(page: Page, app: 'office' | 'drive' = 'office') {
+  await page.waitForURL((url) => url.origin === appOrigin(app) && url.pathname.startsWith('/file/'), { timeout: 60_000 })
+}
+
 async function createFromMenu(page: Page, entry: string) {
   await page.getByRole('button', { name: 'New' }).first().click()
   await page.getByRole('menuitem', { name: entry, exact: true }).click()
 }
 
 /**
- * Creates a note in the current folder and opens it; returns its name as
- * the editor shows it.
+ * Creates a note in the current folder and opens it (in Office); returns its
+ * name as the editor shows it.
  */
 export async function createNote(page: Page): Promise<string> {
   await createFromMenu(page, 'Note')
-  await page.waitForURL(/\/file\//, { timeout: 60_000 })
+  await waitForFilePage(page)
   await expect(page.locator('.cm-content')).toBeVisible({ timeout: 60_000 })
   const title = page.getByRole('button', { name: /\.md$/ }).first()
   await expect(title).toBeVisible()
   return (await title.textContent())!.trim()
 }
 
-/** Leaves the editor for the folder it was opened from. */
+/** Leaves the editor (in Office) for the Drive folder it was opened from. */
 export async function backFromEditor(page: Page) {
   await page.getByRole('link', { name: /^Back to / }).click()
   await expect(page.getByRole('group', { name: 'View' })).toBeVisible({ timeout: 60_000 })

@@ -168,6 +168,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_USER_LOOKUP_PER_MIN=30
 # RATE_LIMIT_REGISTER_PER_HOUR=10
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
+# RATE_LIMIT_REPORT_PER_HOUR=20        # reporting a public link needs no account
 # RATE_LIMIT_FED_USERS_PER_MIN=60
 # RATE_LIMIT_ADMIN_PER_MIN=120
 # RATE_LIMIT_CHAT_KEYS_PER_MIN=30
@@ -947,8 +948,10 @@ an account's first week: `MAIL_SEND_RECIPIENTS_PER_HOUR`, `…_PER_DAY`,
 `MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), pauses an
 account whose mail bounces too often, and shows who sends how much under
 Administration → Mail sending, where an account can be paused, resumed or
-given its own limits. `postmaster@` and `abuse@` are delivered to the
-administrator: read them. Before the MX switch, register the domain with
+given its own limits. `postmaster@`, `abuse@`, `security@` and `hostmaster@`
+are groups: add the people who read them under Administration → Mail
+groups; until then they reach every administrator. Read them.
+`/.well-known/security.txt` names `security@`. Before the MX switch, register the domain with
 [Google Postmaster Tools](https://postmaster.google.com) and
 [Microsoft SNDS](https://sendersupport.olc.protection.outlook.com/snds/) so
 complaints and reputation reach you. Stalwart's spam filter does not score
@@ -1028,7 +1031,8 @@ list. Check, in order:
    encrypted from the first message.
 5. Every person who should receive mail has signed in once (that creates
    their key; mail to an account without one is refused), and
-   `postmaster@` and `abuse@` reach an administrator who reads them.
+   `postmaster@` and `abuse@` reach people who read them (their groups'
+   members, or every administrator).
 6. The domain is registered with Google Postmaster Tools and Microsoft
    SNDS.
 7. A sending trial: `MAIL_OUTSIDE_SENDING=admins`, then an administrator

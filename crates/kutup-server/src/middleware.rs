@@ -254,6 +254,15 @@ pub async fn rate_limit_register(
     limit(addr, &ratelimit::REGISTER, None, req, next).await
 }
 
+/// 20/hour/IP — reporting a public link, which needs no account.
+pub async fn rate_limit_report(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::REPORT, None, req, next).await
+}
+
 /// 120/min/IP — every `/api/admin/*` route.
 pub async fn rate_limit_admin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

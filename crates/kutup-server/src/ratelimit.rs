@@ -140,6 +140,14 @@ pub static REGISTER: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(3600),
     )
 });
+/// Reports on public links: 20 / hour / IP (`RATE_LIMIT_REPORT_PER_HOUR`). Anyone
+/// may report, without an account; a person reports a few, a script many.
+pub static REPORT: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REPORT_PER_HOUR", 20) as usize,
+        Duration::from_secs(3600),
+    )
+});
 /// Admin API: 120 / minute / IP (`RATE_LIMIT_ADMIN_PER_MIN`). The dashboard fires a
 /// handful of requests per view; 120/min is generous for a human and a wall for a script.
 pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| {

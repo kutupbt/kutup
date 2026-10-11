@@ -5,6 +5,8 @@
 //! stored in S3 with its readable fields in `mail_messages`, charged to the
 //! account's one storage pool.
 
+pub mod group_keys;
+pub mod groups;
 pub mod headers;
 pub mod lmtp;
 pub mod outside_keys;
@@ -67,8 +69,9 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
     .ok()
 }
 
-/// Role addresses (RFC 2142) no account may take: mail to `postmaster@` and
-/// `abuse@` goes to the administrator, where complaints must reach.
+/// Role addresses (RFC 2142) no account may take. All but `mailer-daemon@`
+/// are system groups ([`groups`]), which reach their members or, while they
+/// have none, every administrator.
 pub const RESERVED_LOCAL_PARTS: [&str; 5] = [
     "postmaster",
     "abuse",
@@ -76,9 +79,6 @@ pub const RESERVED_LOCAL_PARTS: [&str; 5] = [
     "mailer-daemon",
     "security",
 ];
-
-/// The role addresses delivered to the administrator.
-const ADMIN_ROLE_ADDRESSES: [&str; 2] = ["postmaster", "abuse"];
 
 /// An accepted recipient: whose mail it is and the key it is encrypted to.
 #[derive(Debug, Clone)]
@@ -104,25 +104,14 @@ fn try_later() -> Reply {
 /// with a primary key, on an active account with room in its pool.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
-    let local = address
-        .split_once('@')
-        .map(|(local, _)| local)
-        .unwrap_or_default();
-    // postmaster@ and abuse@ reach the administrator (the break-glass one
-    // when there is one).
-    let role = ADMIN_ROLE_ADDRESSES.contains(&local);
     let row: Option<(Uuid, Uuid, Vec<u8>, i64, i64)> = sqlx::query_as(
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE CASE WHEN $2 THEN u.is_admin ELSE a.address = $1 END
-          ORDER BY (u.email = $3) DESC, u.created_at
-          LIMIT 1",
+          WHERE a.address = $1",
     )
     .bind(&address)
-    .bind(role)
-    .bind(&state.config.break_glass_admin_email)
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
@@ -141,6 +130,69 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
         address_id,
         public_key,
     })
+}
+
+/// Where mail to an address goes: one account, or a group's receivers.
+#[derive(Debug, Clone)]
+pub enum Target {
+    Person(Recipient),
+    Group(groups::Group, Vec<groups::Receiver>),
+    /// A shared mailbox: its mail is encrypted to the group's key.
+    Shared(groups::Group, Vec<u8>),
+}
+
+/// [`resolve`], groups included: a group that takes `sender`'s mail, has
+/// room and someone to receive it.
+pub async fn resolve_target(
+    state: &AppState,
+    recipient: &str,
+    sender: groups::Sender,
+) -> Result<Target, Reply> {
+    let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
+    let lookup_failed = |error: sqlx::Error| {
+        tracing::warn!(error = %error, "mail: group lookup failed");
+        try_later()
+    };
+    let Some(group) = groups::find(&state.pool, &address)
+        .await
+        .map_err(lookup_failed)?
+    else {
+        return resolve(state, recipient).await.map(Target::Person);
+    };
+    if !groups::may_post(&state.pool, &group, sender)
+        .await
+        .map_err(lookup_failed)?
+    {
+        return Err(Reply::new(
+            550,
+            "5.7.1",
+            "this group does not take mail from you",
+        ));
+    }
+    if !groups::has_room(&state.pool, group.id)
+        .await
+        .map_err(lookup_failed)?
+    {
+        return Err(full());
+    }
+    if group.kind == "shared" {
+        let key = group_keys::primary_public_key(&state.pool, group.id)
+            .await
+            .map_err(lookup_failed)?
+            .ok_or_else(|| Reply::new(451, "4.3.0", "this mailbox has no key yet"))?;
+        return Ok(Target::Shared(group, key));
+    }
+    let receivers = groups::receivers(&state.pool, &group)
+        .await
+        .map_err(lookup_failed)?;
+    if receivers.is_empty() {
+        return Err(Reply::new(
+            550,
+            "5.2.1",
+            "this group has nobody to receive mail",
+        ));
+    }
+    Ok(Target::Group(group, receivers))
 }
 
 /// Stores `raw` for `recipient`: encrypted, then written, then recorded and
@@ -248,7 +300,7 @@ async fn record(
         &mut tx,
         NewMessage {
             id,
-            user_id: recipient.user_id,
+            user_id: Some(recipient.user_id),
             address_id: recipient.address_id,
             thread_id: None,
             direction: "inbound",
@@ -267,6 +319,9 @@ async fn record(
             readable,
             bcc: &[],
             external_recipients: 0,
+            group_id: None,
+            key_packet: None,
+            sent_by: None,
         },
     )
     .await?;
@@ -280,7 +335,9 @@ async fn record(
 /// A message row to write (migration 085).
 pub(crate) struct NewMessage<'a> {
     pub id: Uuid,
-    pub user_id: Uuid,
+    /// The account whose mailbox it is; none for a shared mailbox's message
+    /// (then `group_id` is the mailbox).
+    pub user_id: Option<Uuid>,
     pub address_id: Uuid,
     /// The thread, when the caller knows it; otherwise the thread of an
     /// ancestor named in In-Reply-To or References, else a new one.
@@ -295,12 +352,20 @@ pub(crate) struct NewMessage<'a> {
     pub readable: &'a Readable,
     pub bcc: &'a [headers::Mailbox],
     pub external_recipients: i32,
+    /// The distribution list the copy came through.
+    pub group_id: Option<Uuid>,
+    /// A list member's own key packet: the object is the list's shared data
+    /// packet, charged to the group, not to this account.
+    pub key_packet: Option<&'a [u8]>,
+    /// The member who sent it as a shared mailbox.
+    pub sent_by: Option<Uuid>,
 }
 
-/// The thread of the newest message of `user_id` that `readable` replies to.
+/// The thread of the newest message in the mailbox of `owner` (an account,
+/// or a shared mailbox's group) that `readable` replies to.
 pub(crate) async fn ancestor_thread(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
+    owner: Uuid,
     readable: &Readable,
 ) -> sqlx::Result<Option<Uuid>> {
     let ancestors: Vec<&str> = readable
@@ -314,26 +379,31 @@ pub(crate) async fn ancestor_thread(
     }
     sqlx::query_scalar(
         "SELECT thread_id FROM mail_messages
-          WHERE user_id = $1 AND message_id = ANY($2)
+          WHERE owner = $1 AND message_id = ANY($2)
           ORDER BY received_at DESC LIMIT 1",
     )
-    .bind(user_id)
+    .bind(owner)
     .bind(&ancestors)
     .fetch_optional(&mut **tx)
     .await
 }
 
-/// Inserts `message` and charges its owner's pool; the caller holds the
-/// pool lock and has checked the size fits. `false` when the same incoming
+/// Inserts `message` and charges its owner's pool (a list member's copy is
+/// charged to the group by the caller instead); the caller holds the pool
+/// lock and has checked the size fits. `false` when the same incoming
 /// message was already stored for that address.
 pub(crate) async fn insert_message(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     message: NewMessage<'_>,
 ) -> sqlx::Result<bool> {
     let readable = message.readable;
+    let owner = message
+        .user_id
+        .or(message.group_id)
+        .expect("a message belongs to an account or a group");
     let thread = match message.thread_id {
         Some(thread) => Some(thread),
-        None => ancestor_thread(tx, message.user_id, readable).await?,
+        None => ancestor_thread(tx, owner, readable).await?,
     };
     let sent_at = readable
         .sent_at
@@ -348,9 +418,9 @@ pub(crate) async fn insert_message(
             (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
              object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
              cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
-             attachment_count, external_recipients)
+             attachment_count, external_recipients, group_id, key_packet, sent_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24)
+                 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
          ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
          DO NOTHING
          RETURNING id",
@@ -379,13 +449,24 @@ pub(crate) async fn insert_message(
     .bind(&readable.references)
     .bind(readable.attachment_count)
     .bind(message.external_recipients)
+    .bind(message.group_id)
+    .bind(message.key_packet)
+    .bind(message.sent_by)
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {
         return Ok(false);
     }
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1")
-        .bind(message.user_id)
+    if message.key_packet.is_some() {
+        return Ok(true);
+    }
+    // A shared mailbox's message is charged to its group.
+    let charge = match message.user_id {
+        Some(_) => "UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+        None => "UPDATE mail_groups SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+    };
+    sqlx::query(charge)
+        .bind(owner)
         .bind(message.size)
         .execute(&mut **tx)
         .await?;
@@ -395,14 +476,21 @@ pub(crate) async fn insert_message(
 struct Receiver(AppState);
 
 impl lmtp::Delivery for Receiver {
-    type Recipient = Recipient;
+    type Recipient = Target;
 
-    async fn check(&self, address: &str) -> Result<Recipient, Reply> {
-        resolve(&self.0, address).await
+    // Every LMTP delivery comes from outside, through Stalwart.
+    async fn check(&self, address: &str) -> Result<Target, Reply> {
+        resolve_target(&self.0, address, groups::Sender::Outside).await
     }
 
-    async fn deliver(&self, recipient: &Recipient, message: &[u8]) -> Reply {
-        store(&self.0, recipient, message).await
+    async fn deliver(&self, target: &Target, message: &[u8]) -> Reply {
+        match target {
+            Target::Person(recipient) => store(&self.0, recipient, message).await,
+            Target::Group(group, receivers) => {
+                groups::store_from_outside(&self.0, group, receivers, message).await
+            }
+            Target::Shared(group, key) => groups::store_shared(&self.0, group, key, message).await,
+        }
     }
 }
 
@@ -499,7 +587,7 @@ pub async fn rcpt_hook(
     let (true, Some(recipient)) = (request.context.stage == "rcpt", recipient) else {
         return Json(json!({ "action": "accept" })).into_response();
     };
-    match resolve(&state, &recipient.address).await {
+    match resolve_target(&state, &recipient.address, groups::Sender::Outside).await {
         Ok(_) => Json(json!({ "action": "accept" })).into_response(),
         Err(reply) => Json(json!({
             "action": "reject",

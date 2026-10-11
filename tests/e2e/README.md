@@ -101,7 +101,7 @@ MAIL_OUTSIDE_SENDING=off docker compose up -d --wait backend
 E2E_MAIL_OUTSIDE_SENDING=off npx playwright test specs/59-mail-outside-off.spec.ts
 ```
 
-CI's clean-browser job on master runs specs 54, 57 and 58, then 59 the same
+CI's clean-browser job on master runs specs 54, 57, 58 and 60, then 59 the same
 way.
 
 ## Required Chat backup gates
