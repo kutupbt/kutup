@@ -107,7 +107,8 @@
     "dismiss": "Dismiss",
     "unknownSender": "Unknown sender",
     "collapse": "Collapse message",
-    "sentBy": "Sent by {{name}}"
+    "sentBy": "Sent by {{name}}",
+    "autoReply": "This message was written automatically in answer to an earlier message."
   },
   "actions": {
     "archive": "Archive",
@@ -356,7 +357,10 @@
     "foldersSorted": "Folders sorted.",
     "labelsSorted": "Labels sorted.",
     "unreadable_one": "{{count}} name could not be opened with your account key.",
-    "unreadable_other": "{{count}} names could not be opened with your account key."
+    "unreadable_other": "{{count}} names could not be opened with your account key.",
+    "customColor": "Custom colour",
+    "colorCode": "Colour code",
+    "colorCodeInvalid": "Use a colour code like #4d85e0."
   },
   "filters": {
     "title": "Filters",
@@ -468,7 +472,9 @@
     "folders": "Folders and labels",
     "filters": "Filters",
     "general": "General",
-    "senders": "Block and allow"
+    "senders": "Block and allow",
+    "identity": "Identity",
+    "autoReply": "Auto-reply"
   },
   "emptyFolder": {
     "action": "Delete all",
@@ -527,5 +533,60 @@
     "blocked": "{{who}} blocked.",
     "count_one": "{{count}} sender",
     "count_other": "{{count}} senders"
+  },
+  "identity": {
+    "title": "Identity",
+    "description": "How your mail from {{address}} is signed off.",
+    "displayName": "Display name",
+    "displayNameHint": "The name people see next to your address.",
+    "nameTooLong": "A display name is 100 characters at most.",
+    "signature": "Signature",
+    "signatureHint": "Added to new messages, replies and forwards, above the quoted message. Bold, italic, lists and links.",
+    "link": "Link",
+    "linkPrompt": "Link address (https:// or mailto:)",
+    "signatureTooLong": "The signature is too long (10 KB at most).",
+    "addLink": "Add link"
+  },
+  "autoReply": {
+    "title": "Auto-reply",
+    "description": "Answer mail automatically while you are away or cannot reply.",
+    "toggle": "Auto-reply",
+    "off": "Off. Turn it on to choose when it answers and what it says.",
+    "answeringNow": "On: mail that reaches your inbox now gets this answer, once per sender every 7 days.",
+    "outsideSchedule": "On, but outside its schedule now: it answers again when the next period starts.",
+    "duration": "Duration",
+    "repeat": {
+      "fixed": "Fixed duration",
+      "daily": "Repeat daily",
+      "weekly": "Repeat weekly",
+      "monthly": "Repeat monthly",
+      "permanent": "Permanent"
+    },
+    "explain": {
+      "fixed": "Auto-reply is active from the start time to the end time.",
+      "daily": "Auto-reply is always active on the days of the week you select, between the selected hours.",
+      "weekly": "Auto-reply is active each week between the selected start and end time.",
+      "monthly": "Auto-reply is active each month between the selected start and end time.",
+      "permanent": "Auto-reply is active until you turn it off."
+    },
+    "startDate": "Start date",
+    "startTime": "Start time",
+    "endDate": "End date",
+    "endTime": "End time",
+    "days": "Days of the week",
+    "startWeekday": "Start weekday",
+    "endWeekday": "End weekday",
+    "startDayOfMonth": "Start day of month",
+    "endDayOfMonth": "End day of month",
+    "dayOfMonth": "Day {{day}}",
+    "zone": "Time zone",
+    "message": "Message",
+    "readableHint": "Kutup sends this answer for you while you are away, so the server keeps its text readable, as Proton does. Images are left out.",
+    "defaultMessage": "I'm out of the office with limited access to my email.",
+    "tooLong": "The message is too long. Shorten it to fit within 10 KB.",
+    "messageRequired": "Write the message to answer with.",
+    "daysRequired": "Choose at least one day of the week.",
+    "saved": "Auto-reply updated",
+    "disabled": "Auto-reply disabled"
   }
 }

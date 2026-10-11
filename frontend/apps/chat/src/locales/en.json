@@ -1061,6 +1061,14 @@
       "description": "{{place}}: choose up to {{count}} chats to send it to.",
       "sent_one": "Sent to {{count}} chat",
       "sent_other": "Sent to {{count}} chats"
+    },
+    "contacts": {
+      "notInContacts": "{{name}} is not in your contacts.",
+      "save": "Save to contacts",
+      "saveNamed": "Save {{name}} to contacts",
+      "dismiss": "Dismiss",
+      "inContacts": "In your contacts.",
+      "view": "View contact"
     }
   },
   "boot": {

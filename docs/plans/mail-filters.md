@@ -75,6 +75,10 @@ read from the client and its texts):
   ones (as Proton, not inside Inbox): mail moved or filtered there leaves
   the Inbox. Unread counts per folder; collapsible parents; drop mail on
   them; "+" to make one; a menu to rename, recolour, move or delete.
+- **Colours** for folders and labels: Proton's palette of twelve, plus any
+  colour of one's own, from the system colour picker or typed as a
+  `#rrggbb` code (the server stores any lowercase `#rrggbb`). A code that is
+  not complete yet keeps Save off rather than saving the previous colour.
 - **Deleting a folder** moves its mail (and that of its subfolders) to
   Archive, which is Kutup's All-mail-without-a-place, and removes it from
   filters that move there (they keep their other actions, or are switched

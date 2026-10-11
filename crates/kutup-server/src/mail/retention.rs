@@ -21,6 +21,9 @@ pub fn spawn(state: AppState) {
             if let Err(error) = once(&state).await {
                 tracing::warn!(error = %error, "mail: auto-delete failed");
             }
+            if let Err(error) = super::auto_reply::forget_old(&state.pool).await {
+                tracing::warn!(error = %error, "mail: forgetting auto-reply senders failed");
+            }
         }
     });
 }

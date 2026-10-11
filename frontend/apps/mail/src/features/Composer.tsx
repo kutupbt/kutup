@@ -86,10 +86,23 @@ interface Initial {
   attachments: Attachment[]
 }
 
+/**
+ * Where the signature goes, as Proton places it (`messageSignature.ts`): two
+ * empty lines to write on, then the signature; in a reply or forward, above
+ * the quoted message. Nothing without a signature.
+ */
+function withSignature(account: MailAccount, rest = ''): string {
+  return account.signature ? `<p></p><p></p>${account.signature}${rest ? `<p></p>${rest}` : ''}` : `<p></p>${rest}`
+}
+
 /** The composer's starting fields for what it was opened for. */
 function initial(account: MailAccount, target: ComposerTarget, t: (key: string, options?: Record<string, unknown>) => string, locale: string): Initial {
   if (target.kind === 'new') {
-    return { draft: emptyDraft(account, { to: target.to ? [{ address: target.to.toLowerCase(), name: '' }] : [] }), html: '', attachments: [] }
+    return {
+      draft: emptyDraft(account, { to: target.to ? [{ address: target.to.toLowerCase(), name: '' }] : [] }),
+      html: account.signature ? withSignature(account) : '',
+      attachments: [],
+    }
   }
   const { message, opened } = target
   const parsed = opened.parsed
@@ -126,7 +139,7 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
     const files = parsed.attachments.filter((a) => !(a.inline && a.contentId))
     return {
       draft: emptyDraft(account, { subject: prefixed('Fwd', parsed.subject || message.subject) }),
-      html: `<p></p>${header}<blockquote>${quoted(parsed)}</blockquote>`,
+      html: withSignature(account, `${header}<blockquote>${quoted(parsed)}</blockquote>`),
       attachments: files.map((file, i) => ({
         key: `fwd-${i}`,
         name: file.filename || t('read.unnamed'),
@@ -152,7 +165,7 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
       references: [...(parsed.references.length ? parsed.references : message.references), ...(parentId ? [parentId] : [])].slice(-50),
       threadId: message.threadId,
     }),
-    html: `<p></p><p>${escapeHtml(t('compose.wrote', { date: when, name }))}</p><blockquote>${quoted(parsed)}</blockquote>`,
+    html: withSignature(account, `<p>${escapeHtml(t('compose.wrote', { date: when, name }))}</p><blockquote>${quoted(parsed)}</blockquote>`),
     attachments: [],
   }
 }
@@ -522,7 +535,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="self">{account.address}</SelectItem>
+                    <SelectItem value="self">{account.name ? `${account.name} <${account.address}>` : account.address}</SelectItem>
                     {sendAsChoices.map((group) => (
                       <SelectItem key={group.id} value={group.id}>
                         {group.displayName ? `${group.displayName} <${group.address}>` : group.address}
@@ -531,7 +544,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
                   </SelectContent>
                 </Select>
               ) : (
-                <span className="truncate">{account.address}</span>
+                <span className="truncate">{account.name ? `${account.name} <${account.address}>` : account.address}</span>
               )}
             </div>
             <div className="relative">

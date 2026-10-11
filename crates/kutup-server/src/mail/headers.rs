@@ -326,6 +326,25 @@ fn spam_verdict(raw: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// The message's header fields, unfolded: each name lowercased, with its
+/// value.
+pub fn fields(raw: &[u8]) -> Vec<(String, String)> {
+    let end = find_header_end(raw);
+    let text = String::from_utf8_lossy(&raw[..end]);
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.starts_with([' ', '\t']) {
+            if let Some((_, value)) = fields.last_mut() {
+                value.push_str(line);
+            }
+        } else if let Some((name, value)) = line.split_once(':') {
+            fields.push((name.trim().to_ascii_lowercase(), value.to_string()));
+        }
+    }
+    fields
+}
+
 fn find_header_end(raw: &[u8]) -> usize {
     raw.windows(4)
         .position(|w| w == b"\r\n\r\n")
