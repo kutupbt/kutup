@@ -251,8 +251,9 @@ Before the MX switch:
 
 IMAP and SMTP for Thunderbird, Apple Mail or Outlook come through a Kutup
 bridge on the user's machine, after the web app works. The bridge is a Rust
-program sharing `kutup-crypto`, likely the same program as the CalDAV/CardDAV
-bridge and the Drive WebDAV idea in [`06-webdav-support.md`](06-webdav-support.md).
+program sharing `kutup-crypto`, as Proton Bridge is. There is no CalDAV,
+CardDAV or WebDAV (decided 2026-10-11: Proton offers none;
+[`06-webdav-support.md`](06-webdav-support.md) is not planned).
 
 ## Calendar
 
