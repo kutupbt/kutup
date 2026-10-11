@@ -64,10 +64,94 @@ The product owner set the order after reading this research:
 
 1. **Offline is the number one need.** Kutup Pass must work offline in the client apps, and that offline behaviour must be **stable when the client apps arrive** — not added to them later.
 2. **The product being built now is the website** (`pass.<domain>`). It uses the offline engine too, but the website's own offline use is best-effort (see §5.6: offline unlock is new work, and iOS Safari can evict a site's storage after about a week without use [GK]).
-3. **Storage: one sealed record per item, in Kutup's own format; KDBX only for import, export and backup; SQLite with SQLCipher only as the local store of native apps and the CLI** (§5.1a).
+3. **Storage:** superseded the same day by the direction below — the vault is a **KDBX file in Kutup Drive**, with Kutup's three-way merge. The per-item record design (§5.1a, §5) is kept as the later path for per-item sharing.
 4. **Sharing is not the most important problem now.** It moves to the end of the plan (§6). Nothing in the data model may block it later: the vault-key epochs, item-key generations and envelopes stay in the format from day one, so sharing is added without a migration.
 
-What this means for the design: the offline engine — local replica, durable outbox, revision-conditional sync with a change feed, field-level three-way merge, tombstones, resync, offline unlock and the device-key wrapping — is built **first, once, in the shared Rust core**, and proven before any client UI depends on it. The website, the `kutup` CLI and the later native Kutup Pass app (and the extension) all run that same engine, so the native apps add UI and platform glue, not a second offline implementation.
+What this meant for the per-item design (now the later path, §5): the offline engine — local replica, durable outbox, revision-conditional sync with a change feed, field-level three-way merge, tombstones, resync, offline unlock and the device-key wrapping — is built **first, once, in the shared Rust core**, and proven before any client UI depends on it. The website, the `kutup` CLI and the later native Kutup Pass app (and the extension) all run that same engine, so the native apps add UI and platform glue, not a second offline implementation.
+
+## Direction (decided 2026-10-11): KDBX in Kutup Drive, with Kutup's three-way merge
+
+After comparing Proton Pass (per-item records, offline read-only), Strongbox and KeePassXC (a KDBX file, offline editing by design), the product owner chose the KDBX model: **editing offline is the requirement**, and a KDBX file is how the apps they already use every day work, without depending on a service being reachable. Kutup's contribution is to store and sync that file safely and to merge it better than the KeePass apps do.
+
+### What it is
+
+- **The vault is one KDBX 4.1 file in Kutup Drive** (for example in a `Passwords` folder). It is encrypted twice: by KDBX (Argon2id + AES-256 or ChaCha20, under the vault password) and by Drive's end-to-end encryption on top. The server sees only Drive ciphertext.
+- **Every client keeps a local copy and edits it offline.** Nothing about editing needs the server; sync happens when a connection is there.
+- **Drive keeps every version** of the file (Drive version history exists today), so a bad save can be rolled back, and Kutup has the common starting version for merging.
+- **The standard KeePass apps keep working**: KeePassXC on desktop, Strongbox / KeePassium on iOS, KeePassDX / Keepass2Android on Android. They bring autofill, passkeys, SSH agents and biometric unlock that Kutup does not have to build.
+- **Leaving Kutup is trivial**: the vault is a standard KeePass file.
+
+### Clients and how each edits offline
+
+| Client | How it reaches the file | Offline editing | Who merges |
+|---|---|---|---|
+| **Kutup Pass website** (`pass.<domain>`, the product built now) | Opens the KDBX from Drive and decrypts it in the browser (KDBX codec in the Rust core, WASM) | Edits the local copy; the save waits in an outbox (encrypted, in IndexedDB) until online | Kutup (three-way) |
+| **Desktop: KeePassXC + `kutup sync`** | `kutup sync` (exists today, with a three-way-merge sync engine for folders) keeps a local folder in sync; KeePassXC opens the file there. Double encryption intact | KeePassXC edits the local file | Kutup: `kutup sync` learns to merge KDBX files (decrypting with the vault password) instead of producing a conflict copy |
+| **Phones: Strongbox, KeePassium, KeePassDX, Keepass2Android** | Route (a), now: an **opt-in WebDAV address for the vault file only**; route (b), later: a Kutup Drive native app exposing Drive to the system Files app | The app edits its local copy and uploads later | The app merges with its own rules on upload; Kutup re-merges with the common base afterwards (below) |
+
+Route (a) note: server-side WebDAV breaks Drive's end-to-end encryption ([`06-webdav-support.md`](06-webdav-support.md)), so the file behind that address is protected **by KDBX encryption only**, the same exposure as a KDBX on Dropbox: the server operator could copy it and attempt offline password guessing, bounded by Argon2id. It is per vault, opt-in, and says so in the UI. Route (b) keeps both layers and comes with the native Drive app ([`../mobile-build.md`](../mobile-build.md)).
+
+### KeePassXC's merge, the starting point (`KXC/core/Merger.cpp`)
+
+Read in the code (765 lines):
+
+- **When it runs**: automatically when the open file changes on disk and there are unsaved changes ("reload and merge", `KXC/gui/DatabaseWidget.cpp:2217`); manually via Database → Merge with a dry-run preview (`KXC/gui/MergeDialog.cpp:159, 185`); `keepassxc-cli merge`; KeeShare imports.
+- **Matching**: entries and groups by UUID; a missing one is added with its history (`mergeGroup`, `Merger.cpp:186-330`).
+- **Moves**: applied if the other side's "location changed" time is newer.
+- **Conflicting entry**: the **newer whole entry wins** by last-modification time, compared at one-second precision; the losing entry is added to the winner's history, and both histories are unioned by modification time (`resolveEntryConflict_MergeHistories`, `mergeHistory`, `Merger.cpp:439-605`). Equal times with different contents only log "conflict resolution may lose data" (`:541-548`).
+- **Groups**: the newer group's name, notes and icon replace the other's.
+- **Deletions**: the two deleted-objects lists are unioned; a deletion applies unless the object was edited after it — in Synchronize mode only (`mergeDeletions`, `:607`).
+- **Metadata**: partly; the authors' own TODO notes the recycle bin, templates and similar as a "possible lost update" (`:702-704`).
+
+Its limits: there is no common base, so it cannot tell "only I changed this field" from "we both did", and it must pick a whole entry; **device clocks decide**; database settings can be lost.
+
+### Kutup's three-way merge
+
+The same rules, plus the one thing KeePassXC lacks: the version both edits started from, which Drive already keeps.
+
+- **Inputs**: *base* (the Drive version the client last synced and started editing from; the client records its id), *ours* (the local edited file) and *theirs* (the current file on Drive).
+- **Matching**: entries and groups by UUID, as KeePassXC.
+- **Per entry, per field**: title, username, password, URL, notes, every custom string (and its protected flag), `KP2A_URL*` / `URL_n`, `otp` and the other TOTP forms, `KPEX_PASSKEY_*`, tags (as a set), attachments (by name and content hash), icon, expiry, auto-type, custom data per key.
+  - changed on one side → that change applies;
+  - changed on both sides to the same value → no conflict;
+  - changed on both sides to different values → *ours* is written (it is the save landing last on the server), *theirs* goes into the entry's history, and the entry is marked for review (a custom-data key such as `KutupMergeReview`, which other KeePass apps keep and ignore). Passwords get a visible notice, because both may be real.
+- **History**: unioned by modification time (KeePassXC's `mergeHistory`), within the database's history limits.
+- **Moves**: three-way on the parent group; a move on one side applies, moves on both sides → ours.
+- **Deletions**: deleted-objects lists unioned; **deleted on one side but edited on the other after the base → the edit wins**, the entry is restored and the user told.
+- **Groups and database metadata**: three-way per field, including recycle bin, history limits, custom icons (union) and custom data — closing KeePassXC's "possible lost update".
+- **No device clocks decide anything.** Timestamps are kept as data, not used to pick winners.
+- **Fallback without a base** (a file of unknown origin): KeePassXC's rules.
+- The engine lives once in the Rust core (WASM for the website, the `kutup` CLI, UniFFI for a later native app), with KeePassXC's own test databases (`keepassxc/tests/data/`) for round-trips and property tests that no field change is lost.
+
+### Saving without overwriting
+
+- **Kutup clients save conditionally**: "this file, based on Drive version N". If the file moved on, the client fetches it, merges, and saves again. A save never replaces a version it has not seen. (Recording which version an upload is based on is new in Drive.)
+- **The server cannot merge**: it cannot decrypt the file. Merges always run on a client that holds the vault password.
+- **Uploads from phone apps over WebDAV**: the endpoint honours `If-Match` / ETags where the app sends them, and records each upload as a new Drive version with the version it replaced. When two versions diverge from a common ancestor (two devices saved without seeing each other), the next Kutup client that opens the vault — the website or `kutup sync` — runs the three-way merge with that ancestor and saves the result. Until then both versions are kept; nothing is dropped.
+- Whatever a phone app's own merge decided, Kutup's later re-merge against the common base restores field changes it may have buried in history.
+
+### What the earlier research becomes
+
+- **Still applies**: the field model (§4, now native: the vault *is* KDBX), the KDBX 4.1 codec, TOTP, the security monitor (on the website), the lessons from every product studied.
+- **SSH keys**: KeePassXC and Strongbox already run SSH agents from KDBX entries (`KeeAgent.settings`); a `kutup` CLI agent (§5.8) is an optional later addition that reads the same entries.
+- **The per-item record design (§5.1a–§5.15) is the later path**, for when per-item sharing between users or Kutup's own autofill becomes important. Importing a KDBX makes that move straightforward. Until then, a family or team shares a vault by keeping its KDBX file in a shared Drive folder (Drive sharing, with revocation and key rotation, already exists), with the vault password shared out of band.
+
+### Phases for this direction
+
+| Phase | Contents |
+|---|---|
+| **K0** | KDBX 4.1 codec (read every variant KeePassXC reads; write 4.1) and the three-way merge engine in the Rust core; KeePassXC test corpus; merge property tests |
+| **K1** | `kutup sync` merges KDBX files instead of making conflict copies — the first offline client (desktop with KeePassXC) |
+| **K2** | The Kutup Pass website: open, view, edit and create entries in a KDBX from Drive; local copy and save outbox for offline; version history and rollback; conflict review |
+| **K3** | Phones: the opt-in vault WebDAV address with `If-Match`; divergence detection and re-merge by Kutup clients |
+| **K4 (later)** | Kutup Drive native app with system Files integration (double encryption on phones); `kutup` CLI SSH agent; the per-item path (§5) if sharing items between users becomes important |
+
+### Open questions for this direction
+
+1. **Where the vault password lives.** Pure KeePass: the user types it (one more password). Convenience: Kutup stores it wrapped by the account master key, so the website and `kutup sync` unlock with the Kutup sign-in; the KeePass apps still ask for it.
+2. **Key files and YubiKey challenge-response**: support them in the website and `kutup sync`, or password-only for vaults Kutup merges?
+3. **Is the single-layer WebDAV route acceptable** for phones until the Drive native app exists?
+4. **One vault file per user, or several** (personal, shared family vault in a shared folder)?
 
 ---
 
@@ -517,7 +601,7 @@ References need care across vaults: a reference whose target the reader cannot d
 
 ---
 
-## 5. Recommended design (proposal, not a spec)
+## 5. The per-item design (the later path; see "Direction" at the top for what comes first)
 
 ### 5.1 Principles
 
@@ -526,7 +610,9 @@ References need care across vaults: a reference whose target the reader cannot d
 - **The server is a dumb, conditional record store** with ACLs, quotas, jobs and a change feed. It never sees names, URLs, usernames or secrets.
 - **Offline is the normal case**, not a mode.
 
-### 5.1a Storage formats (decided 2026-10-11)
+### 5.1a Storage formats (decided 2026-10-11 for the per-item design)
+
+*Superseded as the first direction by "KDBX in Kutup Drive" (top of this document); this section applies to the per-item path if it is built later.*
 
 The question was whether Kutup Pass should store vaults as KDBX files, as an encrypted SQLite database, or in its own format.
 
@@ -780,6 +866,8 @@ Items, history revisions, attachments and links count against the account's sing
 
 | Phase | Contents | Unlocks |
 |---|---|---|
+*These phases are for the per-item path. The direction chosen first is the KDBX one, with phases K0–K4 near the top of this document.*
+
 Ordered by the priorities above: offline first and proven before any UI relies on it; the website is the product being built; sharing last.
 
 | Phase | Contents | Unlocks |
