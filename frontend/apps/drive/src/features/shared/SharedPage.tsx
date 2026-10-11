@@ -24,6 +24,8 @@ import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 import { AcceptInviteDialog } from './AcceptInviteDialog'
+import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
+import { IdentityWarningIcon } from '@kutup/drive-ui/IdentityWarning'
 
 /**
  * What other people shared with you: folders, here or from other Kutup
@@ -113,10 +115,12 @@ export function SharedPage() {
               const from = (
                 <>
                   <PersonLabel account={s.sharerAccount} format={(name) => t('shared.from', { account: name })} />
+                  <IdentityWarningIcon account={s.sharerAccount} claimed={s.sharerClaim} />
                   {s.sharerAccount !== s.ownerAccount ? (
                     <>
                       {' · '}
                       <PersonLabel account={s.ownerAccount} format={(name) => t('shared.ownedBy', { account: name })} />
+                      <IdentityWarningIcon account={s.ownerAccount} claimed={s.ownerClaim} />
                     </>
                   ) : null}
                 </>
@@ -133,7 +137,10 @@ export function SharedPage() {
             }
             const f = byId.get(item.id)
             return f?.ownerAccount ? (
-              <PersonLabel account={f.ownerAccount} format={(name) => t('shared.from', { account: name })} />
+              <>
+                <PersonLabel account={f.ownerAccount} format={(name) => t('shared.from', { account: name })} />
+                <IdentityWarningIcon account={f.ownerAccount} claimed={folderOwnerClaim(f)} />
+              </>
             ) : null
           }}
           onOpen={(item) => {

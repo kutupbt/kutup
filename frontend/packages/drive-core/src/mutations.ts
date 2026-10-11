@@ -18,6 +18,7 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
 import { atTopLevel, inFolder, nameHashIn, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
+import { confirmRecipient } from './identityPins'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -174,6 +175,8 @@ export interface ShareInput {
   uploadQuotaBytes: number | null
   /** People on other servers only view it (an album: they cannot add photos from there). */
   viewOnlyAcrossServers?: boolean
+  /** The user chose to share although the recipient's identity is in doubt (`IdentityNotConfirmed`). */
+  identityConfirmed?: boolean
 }
 
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
@@ -227,6 +230,7 @@ export function useShareFolder() {
       }
     }
     if (local) {
+      await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
       const namedShareEnvelope = await seal(local.driveHpkePublicKey, local.account, local.accountIncarnationId)
       await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.userId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
@@ -247,6 +251,7 @@ export function useShareFolder() {
       if (status === 404) throw new RecipientNotFound()
       throw error
     }
+    await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
     const namedShareEnvelope = await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId)
     const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
       recipientUsername: username,

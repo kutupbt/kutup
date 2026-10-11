@@ -113,6 +113,9 @@ pub struct MeResponse {
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
+    /// Whether the account signed its Drive key binding (it does so at
+    /// sign-in when not; docs/plans/drive-identity-pins.md).
+    pub has_drive_key_binding: bool,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.
@@ -145,6 +148,12 @@ pub struct UserLookupResponse {
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
+    /// The account authority, whose hash is the incarnation id.
+    pub account_authority_public_key: String,
+    /// The authority's signature over the Drive keys; absent for an account
+    /// that has not signed one yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive_key_binding: Option<String>,
 }
 
 /// Collection list/get row — mirrors `handlers.CollectionRow`.

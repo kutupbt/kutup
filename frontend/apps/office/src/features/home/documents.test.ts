@@ -11,6 +11,7 @@ function entry(name: string, updatedAt: string): DocumentEntry {
     kind: documentKindOf(name)!,
     owner: null,
     sharer: null,
+    sharerClaim: {},
     href: '',
   }
 }

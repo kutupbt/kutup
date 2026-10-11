@@ -32,6 +32,10 @@ pub enum ShareCmd {
         upload: bool,
         #[arg(long)]
         delete: bool,
+        /// Share although the recipient's identity is in doubt (changed, or
+        /// keys their account did not sign).
+        #[arg(long)]
+        share_anyway: bool,
     },
     /// Share a folder with a user on another Kutup server (user@server).
     Federated {
@@ -41,6 +45,9 @@ pub enum ShareCmd {
         upload: bool,
         #[arg(long)]
         delete: bool,
+        /// Share although the recipient's identity is in doubt.
+        #[arg(long)]
+        share_anyway: bool,
     },
     /// Create a public link for a folder.
     Public { collection_id: String },
@@ -93,13 +100,31 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
             email,
             upload,
             delete,
-        } => share_folder(profile, json, collection_id, email, *upload, *delete),
+            share_anyway,
+        } => share_folder(
+            profile,
+            json,
+            collection_id,
+            email,
+            *upload,
+            *delete,
+            *share_anyway,
+        ),
         ShareCmd::Federated {
             collection_id,
             target,
             upload,
             delete,
-        } => share_federated(profile, json, collection_id, target, *upload, *delete),
+            share_anyway,
+        } => share_federated(
+            profile,
+            json,
+            collection_id,
+            target,
+            *upload,
+            *delete,
+            *share_anyway,
+        ),
         ShareCmd::Public { collection_id } => share_public(profile, json, collection_id),
         ShareCmd::Files { share_id } => share_files(profile, json, share_id),
         ShareCmd::Download {
@@ -150,6 +175,7 @@ fn share_folder(
     email: &str,
     upload: bool,
     delete: bool,
+    share_anyway: bool,
 ) -> Result<()> {
     let ctx = require_session(profile)?;
     let collection_key = owned_collection_key(&ctx, collection_id)?;
@@ -158,6 +184,14 @@ fn share_folder(
         .client
         .get_user_by_email(email)
         .with_context(|| format!("look up user {email}"))?;
+    confirm_recipient(
+        &ctx,
+        profile,
+        &recipient.account,
+        &recipient.drive_hpke_public_key,
+        &recipient.account_incarnation_id,
+        share_anyway,
+    )?;
     let master_key = ctx.session.master_key_bytes()?;
     let master_key_array: &[u8; 32] = master_key
         .as_slice()
@@ -208,6 +242,33 @@ fn share_folder(
     Ok(())
 }
 
+/// Before sealing to `account`: their keys checked against their signed
+/// binding and the identity this account trusts (docs/plans/drive-identity-pins.md).
+/// A doubt stops the share unless `share_anyway`, and is always reported.
+fn confirm_recipient(
+    ctx: &Ctx,
+    profile: &str,
+    account: &str,
+    hpke: &str,
+    incarnation: &str,
+    share_anyway: bool,
+) -> Result<()> {
+    let me = crate::identity::Me::of(ctx, profile)?;
+    let claimed = crate::identity::Claimed {
+        hpke: Some(hpke),
+        incarnation: Some(incarnation),
+        ..Default::default()
+    };
+    let status = crate::identity::check(ctx, &me, account, &claimed)?;
+    if status.in_doubt() {
+        eprintln!("warning: {}", status.warning(account));
+        if !share_anyway {
+            bail!("not shared: pass --share-anyway to share with {account} all the same");
+        }
+    }
+    Ok(())
+}
+
 fn share_federated(
     profile: &str,
     json: bool,
@@ -215,6 +276,7 @@ fn share_federated(
     target: &str,
     upload: bool,
     delete: bool,
+    share_anyway: bool,
 ) -> Result<()> {
     let (username, server) = target
         .rsplit_once('@')
@@ -228,6 +290,14 @@ fn share_federated(
         .client
         .get_fed_pubkey(username, server)
         .context("fetch remote public key")?;
+    confirm_recipient(
+        &ctx,
+        profile,
+        &remote.account,
+        &remote.drive_hpke_public_key,
+        &remote.account_incarnation_id,
+        share_anyway,
+    )?;
     let collection = ctx
         .client
         .list_collections()?
@@ -571,6 +641,9 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
 #[derive(Serialize)]
 struct IncomingDisplay {
     id: String,
+    /// Who shared it, and whether their identity checks out.
+    owner: String,
+    identity: &'static str,
     #[serde(rename = "remoteDomain")]
     remote_domain: String,
     name: String,
@@ -614,11 +687,25 @@ fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
 fn incoming_list(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
     let shares = ctx.client.list_incoming_shares()?;
+    let me = crate::identity::Me::of(&ctx, profile)?;
 
     let out: Vec<IncomingDisplay> = shares
         .iter()
         .map(|s| IncomingDisplay {
             id: s.id.clone(),
+            owner: s.owner_account.clone(),
+            identity: crate::identity::check(
+                &ctx,
+                &me,
+                &s.owner_account,
+                &crate::identity::Claimed {
+                    signing: Some(&s.owner_signing_public_key),
+                    incarnation: Some(&s.owner_incarnation_id),
+                    ..Default::default()
+                },
+            )
+            .map(|status| status.label())
+            .unwrap_or("unknown"),
             remote_domain: s.remote_domain.clone(),
             name: decrypt_incoming_name(s, &ctx.session)
                 .unwrap_or_else(|_| "(undecryptable)".into()),
@@ -639,8 +726,8 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
     println!(
         "{}",
         crate::output::header(format!(
-            "{:<36}  {:<30}  {:<30}  PERMS",
-            "ID", "REMOTE", "NAME"
+            "{:<36}  {:<30}  {:<30}  {:<9}  PERMS",
+            "ID", "FROM", "NAME", "IDENTITY"
         ))
     );
     for d in &out {
@@ -655,9 +742,15 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
             perms = "read-only".into();
         }
         println!(
-            "{:<36}  {:<30}  {:<30}  {}",
-            d.id, d.remote_domain, d.name, perms
+            "{:<36}  {:<30}  {:<30}  {:<9}  {}",
+            d.id, d.owner, d.name, d.identity, perms
         );
+        if matches!(d.identity, "changed" | "invalid") {
+            eprintln!(
+                "warning: the identity of {} is in doubt: see 'kutup identity show {}'",
+                d.owner, d.owner
+            );
+        }
     }
     Ok(())
 }

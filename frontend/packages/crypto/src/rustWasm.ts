@@ -41,6 +41,30 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
+  signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  deriveSafetyNumber(
+    localAccount: string,
+    localAuthorityBase64: string,
+    peerAccount: string,
+    peerAuthorityBase64: string,
+  ): { fingerprint: string; qrPayload: string }
+  safetyQrMatches(
+    localAccount: string,
+    localAuthorityBase64: string,
+    peerAccount: string,
+    peerAuthorityBase64: string,
+    scanned: string,
+  ): boolean
+  verifyDriveKeyBinding(
+    account: string,
+    authorityPublicKeyBase64: string,
+    driveHpkePublicKeyBase64: string,
+    driveSigningPublicKeyBase64: string,
+    bindingBase64: string,
+  ): boolean
+  incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
+  sealIdentityPins(masterKeyBase64: string, owner: string, revision: number, pinsJson: string): string
+  openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealedBase64: string): string
   signContactSummary(masterKeyBase64: string, account: string, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
@@ -78,6 +102,19 @@ export interface CryptoWasmModule {
     message: Uint8Array,
     senderPublicKeyBase64?: string,
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
+  encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
+  encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): string
+  signMailDetached(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
+  signMailDetachedAsGroup(
+    masterKeyBase64: string,
+    loginEmail: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    shareBase64: string,
+    groupFingerprintHex: string,
+    content: Uint8Array,
+  ): string
   encryptMailMessageAsGroup(
     masterKeyBase64: string,
     loginEmail: string,

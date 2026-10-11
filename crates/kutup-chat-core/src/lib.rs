@@ -30,6 +30,7 @@ mod prekey_rotation;
 mod profile;
 mod sealed_sender;
 // The query side is called from the browser bindings (and tests) only.
+mod identity_sync;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 pub(crate) mod search;
 mod session;
@@ -105,6 +106,6 @@ pub use mls_policy::{
 };
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
-pub use transport::{ChatTransport, SendOutcome};
+pub use transport::{ChatTransport, IdentityPinsRecord, SendOutcome};
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm::WasmChatClient;

@@ -27,7 +27,7 @@ mod common;
 use common::*;
 
 fn account(user: &User) -> String {
-    format!("{}@{DOMAIN}", user.username)
+    user.account.clone()
 }
 
 fn file_share(owner: &User, file_id: &str, key: &[u8; 32], generation: u32, to: &User) -> String {

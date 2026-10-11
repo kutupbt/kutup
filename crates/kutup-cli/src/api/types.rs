@@ -58,6 +58,9 @@ pub struct RegisterRequest {
     pub argon_iterations: u32,
     pub argon_parallelism: u32,
     pub recovery_proof: String,
+    /// The account authority's signature over its Drive keys
+    /// (docs/plans/drive-identity-pins.md).
+    pub drive_key_binding: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -422,6 +425,13 @@ pub struct UserByEmail {
     pub account_incarnation_id: String,
     #[serde(default)]
     pub drive_signing_public_key: String,
+    /// The account authority and its signature over the Drive keys
+    /// (docs/plans/drive-identity-pins.md); the binding is absent for an
+    /// account that has not signed one yet.
+    #[serde(default)]
+    pub account_authority_public_key: String,
+    #[serde(default)]
+    pub drive_key_binding: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,6 +447,16 @@ pub struct FedPubKeyResponse {
     pub drive_signing_public_key: String,
     #[serde(default)]
     pub account_authority_public_key: String,
+    #[serde(default)]
+    pub drive_key_binding: Option<String>,
+}
+
+/// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPinsRecord {
+    pub revision: u64,
+    pub envelope: String,
 }
 
 #[cfg(test)]
