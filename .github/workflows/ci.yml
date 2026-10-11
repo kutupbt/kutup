@@ -160,9 +160,7 @@ jobs:
       - web
       - chat-backup-integration
     runs-on: ubuntu-24.04
-    # Chat recovery plus the Mail and Contacts browser lines on one stack;
-    # 30 minutes ran out on 2026-10-11 (run 38163154713).
-    timeout-minutes: 60
+    timeout-minutes: 30
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
@@ -172,11 +170,6 @@ jobs:
       # The batch registers more test accounts than the default ten an hour
       # from one address allows (spec 40's last test was refused since #60).
       RATE_LIMIT_REGISTER_PER_HOUR: "100"
-      # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
-      # and outside sending on for spec 58's pause notice; spec 59 runs
-      # after the backend restarts with it off.
-      ADMIN_ACCOUNT: "admin@kutup.dev:admin:Bootstrap*Temporary123"
-      MAIL_OUTSIDE_SENDING: "on"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443
@@ -248,12 +241,6 @@ jobs:
       - name: Run clean-browser recovery
         working-directory: tests/e2e
         run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts specs/36-chat-local-groups.spec.ts specs/38-chat-group-device-replaced.spec.ts specs/40-chat-open-failures.spec.ts specs/90-load-retries.spec.ts --project=chromium
-      - name: Run the Mail browser specs
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/54-mail-address-keys.spec.ts specs/57-mail.spec.ts specs/58-mail-sending-safety.spec.ts specs/59-mail-outside-off.spec.ts specs/60-mail-groups.spec.ts specs/80-mail-people.spec.ts specs/81-mail-list.spec.ts specs/82-mail-folders-labels.spec.ts specs/83-mail-filters.spec.ts specs/84-mail-block-allow.spec.ts specs/85-mail-settings-empty.spec.ts specs/86-mail-encrypt-sign.spec.ts specs/87-mail-identity.spec.ts specs/88-mail-auto-reply.spec.ts specs/89-mail-appearance.spec.ts specs/91-mail-pgp-settings.spec.ts specs/92-contact-keys.spec.ts specs/93-mail-list-filters.spec.ts specs/94-mail-message-tools.spec.ts specs/95-mail-link-confirm.spec.ts specs/96-mail-attachments.spec.ts specs/97-mail-paging.spec.ts --project=chromium
-      - name: Run the Contacts browser specs
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/55-contacts.spec.ts specs/56-contact-pickers.spec.ts specs/74-contact-shields.spec.ts --project=chromium
       - name: Collect sanitized backup diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single
@@ -268,6 +255,169 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
           path: tests/e2e/sanitized-results/**
+
+  mail-browser:
+    name: Mail browser specs
+    # The Mail and Contacts browser lines on their own stack, beside the
+    # Chat gate; like it, on master and on demand only.
+    if: github.event_name != 'pull_request'
+    needs:
+      - rust-workspace
+      - web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      POSTGRES_PASSWORD: mail-browser-ci-postgres
+      JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
+      APP_ENV: test
+      # The batch registers more test accounts than the default ten an hour
+      # from one address allows.
+      RATE_LIMIT_REGISTER_PER_HOUR: "100"
+      # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
+      # and outside sending on for spec 58's pause notice; spec 59 turns it
+      # off in Administration and back on (tests/e2e/README.md).
+      ADMIN_ACCOUNT: "admin@kutup.dev:admin:Bootstrap*Temporary123"
+      MAIL_OUTSIDE_SENDING: "on"
+      # One app per hostname; *.localhost resolves to this machine.
+      KUTUP_ACCOUNT_URL: https://account.localhost:38443
+      KUTUP_DRIVE_URL: https://drive.localhost:38443
+      KUTUP_CHAT_URL: https://chat.localhost:38443
+      KUTUP_OFFICE_URL: https://office.localhost:38443
+      KUTUP_EDITOR_URL: https://editor.localhost:38443
+      KUTUP_MAPS_URL: https://maps.localhost:38443
+      KUTUP_PHOTOS_URL: https://photos.localhost:38443
+      KUTUP_CONTACTS_URL: https://contacts.localhost:38443
+      KUTUP_MAIL_URL: https://mail.localhost:38443
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Generate ephemeral browser-test TLS certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout nginx/certs/privkey.pem \
+            -out nginx/certs/fullchain.pem \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,IP:127.0.0.1
+      # The image builds keep Cargo's registry and target directories in
+      # BuildKit cache mounts, which a fresh runner starts without. Carry
+      # them between runs so only changed crates compile. Never fatal: a
+      # cache problem costs time, not the gate.
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: image-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/kutup-chat-core/Cargo.lock', 'Dockerfile.server', 'frontend/Dockerfile') }}
+          restore-keys: |
+            image-build-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" },
+              "ci-docker-cache/browser-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-browser-cargo-registry" },
+              "ci-docker-cache/browser-git": { "target": "/usr/local/cargo/git", "id": "kutup-browser-cargo-git" },
+              "ci-docker-cache/browser-target": { "target": "/src/target", "id": "kutup-browser-root-target" },
+              "ci-docker-cache/browser-chat-target": { "target": "/src/crates/kutup-chat-core/target", "id": "kutup-browser-chat-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
+      - name: Start the single-server stack
+        run: docker compose up --detach --build --wait
+      - name: Wait for the browser application route
+        run: |
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            https://localhost:38443/api/auth/settings >/dev/null
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            --resolve account.localhost:38443:127.0.0.1 \
+            https://account.localhost:38443/register >/dev/null
+      - name: Run the Mail browser specs
+        working-directory: tests/e2e
+        run: npm exec -- playwright test specs/54-mail-address-keys.spec.ts specs/57-mail.spec.ts specs/58-mail-sending-safety.spec.ts specs/59-mail-outside-off.spec.ts specs/60-mail-groups.spec.ts specs/80-mail-people.spec.ts specs/81-mail-list.spec.ts specs/82-mail-folders-labels.spec.ts specs/83-mail-filters.spec.ts specs/84-mail-block-allow.spec.ts specs/85-mail-settings-empty.spec.ts specs/86-mail-encrypt-sign.spec.ts specs/87-mail-identity.spec.ts specs/88-mail-auto-reply.spec.ts specs/89-mail-appearance.spec.ts specs/91-mail-pgp-settings.spec.ts specs/92-contact-keys.spec.ts specs/93-mail-list-filters.spec.ts specs/94-mail-message-tools.spec.ts specs/95-mail-link-confirm.spec.ts specs/96-mail-attachments.spec.ts specs/97-mail-paging.spec.ts --project=chromium
+      - name: Run the Contacts browser specs
+        working-directory: tests/e2e
+        run: npm exec -- playwright test specs/55-contacts.spec.ts specs/56-contact-pickers.spec.ts specs/74-contact-shields.spec.ts --project=chromium
+      - name: Collect sanitized diagnostics
+        if: failure()
+        run: scripts/collect-chat-e2e-diagnostics.sh single
+      - name: Stop the single-server stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload Mail browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mail-browser-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**
+
+  mail-gate:
+    name: Mail gate (Stalwart, SMTP, GnuPG)
+    # A real Stalwart in front of the backend (scripts/test-mail-inbound.sh):
+    # inbound, end-to-end and outside sending, and PGP/MIME GnuPG opens.
+    # On master and on demand only, like the browser gates.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install protobuf compiler and GnuPG
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler gnupg
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mail-gate
+      # Stalwart's set-up reads the stack's certificate.
+      - name: Generate ephemeral TLS certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout nginx/certs/privkey.pem \
+            -out nginx/certs/fullchain.pem \
+            -subj /CN=mail.kutup.test \
+            -addext subjectAltName=DNS:mail.kutup.test,DNS:localhost,IP:127.0.0.1
+      # The backend image's Cargo caches, carried between runs as the
+      # browser gates do. Never fatal.
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: mail-gate-image-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Dockerfile.server') }}
+          restore-keys: |
+            mail-gate-image-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
+      - name: Run the mail gate
+        run: scripts/test-mail-inbound.sh
 
   chat-security-e2e:
     name: Two-server browser security

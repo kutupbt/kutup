@@ -166,10 +166,12 @@ browser matrix. It validates local links, referenced script/workflow/spec paths,
 changed-file whitespace, and Compose parsing. A mixed documentation-and-code
 change still runs the complete `CI` workflow as well as documentation checks.
 
-Pull requests run the unit, build and backup-lifecycle jobs. The two browser
-gates (clean-browser recovery and the two-server security gate) build the
-whole stack, so they run on pushes to `master` and on demand (Actions → CI →
-Run workflow, on any branch): run them locally before opening a pull request,
+Pull requests run the unit, build and backup-lifecycle jobs. The stack gates
+build the whole stack, so they run on pushes to `master` and on demand
+(Actions → CI → Run workflow, on any branch): clean-browser recovery, the
+two-server security gate, the Mail browser specs (the Mail and Contacts
+Playwright lines) and the Mail gate (`scripts/test-mail-inbound.sh`, a real
+Stalwart with SMTP and GnuPG). Run them locally before opening a pull request,
 with the commands above. They carry the image builds' Cargo caches between
 runs. Dependabot pull requests also skip the backup-lifecycle job.
 
