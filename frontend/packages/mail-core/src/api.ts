@@ -509,6 +509,12 @@ export interface MailSettings {
   autoDeleteDays: 0 | 30
   /** All mail leaves out Spam and Trash. */
   almostAllMail: boolean
+  /** The reading pane beside the list, or below it (Proton's ViewLayout). */
+  viewLayout: 'column' | 'row'
+  /** List rows: Proton's Density. */
+  density: 'comfortable' | 'compact'
+  /** How the composer opens (Proton's ComposerMode). */
+  composerMode: 'popup' | 'maximized'
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const

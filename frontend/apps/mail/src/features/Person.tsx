@@ -19,7 +19,7 @@ import { openComposer } from './composerState'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
 
-export function PersonAvatar({ mailbox, contact, size = 32 }: { mailbox: Mailbox | null | undefined; contact?: Contact; size?: 32 | 48 }) {
+export function PersonAvatar({ mailbox, contact, size = 32 }: { mailbox: Mailbox | null | undefined; contact?: Contact; size?: 24 | 32 | 48 }) {
   const photo = contact?.draft.photo.match(/^data:(image\/[a-z+.-]+);base64,(.+)$/)
   return <Avatar name={nameFor(mailbox, contact) || '?'} image={photo?.[2]} contentType={photo?.[1]} size={size} />
 }

@@ -69,7 +69,8 @@
     "dragging_other": "{{count}} messages",
     "messages": "Messages",
     "viaGroup": "Through {{address}}",
-    "sentBy": "by {{name}}"
+    "sentBy": "by {{name}}",
+    "resize": "Resize the list"
   },
   "read": {
     "pick": "Choose a message to read it.",
@@ -461,7 +462,8 @@
     "general": "General",
     "senders": "Block and allow",
     "identity": "Identity",
-    "autoReply": "Auto-reply"
+    "autoReply": "Auto-reply",
+    "appearance": "Appearance"
   },
   "emptyFolder": {
     "action": "Delete all",
@@ -573,5 +575,20 @@
     "daysRequired": "Choose at least one day of the week.",
     "saved": "Auto-reply updated",
     "disabled": "Auto-reply disabled"
+  },
+  "appearance": {
+    "title": "Appearance",
+    "layout": "Inbox layout",
+    "layoutHint": "Where a message opens: beside the list, or below it.",
+    "column": "Column",
+    "row": "Row",
+    "composer": "Composer",
+    "composerHint": "How a new message opens: as a window over your mail, or full screen.",
+    "popup": "Normal",
+    "maximized": "Maximized",
+    "density": "Density",
+    "densityHint": "How much of the list fits on screen.",
+    "comfortable": "Comfortable",
+    "compact": "Compact"
   }
 }

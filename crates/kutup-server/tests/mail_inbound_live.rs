@@ -2601,10 +2601,15 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup" })
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "density": "tiny" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
@@ -2628,12 +2633,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30 }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized" }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized" })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -2921,7 +2926,12 @@ fn auto_reply_answers_once_per_sender() {
     let answers = |user: &User, name: &str| -> Vec<Value> {
         folder(&c, &base, &user.token, name)
             .into_iter()
-            .filter(|m| m["subject"].as_str().unwrap_or_default().starts_with("Auto: "))
+            .filter(|m| {
+                m["subject"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("Auto: ")
+            })
             .collect()
     };
     let wait_answers = |user: &User, name: &str, count: usize| -> Vec<Value> {
@@ -2931,7 +2941,10 @@ fn auto_reply_answers_once_per_sender() {
             if found.len() >= count {
                 return found;
             }
-            assert!(Instant::now() < deadline, "{count} answers never reached {name}");
+            assert!(
+                Instant::now() < deadline,
+                "{count} answers never reached {name}"
+            );
             std::thread::sleep(Duration::from_millis(500));
         }
     };
@@ -2943,7 +2956,10 @@ fn auto_reply_answers_once_per_sender() {
     assert_eq!(reply["protection"], "zero_access");
     assert_eq!(reply["from"]["address"], alice_address.address.as_str());
     let content = open_row(&c, &base, &bob, &bob_address, &reply);
-    assert!(content.contains("Auto-Submitted: auto-replied"), "{content}");
+    assert!(
+        content.contains("Auto-Submitted: auto-replied"),
+        "{content}"
+    );
     // Alice keeps it in Sent, in the same thread as Bob's message.
     let kept = wait_answers(&alice, "sent", 1).remove(0);
     let original = wait_for(&c, &base, &alice, &first);

@@ -69,7 +69,8 @@
     "dragging_other": "{{count}} ileti",
     "messages": "İletiler",
     "viaGroup": "{{address}} üzerinden",
-    "sentBy": "{{name}} gönderdi"
+    "sentBy": "{{name}} gönderdi",
+    "resize": "Listeyi yeniden boyutlandır"
   },
   "read": {
     "pick": "Okumak için bir posta seçin.",
@@ -461,7 +462,8 @@
     "general": "Genel",
     "senders": "Engelle ve izin ver",
     "identity": "Kimlik",
-    "autoReply": "Otomatik yanıt"
+    "autoReply": "Otomatik yanıt",
+    "appearance": "Görünüm"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -573,5 +575,20 @@
     "daysRequired": "Haftanın en az bir gününü seçin.",
     "saved": "Otomatik yanıt güncellendi",
     "disabled": "Otomatik yanıt kapatıldı"
+  },
+  "appearance": {
+    "title": "Görünüm",
+    "layout": "Gelen kutusu düzeni",
+    "layoutHint": "İletinin açıldığı yer: listenin yanında ya da altında.",
+    "column": "Sütun",
+    "row": "Satır",
+    "composer": "Yazma penceresi",
+    "composerHint": "Yeni iletinin nasıl açılacağı: postalarınızın üzerinde bir pencere olarak ya da tam ekran.",
+    "popup": "Normal",
+    "maximized": "Tam ekran",
+    "density": "Yoğunluk",
+    "densityHint": "Listenin ne kadarının ekrana sığacağı.",
+    "comfortable": "Rahat",
+    "compact": "Sıkışık"
   }
 }

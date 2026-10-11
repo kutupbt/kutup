@@ -10,6 +10,7 @@ import { GroupsPage } from './features/GroupsPage'
 import { MailboxPage } from './features/MailboxPage'
 import { FiltersSettingsPage } from './features/FiltersSettingsPage'
 import { GeneralSettingsPage } from './features/GeneralSettingsPage'
+import { AppearanceSettingsPage } from './features/AppearanceSettingsPage'
 import { AutoReplySettingsPage } from './features/AutoReplySettingsPage'
 import { IdentitySettingsPage } from './features/IdentitySettingsPage'
 import { PlacesSettingsPage } from './features/PlacesSettingsPage'
@@ -44,6 +45,7 @@ export function App() {
               <Route path="/settings" element={<SettingsLayout />}>
                 <Route index element={<Navigate to="/settings/general" replace />} />
                 <Route path="general" element={<GeneralSettingsPage />} />
+                <Route path="appearance" element={<AppearanceSettingsPage />} />
                 <Route path="identity" element={<IdentitySettingsPage />} />
                 <Route path="auto-reply" element={<AutoReplySettingsPage />} />
                 <Route path="folders" element={<PlacesSettingsPage />} />

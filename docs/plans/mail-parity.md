@@ -24,7 +24,7 @@ reference only where Proton has nothing.
 | OpenPGP with outside users: WKD, Autocrypt, trusting a sender's key | `TrustPublicKeyModal.tsx` | ✅ C3 |
 | Threads in the reading pane | `MessageView.tsx` | ✅ |
 | Conversation or message mode in the list | `ViewModeToggle.tsx` | ❌ (the list shows messages) |
-| Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ❌ |
+| Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ✅ Settings → Appearance: column or row, comfortable or compact, composer normal or maximized; the list resizes (drag or arrow keys), remembered per browser |
 | Quick filters (unread, has attachments), sort (date, size) | `FilterList.tsx` | ❌ |
 | Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | 🔶 "load more" only |
 | Selection pane for several messages | `SelectionPane.tsx` | ❌ |
@@ -126,7 +126,7 @@ reference only where Proton has nothing.
 | Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ❌ |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
-| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Folders and labels, Filters, Block and allow; keys in Account |
+| Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |
 
 ## Order
 

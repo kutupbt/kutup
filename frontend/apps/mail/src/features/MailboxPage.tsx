@@ -1,5 +1,5 @@
 import { Archive, Ban, Check, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -33,6 +33,8 @@ import { useMailboxScope } from './mailboxScope'
 import { MAIL_DRAG_TYPE, movesFor, useMailActions, type Movable, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
 import { Padlock } from './Padlock'
+import { PaneSplitter } from './PaneSplitter'
+import { usePaneSize } from './paneSize'
 import { PersonAvatar } from './Person'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
@@ -116,6 +118,12 @@ export function MailboxPage() {
   const emptyFolder = useEmptyFolder()
   const settings = useMailSettings()
   const updateSettings = useUpdateMailSettings()
+  // Appearance (Proton's Layouts): the reading pane beside or below the list, and how tight its rows are.
+  const layout = settings.data?.viewLayout ?? 'column'
+  const compact = settings.data?.density === 'compact'
+  // The row layout has room for one line per message, as Proton's.
+  const oneLine = layout === 'row'
+  const [paneSize, setPaneSize] = usePaneSize(layout)
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
   const unwanted = !placeKind && (fixed === 'trash' || fixed === 'spam') ? fixed : null
@@ -495,7 +503,8 @@ export function MailboxPage() {
   const listPane = (
     <section
       aria-label={title}
-      className={cn('flex min-h-0 flex-1 flex-col border-border md:w-[26rem] md:flex-none md:shrink-0 md:border-r', threadId && 'hidden md:flex')}
+      style={{ '--pane': `${paneSize}px` } as CSSProperties}
+      className={cn('flex min-h-0 flex-1 flex-col md:flex-none md:shrink-0', layout === 'column' ? 'md:w-[var(--pane)]' : 'md:h-[var(--pane)]', threadId && 'hidden md:flex')}
     >
       <div className="flex min-h-12 items-center gap-1 border-b border-border px-2">
         <Checkbox
@@ -595,6 +604,35 @@ export function MailboxPage() {
                 const isChosen = selected.has(message.id)
                 const inMenu = menuFor.some((m) => m.id === message.id)
                 const person = avatarOf(message)
+                const sender = (size: string) => (
+                  <span className={cn(size, 'truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>{correspondent(message, t, contacts)}</span>
+                )
+                const meta = (
+                  <>
+                    {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
+                    <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
+                      {formatFileDate(message.receivedAt, i18n.language)}
+                    </span>
+                  </>
+                )
+                const subjectLine = (
+                  <>
+                    <Padlock message={message} className="[&_svg]:size-3.5" />
+                    <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>{message.subject || t('list.noSubject')}</span>
+                    {message.groupAddress && !group ? (
+                      <span className="shrink-0 truncate rounded bg-muted px-1.5 text-[11px] text-muted-foreground" title={t('list.viaGroup', { address: message.groupAddress })}>
+                        {message.groupAddress.split('@')[0]}
+                      </span>
+                    ) : null}
+                    {message.sentBy ? <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t('list.sentBy', { name: message.sentBy })}</span> : null}
+                    {placeKind !== 'folder' && (folder === 'all' || folder === 'starred') ? (
+                      <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
+                        {message.folder === 'custom' ? (places.data?.folders.get(message.customFolder ?? '')?.name ?? '…') : t(`folders.${message.folder}`)}
+                      </span>
+                    ) : null}
+                    <LabelChips ids={message.labels} places={places.data} />
+                  </>
+                )
                 return (
                   <li
                     key={message.id}
@@ -615,11 +653,11 @@ export function MailboxPage() {
                       here === index && 'shadow-[inset_3px_0_0_var(--primary)]',
                     )}
                   >
-                    <div className="flex items-start gap-2 px-2 py-2">
+                    <div className={cn('flex gap-2 px-2', compact ? 'py-0.5' : 'py-2', oneLine ? 'items-center' : 'items-start')}>
                       {/* The avatar turns into the checkbox on hover, or once anything is chosen (Proton's list). */}
-                      <span className="relative m-1 flex size-8 shrink-0 items-center justify-center">
+                      <span className={cn('relative m-1 flex shrink-0 items-center justify-center', compact ? 'size-6' : 'size-8')}>
                         <span className={cn('transition-opacity', chosen.length > 0 ? 'opacity-0' : 'group-hover:opacity-0')}>
-                          <PersonAvatar mailbox={person} contact={contacts.find(person?.address)} size={32} />
+                          <PersonAvatar mailbox={person} contact={contacts.find(person?.address)} size={compact ? 24 : 32} />
                         </span>
                         <Checkbox
                           className={cn('absolute', chosen.length > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}
@@ -643,35 +681,21 @@ export function MailboxPage() {
                         className="min-w-0 flex-1 py-1"
                         aria-current={open ? 'true' : undefined}
                       >
-                        <span className="flex items-center gap-2">
-                          <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen ? 'font-semibold' : 'text-muted-foreground')}>
-                            {correspondent(message, t, contacts)}
+                        {oneLine ? (
+                          <span className="flex items-center gap-3">
+                            {sender('w-48 shrink-0')}
+                            <span className="flex min-w-0 flex-1 items-center gap-2">{subjectLine}</span>
+                            {meta}
                           </span>
-                          {message.attachmentCount > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
-                          <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
-                            {formatFileDate(message.receivedAt, i18n.language)}
-                          </span>
-                        </span>
-                        <span className="mt-0.5 flex items-center gap-2">
-                          <Padlock message={message} className="[&_svg]:size-3.5" />
-                          <span className={cn('min-w-0 flex-1 truncate text-sm', !message.seen && 'font-medium')}>
-                            {message.subject || t('list.noSubject')}
-                          </span>
-                          {message.groupAddress && !group ? (
-                            <span className="shrink-0 truncate rounded bg-muted px-1.5 text-[11px] text-muted-foreground" title={t('list.viaGroup', { address: message.groupAddress })}>
-                              {message.groupAddress.split('@')[0]}
+                        ) : (
+                          <>
+                            <span className="flex items-center gap-2">
+                              {sender('min-w-0 flex-1')}
+                              {meta}
                             </span>
-                          ) : null}
-                          {message.sentBy ? (
-                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">{t('list.sentBy', { name: message.sentBy })}</span>
-                          ) : null}
-                          {placeKind !== 'folder' && (folder === 'all' || folder === 'starred') ? (
-                            <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
-                              {message.folder === 'custom' ? (places.data?.folders.get(message.customFolder ?? '')?.name ?? '…') : t(`folders.${message.folder}`)}
-                            </span>
-                          ) : null}
-                          <LabelChips ids={message.labels} places={places.data} />
-                        </span>
+                            <span className="mt-0.5 flex items-center gap-2">{subjectLine}</span>
+                          </>
+                        )}
                       </Link>
                       <button
                         type="button"
@@ -702,8 +726,9 @@ export function MailboxPage() {
   )
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className={cn('flex h-full min-h-0', layout === 'row' && 'md:flex-col')}>
       {listPane}
+      <PaneSplitter layout={layout} size={paneSize} onResize={setPaneSize} />
       <div className={cn('min-h-0 min-w-0 flex-1 overflow-hidden', !threadId && 'hidden md:block')}>
         {threadId && account.data ? (
           <ThreadView account={account.data} folder={folder} base={base} threadId={threadId} onClose={() => void navigate(`${base}${search}`)} />
