@@ -30,7 +30,8 @@
     "storage": "Storage",
     "keys": "Encryption keys",
     "mailSending": "Mail sending",
-    "mailGroups": "Mail groups"
+    "mailGroups": "Mail groups",
+    "feedback": "Feedback"
   },
   "auth": {
     "fields": {
@@ -835,6 +836,51 @@
       "addOwner": "Add owner",
       "created": "Group created.",
       "createFailed": "The group could not be created."
+    },
+    "feedback": {
+      "title": "Feedback",
+      "description": "Bugs, ideas and messages people sent from the apps. Forward one to the public tracker after checking it for anything private: who sent it is never included.",
+      "open": "Open",
+      "resolved": "Resolved",
+      "emptyTitle": "No feedback waiting",
+      "emptyDescription": "What people send from the apps' sidebar appears here.",
+      "noneResolvedTitle": "Nothing resolved yet",
+      "noneResolvedDescription": "Feedback you mark done, dismiss or forward is listed here.",
+      "from": "From",
+      "deletedAccount": "A deleted account",
+      "issue": "Issue",
+      "openOnGitHub": "Open on GitHub",
+      "dismiss": "Dismiss",
+      "done": "Mark done",
+      "delete": "Delete",
+      "deleteTitle": "Delete this feedback?",
+      "deleteDescription": "It is removed for good. An issue made from it on GitHub stays there.",
+      "deleted": "Feedback deleted.",
+      "actionFailed": "That did not work. Try again.",
+      "marked": {
+        "done": "Marked done.",
+        "dismissed": "Dismissed.",
+        "forwarded": "Marked as forwarded."
+      },
+      "resolution": {
+        "done": "Done",
+        "dismissed": "Dismissed",
+        "forwarded": "Forwarded"
+      },
+      "forwardTitle": "Forwarded to GitHub?",
+      "forwardDescription": "A prefilled issue opened on {{repository}} in a new tab. Check it for anything private before you submit it, then paste its address here to link the two.",
+      "issueUrl": "Issue address (optional)",
+      "issueUrlInvalid": "An issue address looks like {{prefix}}123.",
+      "markForwarded": "Mark forwarded",
+      "prepareTitle": "Forward to GitHub",
+      "prepareDescription": "Check what the issue will say. It opens on GitHub with this title and text, and you submit it there.",
+      "publicWarningTitle": "This will be public",
+      "publicWarning": "This creates an issue on {{repository}}. If that repository is public, anyone can read it, including any personal details in this feedback: names, email addresses, file names or anything quoted from a message. Remove them first.",
+      "issueTitle": "Issue title",
+      "issueBody": "Issue text",
+      "issueBodyHint": "Who sent the feedback is not included. Edit out anything else personal.",
+      "checkedPersonal": "I've removed personal details, and this can be public",
+      "openIssue": "Open the issue on GitHub"
     }
   }
 }

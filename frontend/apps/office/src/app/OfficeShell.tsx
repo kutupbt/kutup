@@ -1,3 +1,5 @@
+import { FeedbackButton } from '@kutup/ui/components/feedback'
+import { feedbackServices } from '@kutup/session/feedback'
 import { BookUser, Files, FileSpreadsheet, FileText, FileType, HardDrive, Images, Mail as MailIcon, Map as MapIcon, MessagesSquare, PenTool, Presentation, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -43,7 +45,12 @@ export function OfficeShell() {
           <SidebarNavLink to="/whiteboards" icon={<PenTool />} label={t('nav.whiteboards')} />
         </>
       }
-      sidebarFooter={<StorageMeter />}
+      sidebarFooter={
+        <div className="space-y-2">
+          <FeedbackButton app="office" services={feedbackServices} />
+          <StorageMeter />
+        </div>
+      }
       headerEnd={
         <UserMenu
           name={session.username ?? session.email}
