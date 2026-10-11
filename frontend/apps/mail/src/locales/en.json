@@ -522,7 +522,9 @@
     "attachPublicKeyHint": "Each new message carries your public key as a file, so people can check your signatures and write to you encrypted. You can remove it from a message.",
     "pgpScheme": "Default PGP scheme",
     "pgpSchemeHint": "How mail to outside PGP users is encrypted or signed. Inline PGP sends plain text only, each attachment on its own.",
-    "inline": "Inline"
+    "inline": "Inline",
+    "confirmLink": "Confirm link URLs",
+    "confirmLinkHint": "When you click a link in a message that leads outside Kutup, see where it really goes before it opens. Links in Spam always ask."
   },
   "senders": {
     "title": "Block and allow",
@@ -648,5 +650,18 @@
     },
     "reset": "Reset",
     "empty": "No messages match these filters."
+  },
+  "link": {
+    "title": "Link confirmation",
+    "body": "You are about to open another browser tab and visit:",
+    "suspiciousTitle": "Warning: suspected fake website",
+    "suspiciousBody": "This message was filed as spam. The link may lead to a website trying to steal your information, such as passwords and card details.",
+    "punycode": "This link may be a homograph attack: its address uses characters that look like others. Check it is the site you mean to visit, or don't open it.",
+    "understand": "I understand the risk",
+    "dontAsk": "Don't ask again",
+    "confirm": "Confirm",
+    "confirmOpen": "Confirm opening {{url}}",
+    "copy": "Copy the link",
+    "copied": "Link copied"
   }
 }

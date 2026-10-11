@@ -608,6 +608,8 @@ export interface MailSettings {
   composerMode: 'popup' | 'maximized'
   /** One row per conversation, or per message (Proton's ViewMode). */
   viewMode: 'conversation' | 'message'
+  /** A link that leads outside Kutup asks first (Proton's ConfirmLink). */
+  confirmLink: boolean
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
