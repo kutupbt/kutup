@@ -31,7 +31,7 @@ export function SelectionPane({ name, label, conversations, checked, total, q, o
   return (
     <section aria-label={t('selectionPane.label')} className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
       <Mail className="size-10" aria-hidden />
-      {checked === 0 && name ? <h2 className="max-w-full truncate text-lg font-semibold">{name}</h2> : null}
+      {checked === 0 && name ? <p className="max-w-full truncate text-lg font-semibold">{name}</p> : null}
       {checked || (total ?? 0) > 0 ? (
         <p className="text-sm">
           <Trans i18nKey={`selectionPane.${key}`} count={count} values={{ count, name }} components={bold} />
