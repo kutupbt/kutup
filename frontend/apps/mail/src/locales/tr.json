@@ -722,5 +722,16 @@
         "messages_other": "<strong>{{count}} ileti</strong> bu etiketle işaretli"
       }
     }
+  },
+  "attachments": {
+    "count_one": "{{count}} dosya ekli",
+    "count_other": "{{count}} dosya ekli",
+    "downloadAll": "Tüm ekleri indir",
+    "download": "İndir",
+    "downloadNamed": "{{name}} dosyasını indir",
+    "preview": "Önizle",
+    "position": "{{index}} / {{count}}",
+    "previous": "Önceki dosya",
+    "next": "Sonraki dosya"
   }
 }

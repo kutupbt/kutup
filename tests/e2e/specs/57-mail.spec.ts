@@ -55,7 +55,7 @@ test('two Kutup users exchange end-to-end encrypted mail, with replies, filing a
   await row.click()
   await expect(bobMail.getByRole('img', { name: 'End-to-end encrypted, from a verified sender' }).first()).toBeVisible({ timeout: 60_000 })
   await expect(bobMail.frameLocator('iframe[title="Message"]').getByText('Çarşamba saat üçte görüşelim.')).toBeVisible()
-  await expect(bobMail.getByRole('button', { name: /gündem\.txt/ })).toBeVisible()
+  await expect(bobMail.getByRole('button', { name: 'Download gündem.txt' })).toBeVisible()
 
   // Bob replies; the reply joins the thread on Alice's side.
   await bobMail.getByRole('button', { name: 'Reply', exact: true }).click()

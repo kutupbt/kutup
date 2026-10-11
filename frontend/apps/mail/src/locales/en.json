@@ -722,5 +722,16 @@
         "messages_other": "You have <strong>{{count}} messages</strong> tagged with this label"
       }
     }
+  },
+  "attachments": {
+    "count_one": "{{count}} file attached",
+    "count_other": "{{count}} files attached",
+    "downloadAll": "Download all attachments",
+    "download": "Download",
+    "downloadNamed": "Download {{name}}",
+    "preview": "Preview",
+    "position": "{{index}} of {{count}}",
+    "previous": "Previous file",
+    "next": "Next file"
   }
 }

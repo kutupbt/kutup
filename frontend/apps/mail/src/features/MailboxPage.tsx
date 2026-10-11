@@ -257,7 +257,9 @@ export function MailboxPage() {
   const keys = useRef<(event: KeyboardEvent) => void>(() => undefined)
   keys.current = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement | null
-    if (event.altKey) return
+    // Handled already: a dialog's Escape closes it, and React may have
+    // removed the dialog before this listener runs.
+    if (event.altKey || event.defaultPrevented) return
     if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
     if (document.querySelector('[role="dialog"], [role="menu"]')) return
     const meta = event.metaKey || event.ctrlKey
