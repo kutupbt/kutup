@@ -1,7 +1,7 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bold, Italic, List, ListOrdered, Loader2, Maximize2, Minimize2, Paperclip, Quote, Send, Trash2, X } from 'lucide-react'
+import { Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -15,6 +15,7 @@ import {
   UnknownRecipient,
   useMailAccount,
   useMailRefresh,
+  useMailSettings,
   usePinnedKeys,
   useSendingStatus,
   type Draft,
@@ -194,6 +195,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const refresh = useMailRefresh()
   const sendingStatus = useSendingStatus()
   const pinned = usePinnedKeys()
+  const mailSettings = useMailSettings()
   // Shared mailboxes this account may write as (docs/plans/mail-groups.md).
   const groups = useMyGroups()
   const sendAsChoices = (groups.data ?? []).filter((group) => group.kind === 'shared' && group.myCanSendAs)
@@ -213,6 +215,15 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [maximised, setMaximised] = useState(false)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const [sending, setSending] = useState(false)
+  // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
+  const [encrypt, setEncrypt] = useState(true)
+  // Sign starts on for Kutup recipients; for outside ones from "Sign outside
+  // mail" or a contact's Sign flag, as Proton's "Sign external messages".
+  // Pressing the button decides it for this message.
+  const [signChoice, setSignChoice] = useState<boolean | undefined>()
+  const signOutside = mailSettings.data?.signOutside ?? true
+  const sign = signChoice ?? (signOutside || outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.sign))
+  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && m.address.toLowerCase().endsWith(`@${account.domain}`))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)
   const saving = useRef<Promise<void>>(Promise.resolve())
@@ -391,7 +402,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined)
+      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign })
       const full = results.filter((r) => r.status === 'full').map((r) => r.address)
       const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
       if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
@@ -524,7 +535,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               )}
             </div>
             <div className="relative">
-              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} autoFocus={target.kind === 'new' && !start.draft.to.length} />
+              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} encrypt={encrypt} autoFocus={target.kind === 'new' && !start.draft.to.length} />
               {!showCopies ? (
                 <button type="button" className="absolute right-3 top-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowCopies(true)}>
                   {t('compose.ccBcc')}
@@ -533,8 +544,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             </div>
             {showCopies ? (
               <>
-                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} pinned={pinned} />
-                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} pinned={pinned} />
+                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
+                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
               </>
             ) : null}
             <Input
@@ -579,6 +590,11 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               ))}
             </ul>
           ) : null}
+          {!encrypt ? (
+            <p role="status" className="shrink-0 border-t border-border bg-status-warn/20 px-3 py-2 text-xs">
+              {kutupRecipients ? t('compose.notEncryptedKutup') : t('compose.notEncrypted')}
+            </p>
+          ) : null}
           <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
             <Button onClick={() => void send()} disabled={sending}>
               {sending ? <Loader2 className="animate-spin" /> : <Send />}
@@ -588,6 +604,18 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             <Tooltip label={t('compose.attach')}>
               <Button variant="ghost" size="icon" aria-label={t('compose.attach')} onClick={() => files.current?.click()}>
                 <Paperclip />
+              </Button>
+            </Tooltip>
+            <Tooltip label={encrypt ? t('compose.encryptOn') : t('compose.encryptOff')}>
+              <Button variant={encrypt ? 'ghost' : 'outline'} size="sm" aria-pressed={encrypt} onClick={() => setEncrypt((on) => !on)}>
+                {encrypt ? <LockKeyhole className="text-primary" /> : <LockKeyholeOpen className="text-status-warn" />}
+                {t('compose.encrypt')}
+              </Button>
+            </Tooltip>
+            <Tooltip label={sign ? t('compose.signOn') : t('compose.signOff')}>
+              <Button variant={sign ? 'ghost' : 'outline'} size="sm" aria-pressed={sign} onClick={() => setSignChoice(!sign)}>
+                <Signature className={sign ? 'text-primary' : 'text-muted-foreground'} />
+                {t('compose.sign')}
               </Button>
             </Tooltip>
             <span className="flex-1" />

@@ -105,8 +105,15 @@ Turkish. Screens follow Proton's contact widget and modals:
 - import `.vcf` (one or many cards, with a preview and duplicate warning) and
   export all or selected as `.vcf`;
 - "Add to contacts" from Chat, Drive sharing and Mail, always by the user's
-  action. Mail saves in place (`contacts-core/ui/SaveContactDialog`): a new
-  contact, or the address added to an existing one.
+  action. Mail and Chat save in place (`contacts-core/ui/SaveContactDialog`):
+  a new contact, or the address added to an existing one. Chat offers it
+  where it stays until acted on: a banner above a one-to-one conversation
+  with someone not in the address book (not on a message request until it is
+  accepted; dismissed per device), "Save to contacts" in the details panel
+  (or "In your contacts" with a link to the contact), and beside each group
+  member not yet saved. Signal Desktop only says "in your system contacts",
+  since its contacts live on the phone; Kutup's address book is its own, so
+  Chat can add to it. Drive sharing still offers it with a toast.
 
 vCard text is read and written with `ical.js`, as Proton does, in the
 browser only.

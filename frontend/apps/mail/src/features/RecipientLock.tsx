@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, LockKeyhole, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Loader2, LockKeyhole, LockKeyholeOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { PinnedKeys } from '@kutup/mail-core/api'
 import { useProtection } from '@kutup/mail-core/protection'
@@ -9,7 +9,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
  * (docs/plans/mail.md, C3), as Proton shows it while writing. Nothing for
  * mail that goes in clear.
  */
-export function RecipientLock({ address, domain, pinned }: { address: string; domain: string; pinned: PinnedKeys | undefined }) {
+export function RecipientLock({ address, domain, pinned, encrypt = true }: { address: string; domain: string; pinned: PinnedKeys | undefined; encrypt?: boolean }) {
   const { t } = useTranslation()
   const protection = useProtection(address, domain, pinned?.(address), !!pinned)
   if (!pinned || protection.isPending) {
@@ -23,6 +23,16 @@ export function RecipientLock({ address, domain, pinned }: { address: string; do
     )
   }
   const value = protection.data
+  // Encrypt off for this message: whoever could have had end-to-end mail now
+  // gets it readable on the way (docs/plans/mail-encrypt-sign.md).
+  if (!encrypt && value.kind !== 'none' && value.kind !== 'pinnedUnusable') {
+    const label = value.kind === 'kutup' ? t('compose.lock.readableKutup') : t('compose.lock.readableOutside')
+    return (
+      <Tooltip label={label}>
+        <LockKeyholeOpen className="size-3 text-status-warn" role="img" aria-label={label} />
+      </Tooltip>
+    )
+  }
   const [Icon, label, tone] =
     value.kind === 'kutup'
       ? [LockKeyhole, t('compose.endToEnd'), 'text-primary']

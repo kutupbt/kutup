@@ -27,6 +27,7 @@ export function RecipientField({
   onChange,
   domain,
   pinned,
+  encrypt = true,
   autoFocus,
 }: {
   label: string
@@ -36,6 +37,8 @@ export function RecipientField({
   domain: string
   /** Keys pinned in Contacts (undefined while they load). */
   pinned: PinnedKeys | undefined
+  /** Encrypt is on for this message (off: the locks say so). */
+  encrypt?: boolean
   autoFocus?: boolean
 }) {
   const { t } = useTranslation()
@@ -65,7 +68,7 @@ export function RecipientField({
               valid ? 'border-border bg-muted/60' : 'border-destructive text-destructive',
             )}
           >
-            {valid ? <RecipientLock address={mailbox.address} domain={domain} pinned={pinned} /> : null}
+            {valid ? <RecipientLock address={mailbox.address} domain={domain} pinned={pinned} encrypt={encrypt} /> : null}
             <span className="truncate">{mailbox.name || mailbox.address}</span>
             {!valid ? <span className="sr-only">{t('compose.invalidAddress')}</span> : null}
             <button

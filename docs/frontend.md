@@ -21,8 +21,8 @@ Authenticated desktop and tablet layouts use one persistent application shell:
 
 Phones use the same routes, service ownership, and data state with a
 CSS-responsive presentation. The primary phone navigation contains exactly
-Files, Messages, and Account. Native iOS and Android applications are separate
-work in progress and are not described as shipped by this web architecture.
+Files, Messages, and Account. Native iOS and Android applications are not started;
+each product will be its own app ([`mobile-build.md`](mobile-build.md)).
 
 ## Theme contract
 
