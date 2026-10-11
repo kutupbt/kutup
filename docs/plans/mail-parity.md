@@ -38,7 +38,7 @@ reference only where Proton has nothing.
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
-| Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ❌ |
+| Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; ❌ auto-unsubscribe on moving to Spam |
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ❌ |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
 | One-time code detection with Copy | `ItemOneTimeCode.tsx` | ❌ |

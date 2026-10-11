@@ -663,5 +663,20 @@
     "confirmOpen": "{{url}} adresini açmayı onayla",
     "copy": "Bağlantıyı kopyala",
     "copied": "Bağlantı kopyalandı"
+  },
+  "unsubscribe": {
+    "fromList": "Bu ileti bir e-posta listesinden.",
+    "action": "Abonelikten çık",
+    "unsubscribed": "Abonelikten çıkıldı",
+    "title": "Abonelikten çık",
+    "oneClick": "Bu listeden çıkma isteği bültenin göndericisine iletilir ve kendiliğinden işlenir. İsteği Kutup gönderir; liste tarayıcınızı ya da adresinizi görmez.",
+    "http": "Bu listeden çıkmak için, bültenin göndericisinin nasıl yapılacağını anlattığı şu sayfaya gideceksiniz:",
+    "mailto": "Bu listeden çıkmak için {{address}} adresinden, bültenin göndericisinin istediği şu bilgilerle bir e-posta gönderilecek:",
+    "recipient": "Alıcı",
+    "subject": "Konu",
+    "body": "İçerik",
+    "requestSent": "Abonelikten çıkma isteği gönderildi.",
+    "done": "E-posta listesinden çıkıldı.",
+    "failed": "Abonelikten çıkma isteği iletilemedi."
   }
 }

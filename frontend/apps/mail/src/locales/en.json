@@ -663,5 +663,20 @@
     "confirmOpen": "Confirm opening {{url}}",
     "copy": "Copy the link",
     "copied": "Link copied"
+  },
+  "unsubscribe": {
+    "fromList": "This message is from a mailing list.",
+    "action": "Unsubscribe",
+    "unsubscribed": "Unsubscribed",
+    "title": "Unsubscribe",
+    "oneClick": "A request to unsubscribe from this mailing list will be sent to the sender of the newsletter and processed automatically. Kutup sends it, so the list does not see your browser or address.",
+    "http": "To unsubscribe from this mailing list, you will be taken to the following page, where the sender of the newsletter explains how:",
+    "mailto": "To unsubscribe from this mailing list, an email will be sent from {{address}} with the following details, as the sender of the newsletter asks:",
+    "recipient": "Recipient",
+    "subject": "Subject",
+    "body": "Body",
+    "requestSent": "Unsubscribe request sent.",
+    "done": "Mailing list unsubscribed.",
+    "failed": "The unsubscribe request did not go through."
   }
 }

@@ -24,6 +24,7 @@ import { Padlock } from './Padlock'
 import { Person, PersonAvatar } from './Person'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
+import { UnsubscribeBanner } from './Unsubscribe'
 
 function who(mailbox: Mailbox | null | undefined): string {
   return mailbox ? mailbox.name || mailbox.address : ''
@@ -341,6 +342,7 @@ export function MessageView({
               <Alert variant="warn">{t('read.signatureFailed')}</Alert>
             ) : null}
             {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}
+            {draft ? null : <UnsubscribeBanner account={account} message={message} raw={opened.data.raw} group={group} />}
             {draft ? null : (
               <NotInContacts
                 people={(message.direction === 'inbound' ? (from ? [from] : []) : [...(parsed?.to ?? message.to), ...(parsed?.cc ?? message.cc)]).filter(
