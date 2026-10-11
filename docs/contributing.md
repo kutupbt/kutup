@@ -284,6 +284,8 @@ kutup/
 │   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
 │   ├── kutup-federation-proto/ # Shared authenticated federation types
+│   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults and their three-way merge
+│   │   └── vendor/keepass/  # Patched copy of the `keepass` crate (see its KUTUP.md)
 │   ├── kutup-chat-core/     # Standalone libsignal/OpenMLS engine; native + WASM
 │   └── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
 ├── frontend/

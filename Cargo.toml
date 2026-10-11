@@ -7,6 +7,7 @@
 #                          and (for the collab envelope) the server.
 #   crates/kutup-cli     — the `kutup` CLI         (binary `kutup`)
 #   crates/kutup-server  — the backend API binary  (binary `kutup-server`; Axum + sqlx)
+#   crates/kutup-pass    — Kutup Pass core: KeePass (KDBX) vaults and their three-way merge
 [workspace]
 resolver = "2"
 members = ["crates/*"]
@@ -14,7 +15,10 @@ members = ["crates/*"]
 # tree (git, ~large) and needs protoc at build time, so it must not tax the
 # app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
 # and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
-exclude = ["crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz"]
+# crates/kutup-pass/vendor/keepass is the patched KDBX library behind
+# kutup-pass (its KUTUP.md); it is upstream's code, so it stays out of the
+# workspace's lints.
+exclude = ["crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz", "crates/kutup-pass/vendor/keepass"]
 
 [workspace.package]
 edition = "2021"

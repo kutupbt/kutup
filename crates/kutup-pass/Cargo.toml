@@ -1,0 +1,18 @@
+[package]
+name = "kutup-pass"
+description = "Kutup Pass core: KeePass (KDBX) vaults and their three-way merge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The patched copy of the `keepass` crate (vendor/keepass/KUTUP.md).
+keepass = { path = "vendor/keepass", features = ["save_kdbx4"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+uuid.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest = "1"
