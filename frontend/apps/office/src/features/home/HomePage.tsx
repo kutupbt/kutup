@@ -1,9 +1,11 @@
 import { ArrowDownAZ, Clock, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { DOCUMENT_KINDS, type DocumentKind } from '@kutup/drive-core/documents'
+import { personOf, usePeople } from '@kutup/drive-core/people'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { appUrl } from '@kutup/session/apps'
@@ -65,11 +67,16 @@ function Preview({ file, kind }: { file: DriveFile; kind: DocumentKind }) {
 
 function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: string; cardRef: (el: HTMLLIElement | null) => void }) {
   const { t } = useTranslation()
+  const people = usePeople()
   const name = entry.file.name ?? t('home.unnamed')
+  // Someone else's: who shared it (by their name once they gave it), and
+  // whose it is when an editor passed it on.
+  const sharer = entry.sharer ? personOf(people.data, entry.sharer).name : null
+  const owner = entry.owner ? personOf(people.data, entry.owner).name : null
   return (
     <li ref={cardRef}>
-      <a
-        href={entry.href}
+      <Link
+        to={entry.href}
         data-testid="office-document"
         className="group flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card transition-colors hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -82,12 +89,15 @@ function DocumentCard({ entry, when, cardRef }: { entry: DocumentEntry; when: st
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <KindIcon kind={entry.kind} className="size-4" />
-            <span className="truncate">
-              {entry.owner ? t('home.changedBy', { when, owner: entry.owner }) : t('home.changed', { when })}
+            <span
+              className="truncate"
+              title={sharer && owner && entry.sharer !== entry.owner ? t('home.sharedByOwner', { sharer, owner }) : (entry.sharer ?? undefined)}
+            >
+              {sharer ? t('home.sharedBy', { when, sharer }) : t('home.changed', { when })}
             </span>
           </span>
         </span>
-      </a>
+      </Link>
     </li>
   )
 }
@@ -129,6 +139,7 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
   const { t, i18n } = useTranslation()
   const { root, documents, loading, error, incomplete } = useDocuments()
   const createDocument = useCreateDocument()
+  const navigate = useNavigate()
   const [creating, setCreating] = useState<DocumentKind | null>(null)
   const [order, setOrder] = useState<DocumentOrder>('recent')
   const [query, setQuery] = useState('')
@@ -143,7 +154,7 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
     if (!root) return
     setCreating(type)
     try {
-      window.location.assign(await createDocument(root, type, t(`home.untitled.${type}`)))
+      void navigate(await createDocument(root, type, t(`home.untitled.${type}`)))
     } catch {
       toast.error(t('home.createFailed'))
       setCreating(null)

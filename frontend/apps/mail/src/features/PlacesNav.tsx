@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, Folder, FolderPlus, MoreHorizontal, Pencil, Plus, Settings2, Tag, Trash2 } from 'lucide-react'
 import { useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useParams } from 'react-router-dom'
 import type { FolderCount } from '@kutup/mail-core/api'
 import { MAX_FOLDER_DEPTH, usePlaces, useUpdateFolder, type MailFolder, type MailLabel } from '@kutup/mail-core/places'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
@@ -132,6 +132,8 @@ export function PlacesNav({ counts }: { counts: FolderCount[] | undefined }) {
   const update = useUpdateFolder()
   const actions = useMailActions()
   const unread = (key: string) => counts?.find((c) => c.folder === key)?.unread ?? 0
+  // Mail dragged from a shared mailbox stays there.
+  const { groupId } = useParams()
   if (!places.data) return null
 
   const folderRows = (folders: MailFolder[]): ReactNode[] =>
@@ -159,7 +161,9 @@ export function PlacesNav({ counts }: { counts: FolderCount[] | undefined }) {
             </button>
           ) : undefined
         }
-        onDrop={(rows) => actions.move(rows, { folder: folder.id, name: folder.name })}
+        onDrop={(rows) => {
+          if (!groupId) actions.move(rows, { folder: folder.id, name: folder.name })
+        }}
         menu={
           <ItemMenu label={t('places.folderOptions', { name: folder.name })}>
             <DropdownMenuItem onSelect={() => openPlacesDialog({ kind: 'edit', target: { kind: 'folder', folder } })}>
@@ -189,7 +193,9 @@ export function PlacesNav({ counts }: { counts: FolderCount[] | undefined }) {
       icon={<Tag style={{ color: label.color }} />}
       label={label.name}
       unread={unread(`label:${label.id}`)}
-      onDrop={(rows) => actions.mark(rows, { addLabels: [label.id] })}
+      onDrop={(rows) => {
+        if (!groupId) actions.mark(rows, { addLabels: [label.id] })
+      }}
       menu={
         <ItemMenu label={t('places.labelOptions', { name: label.name })}>
           <DropdownMenuItem onSelect={() => openPlacesDialog({ kind: 'edit', target: { kind: 'label', label } })}>

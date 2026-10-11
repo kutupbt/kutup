@@ -80,7 +80,7 @@
       (function () {
         'use strict'
 
-        // Warm-up (?warm=1): Drive mounts this page hidden while it downloads
+        // Warm-up (?warm=1): Office mounts this page hidden while it downloads
         // and decrypts a document, so the converter and the editor's code
         // (several MB, cached for good) arrive at the same time instead of
         // after it. The page only fetches them into the cache and stays idle
@@ -112,10 +112,10 @@
         }
 
         // This page runs on its own origin (editor.<domain>), apart from
-        // Drive, so the OnlyOffice code never shares an origin with the
+        // Office, so the OnlyOffice code never shares an origin with the
         // session, the keys or the API. Two kinds of messages reach it:
         //  - from x2t.html, the converter frame it embeds (same origin);
-        //  - from the Drive page embedding it (PARENT_ORIGIN).
+        //  - from the Office page embedding it (PARENT_ORIGIN).
         // Anything else is dropped.
         var SELF_ORIGIN = window.location.origin
         // The embedding page names itself in `?parent=`. The claim is only
@@ -817,11 +817,11 @@
           return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
         }
 
-        // OnlyOffice's theme for Drive's: its classic light one, or its dark one.
+        // OnlyOffice's theme for Office's: its classic light one, or its dark one.
         var ooThemeFor = function (theme) {
           return theme === 'dark' ? 'theme-dark' : 'theme-classic-light'
         }
-        // Drive's latest theme, applied once the editor is up if it changed
+        // Office's latest theme, applied once the editor is up if it changed
         // while OnlyOffice was loading.
         var driveTheme = null
         var applyTheme = function () {
@@ -846,14 +846,14 @@
           return -1
         }
 
-        // The document cannot open: Drive shows why instead of an empty frame.
+        // The document cannot open: Office shows why instead of an empty frame.
         var fail = function (reason, detail) {
           setStatus('failed: ' + reason + (detail ? ' (' + detail + ')' : ''))
           if (PARENT_ORIGIN) send(window.parent, { type: 'failed', reason: reason, detail: detail || null })
         }
 
         var pendingInitPayload = null
-        // Drive's 'init' arrived (it stops the repeated 'ready').
+        // Office's 'init' arrived (it stops the repeated 'ready').
         var initReceived = false
         var maybeStart = function () {
           if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
@@ -991,7 +991,7 @@
                         // chat moved to permissions per OO deprecation warning.
                         comments: false,
                         hideRightMenu: true,
-                        // Drive's light or dark theme (then kept in step
+                        // Office's light or dark theme (then kept in step
                         // by 'oo-theme'); the page stays white either way.
                         uiTheme: ooThemeFor(driveTheme || payload.theme),
                       },
@@ -1241,7 +1241,7 @@
               }
               return
             case 'oo-theme':
-              // Drive switched between light and dark: OnlyOffice's own theme
+              // Office switched between light and dark: OnlyOffice's own theme
               // switcher (private API; re-check when bumping the build).
               driveTheme = msg.theme === 'dark' ? 'dark' : 'light'
               applyTheme()
@@ -1355,7 +1355,7 @@
         // The document as OnlyOffice lays it out: print it (the CryptPad build
         // hands print output to window.parent.APP.printPdf — this page — only
         // while that hook exists), turn the print buffer into a PDF with x2t,
-        // and hand the PDF to Drive, which draws page one. The hook is
+        // and hand the PDF to Office, which draws page one. The hook is
         // installed for one request at a time, so the editor's own Print
         // behaves as always.
         var FONTS_BASE = new URL('dist/v9/fonts/', window.location.href)
@@ -1628,8 +1628,8 @@
         }, true)
 
         if (PARENT_ORIGIN) {
-          // Announce until Drive answers with 'init'. One message can go
-          // unheard: Drive re-subscribes its listener as its props change and
+          // Announce until Office answers with 'init'. One message can go
+          // unheard: Office re-subscribes its listener as its props change and
           // may remount this frame, and a lost 'ready' left the editor on its
           // loading skeleton for good (seen on reloads).
           var announceReady = function () {
@@ -1646,7 +1646,7 @@
             announceReady()
           }, 250)
         } else {
-          setStatus('not embedded by Kutup Drive')
+          setStatus('not embedded by Kutup Office')
         }
       })()
     </script>

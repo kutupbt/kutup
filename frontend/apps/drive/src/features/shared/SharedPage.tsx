@@ -8,15 +8,15 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { downloadFile, downloadFolderZip } from '../drive/downloads'
+import { downloadFile, downloadFolderZip } from '@kutup/editors/files/downloads'
 import { useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
 import { useRenameFile } from '@kutup/drive-core/mutations'
 import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
-import { NameDialog } from '../dialogs/NameDialog'
+import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { useFolders } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
 import { useLeaveRemoteShare } from '@kutup/drive-core/mutations'
-import { folderPath, openFile } from '../drive/paths'
+import { folderPath, openFile } from '@kutup/editors/paths'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { PersonLabel } from '../people/PersonLabel'
 import { Explorer } from '../explorer/Explorer'
@@ -109,7 +109,18 @@ export function SharedPage() {
             if (item.type === 'file') {
               const s = filesById.get(item.id)
               if (!s) return null
-              const from = <PersonLabel account={s.ownerAccount} format={(name) => t('shared.from', { account: name })} />
+              // Who shared it; and whose it is, when an editor passed it on.
+              const from = (
+                <>
+                  <PersonLabel account={s.sharerAccount} format={(name) => t('shared.from', { account: name })} />
+                  {s.sharerAccount !== s.ownerAccount ? (
+                    <>
+                      {' · '}
+                      <PersonLabel account={s.ownerAccount} format={(name) => t('shared.ownedBy', { account: name })} />
+                    </>
+                  ) : null}
+                </>
+              )
               return s.state === 'gone' ? (
                 <>{from} · {t('shared.gone')}</>
               ) : s.state === 'waiting' ? (

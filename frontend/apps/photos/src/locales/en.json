@@ -292,7 +292,7 @@
     "shared": "Shared with {{account}}",
     "failed": "This could not be done. Try again.",
     "links": "Public links",
-    "linksHint": "Anyone with a link sees the album's photos, without an account. The key is in the link, never on the server.",
+    "linksHint": "Anyone with a link sees the album's photos, without an account, and your address as the one who shared it. The key is in the link, never on the server.",
     "createLink": "Create link",
     "copyLink": "Copy link",
     "linkCopied": "Link copied",
@@ -316,6 +316,7 @@
       "missingKey": "The link is incomplete: its key is missing. Ask for the whole link.",
       "notFound": "The link does not exist, or the album was deleted or the link removed.",
       "expired": "The link has expired.",
+      "removed": "The server's administrators removed this link.",
       "badKey": "The link's key does not open this album. Ask for the whole link.",
       "notAlbum": "This link is not to an album.",
       "other": "Something went wrong. Try again."

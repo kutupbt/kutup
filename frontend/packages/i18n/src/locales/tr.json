@@ -75,7 +75,7 @@
     "onlyOwnerRemoves": "Kişileri yalnızca sahibi değiştirebilir veya kaldırabilir.",
     "settingFailed": "Ayar kaydedilemedi.",
     "linksTitle": "Herkese açık bağlantılar",
-    "linksHint": "Bağlantıya sahip herkes bu dosyayı hesap olmadan açıp indirebilir. Anahtar bağlantının kendisindedir; sunucu onu asla görmez.",
+    "linksHint": "Bağlantıya sahip herkes bu dosyayı hesap olmadan açıp indirebilir ve paylaşan olarak adresinizi görür. Anahtar bağlantının kendisindedir; sunucu onu asla görmez.",
     "link": "Herkese açık bağlantı",
     "linkCreated": "{{date}} oluşturuldu",
     "copy": "Kopyala",
@@ -207,5 +207,88 @@
     "save": "Kaydet",
     "saved": "{{address}} kişilerinize kaydedildi.",
     "failed": "Kişi kaydedilemedi."
+  },
+  "mailGroups": {
+    "title": "Gruplar",
+    "loading": "Grup yükleniyor…",
+    "pageDescription": "Üyesi olduğunuz gruplar. Dağıtım listelerinin e-postaları kendi gelen kutunuza gelir; paylaşılan posta kutusu onun yanında açılır ve üyeleri birlikte okur, birlikte yanıtlar.",
+    "emptyTitle": "Henüz grup yok",
+    "emptyDescription": "Bir yönetici sizi dağıtım listelerine ve paylaşılan posta kutularına ekler.",
+    "kind": {
+      "list": "Dağıtım listesi",
+      "shared": "Paylaşılan posta kutusu"
+    },
+    "goesToAdministrators": "Bu rol adresinin henüz üyesi yok; e-postaları tüm yöneticilere gider.",
+    "toAdministrators": "Tüm yöneticilere gider",
+    "displayName": "Ad",
+    "postPolicy": "Kimler yazabilir",
+    "systemPolicy": "Rol adresleri herkesten e-posta alır.",
+    "policy": {
+      "anyone": "Herkes, Kutup dışından da",
+      "local": "Bu sunucudaki Kutup kullanıcıları",
+      "members": "Üyeleri",
+      "managers": "Sahipleri ve yöneticileri"
+    },
+    "description": "Açıklama",
+    "members": "Üyeler",
+    "membersCount_one": "{{count}} üye",
+    "membersCount_other": "{{count}} üye",
+    "roleOf": "{{address}} rolü",
+    "role": {
+      "owner": "Sahip",
+      "manager": "Yönetici",
+      "member": "Üye"
+    },
+    "canSendAs": "Onun adına gönderebilir",
+    "remove": "{{address}} kaldır",
+    "addPlaceholder": "ad@ornek.org",
+    "add": "Üye ekle",
+    "sharedKeysHint": "Kaydetmek, posta kutusunun anahtarını yeni üyelerle paylaşır; biri ayrıldığında da yeni bir anahtar oluşturur, böylece ayrılan yeni e-postaları okuyamaz.",
+    "withoutHistory": "Bu posta kutusunun anahtarının bir kopyası sizde yok; yeni üyeler yeni bir anahtar alır ve yalnızca bundan sonraki e-postaları görür. Devam etmek için yeniden kaydedin.",
+    "saveWithoutHistory": "Eski e-postalar olmadan kaydet",
+    "save": "Kaydet",
+    "saved": "Grup kaydedildi.",
+    "saveFailed": "Grup kaydedilemedi.",
+    "noAccount": "{{address}} bu sunucuda bir Kutup hesabı değil ya da henüz oturum açmadı.",
+    "manage": "Yönet",
+    "viewMembers": "Üyeler",
+    "openMailbox": "Aç",
+    "sharedMailboxes": "Paylaşılan posta kutuları",
+    "foldersOf": "{{name}} klasörleri",
+    "deleted": "Grup silindi."
+  },
+  "nameDialog": {
+    "label": "Ad",
+    "required": "Bir ad girin.",
+    "tooLong": "En fazla {{max}} karakter kullanın.",
+    "slash": "Adlarda / ya da \\ bulunamaz.",
+    "taken": "Burada bu adda bir şey zaten var.",
+    "failed": "Ad kaydedilemedi."
+  },
+  "publicNotice": {
+    "sharedBy": "{{owner}} tarafından herkese açık paylaşıldı.",
+    "unchecked": "Kutup, bağlantıyla paylaşılanları göremez ve denetleyemez. Paylaşılan bir dosya istedi diye asla parola veya ödeme bilgisi girmeyin."
+  },
+  "reportLink": {
+    "button": "Bildir",
+    "title": "Bu bağlantıyı bildir",
+    "description": "İnsanları kandıran, zararlı yazılım yayan ya da yasaya aykırı bir bağlantıyı bu sunucunun yöneticilerine bildirin. Hesap gerekmez ve sizinle ilgili hiçbir şey saklanmaz.",
+    "reason": "Sorun ne?",
+    "choose": "Bir neden seçin",
+    "reasons": {
+      "phishing": "Oltalama ya da dolandırıcılık (parola, ödeme istiyor)",
+      "malware": "Zararlı yazılım ya da zararlı bir dosya",
+      "illegal": "Yasa dışı içerik",
+      "abuse": "Taciz ya da kötüye kullanım",
+      "other": "Başka bir şey"
+    },
+    "details": "Ayrıntılar",
+    "detailsHint": "İsteğe bağlı. Yöneticiler neye bakmalı?",
+    "shareLink": "Yöneticilerin bu bağlantıyı açmasına izin ver",
+    "shareLinkHint": "Bağlantıyla paylaşılan dosyalar uçtan uca şifrelidir: sunucu onları göremez. Bu, yöneticilerin bakabilmesi için bağlantının tamamını, anahtarıyla birlikte gönderir. Bildiriminizle ilgilendiklerinde silinir.",
+    "send": "Bildirimi gönder",
+    "sentTitle": "Bildirim gönderildi",
+    "sent": "Teşekkürler. Yöneticiler inceleyecek.",
+    "failed": "Bildirim gönderilemedi. Biraz sonra yeniden deneyin."
   }
 }

@@ -36,14 +36,16 @@ const placeKey = (place: Place) => `${place.folder}:${place.customFolder ?? ''}`
  * folder. A move can be undone from its toast (Proton's "Undo"): each
  * message goes back to the place it came from.
  */
-export function useMailActions() {
+export function useMailActions(group?: string) {
   const { t } = useTranslation()
   const update = useUpdateMessages()
+  // A shared mailbox's messages are filed in it (mail groups).
+  const inMailbox = group ? { group } : {}
 
   const failed = (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain')))
 
   async function moveEach(groups: Map<string, { place: Place; ids: string[] }>) {
-    await Promise.all([...groups.values()].map(({ place, ids }) => update.mutateAsync({ ids, ...place })))
+    await Promise.all([...groups.values()].map(({ place, ids }) => update.mutateAsync({ ids, ...place, ...inMailbox })))
   }
 
   function move(messages: Movable[], destination: Destination, after?: () => void) {
@@ -89,7 +91,7 @@ export function useMailActions() {
   function mark(messages: Pick<MailMessage, 'id'>[], change: Omit<MessageChange, 'ids' | 'folder' | 'customFolder'>, after?: () => void) {
     if (messages.length === 0) return
     // mutateAsync: callers such as a picker may close before this settles.
-    update.mutateAsync({ ids: messages.map((m) => m.id), ...change }).then(() => after?.(), failed)
+    update.mutateAsync({ ids: messages.map((m) => m.id), ...change, ...inMailbox }).then(() => after?.(), failed)
   }
 
   return { move, mark, pending: update.isPending }

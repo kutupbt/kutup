@@ -184,6 +184,15 @@ pub async fn create_user(
             "this username is reserved for the server",
         ));
     }
+    if crate::mail::groups::is_group_name(
+        &state.pool,
+        &req.username,
+        &state.config.chat_server_name,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("this username is taken"));
+    }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
         req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
@@ -315,6 +324,16 @@ pub async fn update_user(
             .map_err(|_| AppError::internal("internal error"))?; // A disabled account keeps no live sign-in anywhere.
         if !a {
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
+            // Their public links are down with them (link_reports::ensure_link_up):
+            // reports on those links are answered.
+            if let Ok(admin_uuid) = Uuid::parse_str(&admin.user_id) {
+                crate::handlers::link_reports::resolve_reports_of_owner(
+                    &state.pool,
+                    target,
+                    admin_uuid,
+                )
+                .await?;
+            }
         }
     }
     if let Some(a) = req.is_admin {

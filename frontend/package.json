@@ -49,6 +49,10 @@
       "esbuild": "^0.25.10",
       "@tiptap/extension-bubble-menu": "3.31.3",
       "@tiptap/extension-floating-menu": "3.31.3"
+    },
+    "patchedDependencies": {
+      "@radix-ui/react-dismissable-layer@1.1.19": "patches/@radix-ui__react-dismissable-layer@1.1.19.patch",
+      "@radix-ui/react-dismissable-layer@1.1.20": "patches/@radix-ui__react-dismissable-layer@1.1.20.patch"
     }
   }
 }

@@ -596,7 +596,7 @@ fn reconcile_sums(user: &str) -> String {
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
     COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
-    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user}), 0)
+    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user} AND key_packet IS NULL), 0)
    + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes"#
     )
 }
@@ -701,6 +701,11 @@ pub async fn uploads_sweep_once(
     }
     if let Err(error) = sweep_chat_backup_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat backup orphan sweep failed");
+    }
+    // Distribution-list copies nobody holds any more, before the orphan
+    // sweep, so their groups are refunded.
+    if let Err(error) = crate::mail::groups::release_unreferenced(pool, storage).await {
+        tracing::warn!(error = %error, "mail group release failed");
     }
     if let Err(error) = sweep_mail_orphans(pool, storage).await {
         tracing::warn!(error = %error, "mail orphan sweep failed");
@@ -862,7 +867,9 @@ async fn sweep_mail_orphans(pool: &PgPool, storage: &StorageService) -> anyhow::
             let alive: std::collections::HashSet<String> = sqlx::query_scalar(
                 "SELECT object_key FROM mail_messages WHERE object_key = ANY($1)
                  UNION ALL
-                 SELECT object_key FROM mail_draft_attachments WHERE object_key = ANY($1)",
+                 SELECT object_key FROM mail_draft_attachments WHERE object_key = ANY($1)
+                 UNION ALL
+                 SELECT object_key FROM mail_group_objects WHERE object_key = ANY($1)",
             )
             .bind(&candidates)
             .fetch_all(pool)

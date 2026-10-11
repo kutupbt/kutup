@@ -374,6 +374,16 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - Use semantic theme roles and the responsive ownership boundaries documented
   in [`frontend.md`](frontend.md). A viewport change must not remount services
   or trigger a mutation.
+- Dependency fixes that cannot wait for upstream live in `frontend/patches/`
+  (`pnpm patch`, listed under `pnpm.patchedDependencies`). Each patch is a
+  small, commented change with a test that fails without it. Today there is
+  one: Radix `react-dismissable-layer` (1.1.19 and 1.1.20) decides which layer
+  owns Escape from the live layer stack. Unpatched, an Escape pressed just after
+  a menu opens inside a dialog closes the dialog
+  (`packages/ui/src/components/dialog.test.tsx`). When a Radix upgrade brings
+  a new version of that package, carry the patch over or drop it if upstream
+  fixed it; `pnpm install` fails while a listed version is no longer in the
+  lockfile.
 
 ---
 

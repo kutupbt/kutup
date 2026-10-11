@@ -11,6 +11,7 @@ import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
+import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { formatDuration, formatTaken } from '../library/format'
 import { loadPublicAlbum, PublicAlbumError, publicThumbnail, readPublicOriginal, type PublicPhoto } from './publicAlbum'
 
@@ -193,6 +194,7 @@ export function PublicAlbumPage() {
           <ThemeToggle onChrome={false} />
         </div>
       </header>
+      {album.data ? <PublicNotice owner={album.data.owner} token={token} /> : null}
       <main className="mx-auto max-w-6xl px-2 py-6 md:px-8">
         {album.isPending ? <LoadingPanel label={t('public.loading')} /> : null}
         {failure ? (

@@ -75,7 +75,7 @@
     "onlyOwnerRemoves": "Only the owner can change or remove people.",
     "settingFailed": "The setting could not be saved.",
     "linksTitle": "Public links",
-    "linksHint": "Anyone with a link can open and download this file, without an account. The key is in the link itself; the server never sees it.",
+    "linksHint": "Anyone with a link can open and download this file, without an account, and sees your address as the one who shared it. The key is in the link itself; the server never sees it.",
     "link": "Public link",
     "linkCreated": "Created {{date}}",
     "copy": "Copy",
@@ -207,5 +207,88 @@
     "save": "Save",
     "saved": "{{address}} saved to your contacts.",
     "failed": "The contact could not be saved."
+  },
+  "mailGroups": {
+    "title": "Groups",
+    "loading": "Loading the group…",
+    "pageDescription": "The groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens beside it, and its members read and answer it together.",
+    "emptyTitle": "No groups yet",
+    "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes.",
+    "kind": {
+      "list": "Distribution list",
+      "shared": "Shared mailbox"
+    },
+    "goesToAdministrators": "This role address has no members yet, so its mail goes to every administrator.",
+    "toAdministrators": "Goes to all administrators",
+    "displayName": "Name",
+    "postPolicy": "Who may write to it",
+    "systemPolicy": "Role addresses take mail from anyone.",
+    "policy": {
+      "anyone": "Anyone, outside Kutup too",
+      "local": "Kutup users of this server",
+      "members": "Its members",
+      "managers": "Its owners and managers"
+    },
+    "description": "Description",
+    "members": "Members",
+    "membersCount_one": "{{count}} member",
+    "membersCount_other": "{{count}} members",
+    "roleOf": "Role of {{address}}",
+    "role": {
+      "owner": "Owner",
+      "manager": "Manager",
+      "member": "Member"
+    },
+    "canSendAs": "May send as it",
+    "remove": "Remove {{address}}",
+    "addPlaceholder": "name@example.org",
+    "add": "Add member",
+    "sharedKeysHint": "Saving shares the mailbox's key with new members, and gives it a new key when someone leaves, so they cannot read new mail.",
+    "withoutHistory": "You hold no copy of this mailbox's key, so new members get a new key and see only mail from now on. Save again to go ahead.",
+    "saveWithoutHistory": "Save without older mail",
+    "save": "Save",
+    "saved": "Group saved.",
+    "saveFailed": "The group could not be saved.",
+    "noAccount": "{{address}} is not a Kutup account on this server, or has not signed in yet.",
+    "manage": "Manage",
+    "viewMembers": "Members",
+    "openMailbox": "Open",
+    "sharedMailboxes": "Shared mailboxes",
+    "foldersOf": "Folders of {{name}}",
+    "deleted": "Group deleted."
+  },
+  "nameDialog": {
+    "label": "Name",
+    "required": "Enter a name.",
+    "tooLong": "Use at most {{max}} characters.",
+    "slash": "Names cannot contain / or \\.",
+    "taken": "Something here already has that name.",
+    "failed": "The name could not be saved."
+  },
+  "publicNotice": {
+    "sharedBy": "Shared publicly by {{owner}}.",
+    "unchecked": "Kutup can't see or check what people share by link. Never type a password or payment details because a shared file asks you to."
+  },
+  "reportLink": {
+    "button": "Report",
+    "title": "Report this link",
+    "description": "Tell this server's administrators about a link that tricks people, spreads malware or breaks the law. You don't need an account, and nothing about you is kept.",
+    "reason": "What is wrong with it?",
+    "choose": "Choose a reason",
+    "reasons": {
+      "phishing": "Phishing or fraud (asks for passwords, payments)",
+      "malware": "Malware or a harmful file",
+      "illegal": "Illegal content",
+      "abuse": "Harassment or abuse",
+      "other": "Something else"
+    },
+    "details": "Details",
+    "detailsHint": "Optional. What should the administrators look for?",
+    "shareLink": "Let the administrators open this link",
+    "shareLinkHint": "Files shared by link are end-to-end encrypted: the server can't see them. This sends the whole link, its key included, so the administrators can look. It is deleted once they have dealt with your report.",
+    "send": "Send report",
+    "sentTitle": "Report sent",
+    "sent": "Thank you. The administrators will look at it.",
+    "failed": "The report could not be sent. Try again in a while."
   }
 }

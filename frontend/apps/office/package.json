@@ -13,6 +13,7 @@
     "@kutup/crypto": "workspace:*",
     "@kutup/drive-core": "workspace:*",
     "@kutup/drive-ui": "workspace:*",
+    "@kutup/editors": "workspace:*",
     "@kutup/files": "workspace:*",
     "@kutup/i18n": "workspace:*",
     "@kutup/session": "workspace:*",
