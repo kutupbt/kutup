@@ -91,18 +91,12 @@ artifacts to `test-results/`; both are ignored by Git.
 
 ## Mail and outside sending
 
-The isolated stack runs with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
+The isolated stack starts with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
 nothing actually leaves), which spec 58 needs for its pause notice. Spec 59
-checks the default, off: restart the backend with it off and run that spec
-with `E2E_MAIL_OUTSIDE_SENDING=off` (spec 58 then skips itself):
-
-```sh
-MAIL_OUTSIDE_SENDING=off docker compose up -d --wait backend
-E2E_MAIL_OUTSIDE_SENDING=off npx playwright test specs/59-mail-outside-off.spec.ts
-```
-
-CI's clean-browser job on master runs specs 54, 57, 58 and 60, then 59 the same
-way.
+sets outside sending to "Nobody" in Administration → Mail sending, checks
+Mail, and sets it back to "Everyone"; no restart is needed, since the stored
+setting wins over the variable after the first start. CI's clean-browser job
+on master runs them all in one Mail step.
 
 ## Required Chat backup gates
 

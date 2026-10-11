@@ -356,7 +356,12 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     let local = super::local_address(&sender, &state.config.chat_server_name);
     // Outside mail goes through Stalwart only for those who may send there.
     if local.is_none()
-        && (!state.config.mail_outside_sending.allows(is_admin)
+        && (!crate::site_settings::mail_outside_sending(
+            &state.pool,
+            state.config.mail_outside_sending,
+        )
+        .await?
+        .allows(is_admin)
             || super::safety::check_send(state, delivered.user_id, 1)
                 .await
                 .is_err())
