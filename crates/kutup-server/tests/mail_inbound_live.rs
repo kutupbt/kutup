@@ -3671,6 +3671,34 @@ fn select_all_changes_a_whole_place() {
         3
     );
     assert!(folder(&c, &base, &user.token, &format!("label:{label}")).is_empty());
+    // Someone else's mail is out of reach: Eve's batch changes her own
+    // (empty) Inbox, a mailbox she is not a member of is not found, and
+    // Alice's label is not hers to use.
+    let eve = register(&c, &base);
+    let as_eve = |body: Value| {
+        bearer(
+            c.post(format!("{base}/api/mail/messages/batch")),
+            &eve.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    assert_eq!(
+        updated(as_eve(json!({ "place": "archive", "seen": false }))),
+        0
+    );
+    assert!(folder(&c, &base, &user.token, "archive")
+        .iter()
+        .all(|m| m["seen"] == true));
+    let r = as_eve(
+        json!({ "place": "archive", "seen": false, "group": uuid::Uuid::new_v4().to_string() }),
+    );
+    assert_eq!(r.status(), 404);
+    let r = as_eve(json!({ "place": "archive", "addLabels": [label] }));
+    assert_eq!(r.status(), 400);
+    let r = as_eve(json!({ "place": format!("label:{label}"), "seen": false }));
+    assert_eq!(updated(r), 0);
     // All mail, an unknown place and an empty change are refused.
     for body in [
         json!({ "place": "all", "seen": true }),

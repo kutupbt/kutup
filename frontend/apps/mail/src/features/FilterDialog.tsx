@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -72,6 +72,10 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
   const folders = places.data ? flattenFolders(places.data.tree) : []
   const labels = places.data?.labels ?? []
   const pending = create.isPending || update.isPending
+  // One save at a time: isPending lags a click behind, and a new filter
+  // keeps one id, so a second request is refused rather than a duplicate.
+  const saving = useRef(false)
+  const [newId] = useState(() => crypto.randomUUID())
 
   function setCondition(i: number, change: Partial<FilterCondition>) {
     setDraft((d) => ({ ...d, conditions: d.conditions.map((c, n) => (n === i ? { ...c, ...change } : c)) }))
@@ -90,7 +94,12 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
   }
 
   function save() {
-    const failed = (e: unknown) => toast.error(apiErrorMessage(e, t('common.tryAgain')))
+    if (saving.current) return
+    saving.current = true
+    const failed = (e: unknown) => {
+      saving.current = false
+      toast.error(apiErrorMessage(e, t('common.tryAgain')))
+    }
     const saved = (id: string) => {
       toast.success(t(filter ? 'filters.updated' : 'filters.created', { name: draft.name.trim() }))
       if (applyExisting) {
@@ -102,7 +111,7 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
       onClose()
     }
     if (filter) update.mutate({ id: filter.id, ...draft }, { onSuccess: () => saved(filter.id), onError: failed })
-    else create.mutate(draft, { onSuccess: saved, onError: failed })
+    else create.mutate({ ...draft, id: newId }, { onSuccess: saved, onError: failed })
   }
 
   const opValue = (c: FilterCondition) => `${c.negate ? 'not-' : ''}${c.op}`
