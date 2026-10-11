@@ -871,7 +871,16 @@
       "forwardDescription": "A prefilled issue opened on {{repository}} in a new tab. Check it for anything private before you submit it, then paste its address here to link the two.",
       "issueUrl": "Issue address (optional)",
       "issueUrlInvalid": "An issue address looks like {{prefix}}123.",
-      "markForwarded": "Mark forwarded"
+      "markForwarded": "Mark forwarded",
+      "prepareTitle": "Forward to GitHub",
+      "prepareDescription": "Check what the issue will say. It opens on GitHub with this title and text, and you submit it there.",
+      "publicWarningTitle": "This will be public",
+      "publicWarning": "This creates an issue on {{repository}}. If that repository is public, anyone can read it, including any personal details in this feedback: names, email addresses, file names or anything quoted from a message. Remove them first.",
+      "issueTitle": "Issue title",
+      "issueBody": "Issue text",
+      "issueBodyHint": "Who sent the feedback is not included. Edit out anything else personal.",
+      "checkedPersonal": "I've removed personal details, and this can be public",
+      "openIssue": "Open the issue on GitHub"
     }
   }
 }

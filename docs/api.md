@@ -3029,7 +3029,10 @@ a problem often mentions files, addresses or messages. An administrator may
 forward an item to the public tracker (`FEEDBACK_GITHUB_REPOSITORY`,
 `owner/repo` on GitHub, default `kutupbt/kutup`, `off` for none) by opening a
 prefilled issue there themselves; the server never posts to GitHub, and the
-issue never names who sent it. The public settings advertise the tracker as
+issue never names who sent it. Before it opens, the admin page warns that a
+public repository shows the issue to anyone, names the repository, and lets
+the administrator edit the title and text; it opens only after they confirm
+they removed personal details. The public settings advertise the tracker as
 `feedback.githubRepository` (absent when off), and the form offers it to
 people who want to report there in public instead.
 

@@ -871,7 +871,16 @@
       "forwardDescription": "{{repository}} üzerinde doldurulmuş bir konu yeni sekmede açıldı. Göndermeden önce özel bir şey içermediğini kontrol edin, sonra ikisini bağlamak için adresini buraya yapıştırın.",
       "issueUrl": "Konu adresi (isteğe bağlı)",
       "issueUrlInvalid": "Bir konu adresi {{prefix}}123 gibi görünür.",
-      "markForwarded": "İletildi olarak işaretle"
+      "markForwarded": "İletildi olarak işaretle",
+      "prepareTitle": "GitHub'a ilet",
+      "prepareDescription": "Konunun ne diyeceğini kontrol edin. GitHub'da bu başlık ve metinle açılır, orada siz gönderirsiniz.",
+      "publicWarningTitle": "Bu herkese açık olacak",
+      "publicWarning": "Bu, {{repository}} üzerinde bir konu açar. Depo herkese açıksa onu herkes okuyabilir, bu geri bildirimdeki kişisel ayrıntılar da dahil: adlar, e-posta adresleri, dosya adları ya da bir mesajdan alıntılanan her şey. Önce bunları çıkarın.",
+      "issueTitle": "Konu başlığı",
+      "issueBody": "Konu metni",
+      "issueBodyHint": "Geri bildirimi kimin gönderdiği eklenmez. Kişisel olan başka her şeyi çıkarın.",
+      "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
+      "openIssue": "Konuyu GitHub'da aç"
     }
   }
 }

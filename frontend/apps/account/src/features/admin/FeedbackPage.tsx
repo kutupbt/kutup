@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { feedbackIssueBody, feedbackTracker, githubIssueUrl } from '@kutup/session/feedback'
+import { Checkbox } from '@kutup/ui/components/checkbox'
+import { Label } from '@kutup/ui/components/label'
+import { Textarea } from '@kutup/ui/components/textarea'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
@@ -33,6 +36,7 @@ export function FeedbackPage() {
   const resolve = useResolveFeedback()
   const remove = useDeleteFeedback()
   const [tracker, setTracker] = useState<string | null>(null)
+  const [preparing, setPreparing] = useState<FeedbackItem | null>(null)
   const [forwarding, setForwarding] = useState<FeedbackItem | null>(null)
   const [deleting, setDeleting] = useState<FeedbackItem | null>(null)
 
@@ -49,14 +53,12 @@ export function FeedbackPage() {
       },
     )
 
-  function openOnGitHub(item: FeedbackItem) {
+  // After the warning and the administrator's edits: the issue page opens,
+  // then the feedback waits to be linked to the issue it became.
+  function openOnGitHub(item: FeedbackItem, issue: { title: string; body: string }) {
     if (!tracker) return
-    const title = item.message.split('\n')[0].slice(0, 80)
-    window.open(
-      githubIssueUrl(tracker, { title, body: feedbackIssueBody(item.message, item.details), kind: item.kind }),
-      '_blank',
-      'noopener,noreferrer',
-    )
+    window.open(githubIssueUrl(tracker, { ...issue, kind: item.kind }), '_blank', 'noopener,noreferrer')
+    setPreparing(null)
     setForwarding(item)
   }
 
@@ -86,12 +88,15 @@ export function FeedbackPage() {
               busy={resolve.isPending && resolve.variables?.id === item.id}
               onDone={() => mark(item, 'done')}
               onDismiss={() => mark(item, 'dismissed')}
-              onGitHub={() => openOnGitHub(item)}
+              onGitHub={() => setPreparing(item)}
               onDelete={() => setDeleting(item)}
             />
           </li>
         ))}
       </ul>
+      {preparing && tracker ? (
+        <PrepareIssueDialog item={preparing} tracker={tracker} onClose={() => setPreparing(null)} onOpen={(issue) => openOnGitHub(preparing, issue)} />
+      ) : null}
       {forwarding && tracker ? (
         <ForwardDialog
           item={forwarding}
@@ -229,6 +234,74 @@ function FeedbackCard({
         </div>
       </div>
     </Card>
+  )
+}
+
+/**
+ * Before anything opens on GitHub: where it goes, that a public repository
+ * shows it to anyone, and the issue's title and text to edit, so personal
+ * details can be taken out first. It opens only once the administrator says
+ * they checked; cancelling opens nothing.
+ */
+function PrepareIssueDialog({
+  item,
+  tracker,
+  onClose,
+  onOpen,
+}: {
+  item: FeedbackItem
+  tracker: string
+  onClose: () => void
+  onOpen: (issue: { title: string; body: string }) => void
+}) {
+  const { t } = useTranslation()
+  const [title, setTitle] = useState(() => item.message.split('\n')[0].slice(0, 80))
+  const [body, setBody] = useState(() => feedbackIssueBody(item.message, item.details))
+  const [checked, setChecked] = useState(false)
+  const ready = checked && title.trim() !== '' && body.trim() !== ''
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-xl">
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (ready) onOpen({ title: title.trim(), body: body.trim() })
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{t('admin.feedback.prepareTitle')}</DialogTitle>
+            <DialogDescription>{t('admin.feedback.prepareDescription')}</DialogDescription>
+          </DialogHeader>
+          <div data-testid="feedback-public-warning">
+            <Alert variant="warn" title={t('admin.feedback.publicWarningTitle')}>
+              <p>{t('admin.feedback.publicWarning', { repository: `github.com/${tracker}` })}</p>
+            </Alert>
+          </div>
+          <Field label={t('admin.feedback.issueTitle')}>
+            {(props) => <Input {...props} value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />}
+          </Field>
+          <Field label={t('admin.feedback.issueBody')} description={t('admin.feedback.issueBodyHint')}>
+            {(props) => <Textarea {...props} rows={8} value={body} onChange={(e) => setBody(e.target.value)} className="font-mono text-xs" />}
+          </Field>
+          <div className="flex items-start gap-2">
+            <Checkbox id="feedback-checked" checked={checked} onCheckedChange={(value) => setChecked(value === true)} />
+            <Label htmlFor="feedback-checked" className="leading-snug">
+              {t('admin.feedback.checkedPersonal')}
+            </Label>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" disabled={!ready}>
+              <ExternalLink />
+              {t('admin.feedback.openIssue')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 

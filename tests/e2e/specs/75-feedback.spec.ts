@@ -35,7 +35,9 @@ test('feedback reaches the administrators, who can forward it to GitHub', async 
 
   // A bug, with the details the form shows (and nothing about where she is).
   const bug = `Upload stops at half ${tag}`
-  let dialog = await send(drive, "Something isn't working", bug)
+  // Something personal an administrator takes out before it goes public.
+  const personal = `Kira-sozlesmesi-${tag}.pdf`
+  let dialog = await send(drive, "Something isn't working", `${bug}\nIt was ${personal}.`)
   const details = dialog.getByTestId('feedback-details')
   await expect(details).toContainText('Browser')
   await expect(details).toContainText('Window')
@@ -83,13 +85,35 @@ test('feedback reaches the administrators, who can forward it to GitHub', async 
 
   if (repository) {
     // The bug goes to GitHub: the issue names no one, and is linked back.
-    const popup = admin.waitForEvent('page')
+    // First a warning, naming the repository; cancelling opens nothing.
+    const pagesBefore = admin.pages().length
     await bugCard.getByRole('button', { name: 'Open on GitHub' }).click()
+    let prepare = page.getByRole('dialog', { name: 'Forward to GitHub' })
+    await expect(prepare.getByTestId('feedback-public-warning')).toContainText(`github.com/${repository}`)
+    await expect(prepare.getByTestId('feedback-public-warning')).toContainText('anyone can read it')
+    await prepare.getByRole('button', { name: 'Cancel' }).click()
+    await expect(prepare).toBeHidden()
+    await page.waitForTimeout(1_000)
+    expect(admin.pages().length).toBe(pagesBefore)
+
+    // Then edited, confirmed, opened: the issue says what the administrator left in.
+    await bugCard.getByRole('button', { name: 'Open on GitHub' }).click()
+    prepare = page.getByRole('dialog', { name: 'Forward to GitHub' })
+    const text = prepare.getByLabel('Issue text')
+    await expect(text).toHaveValue(new RegExp(personal))
+    await expect(prepare.getByRole('button', { name: 'Open the issue on GitHub' })).toBeDisabled()
+    await text.fill((await text.inputValue()).replace(`It was ${personal}.`, ''))
+    await prepare.getByLabel('Issue title').fill(`Uploads stop half way ${tag}`)
+    await prepare.getByLabel("I've removed personal details, and this can be public").check()
+    const popup = admin.waitForEvent('page')
+    await prepare.getByRole('button', { name: 'Open the issue on GitHub' }).click()
     const github = await popup
     await github.waitForURL(/^https:\/\/github\.com\//)
-    const body = new URL(github.url()).searchParams.get('body') ?? ''
-    expect(body).toContain(bug)
-    expect(body).not.toContain(alice.email)
+    const issue = new URL(github.url()).searchParams
+    expect(issue.get('title')).toBe(`Uploads stop half way ${tag}`)
+    expect(issue.get('body')).toContain(bug)
+    expect(issue.get('body')).not.toContain(personal)
+    expect(issue.get('body')).not.toContain(alice.email)
     await github.close()
     const forward = page.getByRole('dialog', { name: 'Forwarded to GitHub?' })
     await forward.getByLabel('Issue address (optional)').fill('https://example.org/issues/1')

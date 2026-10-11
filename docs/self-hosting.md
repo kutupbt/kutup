@@ -179,7 +179,10 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # (Account → Admin → Feedback). The public tracker an administrator may
 # forward an item to, and that the form offers to people who prefer to report
 # in public: owner/repo on GitHub, or off. The default is the upstream
-# project; point it at your own repository, or turn it off.
+# project; point it at your own repository, or turn it off. Forwarding from
+# the admin page always warns first that the issue is readable by anyone if
+# the repository is public, and lets the administrator edit the issue's
+# title and text (to take personal details out) before anything opens.
 # FEEDBACK_GITHUB_REPOSITORY=kutupbt/kutup
 
 # Optional OTLP/gRPC traces and metrics. Leave all endpoints unset for
