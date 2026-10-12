@@ -19,9 +19,11 @@ export interface OutboxRecord {
 
 const STORE = 'vaults'
 
+const databaseName = (userId: string) => `kutup-pass-${userId}`
+
 function open(userId: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(`kutup-pass-${userId}`, 1)
+    const request = indexedDB.open(databaseName(userId), 1)
     request.onupgradeneeded = () => {
       request.result.createObjectStore(STORE, { keyPath: 'fileId' })
     }
@@ -63,6 +65,15 @@ export const outbox = {
     } catch {
       // Nothing to forget.
     }
+  },
+  /** Forgets every vault kept for the account here (on sign-out). */
+  async clear(userId: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const request = indexedDB.deleteDatabase(databaseName(userId))
+      request.onsuccess = () => resolve()
+      request.onerror = () => resolve()
+      request.onblocked = () => resolve()
+    })
   },
   /** The vaults with edits waiting to be saved. */
   async pendingIds(userId: string): Promise<string[]> {

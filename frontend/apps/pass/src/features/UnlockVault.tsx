@@ -12,7 +12,7 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { keptKey, useKeepVaultKey, useVaultSecrets } from '../drive/secrets'
 import { vaultTitle, type VaultFile } from '../drive/vaults'
-import { freshKeys, openVault } from '../sync/openVaults'
+import { clearLocked, freshKeys, openVault, wasLocked } from '../sync/openVaults'
 import { VaultError } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 import { KeyFileInput } from './KeyFileInput'
@@ -35,6 +35,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
   const [remember, setRemember] = useState(true)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [kept, setKept] = useState<VaultKeyInput | null>(null)
   const tried = useRef<string | null>(null)
 
   const fileId = vault.file.id
@@ -43,14 +44,22 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     tried.current = fileId
     setAttempt('trying')
     void (async () => {
-      const key = freshKeys.get(fileId) ?? (await keptKey(session, secrets.data, fileId))
+      const fresh = freshKeys.get(fileId)
+      const key = fresh ?? (await keptKey(session, secrets.data, fileId))
       if (!key) {
+        setAttempt('form')
+        return
+      }
+      // Locked in this tab: the kept key waits for a click.
+      if (!fresh && wasLocked(fileId)) {
+        setKept(key)
         setAttempt('form')
         return
       }
       try {
         await openVault(vault, key, session.userId)
         freshKeys.delete(fileId)
+        clearLocked(fileId)
       } catch (failure) {
         setNotice(failure instanceof VaultError ? t('unlock.keptStale') : t('unlock.unreachable'))
         setAttempt('form')
@@ -65,6 +74,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     setError(null)
     try {
       await openVault(vault, key, session.userId)
+      clearLocked(fileId)
       if (remember) {
         try {
           await keepKey(session, fileId, key)
@@ -90,6 +100,25 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
         <p className="text-sm text-muted-foreground">{t('unlock.description')}</p>
       </div>
       {notice ? <Alert variant="warn">{notice}</Alert> : null}
+      {kept ? (
+        <div className="space-y-2">
+          <Button
+            className="w-full"
+            loading={pending}
+            onClick={() => {
+              setPending(true)
+              setError(null)
+              openVault(vault, kept, session.userId)
+                .then(() => clearLocked(fileId))
+                .catch((failure) => setError(failure instanceof VaultError ? t('unlock.keptStale') : t('unlock.unreachable')))
+                .finally(() => setPending(false))
+            }}
+          >
+            {t('unlock.withSignIn')}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">{t('unlock.orKey')}</p>
+        </div>
+      ) : null}
       <form
         className="space-y-4"
         onSubmit={(e) => {

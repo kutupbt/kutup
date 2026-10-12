@@ -6,16 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>Kutup Pass</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <script>
-      // No-flash theme: mirror next-themes (storage key kutup-theme) before
-      // first paint. A stored light/dark wins; otherwise follow the OS.
-      (function () {
-        var p; try { p = localStorage.getItem('kutup-theme'); } catch (e) {}
-        var dark = p === 'dark' || (p !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        document.documentElement.classList.add(dark ? 'dark' : 'light');
-        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
-      })();
-    </script>
+    <script src="/theme.js"></script>
   </head>
   <body>
     <div id="root"></div>

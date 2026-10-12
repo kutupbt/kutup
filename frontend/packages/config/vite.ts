@@ -30,13 +30,26 @@ export function wasmHash(module: WasmModule): string {
   return hash.digest('hex').slice(0, 16)
 }
 
-/** The reload guard ([`reloadGuard`]) inline in each app page, ahead of the bundle it watches. */
-function reloadOnceOnLoadFailure(): Plugin {
+/** Where the reload guard is served from when a page allows no inline script. */
+const RELOAD_GUARD_FILE = 'kutup-reload-guard.js'
+
+/**
+ * The reload guard ([`reloadGuard`]) in each app page, ahead of the bundle it
+ * watches: inline, or with `strictCsp` (a page whose policy allows no inline
+ * script, such as Pass) as a classic script file loaded the same way.
+ */
+function reloadOnceOnLoadFailure(strictCsp: boolean): Plugin {
   const build = Date.now().toString(36)
   return {
     name: 'kutup-reload-once',
     apply: 'build',
-    transformIndexHtml: () => [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+    transformIndexHtml: () =>
+      strictCsp
+        ? [{ tag: 'script', attrs: { src: `/${RELOAD_GUARD_FILE}` }, injectTo: 'head-prepend' }]
+        : [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+    generateBundle() {
+      if (strictCsp) this.emitFile({ type: 'asset', fileName: RELOAD_GUARD_FILE, source: reloadGuardScript(build) })
+    },
   }
 }
 
@@ -106,7 +119,12 @@ export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, d
  * KUTUP_DEV_DOMAIN and KUTUP_DEV_PORT_OFFSET move the apps for a second
  * local server (docs/contributing.md).
  */
-export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfig {
+export function kutupApp(opts: {
+  app: KutupApp
+  wasm: WasmModule[]
+  /** The page allows no inline script (its CSP; frontend/docker/40-kutup-hosts.sh). */
+  strictCsp?: boolean
+}): UserConfig {
   const requireFromCrypto = createRequire(path.join(FRONTEND, 'packages/crypto/package.json'))
   const apiTarget = process.env.KUTUP_API_TARGET ?? 'http://localhost:3000'
   // A second local server (federation testing) runs its apps on
@@ -114,7 +132,7 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
   const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
   const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
-    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure()],
+    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure(Boolean(opts.strictCsp))],
     worker: { format: 'es' },
     resolve: {
       alias: {

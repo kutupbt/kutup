@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
+import { lockAll } from './sync/openVaults'
 import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
@@ -13,7 +14,11 @@ import { NotFoundPage } from './NotFoundPage'
 /** When the sign-in ends (signed out elsewhere, expired), ask the account app again. */
 function UnauthenticatedHandler() {
   useEffect(() => {
-    setUnauthenticatedHandler(() => requestFork('pass'))
+    // The session ended (revoked elsewhere, expired): the vaults lock first.
+    // Edits not yet saved stay in the outbox for the next sign-in.
+    setUnauthenticatedHandler(() => {
+      void lockAll().finally(() => requestFork('pass'))
+    })
   }, [])
   return null
 }

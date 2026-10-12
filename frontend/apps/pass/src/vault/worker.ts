@@ -2,8 +2,10 @@
 // The Kutup Pass worker (docs/plans/pass.md, K2c): it holds the open vaults
 // in the WASM module (crates/kutup-pass-wasm) and runs everything that
 // touches them here, off the page, since unlocking and saving derive the
-// vault key on purpose slowly. Vault contents never leave this worker except
-// as the views and values the page asks for.
+// vault key on purpose slowly. The page receives what it asks for: the
+// vault's view (every field, protected values included, which the page shows
+// on request), attachments, one-time codes and the encrypted KDBX file. The
+// vault's key and its decrypted database stay here; locking frees them.
 
 import { freshUrl, retryLoad } from '@kutup/crypto/retry'
 import type { Request, Response } from './protocol'

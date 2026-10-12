@@ -40,10 +40,46 @@ export function openVault(vault: VaultFile, key: VaultKeyInput, userId: string):
   return pending
 }
 
+const LOCKED_KEY = 'kutup-pass-locked'
+
+function lockedIds(): Set<string> {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem(LOCKED_KEY) ?? '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveLocked(ids: Set<string>) {
+  try {
+    sessionStorage.setItem(LOCKED_KEY, JSON.stringify([...ids]))
+  } catch {
+    // This visit only.
+  }
+}
+
+/**
+ * Whether the vault was locked in this tab (by hand or after idling): it
+ * then waits for a click before its kept key opens it again, also after a
+ * reload of the tab.
+ */
+export function wasLocked(fileId: string): boolean {
+  return lockedIds().has(fileId)
+}
+
+/** The vault was unlocked on purpose. */
+export function clearLocked(fileId: string): void {
+  const ids = lockedIds()
+  if (ids.delete(fileId)) saveLocked(ids)
+}
+
 /** Locks a vault: saves what is waiting (it stays in the outbox if that fails) and forgets it here. */
 export async function lockVault(fileId: string): Promise<void> {
   const session = sessions.get(fileId)
   if (!session) return
+  const ids = lockedIds()
+  ids.add(fileId)
+  saveLocked(ids)
   try {
     await session.save()
   } catch {
@@ -55,6 +91,7 @@ export async function lockVault(fileId: string): Promise<void> {
 }
 
 export async function lockAll(): Promise<void> {
+  freshKeys.clear()
   await Promise.all([...sessions.keys()].map(lockVault))
 }
 
@@ -76,5 +113,8 @@ export function useSessionState(session: VaultSession | null): SessionState | nu
   )
 }
 
-/** Keys typed this visit for vaults just made, so the new vault opens without asking again. */
+/**
+ * Keys typed this visit for vaults just made, so the new vault opens without
+ * asking again; each is dropped once its vault opens, and all on lock.
+ */
 export const freshKeys = new Map<string, VaultKeyInput>()

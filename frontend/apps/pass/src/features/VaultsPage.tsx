@@ -7,7 +7,9 @@ import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { formatRelative } from '@kutup/ui/lib/format'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
+import { AUTO_LOCK_CHOICES, setAutoLockMinutes, useAutoLockMinutes, type AutoLockMinutes } from '../sync/autoLock'
 import { useVaultSession } from '../sync/openVaults'
 import { CreateVaultDialog } from './CreateVaultDialog'
 
@@ -40,6 +42,32 @@ function VaultCard({ vault }: { vault: VaultFile }) {
         )}
       </Link>
     </li>
+  )
+}
+
+/** How long open vaults stay unlocked without use, on this device. */
+function AutoLockSetting() {
+  const { t } = useTranslation()
+  const minutes = useAutoLockMinutes()
+  return (
+    <section className="mt-8 max-w-3xl space-y-1.5" aria-labelledby="auto-lock-label">
+      <h2 id="auto-lock-label" className="text-sm font-medium">
+        {t('autoLock.label')}
+      </h2>
+      <p className="text-xs text-muted-foreground">{t('autoLock.description')}</p>
+      <Select value={String(minutes)} onValueChange={(value) => setAutoLockMinutes(Number(value) as AutoLockMinutes)}>
+        <SelectTrigger className="w-56" aria-labelledby="auto-lock-label">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {AUTO_LOCK_CHOICES.map((choice) => (
+            <SelectItem key={choice} value={String(choice)}>
+              {choice === 0 ? t('autoLock.never') : choice >= 60 ? t('autoLock.hours', { count: choice / 60 }) : t('autoLock.minutes', { count: choice })}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </section>
   )
 }
 
@@ -80,6 +108,7 @@ export function VaultsPage() {
           ))}
         </ul>
       )}
+      <AutoLockSetting />
       <p className="mt-8 max-w-3xl text-xs text-muted-foreground">{t('vaults.keepassNote')}</p>
       <CreateVaultDialog open={creating} onOpenChange={setCreating} />
     </PageBody>

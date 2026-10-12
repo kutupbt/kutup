@@ -209,6 +209,21 @@ one database, plus a report of what happened.
   tab was closed (spec 78). Opening a vault while Drive cannot be reached
   uses the kept copy; a reload without network still needs the sign-in to
   work offline first (research 19 §5.6).
+- **Locking.** Open vaults lock after a while without use on the device
+  (15 minutes unless changed on the vault list; "only when I sign out" is a
+  choice), when the account's session ends (signed out in Pass or another
+  Pass tab, or refused by the server because it was revoked elsewhere, which
+  the minute's refresh notices), and by hand. A vault locked in a tab waits
+  for a click before its kept key opens it again, also after a reload of the
+  tab. Signing out also deletes the vaults this device kept for offline use;
+  a refused session keeps them, unsaved edits included, for the next
+  sign-in. A PIN or the account password to unlock after idling, as Proton
+  Pass offers, comes later.
+- **Page policy.** The pass host allows no inline or eval'd script
+  (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
+  (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
+  reload guard load as files (`strictCsp` in the shared Vite config). Spec 79
+  checks the headers and that the page breaks none of it.
 - **Entries.** Standard fields, the TOTP secret (`otp`, an otpauth:// URI or
   a base32 key) with a live code, custom fields (hidden or not), tags,
   expiry, attachments up to 50 MB, history with restore, groups, the recycle

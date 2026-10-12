@@ -1,5 +1,5 @@
 import { BookUser, FileType, HardDrive, Images, KeyRound, LockKeyhole, LockKeyholeOpen, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Vault } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
@@ -15,6 +15,7 @@ import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { useVaultFiles, vaultTitle } from '../drive/vaults'
 import { CreateVaultDialog } from '../features/CreateVaultDialog'
+import { lockAndForget, startAutoLock } from '../sync/autoLock'
 import { lockAll, openVaultIds, useVaultSession } from '../sync/openVaults'
 
 function VaultLink({ fileId, name }: { fileId: string; name: string }) {
@@ -43,6 +44,7 @@ export function PassShell() {
   useAccountUiPreferences()
   const { vaults } = useVaultFiles()
   const [creating, setCreating] = useState(false)
+  useEffect(startAutoLock, [])
   useVaultSession(undefined)
   const anyOpen = openVaultIds().length > 0
   return (
@@ -106,7 +108,8 @@ export function PassShell() {
           email={session.email}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
-            void lockAll()
+            // Locked, and what this device kept for offline use forgotten.
+            void lockAndForget(session.userId)
               .then(() => signOut())
               .then(() => window.location.assign(appUrl('account', '/login')))
           }}

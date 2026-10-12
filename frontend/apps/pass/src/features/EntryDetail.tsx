@@ -16,16 +16,18 @@ import { HistoryDialog } from './HistoryDialog'
 /** A copied secret is cleared from the clipboard after this, if it is still there. */
 const CLEAR_CLIPBOARD_MS = 30_000
 
-async function copySecret(value: string, done: string, cleared: string) {
+async function copySecret(value: string, done: string, cleared: string, notCleared: string) {
   await copyText(value)
   toast.success(done)
   setTimeout(() => {
+    // Only what this copied is cleared: reading the clipboard needs the
+    // browser's permission, and without it the person is told to clear it.
     void navigator.clipboard
       .readText()
       .then((now) => {
         if (now === value) return navigator.clipboard.writeText('').then(() => toast(cleared))
       })
-      .catch(() => {})
+      .catch(() => toast.warning(notCleared))
   }, CLEAR_CLIPBOARD_MS)
 }
 
@@ -52,7 +54,7 @@ function SecretValue({ value, label }: { value: string; label: string }) {
           <Button variant="ghost" size="icon" onClick={() => setShown(!shown)} aria-label={shown ? t('common.hidePassword') : t('common.showPassword')}>
             {shown ? <EyeOff /> : <Eye />}
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => void copySecret(value, t('detail.copied', { what: label }), t('detail.clipboardCleared'))} aria-label={t('detail.copy', { what: label })}>
+          <Button variant="ghost" size="icon" onClick={() => void copySecret(value, t('detail.copied', { what: label }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: label })}>
             <Copy />
           </Button>
         </>
@@ -88,7 +90,7 @@ function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }
     <Row
       label={t('detail.otp')}
       actions={
-        <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
+        <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
           <Copy />
         </Button>
       }

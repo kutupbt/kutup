@@ -61,6 +61,14 @@ NGINX
     images="'self' data: blob:"
     if [ "$app" = mail ]; then images="$images https:"; fi
     app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src $images; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
+    frame_options=SAMEORIGIN
+    # Pass holds open vaults: no inline or eval'd script (its page loads its
+    # theme and reload guard as files; vite's strictCsp), WASM only through
+    # 'wasm-unsafe-eval', and nothing may frame it.
+    if [ "$app" = pass ]; then
+      app_csp="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"
+      frame_options=DENY
+    fi
     cat <<NGINX
 server {
     listen 80;
@@ -69,7 +77,7 @@ server {
     index index.html;
     add_header X-Content-Type-Options nosniff always;
     add_header Content-Security-Policy "$app_csp" always;
-    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Frame-Options $frame_options always;
     add_header Referrer-Policy same-origin always;
 
     # The Rust runtimes live in directories named for their content hash
@@ -80,7 +88,7 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     # Anything else there (none is expected) is revalidated.
@@ -89,7 +97,7 @@ server {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     # Vite's content-hashed bundles.
@@ -98,7 +106,7 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     location / {
@@ -106,7 +114,7 @@ server {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
         add_header Referrer-Policy same-origin always;
     }
 }

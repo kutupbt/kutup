@@ -62,7 +62,9 @@
     "wrongKey": "Bu parola ya da anahtar dosyası bu kasayı açmıyor.",
     "unreachable": "Kutup'a ulaşılamadı ve bu cihazda kasanın kopyası yok. Bağlantınızı denetleyin.",
     "keptStale": "Hesabınızda tutulan anahtar bu kasayı artık açmıyor; parolası büyük olasılıkla başka yerde değiştirildi. Yenisini girin.",
-    "keepFailed": "Kasanın anahtarı hesabınızda tutulamadı; bir dahaki sefer yeniden sorulacak."
+    "keepFailed": "Kasanın anahtarı hesabınızda tutulamadı; bir dahaki sefer yeniden sorulacak.",
+    "withSignIn": "Oturumumla aç",
+    "orKey": "ya da kasanın anahtarını girin:"
   },
   "sync": {
     "saved": "Kaydedildi",
@@ -196,7 +198,8 @@
     "created": "{{when}} oluşturuldu",
     "history_one": "{{count}} önceki sürüm",
     "history_other": "{{count}} önceki sürüm",
-    "expired": "Bu kaydın süresi {{when}} tarihinde doldu."
+    "expired": "Bu kaydın süresi {{when}} tarihinde doldu.",
+    "clipboardNotCleared": "Kopyalanan gizli bilgi panodan silinemedi: pano erişimine izin verin ya da panoyu kendiniz temizleyin."
   },
   "history": {
     "title": "Önceki sürümler",
@@ -224,5 +227,14 @@
     "weak": "Zayıf parola",
     "fair": "Orta parola",
     "strong": "Güçlü parola"
+  },
+  "autoLock": {
+    "label": "Kasaları şu süre sonra kilitle",
+    "description": "Açık kasalar bu cihazda bu kadar süre kullanılmayınca kendiliğinden kilitlenir; oturumu kapattığınızda her zaman.",
+    "never": "Yalnızca oturumu kapatınca",
+    "minutes_one": "{{count}} dakika",
+    "minutes_other": "{{count}} dakika",
+    "hours_one": "{{count}} saat",
+    "hours_other": "{{count}} saat"
   }
 }

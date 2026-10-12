@@ -62,7 +62,9 @@
     "wrongKey": "That password or key file does not open this vault.",
     "unreachable": "Kutup could not be reached, and this device has no copy of the vault. Check your connection.",
     "keptStale": "The key your account keeps no longer opens this vault: its password was probably changed elsewhere. Enter the new one.",
-    "keepFailed": "The vault's key could not be kept in your account; you will be asked for it next time."
+    "keepFailed": "The vault's key could not be kept in your account; you will be asked for it next time.",
+    "withSignIn": "Unlock with my sign-in",
+    "orKey": "or enter the vault's key:"
   },
   "sync": {
     "saved": "Saved",
@@ -196,7 +198,8 @@
     "created": "Created {{when}}",
     "history_one": "{{count}} earlier version",
     "history_other": "{{count}} earlier versions",
-    "expired": "This entry expired on {{when}}."
+    "expired": "This entry expired on {{when}}.",
+    "clipboardNotCleared": "Copied secrets could not be cleared from the clipboard: allow clipboard access, or clear it yourself."
   },
   "history": {
     "title": "Earlier versions",
@@ -224,5 +227,14 @@
     "weak": "Weak password",
     "fair": "Fair password",
     "strong": "Strong password"
+  },
+  "autoLock": {
+    "label": "Lock vaults after",
+    "description": "Open vaults lock by themselves after this long without use on this device, and always when you sign out.",
+    "never": "Only when I sign out",
+    "minutes_one": "{{count}} minute",
+    "minutes_other": "{{count}} minutes",
+    "hours_one": "{{count}} hour",
+    "hours_other": "{{count}} hours"
   }
 }
