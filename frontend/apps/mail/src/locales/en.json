@@ -15,7 +15,20 @@
   },
   "search": {
     "label": "Search mail",
-    "placeholder": "Search subjects and addresses"
+    "placeholder": "Search subjects and addresses",
+    "advanced": "Advanced search",
+    "keyword": "Keyword",
+    "location": "Location",
+    "since": "Start date",
+    "until": "End date",
+    "from": "Sender",
+    "to": "Recipient",
+    "personPlaceholder": "Name or email address",
+    "address": "Address",
+    "allAddresses": "All",
+    "hasAttachments": "Has attachments",
+    "reset": "Reset",
+    "submit": "Search"
   },
   "folders": {
     "inbox": "Inbox",
@@ -74,7 +87,8 @@
     "resize": "Resize the list",
     "me": "me",
     "inConversation_one": "{{count}} message in this conversation",
-    "inConversation_other": "{{count}} messages in this conversation"
+    "inConversation_other": "{{count}} messages in this conversation",
+    "advancedResults": "Search results in {{place}}"
   },
   "read": {
     "notFound": "This conversation no longer exists.",

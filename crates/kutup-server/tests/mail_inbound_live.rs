@@ -3805,6 +3805,139 @@ fn select_all_changes_a_whole_place() {
 }
 
 #[test]
+fn advanced_search_by_sender_recipient_dates_and_address() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let carol = register(&c, &base);
+    let carol_address = set_up_address(&c, &base, &carol);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let send = |from: &User, from_address: &Address, to: &Address, subject: &str| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+            from_address.address, to.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&to.public_key, &from_address.public_key],
+            &from_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": to.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), to.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &from.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let from_bob = send(&bob, &bob_address, &alice_address, "bob'tan");
+    let from_carol = send(&carol, &carol_address, &alice_address, "carol'dan");
+    let to_carol = send(&alice, &alice_address, &carol_address, "carol'a");
+    wait_for(&c, &base, &alice, &from_bob);
+    wait_for(&c, &base, &alice, &from_carol);
+    wait_for(&c, &base, &alice, &to_carol);
+    let found = |folder: &str, query: &[(&str, &str)]| -> Vec<String> {
+        let mut params = vec![("folder", folder)];
+        params.extend_from_slice(query);
+        let page: Value = bearer(c.get(format!("{base}/api/mail/messages")), &alice.token)
+            .query(&params)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let mut subjects: Vec<String> = page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["subject"].as_str().unwrap().to_string())
+            .collect();
+        subjects.sort();
+        subjects
+    };
+    let bob_local = bob_address.address.split_once('@').unwrap().0;
+    let carol_local = carol_address.address.split_once('@').unwrap().0;
+    // Sender and recipient, by part of the address, in a place or in all mail.
+    assert_eq!(found("inbox", &[("from", bob_local)]), ["bob'tan"]);
+    assert_eq!(found("all", &[("to", carol_local)]), ["carol'a"]);
+    assert_eq!(found("inbox", &[("to", carol_local)]), Vec::<String>::new());
+    assert_eq!(
+        found("all", &[("from", &alice_address.address.to_uppercase())]),
+        ["carol'a"]
+    );
+    // Dates: the end is open, the start closed.
+    let hour = time::Duration::hours(1);
+    let now = time::OffsetDateTime::now_utc();
+    let at = |t: time::OffsetDateTime| {
+        t.format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    };
+    let (past, future) = (at(now - hour), at(now + hour));
+    assert_eq!(
+        found("all", &[("since", &past), ("until", &future)]),
+        ["bob'tan", "carol'a", "carol'dan"]
+    );
+    assert!(found("all", &[("since", &future)]).is_empty());
+    assert!(found("all", &[("until", &past)]).is_empty());
+    // Address: Alice's own; anyone else's finds nothing of hers.
+    assert_eq!(
+        found("all", &[("address", &alice_address.address.to_uppercase())]),
+        ["bob'tan", "carol'a", "carol'dan"]
+    );
+    assert!(found("all", &[("address", &bob_address.address)]).is_empty());
+    // Together, and by conversation.
+    assert_eq!(
+        found(
+            "inbox",
+            &[
+                ("from", carol_local),
+                ("since", &past),
+                ("conversations", "true")
+            ]
+        ),
+        ["carol'dan"]
+    );
+    // What Address offers: her own address (she is in no list).
+    let offered: Value = bearer(
+        c.get(format!("{base}/api/mail/search-addresses")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(offered, json!([alice_address.address]));
+    // Times that are not times, or the wrong way round.
+    for query in [
+        vec![("since", "yesterday")],
+        vec![("since", future.as_str()), ("until", past.as_str())],
+    ] {
+        let mut params = vec![("folder", "all")];
+        params.extend(query);
+        let r = bearer(c.get(format!("{base}/api/mail/messages")), &alice.token)
+            .query(&params)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 400);
+    }
+}
+
+#[test]
 fn senders_whose_images_always_load() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");

@@ -190,7 +190,7 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest', view.page ?? 0, view.pageSize ?? DEFAULT_PAGE_SIZE] as const
+const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest', JSON.stringify(view.criteria ?? {}), view.page ?? 0, view.pageSize ?? DEFAULT_PAGE_SIZE] as const
 /** Two list keys for one place and view, whatever their page. */
 const samePlace = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((part, i) => i === a.length - 2 || part === b[i])
 const countsKey = (group?: string, conversations = false) => ['mail', 'counts', group ?? null, conversations] as const
@@ -329,6 +329,8 @@ export type ListSort = 'newest' | 'oldest' | 'largest' | 'smallest'
 /** How a place is listed: searched, in a shared mailbox, by conversation, filtered, sorted. */
 export interface ListView {
   q?: string
+  /** Advanced search beyond the keyword (as `listCriteria` makes it). */
+  criteria?: { from?: string; to?: string; since?: string; until?: string; address?: string }
   group?: string
   /** One row per conversation (the account's View mode). */
   conversations?: boolean
@@ -346,7 +348,7 @@ export const DEFAULT_PAGE_SIZE = 50
 export const PAGE_SIZES = [50, 100, 200] as const
 
 export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true) {
-  const { q, group, conversations, filter, sort, page = 0, pageSize = DEFAULT_PAGE_SIZE } = view
+  const { q, criteria, group, conversations, filter, sort, page = 0, pageSize = DEFAULT_PAGE_SIZE } = view
   // One numbered page per key, kept in the infinite shape the cache
   // updates (patchMessages, patchLabels) work on.
   return useInfiniteQuery<Page, Error, InfiniteData<Page, number>, ReturnType<typeof folderKey>, number>({
@@ -361,6 +363,7 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
           params: {
             folder,
             ...(q ? { q } : {}),
+            ...criteria,
             page: pageParam,
             limit: pageSize,
             ...scoped(group),
@@ -708,6 +711,16 @@ export async function fetchMailImage(url: string): Promise<ProxiedImage> {
   } catch {
     return { kind: 'failed' }
   }
+}
+
+/** What advanced search's Address can be: your addresses and lists, or a shared mailbox's address. */
+export function useSearchAddresses(group?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['mail', 'search-addresses', group ?? null],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: async () => (await api.get<string[]>('/mail/search-addresses', { params: scoped(group) })).data,
+  })
 }
 
 const imageSendersKey = ['mail', 'image-senders'] as const

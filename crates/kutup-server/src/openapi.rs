@@ -73,6 +73,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::mail_groups::resolve_account,
         crate::handlers::mail_groups::directory,
         crate::handlers::mail::list_messages,
+        crate::handlers::mail::search_addresses,
         crate::handlers::mail::message_content,
         crate::handlers::mail::unsubscribe,
         crate::handlers::mail::update_messages,
