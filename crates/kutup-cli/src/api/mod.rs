@@ -52,6 +52,9 @@ pub struct ApiError {
     /// conditional save (`basedOn`) did not start from: a version id, or
     /// `original` (docs/plans/pass.md, "Saving without overwriting").
     pub version_conflict: Option<String>,
+    /// A `409 bindingChanged`: sealed for an envelope binding the account no
+    /// longer has (re-sealed meanwhile; docs/plans/account-identity.md).
+    pub binding_changed: bool,
 }
 
 /// What holds a taken name, as the server says (any part may be missing).
@@ -92,6 +95,11 @@ impl ApiError {
                 status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("version_conflict")
             })
             .and_then(|v| v.get("current")?.as_str().map(str::to_string));
+        let binding_changed = status == 409
+            && parsed
+                .as_ref()
+                .and_then(|v| v.get("code")?.as_str())
+                .is_some_and(|code| code == "bindingChanged");
         let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
@@ -107,6 +115,7 @@ impl ApiError {
             message,
             name_taken,
             version_conflict,
+            binding_changed,
         }
     }
 }
@@ -443,6 +452,25 @@ mod tests {
         );
         assert_eq!(e.message, "quota exceeded");
         assert_eq!(e.to_string(), "HTTP 413: quota exceeded");
+    }
+
+    #[test]
+    fn from_parts_reads_a_binding_change() {
+        let e = ApiError::from_parts(
+            409,
+            "Conflict",
+            r#"{"error":"envelope is not bound to this account","code":"bindingChanged"}"#.into(),
+        );
+        assert!(e.binding_changed);
+        assert!(!ApiError::from_parts(409, "Conflict", r#"{"error":"x"}"#.into()).binding_changed);
+        assert!(
+            !ApiError::from_parts(
+                400,
+                "Bad Request",
+                r#"{"error":"x","code":"bindingChanged"}"#.into()
+            )
+            .binding_changed
+        );
     }
 
     #[test]

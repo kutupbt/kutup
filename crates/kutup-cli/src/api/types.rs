@@ -166,6 +166,9 @@ pub struct UserMe {
     #[serde(default)]
     pub address: String,
     pub username: String,
+    /// What the account's envelopes are bound to now.
+    #[serde(default)]
+    pub envelope_binding: String,
     #[serde(default)]
     pub is_admin: bool,
     #[serde(default)]

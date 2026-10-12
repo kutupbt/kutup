@@ -425,6 +425,7 @@ mod tests {
                 message: "x".into(),
                 name_taken: None,
                 version_conflict: None,
+                binding_changed: false,
             })
             .context("outer")
             .context("outermost");
