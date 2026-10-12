@@ -11,7 +11,9 @@
 # Checked: disjoint edits from both sides survive; the same field edited on
 # both sides keeps the later sync's value, the other in the entry's history,
 # and the entry marked for review; the vault stays one Drive file with a
-# stable id; without the vault key, sync falls back to a conflict copy.
+# stable id; with the vault key kept in the account (`kutup pass keep`) sync
+# merges with no password given; without any key, sync falls back to a
+# conflict copy.
 #
 # Required env:
 #   KUTUP_SERVER     e.g. https://drive.localhost:38643 or http://<backend>:3000
@@ -116,6 +118,22 @@ same "$FILES" 1 "files in the folder"
 same "$("$BIN" --profile "$A" --json ls "$FOLDER" | jq -r '.[] | select(.type=="file") | .id')" "$FILE_ID" "the vault's file id"
 ls "$TMP/$A" "$TMP/$B" | grep -q sync-conflict && fail "no conflict copies"
 pass "the vault is one Drive file with a stable id; no conflict copies"
+
+# --- the key kept in the account: no password needed to merge ---
+"$BIN" --profile "$A" pass keep "$FILE_ID" >/dev/null
+same "$("$BIN" --profile "$B" --json pass ls | jq -r '.[0].name')" vault.kdbx "the kept key, seen from B"
+tick
+vault set "$TMP/$A/vault.kdbx" Bank URL https://bank.example
+vault set "$TMP/$B/vault.kdbx" Bank Notes "kept-key note"
+( unset KUTUP_VAULT_PASSWORD; sync_on "$A"; sync_on "$B"; sync_on "$A" ) </dev/null
+grep -q "⇄ vault.kdbx" "$TMP/$B.log" || { cat "$TMP/$B.log"; fail "B merged with the kept key"; }
+for m in "$A" "$B"; do
+  same "$(vault get "$TMP/$m/vault.kdbx" Bank URL)" https://bank.example "$m: A's URL"
+  same "$(vault get "$TMP/$m/vault.kdbx" Bank Notes)" "kept-key note" "$m: B's note"
+done
+"$BIN" --profile "$A" pass forget "$FILE_ID" >/dev/null
+same "$("$BIN" --profile "$A" --json pass ls | jq length)" 0 "kept keys after forget"
+pass "with the key kept in the account, sync merges without a password; forget removes it"
 
 # --- without the key: a conflict copy, as for any file ---
 tick

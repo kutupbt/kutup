@@ -42,6 +42,7 @@ pgp = { version = "=0.21.0", default-features = false, features = ["wasm"], opti
 [dev-dependencies]
 serde.workspace = true
 hex.workspace = true
+uuid.workspace = true
 
 [[test]]
 name = "mail_key_vectors"

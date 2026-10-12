@@ -662,8 +662,11 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   `X-Kutup-Version`) in Drive; `kutup sync` saves `.kdbx` files as versions
   of the same file and merges them instead of making conflict copies
   (`scripts/verify-pass-sync.sh`).
-- **K2**: the website, vault secrets sealed under the account key, the
-  offline outbox.
+- **K2a** ✅: vault secrets sealed under the account key
+  (`kutup_crypto::pass_vault`, `/api/pass/vault-secrets`); `kutup sync`
+  opens vaults with the sign-in, `kutup pass keep|ls|forget`.
+- **K2b/K2c**: vault editing in `kutup-pass` and its WASM build; the website
+  with the offline outbox.
 - **K3**: re-merging diverged versions; phone browsers. **K3b**: the opt-in
   SSH agent in the `kutup` CLI.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing

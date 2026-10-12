@@ -1,7 +1,7 @@
 # Kutup Pass (password manager)
 
-**Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`) and K1 (conditional
-saves, `kutup sync` merging vaults) built. The research and every product
+**Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`), K1 (conditional
+saves, `kutup sync` merging vaults) and K2a (vault secrets) built. The research and every product
 decision are in
 [`../research/19-password-manager.md`](../research/19-password-manager.md)
 ("Priorities", "Direction", "SSH agent in the `kutup` CLI", "Unlocking, key
@@ -194,11 +194,18 @@ one database, plus a report of what happened.
   outbox of pending saves are kept in IndexedDB (encrypted records, research
   16); a reload without network can open the vault again once offline unlock
   exists (research 19 §5.6).
-- **Vault secrets**: a per-user, per-vault record sealed under the account
-  master key (`kutup-crypto`, a new `account_envelope` purpose bound to the
-  user and file id), holding the vault password and optionally the key file.
-  Stored by the server, unreadable to it. Creating or opening a vault offers
-  to remember it; a removed member's record is deleted with their access.
+- **Vault secrets** (built in K2a): a per-user, per-vault record sealed
+  under the account master key: `kutup_crypto::pass_vault`, an
+  `account_envelope` with the new purpose `PassVaultSecret = 6` (bound to the
+  login email) whose payload binds the vault's file id, holding the vault
+  password and/or the key file. Key files over 2048 bytes are kept as their
+  SHA-256, which KeePass treats as the same key; what is kept is checked to
+  open the vault first. Stored by the server (`pass_vault_secrets`,
+  `/api/pass/vault-secrets`), unreadable to it. Creating or opening a vault
+  offers to remember it; a removed member's record is deleted when it is
+  next listed, and purging the vault deletes them all. `kutup sync` tries the
+  kept secret before the environment and the prompt, offers to keep a typed
+  password, and `kutup pass keep|ls|forget` manages them headless.
 - Entry editing covers the KeePassXC fields (research 19 §4): standard fields,
   custom fields (protected or not), tags, attachments, TOTP (`otp`), URLs
   (`URL`, `KP2A_URL*`), expiry, history, groups, recycle bin; passkeys and SSH
@@ -225,7 +232,9 @@ keeps, approval per use, keys listed while locked, memory only,
 | **K0a** ✅ | `crates/kutup-pass`: KDBX open/save through `keepass`, upgrade to 4.1, composite keys; the corpus round-trip test | every corpus vault in a supported format round-trips equal |
 | **K0b** ✅ | Three-way merge with the report and review marks; fixtures and property tests | all merge cases and properties pass |
 | **K1** ✅ | `basedOn` and parent versions on the server (+ migration); `kutup sync` saves `.kdbx` as versions and merges on conflict | two machines editing one vault offline, then syncing, lose nothing (live test) |
-| **K2** | `kutup-pass-wasm`; the `pass.<domain>` app; vault secrets; editing; offline outbox | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
+| **K2a** ✅ | Vault secrets: `kutup_crypto::pass_vault` (+ vectors, WASM), the server records (+ migration), `kutup sync` and `kutup pass` using them | sync merges a vault with no password given once its key is kept |
+| **K2b** | Vault editing in `kutup-pass` (a view and edit operations as KeePass apps make them) and `kutup-pass-wasm` | the website's operations round-trip through KDBX and merge |
+| **K2c** | The `pass.<domain>` app: vault list, unlock, entry editor, offline outbox, conflict review | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
 | **K3** | Divergence handling and re-merge; the website on phone browsers | diverged versions are merged by the next client that opens the vault |
 | **K3b** | The `kutup` SSH agent | `ssh` and `git commit -S` work through it with approvals |
 | **K4** | Native apps (separate repositories, later) | — |

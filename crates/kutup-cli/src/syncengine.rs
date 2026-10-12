@@ -250,6 +250,7 @@ pub fn sync(
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
     let master_key = sess.master_key_bytes().context("master key")?;
+    vaults.sign_in(sess)?;
     let root = PathBuf::from(local_dir);
     let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     let pair = sync_pair_id(collection_id, &canonical_root.to_string_lossy());

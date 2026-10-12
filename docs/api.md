@@ -1417,6 +1417,39 @@ not offered or a resource it does not have, `429` above 1,200 requests a
 minute per person, `502` when the provider fails (an expired cached copy is
 served instead when there is one).
 
+## Kutup Pass
+
+Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
+file in Drive with its own key; each person may keep, per vault they can
+open, that key sealed under their master key: an `AccountEnvelopeV1` with
+purpose `PassVaultSecret` (6) whose payload binds the vault's file id
+(`kutup_crypto::pass_vault`, vectors in
+`crates/kutup-crypto/tests/vectors/pass-vault-secret-v1.json`). Kutup Pass and
+`kutup sync` then open the vault with the Kutup sign-in. The server checks
+only the envelope's public header.
+
+### GET /api/pass/vault-secrets
+
+The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
+updatedAt}]` (`envelope` base64). A vault in the trash keeps its secret,
+unlisted, until it is restored; a secret for a vault the caller can no longer
+open is deleted as it is listed. Purging a vault deletes every secret for it.
+
+### PUT /api/pass/vault-secrets/:fileId
+
+**Body:** `{envelope}`, canonical base64 of at most 4608 bytes. Stores or
+replaces the caller's secret for that vault. `400` unless the envelope is a
+`PassVaultSecret` envelope for the caller's login email; `404` for a vault
+that does not exist, is in the trash, or the caller cannot open.
+**Response:** `204`.
+
+### DELETE /api/pass/vault-secrets/:fileId
+
+Forgets the caller's secret for the vault (the vault is untouched).
+**Response:** `204`.
+
+---
+
 ## Photos
 
 The Photos app's library (docs/plans/photos.md). Photos are Drive files;

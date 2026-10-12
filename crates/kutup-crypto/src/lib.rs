@@ -31,6 +31,7 @@
 //! - [`contact_card`] — signed contact summaries and sealed contact cards.
 //! - [`mail_names`] — sealed names of mail folders, labels and filters.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
+//! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_envelope;
 pub mod asset;
@@ -60,6 +61,7 @@ pub mod mail_names;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod pass_vault;
 pub mod photos_library;
 pub mod profile_key_share;
 pub mod safety_number;

@@ -10,6 +10,7 @@ pub mod logout;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;
+pub mod pass;
 pub mod pubshare;
 pub mod recover;
 pub mod register;

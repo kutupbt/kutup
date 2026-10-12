@@ -15,6 +15,7 @@ pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod identity;
+pub mod pass;
 pub mod public;
 pub mod sessions;
 pub mod sharing;
