@@ -92,6 +92,11 @@ function forgetFetched(): void {
   for (const icon of icons) icon.then((src) => src && URL.revokeObjectURL(src), () => undefined)
 }
 
+/** The website's icon through Kutup, as an address in this tab; null for none. */
+export function siteIconThroughKutup(domain: string): Promise<string | null> {
+  return throughKutup(domain)
+}
+
 function throughKutup(domain: string): Promise<string | null> {
   let icon = fetched.get(domain)
   if (!icon) {

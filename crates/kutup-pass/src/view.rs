@@ -4,6 +4,7 @@
 //!
 //! Times are UTC, as KeePass keeps them, written `YYYY-MM-DDTHH:MM:SSZ`.
 
+use base64::Engine as _;
 use chrono::NaiveDateTime;
 use keepass::db::{CustomDataValue, Entry, Group, GroupId, Icon};
 use keepass::Database;
@@ -33,6 +34,21 @@ pub struct VaultView {
     pub groups: Vec<GroupView>,
     /// Every entry, by group in the order above, then in the group's order.
     pub entries: Vec<EntryView>,
+    /// The vault's own pictures that a browser can show (raster images),
+    /// used or not, oldest first.
+    pub custom_icons: Vec<CustomIconView>,
+}
+
+/// One of the vault's own pictures (a KeePass custom icon).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomIconView {
+    pub id: String,
+    /// `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/x-icon`
+    /// or `image/bmp`, from the bytes.
+    pub mime: String,
+    /// Base64.
+    pub data: String,
 }
 
 /// A group.
@@ -48,6 +64,9 @@ pub struct GroupView {
     /// A built-in KeePass icon number.
     pub icon: Option<usize>,
     pub has_custom_icon: bool,
+    /// The id of its picture in [`VaultView::custom_icons`], when that is
+    /// one a browser can show.
+    pub custom_icon: Option<String>,
     pub tags: Vec<String>,
     pub expires: bool,
     pub expiry: Option<String>,
@@ -102,6 +121,9 @@ pub struct EntryView {
     pub tags: Vec<String>,
     pub icon: Option<usize>,
     pub has_custom_icon: bool,
+    /// The id of its picture in [`VaultView::custom_icons`], when that is
+    /// one a browser can show.
+    pub custom_icon: Option<String>,
     /// `#rrggbb`.
     pub foreground_color: Option<String>,
     pub background_color: Option<String>,
@@ -133,6 +155,39 @@ pub fn parse_time(value: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
         .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"))
         .ok()
+}
+
+/// The image type of a picture, from its first bytes; only raster formats
+/// a browser shows in `<img>` (never SVG).
+pub fn raster_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.len() >= 6 && bytes[..4] == [0, 0, 1, 0] && bytes[4..6] != [0, 0] {
+        Some("image/x-icon")
+    } else if bytes.starts_with(b"BM") && bytes.len() > 26 {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
+/// The id of the picture `icon` names, when the vault has it and a browser
+/// can show it.
+fn shown_custom_icon(db: &Database, icon: Option<&Icon>) -> Option<String> {
+    match icon {
+        Some(Icon::Custom(id)) => db
+            .custom_icons
+            .get(id)
+            .filter(|icon| raster_kind(&icon.data).is_some())
+            .map(|_| id.uuid().to_string()),
+        _ => None,
+    }
 }
 
 fn builtin(icon: Option<&Icon>) -> (Option<usize>, bool) {
@@ -228,6 +283,7 @@ fn entry_view(db: &Database, entry: &Entry, history_count: usize) -> EntryView {
         tags,
         icon,
         has_custom_icon,
+        custom_icon: shown_custom_icon(db, entry.icon.as_ref()),
         foreground_color: entry.foreground_color.as_ref().map(ToString::to_string),
         background_color: entry.background_color.as_ref().map(ToString::to_string),
         override_url: entry.override_url.clone().unwrap_or_default(),
@@ -266,6 +322,7 @@ fn group_view(db: &Database, group: &Group, depth: usize, bin: Option<GroupId>) 
         notes: group.notes.clone().unwrap_or_default(),
         icon,
         has_custom_icon,
+        custom_icon: shown_custom_icon(db, group.icon.as_ref()),
         tags: group.tags.clone(),
         expires: group.times.expires.unwrap_or(false),
         expiry: group.times.expiry.map(format_time),
@@ -296,6 +353,12 @@ pub fn view(db: &Database) -> VaultView {
         }
     }
     let limit = |value: Option<isize>| value.filter(|v| *v >= 0).map(|v| v as i64);
+    let mut custom_icons: Vec<(&keepass::db::CustomIcon, &'static str)> = db
+        .custom_icons
+        .values()
+        .filter_map(|icon| raster_kind(&icon.data).map(|mime| (icon, mime)))
+        .collect();
+    custom_icons.sort_by_key(|(icon, _)| (icon.last_modification_time, icon.id.uuid()));
     VaultView {
         name: db.meta.database_name.clone().unwrap_or_default(),
         description: db.meta.database_description.clone().unwrap_or_default(),
@@ -307,6 +370,14 @@ pub fn view(db: &Database) -> VaultView {
         history_max_size: limit(db.meta.history_max_size),
         groups,
         entries,
+        custom_icons: custom_icons
+            .into_iter()
+            .map(|(icon, mime)| CustomIconView {
+                id: icon.id.uuid().to_string(),
+                mime: mime.to_owned(),
+                data: base64::engine::general_purpose::STANDARD.encode(&icon.data),
+            })
+            .collect(),
     }
 }
 

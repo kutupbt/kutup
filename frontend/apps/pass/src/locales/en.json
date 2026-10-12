@@ -286,6 +286,18 @@
     },
     "saveFailed": "Could not save the setting. Try again."
   },
+  "icons": {
+    "change": "Change icon",
+    "title": "Icon for {{name}}",
+    "description": "A picture kept in the vault, so KeePass apps show it too.",
+    "inVault": "Pictures in this vault",
+    "pick": "Picture {{number}}",
+    "upload": "Upload a picture",
+    "fromWebsite": "Use the website's icon",
+    "reset": "Default icon",
+    "unreadable": "That file could not be read as a picture. Choose a PNG, JPEG, GIF, WebP, BMP or ICO image of at most 5 MB.",
+    "noSiteIcon": "The website has no icon Kutup could fetch."
+  },
   "import": {
     "open": "Import from another app…",
     "title": "Import passwords",

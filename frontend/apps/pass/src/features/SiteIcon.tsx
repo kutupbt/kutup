@@ -3,14 +3,16 @@ import { cn } from '@kutup/ui/lib/cn'
 import { useSiteIcon } from '../sync/siteIcons'
 
 /**
- * An entry's website icon (`sync/siteIcons.ts`), asked for once the row
- * scrolls into view; the title's first letter until then, and when there
- * is none.
+ * An entry's icon: its own picture from the vault (`picture`, a data:
+ * address) when it has one, else its website's icon (`sync/siteIcons.ts`),
+ * asked for once the row scrolls into view; the title's first letter until
+ * then, and when there is none.
  */
-export function SiteIcon({ title, address, className }: { title: string; address: string; className?: string }) {
+export function SiteIcon({ title, address, picture, className }: { title: string; address: string; picture?: string | null; className?: string }) {
   const box = useRef<HTMLSpanElement>(null)
   const [visible, setVisible] = useState(false)
-  const src = useSiteIcon(visible ? address : '')
+  const site = useSiteIcon(visible && !picture ? address : '')
+  const src = picture ?? site
   const [broken, setBroken] = useState<string | null>(null)
 
   useEffect(() => {

@@ -13,6 +13,7 @@ function entry(id: string, title: string, password: string, extra: Partial<Entry
     tags: [],
     icon: null,
     hasCustomIcon: false,
+    customIcon: null,
     foregroundColor: null,
     backgroundColor: null,
     overrideUrl: '',
@@ -43,6 +44,7 @@ function vault(entries: EntryView[]): VaultView {
     historyMaxSize: null,
     groups: [],
     entries,
+    customIcons: [],
   }
 }
 

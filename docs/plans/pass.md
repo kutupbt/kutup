@@ -308,7 +308,7 @@ one database, plus a report of what happened.
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
   wrong key, kept and forgotten keys, lock), 150 (CSV import), 151 (PIN),
-  152 (site icons).
+  152 (site icons), 153 (custom icons).
 - **Security report** (the vault's Security button): weak passwords,
   passwords shared by several entries, and expired entries, worked out on
   the device from the open vault; nothing is sent anywhere, so there is no
@@ -329,8 +329,22 @@ one database, plus a report of what happened.
   `KP2A_URL_n`, custom fields kept (secret-looking ones hidden), times kept;
   it applies all or nothing. The dialog asks to delete the plaintext export
   afterwards. Spec 150.
-- **Not yet:** custom icons (the vault's own pictures: shown, uploaded, a
-  site icon saved into the vault), sharing single entries; on the roadmap.
+- **Custom icons** (KeePass's own pictures, kept in the vault, so KeePassXC
+  and other KeePass apps show them too): an entry's or group's picture
+  shows before its website's icon (entries) or the folder (groups). "Change
+  icon" (the entry's icon, the group's menu) offers the vault's pictures,
+  an uploaded image, or, for an entry when icons come through Kutup, its
+  website's icon saved into the vault; or the default icon again. The tab
+  redraws a new picture as a PNG of at most 64 px a side (KeePassXC keeps
+  128), which drops everything but the pixels; inputs up to 5 MB, raster
+  types only. The edits are `setEntryIcon` (the previous state into the
+  entry's history) and `setGroupIcon`, which take a PNG of at most 256 KiB
+  and reuse a picture with the same bytes. The view lists the vault's
+  pictures browsers can show (PNG, JPEG, GIF, WebP, ICO, BMP; never SVG) as
+  base64, shown as `data:` addresses, so the pass host still loads no
+  outside images. As KeePass apps, a picture nothing uses any more stays in
+  the vault (merges union them). Spec 153 and `tests/edit.rs`.
+- **Not yet:** sharing single entries; on the roadmap.
 
 **The plan as written:**
 
