@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { membersOf, useUpdateMessages, type FolderId, type MailConversation, type MailMessage, type MessageChange } from '@kutup/mail-core/api'
+import { membersOf, useMailSettings, useUpdateMailSettings, useUpdateMessages, type FolderId, type MailConversation, type MailMessage, type MessageChange } from '@kutup/mail-core/api'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { askSpamUnsubscribe, fromList, useQuietUnsubscribe } from './spamUnsubscribe'
 
 /** Where a move can send mail; Inbox means home: received mail to the Inbox, sent mail to Sent. */
 export type MoveTarget = 'inbox' | 'archive' | 'spam' | 'trash'
@@ -17,7 +18,7 @@ export function movesFor(folder: FolderId): MoveTarget[] {
 }
 
 /** What a move needs to know of a message (also what a dragged row carries); a conversation row moves all its messages here. */
-export type Movable = Pick<MailMessage, 'id' | 'folder' | 'direction'> & { customFolder?: string | null; conversation?: MailConversation }
+export type Movable = Pick<MailMessage, 'id' | 'folder' | 'direction'> & { customFolder?: string | null; conversation?: MailConversation; threadId?: string; unsubscribable?: boolean }
 
 /** Drag data for mail rows dropped on a folder: JSON `Movable[]`. */
 export const MAIL_DRAG_TYPE = 'application/x-kutup-mail'
@@ -39,6 +40,9 @@ const placeKey = (place: Place) => `${place.folder}:${place.customFolder ?? ''}`
 export function useMailActions(group?: string) {
   const { t } = useTranslation()
   const update = useUpdateMessages()
+  const settings = useMailSettings()
+  const updateSettings = useUpdateMailSettings()
+  const quietUnsubscribe = useQuietUnsubscribe()
   // A shared mailbox's messages are filed in it (mail groups).
   const inMailbox = group ? { group } : {}
 
@@ -48,7 +52,36 @@ export function useMailActions(group?: string) {
     await Promise.all([...groups.values()].map(({ place, ids }) => update.mutateAsync({ ids, ...place, ...inMailbox })))
   }
 
+  /**
+   * Moves; to Spam, mail from a list may also unsubscribe (Proton's
+   * SpamAction): asked each time, or as the reader chose to be remembered.
+   */
   function move(messages: Movable[], destination: Destination, after?: () => void) {
+    const listed = destination === 'spam' ? messages.filter(fromList) : []
+    const action = settings.data?.spamAction ?? 'ask'
+    if (listed.length === 0 || action === 'just_spam') return moveNow(messages, destination, after)
+    const go = (unsubscribe: boolean) => {
+      moveNow(messages, destination, after)
+      if (unsubscribe) {
+        void quietUnsubscribe(listed).then(({ done, manual, failed }) => {
+          if (done) toast.success(t('spamUnsubscribe.done', { count: done }))
+          if (manual) toast.info(t('spamUnsubscribe.manual', { count: manual }))
+          if (failed) toast.error(t('spamUnsubscribe.failed', { count: failed }))
+        })
+      }
+    }
+    if (action === 'spam_and_unsubscribe') return go(true)
+    askSpamUnsubscribe({
+      count: messages.length,
+      conversations: messages.some((m) => m.conversation),
+      onChoice: (unsubscribe, remember) => {
+        if (remember) updateSettings.mutate({ spamAction: unsubscribe ? 'spam_and_unsubscribe' : 'just_spam' })
+        go(unsubscribe)
+      },
+    })
+  }
+
+  function moveNow(messages: Movable[], destination: Destination, after?: () => void) {
     // Drafts stay drafts: they are deleted, not filed.
     const movable = membersOf(messages.map((m) => ({ ...m, customFolder: m.customFolder ?? null }))).filter((m) => m.folder !== 'drafts')
     if (movable.length === 0) return

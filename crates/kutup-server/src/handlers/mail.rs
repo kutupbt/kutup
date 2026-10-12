@@ -70,6 +70,9 @@ pub struct MailMessage {
     pub attachment_count: i32,
     /// From a mailing list the reader unsubscribed from (Proton's banner then says so).
     pub unsubscribed: bool,
+    /// From a list that offers a way out (List-Unsubscribe, noted on arrival):
+    /// moving it to Spam may unsubscribe (Proton's SpamAction).
+    pub unsubscribable: bool,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -104,6 +107,8 @@ pub struct ConversationMember {
     pub folder: String,
     pub direction: String,
     pub custom_folder: Option<String>,
+    #[serde(default)]
+    pub unsubscribable: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -227,6 +232,7 @@ pub(crate) struct Row {
     references_list: Vec<String>,
     attachment_count: i32,
     unsubscribed: bool,
+    unsubscribable: bool,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -237,6 +243,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     seen, starred, protection,
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
     reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
+    unsubscribable,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -269,6 +276,7 @@ impl From<Row> for MailMessage {
             references: row.references_list,
             attachment_count: row.attachment_count,
             unsubscribed: row.unsubscribed,
+            unsubscribable: row.unsubscribable,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -648,7 +656,7 @@ async fn conversation_rows(
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
         "WITH here AS (
              SELECT id, thread_id, folder, direction, custom_folder, received_at, seen, starred,
-                    from_address, from_name, attachment_count, size_bytes
+                    from_address, from_name, attachment_count, size_bytes, unsubscribable
                FROM mail_messages
               WHERE {place_filter}
          ), threads AS (
@@ -656,7 +664,8 @@ async fn conversation_rows(
                     (array_agg(id ORDER BY received_at DESC, id DESC))[1] AS latest,
                     max(received_at) AS last_at,
                     jsonb_agg(jsonb_build_object('id', id, 'folder', folder, 'direction', direction,
-                                                 'customFolder', custom_folder)
+                                                 'customFolder', custom_folder,
+                                                 'unsubscribable', unsubscribable)
                               ORDER BY received_at, id) AS members,
                     count(*) FILTER (WHERE NOT seen) AS unread,
                     bool_or(starred) AS starred,

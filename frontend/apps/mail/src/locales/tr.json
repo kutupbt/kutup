@@ -526,7 +526,12 @@
     "confirmLink": "Bağlantı adreslerini onayla",
     "confirmLinkHint": "Bir iletideki Kutup dışına giden bir bağlantıya tıkladığınızda, açılmadan önce gerçekte nereye gittiğini görün. İstenmeyen klasöründeki bağlantılar her zaman sorar.",
     "pageSizeConversations": "Sayfa başına konuşma",
-    "pageSizeMessages": "Sayfa başına ileti"
+    "pageSizeMessages": "Sayfa başına ileti",
+    "spamAction": "Otomatik abonelikten çık",
+    "spamActionHint": "Bir e-posta listesinden gelen postayı Spam'e taşıdığınızda listeden de çıkın.",
+    "spamActionOn": "Açık",
+    "spamActionOff": "Kapalı",
+    "spamActionAsk": "Her seferinde sor"
   },
   "senders": {
     "title": "Engelle ve izin ver",
@@ -822,5 +827,21 @@
     "copyAndTrash": "'{{code}}' kodunu kopyala ve Çöp'e taşı",
     "copied": "'{{code}}' panoya kopyalandı",
     "copyFailed": "Kod kopyalanamadı."
+  },
+  "spamUnsubscribe": {
+    "title": "Spam'e taşı",
+    "bodyMessages_one": "Bu ileti spam olarak işaretlenecek. Gelecekteki e-postaların aboneliğinden de çıkmak ister misiniz?",
+    "bodyMessages_other": "Bu iletiler spam olarak işaretlenecek. Gelecekteki e-postaların aboneliğinden de çıkmak ister misiniz?",
+    "bodyConversations_one": "Bu konuşma spam olarak işaretlenecek. Gelecekteki e-postaların aboneliğinden de çıkmak ister misiniz?",
+    "bodyConversations_other": "Bu konuşmalar spam olarak işaretlenecek. Gelecekteki e-postaların aboneliğinden de çıkmak ister misiniz?",
+    "remember": "Seçimimi hatırla",
+    "justSpam": "Spam'e taşı",
+    "andUnsubscribe": "Spam'e taşı ve abonelikten çık",
+    "done_one": "1 e-posta listesinden çıkıldı.",
+    "done_other": "{{count}} e-posta listesinden çıkıldı.",
+    "manual_one": "1 listeden yalnızca web sayfasında çıkılabiliyor: çıkmak için iletilerinden birini açın.",
+    "manual_other": "{{count}} listeden yalnızca web sayfalarında çıkılabiliyor: çıkmak için iletilerinden birini açın.",
+    "failed_one": "1 listeden çıkılamadı.",
+    "failed_other": "{{count}} listeden çıkılamadı."
   }
 }

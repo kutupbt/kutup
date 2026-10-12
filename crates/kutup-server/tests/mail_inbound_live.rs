@@ -2617,9 +2617,14 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50 })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask" })
     );
     // Proton's page sizes only.
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "spamAction": "always" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 400);
     for (size, status) in [(100, 200), (75, 400)] {
         let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
             .json(&json!({ "pageSize": size }))
@@ -2657,12 +2662,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200 }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe" }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200 })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe" })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3575,6 +3580,8 @@ fn one_click_unsubscribe_goes_through_the_server() {
     assert_eq!((rcpt, data), (250, 250));
     let row = wait_for(&c, &base, &alice, &message_id);
     assert_eq!(row["unsubscribed"], false);
+    // Noted on arrival: list mail (Proton's SpamAction asks on Spam).
+    assert_eq!(row["unsubscribable"], true);
     let id = row["id"].as_str().unwrap().to_string();
 
     // Someone else's message: not found.

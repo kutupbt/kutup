@@ -51,6 +51,10 @@ pub struct Readable {
     /// the receiver), or a Kutup account sent it. An allow-list entry counts
     /// only then (docs/plans/mail-filters.md).
     pub from_authenticated: bool,
+    /// From a mailing list that offers a way out (`List-Unsubscribe`): moving
+    /// it to Spam may unsubscribe (Proton's SpamAction). Only the flag is
+    /// kept; the ways out stay in the encrypted message.
+    pub list_unsubscribe: bool,
 }
 
 /// A delivery failure report.
@@ -87,6 +91,9 @@ impl Readable {
             pgp_encrypted: pgp_encrypted(&message),
             // Needs the server's own name: set by the receiver.
             from_authenticated: false,
+            list_unsubscribe: fields(raw)
+                .iter()
+                .any(|(name, value)| name == "list-unsubscribe" && !value.trim().is_empty()),
         }
     }
 }

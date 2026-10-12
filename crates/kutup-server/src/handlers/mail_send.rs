@@ -284,6 +284,7 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
             pgp_encrypted: false,
             // From is the sending account's own address, checked here.
             from_authenticated: true,
+            list_unsubscribe: false,
         },
         bcc,
     })

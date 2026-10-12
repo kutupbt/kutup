@@ -38,7 +38,7 @@ reference only where Proton has nothing.
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
-| Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; ❌ auto-unsubscribe on moving to Spam |
+| Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; on moving list mail to Spam, "Move to spam and unsubscribe" (asked, or always/never in Settings → General as Proton's Auto-unsubscribe): arrival notes only that a message is from a list, the ways out are read on the device |
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ❌ |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
 | One-time code detection with Copy | `ItemOneTimeCode.tsx` | ✅ on the device, mail under 20 minutes old with a code-like subject (English, Turkish, German, French, Spanish): the code beside the list row (from the subject) and in the opened message (subject and body); Copy puts it on the clipboard and moves the mail to Trash with Undo (spec 99) |

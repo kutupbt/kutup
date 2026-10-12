@@ -69,6 +69,8 @@ export interface MailMessage {
   attachmentCount: number
   /** From a mailing list the reader unsubscribed from. */
   unsubscribed?: boolean
+  /** From a list that offers a way out (noted on arrival): moving it to Spam may unsubscribe (Proton's SpamAction). */
+  unsubscribable?: boolean
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -83,6 +85,7 @@ export interface ConversationMember {
   folder: MailMessage['folder']
   direction: MailMessage['direction']
   customFolder: string | null
+  unsubscribable?: boolean
 }
 
 /** A conversation in one place, as Proton's ContextNumMessages and ContextNumUnread. */
@@ -662,6 +665,8 @@ export interface MailSettings {
   confirmLink: boolean
   /** Rows on a page of the list: 50, 100 or 200 (Proton's PageSize). */
   pageSize: number
+  /** Moving list mail to Spam: ask, just move, or move and unsubscribe (Proton's SpamAction). */
+  spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
