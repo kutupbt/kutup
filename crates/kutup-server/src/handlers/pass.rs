@@ -178,11 +178,13 @@ fn checked_envelope(b64: &str, binding: &str) -> AppResult<Vec<u8>> {
     }
     let header = account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
-    if header.purpose != AccountEnvelopePurpose::PassVaultSecret
-        || Some(header.canonical_login_email)
-            != account_envelope::canonical_login_email(binding).ok()
-    {
+    if header.purpose != AccountEnvelopePurpose::PassVaultSecret {
         return Err(AppError::bad_request(
+            "envelope is not this account's vault secret",
+        ));
+    }
+    if Some(header.canonical_login_email) != account_envelope::canonical_login_email(binding).ok() {
+        return Err(AppError::binding_changed(
             "envelope is not this account's vault secret",
         ));
     }

@@ -401,7 +401,7 @@ pub async fn add_key(
             .fetch_one(&mut *change.tx)
             .await?;
     if header.canonical_login_email != binding {
-        return Err(AppError::bad_request(
+        return Err(AppError::binding_changed(
             "privateKeyEnvelope is not this account's mail key",
         ));
     }

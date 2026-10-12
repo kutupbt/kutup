@@ -63,6 +63,15 @@ impl AppError {
         Self::new(StatusCode::NOT_FOUND, message)
     }
 
+    /// An envelope bound to what the account's keys were bound to before a
+    /// re-seal (docs/plans/account-identity.md): 409 with `code:
+    /// "bindingChanged"`, so a page open since then refreshes its binding
+    /// (`refreshEnvelopeBinding`), seals again and retries.
+    pub fn binding_changed(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, message)
+            .with_details(serde_json::json!({ "code": "bindingChanged" }))
+    }
+
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, message)
     }
