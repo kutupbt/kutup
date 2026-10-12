@@ -27,7 +27,7 @@ async function write(page: Page, to: string, subject: string, body: string) {
   await page.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(page.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(page.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 }
 
 async function shot(page: Page, name: string) {
@@ -128,7 +128,7 @@ test('saving senders to contacts, person cards, a dark body and folded quotes', 
   await reply.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(aliceMail.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(aliceMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(aliceMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
   await openWhenArrived(bobMail, new RegExp(`Re: ${subject}`))
   const answer = bobMail.frameLocator('iframe[title="Message"]').last()
   await expect(answer.getByText('Memnun oldum Bob.')).toBeVisible({ timeout: 60_000 })

@@ -36,8 +36,8 @@ import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 // each message opened here with the address key, and messages written here,
 // encrypted once for every Kutup recipient and the sender's own copy.
 
-export type FolderId = 'inbox' | 'drafts' | 'scheduled' | 'sent' | 'archive' | 'spam' | 'trash' | 'starred' | 'all'
-export const FOLDERS: FolderId[] = ['inbox', 'drafts', 'scheduled', 'sent', 'starred', 'archive', 'spam', 'trash']
+export type FolderId = 'inbox' | 'drafts' | 'scheduled' | 'snoozed' | 'sent' | 'archive' | 'spam' | 'trash' | 'starred' | 'all'
+export const FOLDERS: FolderId[] = ['inbox', 'drafts', 'scheduled', 'snoozed', 'sent', 'starred', 'archive', 'spam', 'trash']
 /**
  * What a list shows: a fixed folder, one of the account's own folders
  * (`folder:<id>`) or a label (`label:<id>`), docs/plans/mail-filters.md.
@@ -79,6 +79,8 @@ export interface MailMessage {
   /** A scheduled message: when it goes, and its held send (to take it back). */
   scheduledAt?: string | null
   outboxId?: string | null
+  /** Snoozed: when it comes back to the Inbox. */
+  snoozedUntil?: string | null
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -712,6 +714,16 @@ export function useRemoveImageSender() {
       await api.post('/mail/image-senders/delete', { address })
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: imageSendersKey }),
+  })
+}
+
+/** Proton's Snooze: Inbox messages wait in Snoozed until `until` (ISO 8601); without it, back now. */
+export function useSnooze() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ ids, until, group }: { ids: string[]; until?: string; group?: string }) =>
+      (await api.post<{ updated: number }>('/mail/messages/snooze', { ids, ...(until ? { until } : {}), ...scoped(group) })).data.updated,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: mailKey }),
   })
 }
 

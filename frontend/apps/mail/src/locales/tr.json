@@ -26,7 +26,8 @@
     "spam": "İstenmeyen",
     "trash": "Çöp",
     "all": "Tüm postalar",
-    "scheduled": "Planlanan"
+    "scheduled": "Planlanan",
+    "snoozed": "Ertelenen"
   },
   "empty": {
     "inbox": "Gelen kutunuz boş",
@@ -902,5 +903,23 @@
     "rowAt": "{{date}} gidecek",
     "willSend": "Bu ileti {{date}} tarihinde gönderilecek.",
     "edit": "Düzenle"
+  },
+  "snooze": {
+    "action": "Ertele",
+    "title": "Şu zamana kadar ertele",
+    "tomorrow": "Yarın",
+    "later": "Bu hafta içinde",
+    "weekend": "Bu hafta sonu",
+    "nextweek": "Gelecek hafta",
+    "custom": "Tarih ve saat seç…",
+    "customTitle": "Ertele",
+    "customHint": "İleti gelen kutunuza ne zaman geri dönsün?",
+    "outOfRange": "Bir dakika ile bir yıl sonrası arasında bir zaman seçin.",
+    "done_one": "Konuşma {{date}} tarihine kadar ertelendi.",
+    "done_other": "{{count}} konuşma {{date}} tarihine kadar ertelendi.",
+    "unsnooze": "Ertelemeyi kaldır",
+    "undone_one": "Erteleme kaldırıldı.",
+    "undone_other": "{{count}} konuşmanın ertelemesi kaldırıldı.",
+    "rowUntil": "{{date}} dönecek"
   }
 }

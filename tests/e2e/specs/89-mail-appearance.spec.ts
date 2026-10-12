@@ -37,7 +37,7 @@ test('appearance: row layout, compact rows, maximised composer, resizable list',
   await mail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
   const row = mail.getByRole('listitem').filter({ has: mail.getByRole('link', { name: new RegExp(subject) }) }).first()
   await expect(row).toBeVisible({ timeout: 60_000 })
   const comfortable = (await row.boundingBox())!.height
@@ -105,7 +105,7 @@ test('conversation grouping: a reply joins its conversation in one row; off list
   await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(bobMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
   const reply = async (page: Page, text: string) => {
     // Held for undo send first: wait until it went.
     await expect(async () => {
@@ -119,7 +119,7 @@ test('conversation grouping: a reply joins its conversation in one row; off list
     await page.getByRole('dialog', { name: new RegExp(subject) }).getByRole('button', { name: 'Send', exact: true }).click()
     await expect(page.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
     // The toast may be the last send's: wait for this composer to close.
-    await expect(page.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+    await expect(page.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
   }
   await expect(async () => {
     await mail.reload()

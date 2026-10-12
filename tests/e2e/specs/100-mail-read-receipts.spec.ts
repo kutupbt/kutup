@@ -40,7 +40,7 @@ test('a read receipt: asked for, sent by the reader, received by the sender', as
   await expect(named.getByRole('button', { name: 'Read receipt' })).toHaveAttribute('aria-pressed', 'true')
   await named.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
-  await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(bobMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
   // Alice is offered one; nothing goes until she sends it.
   await expect(async () => {

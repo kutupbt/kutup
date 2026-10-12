@@ -4184,3 +4184,105 @@ fn scheduled_send_waits_in_scheduled_then_goes() {
         .iter()
         .any(|m| m["subject"] == "Sonra"));
 }
+
+#[test]
+fn snoozed_mail_comes_back_unread() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    send_to_self(&c, &base, &user, &address, "Sonra bak");
+    let find = |name: &str| -> Option<Value> {
+        folder(&c, &base, &user.token, name)
+            .into_iter()
+            .find(|m| m["subject"] == "Sonra bak" && m["direction"] == "inbound")
+    };
+    let mut row = None;
+    for _ in 0..100 {
+        row = find("inbox");
+        if row.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let id = row.expect("delivered")["id"].as_str().unwrap().to_string();
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [id], "seen": true }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    let snooze = |token: &str, until: Option<time::OffsetDateTime>| {
+        let until = until.map(|at| {
+            at.format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        });
+        bearer(c.post(format!("{base}/api/mail/messages/snooze")), token)
+            .json(&json!({ "ids": [id], "until": until }))
+            .send()
+            .unwrap()
+    };
+    let updated = |r: reqwest::blocking::Response| -> u64 {
+        assert!(r.status().is_success(), "{}", r.status());
+        r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
+    };
+    let now = time::OffsetDateTime::now_utc;
+    // Too soon or too far: refused; someone else's: untouched.
+    assert_eq!(
+        snooze(&user.token, Some(now() + time::Duration::seconds(5))).status(),
+        400
+    );
+    assert_eq!(
+        snooze(&user.token, Some(now() + time::Duration::days(400))).status(),
+        400
+    );
+    let eve = register(&c, &base);
+    assert_eq!(
+        updated(snooze(&eve.token, Some(now() + time::Duration::hours(1)))),
+        0
+    );
+
+    // Snoozed: out of the Inbox, in Snoozed with its time; Unsnooze brings it back.
+    assert_eq!(
+        updated(snooze(&user.token, Some(now() + time::Duration::hours(3)))),
+        1
+    );
+    assert!(find("inbox").is_none());
+    assert!(find("snoozed").expect("snoozed")["snoozedUntil"].is_string());
+    assert_eq!(updated(snooze(&user.token, None)), 1);
+    assert!(find("inbox").is_some() && find("snoozed").is_none());
+
+    // Left alone: back in the Inbox at its time, unread.
+    assert_eq!(
+        updated(snooze(
+            &user.token,
+            Some(now() + time::Duration::seconds(61))
+        )),
+        1
+    );
+    let mut back = None;
+    for _ in 0..120 {
+        back = find("inbox");
+        if back.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let back = back.expect("back in the Inbox");
+    assert_eq!(back["seen"], false);
+    assert!(back["snoozedUntil"].is_null());
+
+    // Moved away while snoozed: no longer waiting.
+    assert_eq!(
+        updated(snooze(&user.token, Some(now() + time::Duration::hours(1)))),
+        1
+    );
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [id], "folder": "archive" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    assert!(find("archive").expect("archived")["snoozedUntil"].is_null());
+}

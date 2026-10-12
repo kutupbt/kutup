@@ -54,7 +54,7 @@ test('display name and signature: set in Settings, used when writing', async ({ 
   await mail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
   // Bob sees the name and the signature.
   await expect(async () => {

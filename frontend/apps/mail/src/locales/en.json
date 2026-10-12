@@ -26,7 +26,8 @@
     "spam": "Spam",
     "trash": "Trash",
     "all": "All mail",
-    "scheduled": "Scheduled"
+    "scheduled": "Scheduled",
+    "snoozed": "Snoozed"
   },
   "empty": {
     "inbox": "Your inbox is empty",
@@ -902,5 +903,23 @@
     "rowAt": "Sends {{date}}",
     "willSend": "This message will be sent on {{date}}.",
     "edit": "Edit"
+  },
+  "snooze": {
+    "action": "Snooze",
+    "title": "Snooze until",
+    "tomorrow": "Tomorrow",
+    "later": "Later this week",
+    "weekend": "This weekend",
+    "nextweek": "Next week",
+    "custom": "Select date and time…",
+    "customTitle": "Snooze",
+    "customHint": "When should the message reappear in your inbox?",
+    "outOfRange": "Choose a time from a minute to a year ahead.",
+    "done_one": "Conversation snoozed until {{date}}.",
+    "done_other": "{{count}} conversations snoozed until {{date}}.",
+    "unsnooze": "Unsnooze",
+    "undone_one": "Conversation unsnoozed.",
+    "undone_other": "{{count}} conversations unsnoozed.",
+    "rowUntil": "Back {{date}}"
   }
 }
