@@ -98,6 +98,7 @@ export type Op =
   | { op: 'deleteGroup'; id: string }
   | { op: 'moveGroup'; id: string; parentId: string }
   | { op: 'emptyRecycleBin' }
+  | { op: 'importCsv'; data: string; provider: string | null; groupName: string }
   | { op: 'updateVault'; name: string; description?: string; defaultUserName?: string }
 
 export interface Applied {
@@ -129,6 +130,27 @@ export interface MergeReport {
 export interface MergeOutcome {
   report: MergeReport
   differsFromTheirs: boolean
+}
+
+export interface ImportFormat {
+  id: string
+  name: string
+}
+
+export interface ImportPreview {
+  provider: string
+  providerName: string
+  count: number
+  groups: string[]
+  sample: { title: string; username: string; url: string; group: string }[]
+  /** What would not be imported: "kind: title". */
+  skipped: string[]
+  warnings: string[]
+}
+
+export interface ImportFailure {
+  error: 'empty' | 'tooLarge' | 'unreadable' | 'unknownFormat' | 'missingColumns' | 'tooMany'
+  detail: string
 }
 
 export interface OtpView {

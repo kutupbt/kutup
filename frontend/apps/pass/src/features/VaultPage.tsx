@@ -1,4 +1,4 @@
-import { ArrowLeft, Folder, FolderPlus, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, FileUp, Folder, FolderPlus, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -28,6 +28,7 @@ import { fieldValue, type EntryInput, type EntryView, type GroupView, type Merge
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { GroupDialog } from './GroupDialog'
+import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
@@ -92,6 +93,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [deletingGroup, setDeletingGroup] = useState<GroupView | null>(null)
   const [emptyingBin, setEmptyingBin] = useState(false)
   const [renamingVault, setRenamingVault] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   // Another device's save is taken in when the tab comes back, and now and then.
   useEffect(() => {
@@ -190,6 +192,12 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 <DropdownMenuItem onSelect={() => setRenamingVault(true)}>
                   <Pencil />
                   {t('vault.rename')}
+                </DropdownMenuItem>
+              ) : null}
+              {session.canEdit ? (
+                <DropdownMenuItem onSelect={() => setImporting(true)}>
+                  <FileUp />
+                  {t('import.open')}
                 </DropdownMenuItem>
               ) : null}
               {kept ? (
@@ -455,6 +463,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         }}
       />
       <TheirsKeyDialog session={session} open={status === 'needsKey'} />
+      <ImportDialog session={session} open={importing} onOpenChange={setImporting} onImported={(id) => selectGroup(id)} />
     </div>
   )
 }

@@ -249,14 +249,28 @@ one database, plus a report of what happened.
 - **Specs** 76 (vault, entries, history, attachments, groups, recycle bin,
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
-  wrong key, kept and forgotten keys, lock).
+  wrong key, kept and forgotten keys, lock), 150 (CSV import).
 - **Security report** (the vault's Security button): weak passwords,
   passwords shared by several entries, and expired entries, worked out on
   the device from the open vault; nothing is sent anywhere, so there is no
   breach lookup (a k-anonymity check against an outside service would send
   hash prefixes away).
-- **Not yet:** custom icons, importing CSV from other managers, sharing
-  single entries; on the roadmap.
+- **Import** (Vault actions → Import from another app…): a CSV export from
+  KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass,
+  Dashlane, Chrome (also Edge and Brave), Firefox, Safari / Apple Passwords,
+  or any CSV with named columns (`kutup-pass::import`). The format is worked
+  out from the header (or picked); the file is read on the device in the
+  vault worker and shown first: how many entries, the folders that become
+  groups, a sample, what will be skipped (cards, identities and other
+  non-login items) and notes on values kept as they were (an OTP that could
+  not be read stays as a hidden field). Decoding takes UTF-8 with or without
+  a BOM and UTF-16, separators `,` `;` or tab; limits 20 MB and 50,000
+  entries. The import is one edit (`importCsv`): a new group at the top of
+  the vault holds it all, folders as groups below, extra URLs as
+  `KP2A_URL_n`, custom fields kept (secret-looking ones hidden), times kept;
+  it applies all or nothing. The dialog asks to delete the plaintext export
+  afterwards. Spec 150.
+- **Not yet:** custom icons, sharing single entries; on the roadmap.
 
 **The plan as written:**
 
