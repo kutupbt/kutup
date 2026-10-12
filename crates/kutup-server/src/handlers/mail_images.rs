@@ -10,14 +10,12 @@
 //! - `GET /api/mail/images?url=`: one image. A known tracker answers 204 with
 //!   `X-Kutup-Tracker` and is never fetched.
 //!
-//! The fetcher runs inside the server's network, so it is narrow, as the Chat
-//! link preview's: http on port 80 or https on 443, every resolved address
-//! public, the connection pinned to the checked address (no DNS rebinding),
-//! redirects followed by hand and checked again, size and time limits, a
-//! per-account rate limit, and only raster images, recognised by their bytes
-//! (never SVG, which could run script if opened on its own).
+//! The fetch goes through `public_fetch` (public addresses only, pinned,
+//! redirects checked again, size and time limits), with http on port 80
+//! allowed too and no redirect followed to a tracker; a per-account rate
+//! limit; and only raster images, recognised by their bytes (never SVG,
+//! which could run script if opened on its own).
 
-use std::net::{IpAddr, SocketAddr};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -30,15 +28,13 @@ use url::Url;
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
+use crate::public_fetch::{self, Checks, Options};
 use crate::ratelimit::RateLimiter;
 use crate::AppState;
 
 const IMAGE_LIMIT_BYTES: usize = 8 * 1024 * 1024;
-const MAX_REDIRECTS: usize = 3;
-const MAX_URL_BYTES: usize = 4096;
 const MAX_CHECK_URLS: usize = 500;
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
 /// The header that names a blocked tracker's provider (Proton's
 /// `x-pm-tracker-provider`).
@@ -181,11 +177,11 @@ pub async fn fetch(
             "too many images; try again shortly",
         ));
     }
-    let url = parse_public(query.url.trim(), false)?;
+    let url = public_fetch::parse_public(query.url.trim(), true)?;
     if let Some(provider) = tracker_of(&url) {
         return Ok(tracker_response(provider));
     }
-    let (mime, body) = fetch_image(url, false).await?;
+    let (mime, body) = fetch_image(url, &Checks::PUBLIC).await?;
     Ok((
         StatusCode::OK,
         [
@@ -216,79 +212,29 @@ fn tracker_response(provider: &str) -> Response {
     response
 }
 
-fn unusable(message: &'static str) -> AppError {
-    AppError::new(StatusCode::UNPROCESSABLE_ENTITY, message)
-}
-
-/// Fetches one image, following redirects by hand; a redirect to a tracker
-/// or to a private address stops it. `allow_private` is for tests only.
-async fn fetch_image(mut url: Url, allow_private: bool) -> AppResult<(&'static str, Vec<u8>)> {
-    for _ in 0..=MAX_REDIRECTS {
-        let address = resolve(&url, allow_private).await?;
-        let host = url.host_str().expect("checked host").to_owned();
-        let client = reqwest::Client::builder()
-            .resolve(&host, address)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|_| AppError::internal("image proxy client"))?;
-        let response = client
-            .get(url.clone())
-            .header(
-                reqwest::header::ACCEPT,
-                "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9,image/*;q=0.8",
-            )
-            .send()
-            .await
-            .map_err(|_| unusable("the site did not answer"))?;
-        if response.status().is_redirection() {
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .ok_or_else(|| unusable("the site redirected nowhere"))?;
-            let next = url
-                .join(location)
-                .map_err(|_| unusable("the site redirected to an invalid address"))?;
-            url = parse_public(next.as_str(), allow_private)
-                .map_err(|_| unusable("the site redirected to an address that is not public"))?;
-            if tracker_of(&url).is_some() {
-                return Err(unusable("the site redirected to a tracker"));
-            }
-            continue;
-        }
-        if !response.status().is_success() {
-            return Err(unusable("the site did not return the image"));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > IMAGE_LIMIT_BYTES as u64)
-        {
-            return Err(unusable("the image is too large"));
-        }
-        let body = read_limited(response).await?;
-        let mime =
-            sniff_image(&body).ok_or_else(|| unusable("the site did not return an image"))?;
-        return Ok((mime, body));
-    }
-    Err(unusable("the site redirected too many times"))
-}
-
-async fn read_limited(mut response: reqwest::Response) -> AppResult<Vec<u8>> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| unusable("the site stopped answering"))?
-    {
-        if body.len() + chunk.len() > IMAGE_LIMIT_BYTES {
-            return Err(unusable("the image is too large"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+/// Fetches one image; a redirect to a tracker is not followed.
+async fn fetch_image(url: Url, checks: &Checks) -> AppResult<(&'static str, Vec<u8>)> {
+    let fetched = public_fetch::fetch(
+        url,
+        &public_fetch::Request {
+            accept: "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9,image/*;q=0.8",
+            user_agent: USER_AGENT,
+            timeout: TOTAL_TIMEOUT,
+            limit: IMAGE_LIMIT_BYTES,
+            truncate: false,
+            // Sites often send images under another type; the bytes decide.
+            wanted: &|_| true,
+        },
+        &Options {
+            allow_http: true,
+            follow: &|next| tracker_of(next).is_none(),
+        },
+        checks,
+    )
+    .await?;
+    let mime = sniff_image(&fetched.body)
+        .ok_or_else(|| public_fetch::unusable("the site did not return an image"))?;
+    Ok((mime, fetched.body))
 }
 
 /// The raster type the bytes start with; anything else (SVG, HTML, a type a
@@ -317,74 +263,16 @@ pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// An http URL on port 80 or https on 443, with a host name or a public IP
-/// and no credentials.
-fn parse_public(value: &str, allow_private: bool) -> AppResult<Url> {
-    if value.len() > MAX_URL_BYTES {
-        return Err(AppError::bad_request("the image address is too long"));
-    }
-    let url =
-        Url::parse(value).map_err(|_| AppError::bad_request("the image address is not a URL"))?;
-    let port_ok = match url.scheme() {
-        "https" => url.port_or_known_default() == Some(443),
-        "http" => url.port_or_known_default() == Some(80) || allow_private,
-        _ => false,
-    };
-    if !port_ok
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.host_str().is_none_or(str::is_empty)
-    {
-        return Err(not_public());
-    }
-    if !allow_private {
-        if let Some(url::Host::Ipv4(ip)) = url.host() {
-            ensure_public(IpAddr::V4(ip))?;
-        }
-        if let Some(url::Host::Ipv6(ip)) = url.host() {
-            ensure_public(IpAddr::V6(ip))?;
-        }
-    }
-    Ok(url)
-}
-
-/// Resolves the host and checks every address; the fetch then connects to
-/// the first one only, so a second lookup cannot swap in a private address.
-async fn resolve(url: &Url, allow_private: bool) -> AppResult<SocketAddr> {
-    let host = url.host_str().expect("checked host");
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| unusable("the site's name did not resolve"))?
-        .collect();
-    if addresses.is_empty() {
-        return Err(unusable("the site's name did not resolve"));
-    }
-    if !allow_private {
-        for address in &addresses {
-            ensure_public(address.ip())?;
-        }
-    }
-    Ok(addresses[0])
-}
-
-fn ensure_public(ip: IpAddr) -> AppResult<()> {
-    if crate::ssrf::is_public(ip) {
-        Ok(())
-    } else {
-        Err(not_public())
-    }
-}
-
-fn not_public() -> AppError {
-    AppError::bad_request("only public http and https images load through the proxy")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const LOCAL: Checks = Checks {
+        public: |_| true,
+        any_port: true,
+    };
 
     #[test]
     fn only_public_http_and_https_on_default_ports() {
@@ -393,7 +281,7 @@ mod tests {
             "http://example.org/a.png",
             "https://93.184.215.14/x.gif",
         ] {
-            assert!(parse_public(ok, false).is_ok(), "{ok}");
+            assert!(public_fetch::parse_public(ok, true).is_ok(), "{ok}");
         }
         for bad in [
             "https://example.org:8443/a.png",
@@ -409,7 +297,7 @@ mod tests {
             "https://[::ffff:192.168.1.1]/a.png",
             "http://0.0.0.0/a.png",
         ] {
-            assert!(parse_public(bad, false).is_err(), "{bad}");
+            assert!(public_fetch::parse_public(bad, true).is_err(), "{bad}");
         }
     }
 
@@ -494,7 +382,7 @@ mod tests {
         ])
         .await;
         let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
-        let (mime, body) = fetch_image(url, true).await.unwrap();
+        let (mime, body) = fetch_image(url, &LOCAL).await.unwrap();
         assert_eq!(mime, "image/png");
         assert_eq!(body, png);
     }
@@ -508,7 +396,7 @@ mod tests {
         )])
         .await;
         let url = Url::parse(&format!("http://{address}/x.png")).unwrap();
-        assert!(fetch_image(url, true).await.is_err());
+        assert!(fetch_image(url, &LOCAL).await.is_err());
     }
 
     #[tokio::test]
@@ -520,13 +408,13 @@ mod tests {
         )])
         .await;
         let url = Url::parse(&format!("http://{address}/x.png")).unwrap();
-        assert!(fetch_image(url, true).await.is_err());
+        assert!(fetch_image(url, &LOCAL).await.is_err());
     }
 
     #[tokio::test]
     async fn private_addresses_are_never_fetched() {
         let address = serve(vec![http("200 OK", "", b"GIF89a")]).await;
         let url = Url::parse(&format!("http://{address}/x.gif")).unwrap();
-        assert!(fetch_image(url, false).await.is_err());
+        assert!(fetch_image(url, &Checks::PUBLIC).await.is_err());
     }
 }
