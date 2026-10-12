@@ -154,6 +154,21 @@ describe('api/client — 401 refresh chain', () => {
     expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
     expect(calls.filter((c) => c.url?.endsWith('/user/reauth'))).toHaveLength(1)
   })
+
+  it('refreshes an expired token at the re-checks and retries', async () => {
+    seedAuth('expired-token')
+    responses[route('POST /user/reauth')] = [
+      { status: 401, data: { error: 'unauthorized' } },
+      { status: 204, data: '' },
+    ]
+    const axiosMod = (await import('axios')).default
+    axiosMod.defaults.adapter = api.defaults.adapter
+    responses['POST /api/auth/refresh'] = [{ status: 200, data: { accessToken: 'fresh-token' } }]
+    await expect(api.post('/user/reauth', {})).resolves.toBeTruthy()
+    const reauthCalls = calls.filter((c) => c.url?.endsWith('/user/reauth'))
+    expect(reauthCalls).toHaveLength(2)
+    expect(reauthCalls[1].headers.Authorization).toBe('Bearer fresh-token')
+  })
 })
 
 describe('api/client — transient retries', () => {

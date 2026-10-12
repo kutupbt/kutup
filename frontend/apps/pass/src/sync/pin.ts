@@ -1,7 +1,9 @@
-// The PIN lock (docs/plans/pass.md, "Locking"), as Proton Pass's: six digits
-// per account, used on every device, kept and checked by the server only, so
-// a stolen session cannot guess it offline. Three wrong PINs in a row end the
-// sign-in. Setting or removing it takes the account password.
+// The PIN lock (docs/plans/pass.md, "The PIN"), as Proton Pass's: six digits
+// per account, used on every device whose lock mode is the PIN. Like the
+// password lock it releases no key (this tab still holds the vault's kept
+// key); the server keeps and checks it so it cannot be worked through: three
+// wrong PINs in a row end the sign-in. Setting or removing it takes the
+// account password.
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'

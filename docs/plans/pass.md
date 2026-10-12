@@ -234,18 +234,27 @@ one database, plus a report of what happened.
   this device kept for offline use; a refused session keeps them, unsaved
   edits included, for the next sign-in.
 - **The PIN** (as Proton Pass's PIN lock): six digits per account, used on
-  every device whose mode is the PIN. The server keeps only its bcrypt hash
-  (`pass_pins`, migration 156) and checks it, `POST /api/pass/pin/verify`,
-  so a stolen session cannot guess it offline; the sixth digit sends it.
-  Three wrong PINs in a row end the sign-in that tried them (every session
-  of it) and the app signs out; the count is shared by the account's devices
-  and each try is reserved before the check, so parallel tries get no more.
-  A right PIN starts the count again. Setting, changing (`PUT
-  /api/pass/pin`) or removing it (`DELETE /api/pass/pin`) takes the account
+  every device whose mode is the PIN; the sixth digit sends it. Like the
+  password mode it is a lock on the app, not on a key: the tab already holds
+  the vault's kept key and opens it after the server's yes, so it guards
+  against someone at an unattended device, not against code running in the
+  tab. The server keeps only its bcrypt hash (`pass_pins`, migration 156)
+  and checks it, `POST /api/pass/pin/verify`, so the PIN cannot be worked
+  through: three wrong PINs in a row end the sign-in that tried them (every
+  session of it) and the app signs out. The count is per sign-in
+  (`pass_pin_failures`, keyed by the root session): each try is reserved
+  before the check, so parallel tries get no more; only that sign-in's right
+  PIN clears it; it is never reset by a lockout (a new sign-in, with the
+  password, starts its own); another sign-in's misses or right PIN do not
+  change it. Setting, changing (`PUT /api/pass/pin`, which starts every
+  count again) or removing it (`DELETE /api/pass/pin`) takes the account
   password, under the sign-in lockout. Choosing the PIN mode without a PIN
-  asks for one first; a PIN removed on another device sends this one back
-  to the password. These password re-checks never trigger the client's
-  token refresh and retry on 401, which would count a wrong password twice.
+  asks for one first; a PIN removed on another device sends this one back to
+  the password. A wrong password at these re-checks (`invalid credentials`)
+  is not retried with a refreshed token, which would count it twice toward
+  the lockout; an expired token there is refreshed as anywhere. Later, as
+  Proton does, a right PIN could release a server-held wrapping secret for
+  the kept keys, so the lock would guard key material too.
   Specs 151 and `pass_live`.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it

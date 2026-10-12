@@ -184,14 +184,19 @@ pub async fn delete_vault_secret(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-// ── The PIN lock (docs/plans/pass.md, "Locking") ────────────────────────────
+// ── The PIN lock (docs/plans/pass.md, "The PIN") ────────────────────────────
 //
 // As Proton Pass's PIN lock: a six-digit PIN per account, kept here as a
-// bcrypt hash and checked here, never by the client, so a stolen session
-// cannot guess it offline. Three wrong PINs in a row end the sign-in that
-// tried them (every session of it); the count is shared by the account's
-// devices and reserved before the check, so parallel tries get no more.
-// Setting or removing the PIN takes the account password.
+// bcrypt hash and checked here only. Like the password lock it releases no
+// key: the app already holds the vault's kept key and opens it after a yes.
+// What the server check adds is the limit: a PIN can be tried three times
+// per sign-in, and the third wrong one in a row ends that sign-in (every
+// session of it), so neither someone at a locked tab nor a stolen access
+// token can work through the PINs. The count is per sign-in, each try is
+// reserved before the check (parallel tries get no more), only that
+// sign-in's right PIN clears it, and it is never reset on a lockout: a new
+// sign-in, with the password, starts its own. Setting or removing the PIN
+// takes the account password.
 
 /// Wrong PINs in a row before the sign-in ends.
 pub const PIN_ATTEMPTS: i16 = 3;
@@ -296,14 +301,21 @@ pub async fn set_pin(
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, failures = 0, updated_at = NOW()",
+         ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
     )
     .bind(user_id)
     .bind(hash)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    // A new PIN, with the password: every sign-in's tries start again.
+    sqlx::query("DELETE FROM pass_pin_failures WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -355,33 +367,44 @@ pub async fn verify_pin(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let user_id = trusted_uuid(&user.user_id)?;
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(hash) = hash else {
+        return Ok(refusal(StatusCode::NOT_FOUND, "noPin", None));
+    };
+    // The sign-in this session belongs to (the root of its tree).
+    let sign_in: Uuid = sqlx::query_scalar(
+        "SELECT COALESCE(parent_session_id, id) FROM auth_sessions
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user.session.session_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::unauthorized("session ended"))?;
     // Reserve a try first: of any number of tries at once, at most the
     // remaining ones reach the check.
-    let reserved: Option<(String, i16)> = sqlx::query_as(
-        "UPDATE pass_pins SET failures = failures + 1
-         WHERE user_id = $1 AND failures < $2
-         RETURNING pin_hash, failures",
+    let reserved: Option<i16> = sqlx::query_scalar(
+        "INSERT INTO pass_pin_failures (sign_in_id, user_id, failures) VALUES ($1, $2, 1)
+         ON CONFLICT (sign_in_id) DO UPDATE SET failures = pass_pin_failures.failures + 1
+         WHERE pass_pin_failures.failures < $3
+         RETURNING failures",
     )
+    .bind(sign_in)
     .bind(user_id)
     .bind(PIN_ATTEMPTS)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((hash, failures)) = reserved else {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE user_id = $1)")
-                .bind(user_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if !exists {
-            return Ok(refusal(StatusCode::NOT_FOUND, "noPin", None));
-        }
-        // Out of tries (another try ended a sign-in a moment ago).
+    let Some(failures) = reserved else {
+        // This sign-in has used its tries (a parallel try ended it).
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
     };
     if valid_pin(&req.pin) && bcrypt::verify(&req.pin, &hash).unwrap_or(false) {
-        sqlx::query("UPDATE pass_pins SET failures = 0 WHERE user_id = $1")
-            .bind(user_id)
+        sqlx::query("DELETE FROM pass_pin_failures WHERE sign_in_id = $1")
+            .bind(sign_in)
             .execute(&state.pool)
             .await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -389,11 +412,6 @@ pub async fn verify_pin(
     tracing::warn!(user_id = %user_id, failures, "wrong Pass PIN");
     if failures >= PIN_ATTEMPTS {
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
-        // The next sign-in, with the password, gets its tries again.
-        sqlx::query("UPDATE pass_pins SET failures = 0 WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&state.pool)
-            .await?;
         tracing::warn!(user_id = %user_id, "Pass PIN tries used up; the sign-in was ended");
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
     }

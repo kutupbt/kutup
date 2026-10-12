@@ -427,3 +427,68 @@ fn pin_is_removed_only_with_the_password() {
         .unwrap();
     assert_eq!(status["set"], false);
 }
+
+/// A second sign-in of `user` (another device): its access token.
+fn sign_in(c: &Client, base: &str, user: &User) -> String {
+    let login_key = login_key(c, base, user, "integrity-pw-123456");
+    let r = c
+        .post(format!("{base}/api/auth/login"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "email": user.email, "loginKey": login_key }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "login: {}", r.status());
+    r.json::<Value>().unwrap()["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn pin_tries_are_counted_per_sign_in() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let user = register(&c, &base);
+    let right = login_key(&c, &base, &user, "integrity-pw-123456");
+    assert_eq!(
+        bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
+            .json(&json!({ "loginKey": right, "pin": "975310" }))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let other = sign_in(&c, &base, &user);
+    let verify = |token: &str, pin: &str| -> Value {
+        let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), token)
+            .json(&json!({ "pin": pin }))
+            .send()
+            .unwrap();
+        if response.status() == StatusCode::NO_CONTENT {
+            return json!("ok");
+        }
+        response.json().unwrap()
+    };
+    // Another sign-in's misses leave this one its three tries…
+    assert_eq!(verify(&other, "000001")["attemptsLeft"], 2);
+    assert_eq!(verify(&other, "000002")["attemptsLeft"], 1);
+    assert_eq!(verify(&user.token, "000003")["attemptsLeft"], 2);
+    // …and this one's right PIN gives the other none back.
+    assert_eq!(verify(&user.token, "975310"), json!("ok"));
+    assert_eq!(verify(&other, "000004")["error"], "signedOut");
+    // The other sign-in has ended; this one goes on.
+    assert_eq!(
+        bearer(c.get(format!("{base}/api/pass/pin")), &other)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(verify(&user.token, "975310"), json!("ok"));
+}
