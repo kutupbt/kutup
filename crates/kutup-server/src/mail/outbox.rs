@@ -33,15 +33,31 @@ fn object_key(user_id: Uuid, id: Uuid) -> String {
     format!("mail-outbox/{user_id}/{id}")
 }
 
-/// Keeps `parts` for `delay` seconds; the draft stays a draft meanwhile.
+/// When a held send goes.
+#[derive(Debug, Clone, Copy)]
+pub enum Until {
+    /// Undo send: this many seconds from now; the draft stays in Drafts.
+    Delay(i32),
+    /// Scheduled send: then; the draft waits in Scheduled.
+    At(OffsetDateTime),
+}
+
+/// Scheduled messages an account may have waiting (Proton's 100).
+pub const MAX_SCHEDULED: i64 = 100;
+
+/// Keeps `parts` until they go.
 pub async fn hold(
     state: &AppState,
     user_id: Uuid,
     is_admin: bool,
     draft: Uuid,
     parts: &BTreeMap<String, Vec<u8>>,
-    delay: i32,
+    until: Until,
 ) -> AppResult<HeldSend> {
+    let (delay, at) = match until {
+        Until::Delay(seconds) => (seconds, None),
+        Until::At(at) => (0, Some(at)),
+    };
     let id = Uuid::new_v4();
     let encoded: BTreeMap<&str, String> = parts
         .iter()
@@ -56,9 +72,17 @@ pub async fn hold(
         .await
         .map_err(|_| AppError::internal("storage"))?;
     let deliver_at: Result<OffsetDateTime, sqlx::Error> = sqlx::query_scalar(
-        "INSERT INTO mail_outbox (id, user_id, draft_id, is_admin, deliver_at, parts_key, parts_version)
-         VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), $6, $7)
-         RETURNING deliver_at",
+        "WITH held AS (
+             INSERT INTO mail_outbox (id, user_id, draft_id, is_admin, deliver_at, parts_key,
+                                      parts_version, scheduled)
+             VALUES ($1, $2, $3, $4, COALESCE($8, now() + make_interval(secs => $5)), $6, $7,
+                     $8::timestamptz IS NOT NULL)
+             RETURNING deliver_at
+         ), moved AS (
+             UPDATE mail_messages SET folder = 'scheduled', folder_changed_at = now()
+              WHERE id = $3 AND user_id = $2 AND folder = 'drafts' AND $8::timestamptz IS NOT NULL
+         )
+         SELECT deliver_at FROM held",
     )
     .bind(id)
     .bind(user_id)
@@ -67,6 +91,7 @@ pub async fn hold(
     .bind(f64::from(delay))
     .bind(&key)
     .bind(&version)
+    .bind(at)
     .fetch_one(&state.pool)
     .await;
     match deliver_at {
@@ -90,9 +115,15 @@ pub async fn hold(
 /// Takes a held send back: `true` when it had not gone yet.
 pub async fn cancel(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<bool> {
     let row: Option<(String, String)> = sqlx::query_as(
-        "UPDATE mail_outbox SET state = 'cancelled', finished_at = now()
-          WHERE id = $1 AND user_id = $2 AND state = 'pending'
-          RETURNING parts_key, parts_version",
+        "WITH taken AS (
+             UPDATE mail_outbox SET state = 'cancelled', finished_at = now()
+              WHERE id = $1 AND user_id = $2 AND state = 'pending'
+              RETURNING draft_id, parts_key, parts_version
+         ), back AS (
+             UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
+              WHERE id IN (SELECT draft_id FROM taken) AND folder = 'scheduled'
+         )
+         SELECT parts_key, parts_version FROM taken",
     )
     .bind(id)
     .bind(user_id)
@@ -112,9 +143,14 @@ pub async fn cancel(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<bool
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
         if let Err(error) = sqlx::query(
-            "UPDATE mail_outbox SET state = 'failed', finished_at = now(),
-                    result = '{\"error\": \"interrupted\"}'
-              WHERE state = 'sending'",
+            "WITH failed AS (
+                 UPDATE mail_outbox SET state = 'failed', finished_at = now(),
+                        result = '{\"error\": \"interrupted\"}'
+                  WHERE state = 'sending'
+                  RETURNING draft_id
+             )
+             UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
+              WHERE id IN (SELECT draft_id FROM failed) AND folder = 'scheduled'",
         )
         .execute(&state.pool)
         .await
@@ -153,8 +189,14 @@ async fn send_due(state: &AppState) -> anyhow::Result<()> {
                 ("failed", error)
             }
         };
+        // A send that failed leaves its draft in Drafts, scheduled or not.
         sqlx::query(
-            "UPDATE mail_outbox SET state = $2, result = $3, finished_at = now() WHERE id = $1",
+            "WITH done AS (
+                 UPDATE mail_outbox SET state = $2, result = $3, finished_at = now() WHERE id = $1
+                 RETURNING draft_id
+             )
+             UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
+              WHERE $2 = 'failed' AND id IN (SELECT draft_id FROM done) AND folder = 'scheduled'",
         )
         .bind(id)
         .bind(final_state)

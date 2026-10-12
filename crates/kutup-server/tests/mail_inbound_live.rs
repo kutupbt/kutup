@@ -4033,3 +4033,154 @@ fn undo_send_holds_a_draft_then_sends_it() {
         .unwrap();
     assert_eq!(r.status(), 400);
 }
+
+#[test]
+fn scheduled_send_waits_in_scheduled_then_goes() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let domain = address.address.split_once('@').unwrap().1.to_string();
+    let make_draft = |subject: &str| -> (String, String) {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let own =
+            mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
+        let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
+                ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
+            ]))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        (
+            r.json::<Value>().unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            message_id,
+        )
+    };
+    let send = |draft: &str, message_id: &str, subject: &str, at: time::OffsetDateTime| {
+        let mime = format!("From: {0}\r\nTo: {0}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n", address.address);
+        let split =
+            mail_key::encrypt_split(&[&address.public_key], &address.secret_key, mime.as_bytes())
+                .unwrap();
+        let packet = b64(&split.key_packets[0]);
+        let meta = json!({
+            "to": [{ "address": address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "draftId": draft,
+            "scheduleAt": at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "keyPackets": { "self": packet, address.address.clone(): packet },
+        });
+        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap()
+    };
+    let now = time::OffsetDateTime::now_utc;
+    let in_folder = |name: &str, id: &str| {
+        folder(&c, &base, &user.token, name)
+            .iter()
+            .any(|m| m["id"] == id)
+    };
+
+    // Too soon or too far: refused.
+    let (draft, message_id) = make_draft("Sonra");
+    assert_eq!(
+        send(
+            &draft,
+            &message_id,
+            "Sonra",
+            now() + time::Duration::seconds(10)
+        )
+        .status(),
+        400
+    );
+    assert_eq!(
+        send(
+            &draft,
+            &message_id,
+            "Sonra",
+            now() + time::Duration::days(91)
+        )
+        .status(),
+        400
+    );
+
+    // Scheduled: in Scheduled with its time; Edit takes it back to Drafts.
+    let r = send(
+        &draft,
+        &message_id,
+        "Sonra",
+        now() + time::Duration::hours(2),
+    );
+    assert_eq!(r.status(), 202, "{}", r.text().unwrap_or_default());
+    let outbox = r.json::<Value>().unwrap()["outboxId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(in_folder("scheduled", &draft) && !in_folder("drafts", &draft));
+    let row = folder(&c, &base, &user.token, "scheduled")
+        .into_iter()
+        .find(|m| m["id"] == draft.as_str())
+        .unwrap();
+    assert_eq!(row["outboxId"], outbox.as_str());
+    assert!(row["scheduledAt"].is_string());
+    // A scheduled message is not moved away meanwhile.
+    let moved = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [draft], "folder": "trash" }))
+        .send()
+        .unwrap();
+    assert_eq!(moved.json::<Value>().unwrap()["updated"], 0);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/outbox/{outbox}/cancel")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(in_folder("drafts", &draft) && !in_folder("scheduled", &draft));
+
+    // Scheduled a minute ahead and left alone: it goes then.
+    let r = send(
+        &draft,
+        &message_id,
+        "Sonra",
+        now() + time::Duration::seconds(62),
+    );
+    assert_eq!(r.status(), 202);
+    let outbox = r.json::<Value>().unwrap()["outboxId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut state = Value::Null;
+    for _ in 0..100 {
+        state = bearer(
+            c.get(format!("{base}/api/mail/outbox/{outbox}")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json::<Value>()
+        .unwrap()["state"]
+            .clone();
+        if state == "sent" || state == "failed" {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    assert_eq!(state, "sent");
+    assert!(!in_folder("scheduled", &draft) && !in_folder("drafts", &draft));
+    assert!(folder(&c, &base, &user.token, "inbox")
+        .iter()
+        .any(|m| m["subject"] == "Sonra"));
+}
