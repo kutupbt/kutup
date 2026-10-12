@@ -672,8 +672,11 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   outbox, merges with review marks (specs 76–79).
 - **Pass next** (with K3): the security report (weak, reused), custom
   icons, CSV import from other password managers.
-- **K3**: re-merging diverged versions; phone browsers. **K3b**: the opt-in
-  SSH agent in the `kutup` CLI.
+- **K3** ✅: divergence is prevented by serialized conditional saves; the
+  website works at phone width. **K3b** ✅: `kutup ssh-agent` and
+  `kutup ssh-add` (`scripts/verify-pass-ssh.sh`).
+- **SSH agent next:** `kutup ssh-agent install` (systemd / launchd), desktop
+  notifications for approval, Windows (named pipe), noticing another agent.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 

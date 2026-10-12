@@ -17,6 +17,8 @@ mod mimetype;
 mod names;
 mod output;
 mod session;
+#[cfg(unix)]
+mod sshagent;
 mod syncengine;
 mod transfer;
 mod uploader;
@@ -191,6 +193,12 @@ enum Commands {
         #[command(subcommand)]
         command: commands::pass::PassCmd,
     },
+    /// Serve the SSH keys kept in your vaults (KeeAgent entries) as an SSH agent; opt-in.
+    #[command(name = "ssh-agent")]
+    SshAgent(commands::ssh::AgentArgs),
+    /// Add an SSH key kept in a vault to your running SSH agent.
+    #[command(name = "ssh-add")]
+    SshAdd(commands::ssh::AddArgs),
     /// List, restore, and permanently delete trashed items.
     Trash {
         #[command(subcommand)]
@@ -322,6 +330,8 @@ fn main() {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
         Commands::Pass { command } => commands::pass::run(&cli.profile, cli.json, command),
+        Commands::SshAgent(args) => commands::ssh::agent(&cli.profile, args),
+        Commands::SshAdd(args) => commands::ssh::add(&cli.profile, cli.json, args),
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),

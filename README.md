@@ -173,6 +173,12 @@ kutup login --server https://your.kutup.host --email you@example.com
 # KUTUP_INSECURE_TLS=1 skips certificate checks. Development only.
 KUTUP_INSECURE_TLS=1 kutup login --server https://localhost:38443 --email you@example.com
 
+# Opt-in SSH agent for the SSH keys kept in your vaults (KeeAgent entries, as
+# in KeePassXC), from a folder `kutup sync` keeps; asks before each use.
+kutup ssh-agent ./local-folder <folder-id>   # in its own terminal; approvals are asked there
+export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/kutup/ssh-agent.sock   # the line it prints, in your shell
+kutup ssh-add ./local-folder <folder-id> "Server key" --lifetime 3600
+
 # List your folders + files at the Drive root.
 kutup ls
 kutup ls <folder-id>           # contents of a sub-folder

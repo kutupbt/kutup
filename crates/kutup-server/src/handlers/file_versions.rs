@@ -48,7 +48,7 @@ pub struct VersionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     remote_author: Option<String>,
     /// A whole-file version: the version it replaced (`null`: the original
-    /// upload, or not recorded). Two versions with one parent diverged.
+    /// upload, or not recorded).
     parent_version_id: Option<String>,
 }
 

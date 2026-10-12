@@ -136,6 +136,7 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
 ./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
 KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
+KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against OpenSSH (Kutup Pass K3b)
 pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves, merges (after build:wasm)
 ```
 

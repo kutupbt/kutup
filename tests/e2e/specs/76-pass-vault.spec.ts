@@ -79,6 +79,19 @@ test('pass: a vault in Drive, entries with history, one-time codes and attachmen
   await page.getByRole('button', { name: 'Recycle bin' }).click()
   await expect(page.getByRole('list', { name: 'Entries' }).getByText('Sunucu')).toBeVisible()
 
+  // On a phone: the list, then the entry on its own, and back.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('combobox', { name: 'Groups' }).click()
+  await page.getByRole('option', { name: 'All entries' }).click()
+  await page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: /Banka/ }).click()
+  await expect(page.getByRole('article', { name: 'Banka' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Entries' })).toBeHidden()
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page.getByRole('list', { name: 'Entries' })).toBeVisible()
+  const width = await page.evaluate(() => document.documentElement.scrollWidth)
+  expect(width).toBeLessThanOrEqual(390)
+  await page.setViewportSize({ width: 1280, height: 800 })
+
   // The vault is a KeePass file in Drive.
   const drive = await openDrive(context)
   await expect(drive.getByText('Kişisel.kdbx')).toBeVisible({ timeout: 60_000 })
