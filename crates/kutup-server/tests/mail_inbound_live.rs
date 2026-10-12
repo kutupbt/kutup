@@ -4056,21 +4056,11 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
         .json()
         .unwrap();
     assert_eq!(saved["imageProxy"], false);
-    // Trackers are named without fetching anything.
     let tracker = "https://x.us1.list-manage.com/track/open.php?u=1";
-    let checked: Value = bearer(c.post(format!("{base}/api/mail/images/check")), &user.token)
-        .json(&json!({ "urls": [tracker, "https://cdn.example.org/logo.png", "not a url"] }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(
-        checked["trackers"],
-        json!([{ "url": tracker, "provider": "Mailchimp" }])
-    );
+    // The address goes in the body, never in a URL a log would keep.
     let image = |url: &str| {
-        bearer(c.get(format!("{base}/api/mail/images")), &user.token)
-            .query(&[("url", url)])
+        bearer(c.post(format!("{base}/api/mail/images")), &user.token)
+            .json(&json!({ "url": url }))
             .send()
             .unwrap()
     };
@@ -4090,8 +4080,8 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
     }
     // Signed in only.
     let r = c
-        .get(format!("{base}/api/mail/images"))
-        .query(&[("url", "https://example.org/a.png")])
+        .post(format!("{base}/api/mail/images"))
+        .json(&json!({ "url": "https://example.org/a.png" }))
         .send()
         .unwrap();
     assert_eq!(r.status(), 401);
