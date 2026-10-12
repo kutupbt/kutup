@@ -3,6 +3,7 @@ import { feedbackServices } from '@kutup/session/feedback'
 import {
   Archive,
   BookUser,
+  AlarmClock,
   Clock,
   FilePen,
   FileType,
@@ -55,6 +56,7 @@ const NAV: { id: FolderId; icon: ReactNode }[] = [
   { id: 'inbox', icon: <Inbox /> },
   { id: 'drafts', icon: <FilePen /> },
   { id: 'scheduled', icon: <Clock /> },
+  { id: 'snoozed', icon: <AlarmClock /> },
   { id: 'sent', icon: <Send /> },
   { id: 'starred', icon: <Star /> },
   { id: 'archive', icon: <Archive /> },

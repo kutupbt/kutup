@@ -1,4 +1,4 @@
-import { Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { AlarmClock, Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -50,6 +50,7 @@ import { pageCount, pageFromParams } from './paging'
 import { SelectionPane } from './SelectionPane'
 import { OneTimeCodeButton } from './OneTimeCode'
 import { AttachmentChips } from './AttachmentChips'
+import { SnoozeButton, UnsnoozeButton } from './Snooze'
 import { chipsShown } from './attachments'
 import { SelectAllBanner, SelectAllConfirm } from './SelectAll'
 import { canSelectAll, type AllAction } from './selectAll'
@@ -649,6 +650,8 @@ export function MailboxPage() {
             <ToolbarButton label={t('actions.markUnread')} onClick={() => markChosen(chosen, false, () => setSelected(new Set()))}>
               <Mail />
             </ToolbarButton>
+            {!allOfPlace && folder === 'inbox' ? <SnoozeButton rows={chosen} group={group} onDone={() => afterPick(chosen)} /> : null}
+            {!allOfPlace && folder === 'snoozed' ? <UnsnoozeButton rows={chosen} group={group} onDone={() => afterPick(chosen)} /> : null}
             {moves.length ? <PickerButton mode="move" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} onAll={allOfPlace ? setPendingAll : undefined} /> : null}
             <PickerButton
               mode="label"
@@ -765,7 +768,13 @@ export function MailboxPage() {
                 const meta = (
                   <>
                     {attachments > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
-                    {message.scheduledAt ? (
+                    {message.snoozedUntil ? (
+                      // Snoozed: when it comes back.
+                      <span className="flex shrink-0 items-center gap-1 text-xs text-primary" title={formatInstant(message.snoozedUntil, i18n.language) ?? undefined}>
+                        <AlarmClock className="size-3.5" aria-hidden />
+                        {t('snooze.rowUntil', { date: formatFileDate(message.snoozedUntil, i18n.language) })}
+                      </span>
+                    ) : message.scheduledAt ? (
                       // Scheduled: when it goes, not when it was written.
                       <span className="flex shrink-0 items-center gap-1 text-xs text-primary" title={formatInstant(message.scheduledAt, i18n.language) ?? undefined}>
                         <Clock className="size-3.5" aria-hidden />

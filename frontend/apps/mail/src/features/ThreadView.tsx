@@ -15,6 +15,7 @@ import { useMailActions, type MoveTarget } from './mailActions'
 import { LabelChips } from './LabelChips'
 import { useMailboxScope } from './mailboxScope'
 import { MessageView } from './MessageView'
+import { SnoozeButton, UnsnoozeButton } from './Snooze'
 import { PickerButton } from './PlacePicker'
 
 function Action({ label, onClick, children, disabled }: { label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
@@ -130,7 +131,7 @@ export function ThreadView({
               <Trash2 />
             </Action>
           </>
-        ) : folder !== 'drafts' ? (
+        ) : folder === 'scheduled' ? null : folder !== 'drafts' ? (
           <>
             {folder === 'archive' ? (
               <Action label={t('actions.moveToInbox')} onClick={() => move('inbox')}>
@@ -149,13 +150,14 @@ export function ThreadView({
             <Action label={t('actions.trash')} onClick={() => move('trash')}>
               <Trash2 />
             </Action>
+            {folder === 'inbox' ? <SnoozeButton rows={shown} group={group} onDone={onClose} /> : folder === 'snoozed' ? <UnsnoozeButton rows={shown} group={group} onDone={onClose} /> : null}
           </>
         ) : (
           <Action label={t('actions.deleteDraft')} onClick={() => setConfirming(true)}>
             <Trash2 />
           </Action>
         )}
-        {folder !== 'drafts' ? <PickerButton mode="move" rows={shown} folder={folder} onMoved={onClose} /> : null}
+        {folder !== 'drafts' && folder !== 'scheduled' ? <PickerButton mode="move" rows={shown} folder={folder} onMoved={onClose} /> : null}
         <PickerButton mode="label" rows={shown} folder={folder} />
         <span className="flex-1" />
         <Action label={t('actions.markUnread')} onClick={() => apply({ seen: false }, undefined, true)}>
