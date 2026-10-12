@@ -72,7 +72,7 @@ test('All mail, Exclude Spam/Trash, Delete all in Trash, and auto-delete', async
   await expect(row(trashed)).toBeVisible({ timeout: 30_000 })
   await expect(mail.getByText('Automatically delete messages that have been in Trash and Spam for more than 30 days.')).toBeVisible()
   if (SHOTS) await mail.screenshot({ path: `${SHOTS}/trash-banner.png` })
-  await mail.getByRole('button', { name: 'Enable' }).click()
+  await mail.getByRole('button', { name: 'Enable', exact: true }).click()
   await expect(mail.getByText('Messages that have been in Trash and Spam more than 30 days will be automatically deleted.')).toBeVisible({ timeout: 30_000 })
   await mail.getByRole('button', { name: 'Delete all' }).click()
   const confirm = mail.getByRole('alertdialog')

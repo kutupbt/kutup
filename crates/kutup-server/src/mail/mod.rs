@@ -453,9 +453,10 @@ pub(crate) async fn insert_message(
              object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
              cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
              attachment_count, external_recipients, group_id, key_packet, sent_by, unsubscribable,
-             attachments, expires_at)
+             attachments, expires_at, notify_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END)
          ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
          DO NOTHING
          RETURNING id",

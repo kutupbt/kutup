@@ -1004,5 +1004,26 @@
     "outside": "Expiring messages go to Kutup recipients only: a copy sent outside Kutup cannot be deleted later.",
     "banner": "This message will expire on {{date}}.",
     "row": "Expires {{date}}"
+  },
+  "notifications": {
+    "title": "New email received",
+    "body": "From: {{sender}} - {{subject}}",
+    "grouped_one": "{{count}} new message",
+    "grouped_other": "{{count}} new messages",
+    "banner": "Kutup Mail needs your permission to show desktop notifications for new mail.",
+    "bannerLabel": "Desktop notifications",
+    "enable": "Enable desktop notifications",
+    "dismiss": "Not now",
+    "settingsTitle": "Desktop notifications",
+    "settingsHint": "New mail in the Inbox, Starred or a folder with notifications on, while Mail is open.",
+    "status": {
+      "granted": "Desktop notifications are on",
+      "default": "Desktop notifications are off",
+      "denied": "Desktop notifications are blocked in this browser’s site settings",
+      "unsupported": "This browser cannot show desktop notifications"
+    },
+    "test": "Send test notification",
+    "testTitle": "You have a new email",
+    "testBody": "This is how new mail will look."
   }
 }

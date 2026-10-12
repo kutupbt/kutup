@@ -1004,5 +1004,26 @@
     "outside": "Süreli iletiler yalnızca Kutup alıcılarına gider: Kutup dışına giden bir kopya sonradan silinemez.",
     "banner": "Bu ileti {{date}} tarihinde silinecek.",
     "row": "{{date}} silinecek"
+  },
+  "notifications": {
+    "title": "Yeni e-posta geldi",
+    "body": "Gönderen: {{sender}} - {{subject}}",
+    "grouped_one": "{{count}} yeni ileti",
+    "grouped_other": "{{count}} yeni ileti",
+    "banner": "Kutup Posta, yeni postalar için masaüstü bildirimi göstermek üzere izninize ihtiyaç duyuyor.",
+    "bannerLabel": "Masaüstü bildirimleri",
+    "enable": "Masaüstü bildirimlerini aç",
+    "dismiss": "Şimdi değil",
+    "settingsTitle": "Masaüstü bildirimleri",
+    "settingsHint": "Posta açıkken Gelen Kutusu’na, Yıldızlı’ya veya bildirimi açık bir klasöre gelen yeni postalar.",
+    "status": {
+      "granted": "Masaüstü bildirimleri açık",
+      "default": "Masaüstü bildirimleri kapalı",
+      "denied": "Masaüstü bildirimleri bu tarayıcının site ayarlarında engellenmiş",
+      "unsupported": "Bu tarayıcı masaüstü bildirimi gösteremiyor"
+    },
+    "test": "Deneme bildirimi gönder",
+    "testTitle": "Yeni bir e-postanız var",
+    "testBody": "Yeni postalar böyle görünecek."
   }
 }

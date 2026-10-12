@@ -63,7 +63,7 @@ reference only where Proton has nothing.
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ✅ Send's menu: tomorrow morning, Monday morning, or a day and time (a minute to 90 days ahead, 100 at most); the server holds it in the outbox, the draft waits in Scheduled (shown only when something is), the row shows when it goes, the message says so with Edit back to Drafts and the composer (spec 103) |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
 | Expiring messages | `ComposerExpirationModal.tsx` | 🔶 More options → Set expiration (a minute to 4 weeks, Proton's limit); the server deletes every Kutup copy then and frees its storage (spec 108); outside recipients refused until password-protected mail, as Proton requires a password there |
-| Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
+| Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ➖ dropped (2026-10-12): an encrypted file and a password sent another way covers it for Kutup; expiring messages to outside people stay refused (`expiringOutside`) |
 | Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | ✅ "Remove metadata" in the insert question: JPEG, PNG and WebP drawn again without EXIF; where it starts is Settings → General "Remove image metadata" (on by default; Proton's is off) (spec 110) |
 | Mailto handler, "default mail app" | `useMailtoHash.ts` | ✅ Settings → General: "Set as default" registers Kutup Mail for mailto links (`#mailto=`, as Proton's); a link opens the composer with its To, Cc, Bcc, subject and body (spec 107) |
 | Request a read receipt | `MoreActionsExtension.tsx` | ✅ "Read receipt" in the composer (`Disposition-Notification-To`), kept in the draft (spec 100) |
@@ -109,8 +109,8 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Unread count in the title | `useMailboxFavicon.ts` | ✅ (favicon count missing) |
-| Desktop notifications for new mail | `useNewEmailNotification.ts` | ❌ |
-| Web push | | ❌ (C2f) |
+| Desktop notifications for new mail | `useNewEmailNotification.ts` | ✅ while Mail is open: "New email received", "From: sender - subject" for each new unread message in the Inbox, Starred or a folder with notifications on (snoozed mail coming back too), one "N new messages" past three (Proton groups on Windows only); a click opens it; Settings → General shows the browser's permission, Enable and Send test notification; a banner asks once (`GET /api/mail/notifications`, `notify_at`; spec 112). Your own mailbox only, as Proton |
+| Web push | | ❌ deferred (2026-10-12): Proton's web app has none (its notifications come while a tab is open, as Kutup's desktop notifications do). Chat's web push could carry it later |
 | Daily email summary | `DailyEmailNotificationToggle` | ❌ |
 | Per-folder notifications | label `Notify` | 🔶 F1 (the switch), with push |
 
@@ -150,8 +150,8 @@ Each is its own plan and pull request, Proton first:
    shortcuts (R, Shift+R, F).
 5. **P4 writing:** undo send, scheduled send, snooze, inline images and
    emoji, plain text mode, contact groups as recipients, mailto handler.
-6. **P5 privacy:** image proxy and tracker protection, expiring messages,
-   password-protected mail to outside people.
+6. **P5 privacy:** image proxy and tracker protection, expiring messages
+   (password-protected mail to outside people dropped, 2026-10-12).
 7. **P6 search and notifications:** advanced search, body search in the
    browser, desktop notifications and web push.
 8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), export,

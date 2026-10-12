@@ -710,6 +710,22 @@ export async function fetchMailImage(url: string): Promise<ProxiedImage> {
   }
 }
 
+/** New mail to tell the reader about (Proton's new-email notifications). */
+export interface NewMail {
+  id: string
+  threadId: string
+  folder: string
+  customFolder: string | null
+  subject: string
+  fromAddress: string
+  fromName: string
+}
+
+/** New mail since `after` (the last answer's `now`); without it, only `now`. */
+export async function fetchNewMail(after: string | null): Promise<{ now: string; messages: NewMail[]; more: boolean }> {
+  return (await api.get<{ now: string; messages: NewMail[]; more: boolean }>('/mail/notifications', { params: after ? { after } : {} })).data
+}
+
 /** What advanced search's Address can be: your addresses and lists, or a shared mailbox's address. */
 export function useSearchAddresses(group?: string, enabled = true) {
   return useQuery({
