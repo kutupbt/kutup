@@ -10,7 +10,7 @@ import { openWhenArrived } from '../fixtures/mail'
 const PASSWORD = 'Deneme123*MailComposerFormatPassword'
 
 async function choose(mail: Page, label: string, option: string) {
-  await mail.getByRole('combobox', { name: label }).click()
+  await mail.getByRole('combobox', { name: label, exact: true }).click()
   await mail.getByRole('option', { name: option }).click()
   await expect(mail.getByText('Preference saved.').last()).toBeVisible({ timeout: 30_000 })
 }
