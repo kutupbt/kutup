@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@emoji-mart/data": "1.2.1",
     "@kutup/contacts-core": "workspace:*",
     "@kutup/crypto": "workspace:*",
     "@kutup/drive-core": "workspace:*",
@@ -19,11 +20,13 @@
     "@kutup/session": "workspace:*",
     "@kutup/ui": "workspace:*",
     "@tanstack/react-query": "^5",
+    "@tiptap/extension-image": "3.31.3",
     "@tiptap/extension-placeholder": "3.31.3",
     "@tiptap/pm": "3.31.3",
     "@tiptap/react": "3.31.3",
     "@tiptap/starter-kit": "3.31.3",
     "axios": "^1.20.0",
+    "emoji-mart": "5.6.0",
     "fflate": "^0.8.3",
     "i18next": "^26.0.6",
     "lucide-react": "^1.8.0",

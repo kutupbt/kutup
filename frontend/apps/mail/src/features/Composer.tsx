@@ -1,7 +1,7 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bell, Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, MoreHorizontal, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
+import { Bell, Bold, ImagePlus, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, MoreHorizontal, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -29,7 +29,7 @@ import {
 } from '@kutup/mail-core/api'
 import { GroupNotAllowed } from '@kutup/mail-core/keys'
 import { armorMailPublicKey } from '@kutup/crypto'
-import { attachmentPart, describePart, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
+import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
 import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
 import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
@@ -43,6 +43,9 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import { closeComposer, composerGeneration, openComposer, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
+import { EmojiButton } from './EmojiPicker'
+import { ImageInsertDialog } from './ImageInsertDialog'
+import { InlineImage, newContentId, withContentIds, withoutMetadata } from './inlineImages'
 import { fontFamily, plainToHtml, wrapHtml, type ComposerLook } from './composerLook'
 import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
@@ -63,6 +66,9 @@ interface Attachment {
   status: 'uploading' | 'ready' | 'failed'
   /** Your public key, attached by the setting (Proton's Attach public key): sent from here, never uploaded with the draft. */
   publicKey?: true
+  /** An image in the text (inline): its Content-ID, and this browser's URL for it. */
+  cid?: string
+  url?: string
 }
 
 function escapeHtml(text: string): string {
@@ -328,17 +334,30 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const saving = useRef<Promise<void>>(Promise.resolve())
   const closed = useRef(false)
   const files = useRef<HTMLInputElement>(null)
+  const images = useRef<HTMLInputElement>(null)
+  // Images added (button, paste or drop), asked inline or attached (Proton's).
+  const [pendingImages, setPendingImages] = useState<File[] | null>(null)
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Placeholder.configure({ placeholder: t('compose.bodyPlaceholder') }),
+      InlineImage,
     ],
     content: start.html,
     autofocus: target.kind === 'new' && !start.draft.to.length ? false : 'start',
-    editorProps: { attributes: { role: 'textbox', 'aria-multiline': 'true', 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none' } },
+    editorProps: {
+      // Pasted or dropped images: asked inline or attached, as the button does.
+      handlePaste: (_view, event) => takeImages(event.clipboardData?.files),
+      handleDrop: (_view, event) => takeImages(event.dataTransfer?.files),
+      attributes: { role: 'textbox', 'aria-multiline': 'true', 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none [&_img]:max-w-full' },
+    },
     onUpdate: () => setRevision((r) => r + 1),
   })
+
+  // The editor for effects that run once (a saved draft's images).
+  const editorRef = useRef(editor)
+  editorRef.current = editor
 
   const current = useCallback(
     (): Draft => ({
@@ -350,8 +369,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       subject,
       ...(plain
         ? { html: '', text: plainText, plain: true }
-        : { html: wrapHtml(editor?.getHTML() ?? '', look), text: editor?.getText({ blockSeparator: '\n' }) ?? '', plain: false }),
-      attachments: attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
+        : { html: wrapHtml(withContentIds(editor?.getHTML() ?? ''), look), text: editor?.getText({ blockSeparator: '\n' }) ?? '', plain: false }),
+      // Files only: images in the text are not listed as attachments.
+      attachments: attachments.filter((a) => a.id && !a.cid).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
       requestReceipt,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- look is rebuilt from these every render
@@ -399,10 +419,23 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
           data.map(async (row) => {
             const part = await draftAttachmentPart(account, id, row.id)
             const info = describePart(part)
-            return { key: row.id, id: row.id, name: info.name, size: info.size, part, status: 'ready' as const }
+            const cid = inlineContentId(part)
+            const url = cid ? URL.createObjectURL(new Blob([partContent(part) as BlobPart], { type: info.type })) : undefined
+            return { key: row.id, id: row.id, name: info.name, size: info.size, part, status: 'ready' as const, ...(cid ? { cid, url } : {}) }
           }),
         )
         setAttachments(loaded)
+        // The draft's images show again: each cid: in the text gets this browser's URL.
+        const shown = new Map(loaded.filter((a) => a.cid).map((a) => [`cid:${a.cid}`, a]))
+        const editor = editorRef.current
+        if (editor && shown.size) {
+          const tr = editor.state.tr
+          editor.state.doc.descendants((node, pos) => {
+            const found = node.type.name === 'image' ? shown.get(String(node.attrs.src)) : undefined
+            if (found) tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: found.url, cid: found.cid })
+          })
+          editor.view.dispatch(tr)
+        }
       })
       .catch(() => toast.error(t('compose.attachmentsFailed')))
   }, [account, target.kind, t])
@@ -454,7 +487,16 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     }
   }, [start.attachments, target.kind, upload])
 
-  async function addFiles(list: FileList | null) {
+  /** Image files from the button, a paste or a drop: asked inline or attached. */
+  function takeImages(list: FileList | null | undefined): boolean {
+    const found = [...(list ?? [])].filter((f) => f.type.startsWith('image/'))
+    if (!found.length) return false
+    setPendingImages(found)
+    return true
+  }
+
+  /** Files attached; images may go in the text instead (inline), their metadata removed first. */
+  async function addFiles(list: FileList | File[] | null, inline = false, strip = false) {
     if (!list?.length) return
     const used = attachments.reduce((n, a) => n + a.size, 0)
     const incoming = [...list]
@@ -463,14 +505,20 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       return
     }
     for (const file of incoming) {
+      const image = file.type.startsWith('image/')
+      const bytes = image && strip ? await withoutMetadata(file) : new Uint8Array(await file.arrayBuffer())
+      const cid = image && inline ? newContentId() : undefined
+      const url = cid ? URL.createObjectURL(new Blob([bytes as BlobPart], { type: file.type })) : undefined
       const attachment: Attachment = {
         key: crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        part: attachmentPart({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) }),
+        name: file.name || 'image',
+        size: bytes.length,
+        part: attachmentPart({ name: file.name || 'image', type: file.type, bytes }, cid),
         status: 'uploading',
+        ...(cid ? { cid, url } : {}),
       }
       setAttachments((now) => [...now, attachment])
+      if (cid && url) editor?.chain().focus().setImage({ src: url, alt: file.name }).updateAttributes('image', { cid }).run()
       void upload(attachment).catch(() =>
         setAttachments((now) => now.map((a) => (a.key === attachment.key ? { ...a, status: 'failed' } : a))),
       )
@@ -530,10 +578,13 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       // its first autosave would otherwise go at once).
       if (!draftId.current) await save()
       closed.current = true
-      const parts = await Promise.all(
-        attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
-      )
       const draft = { ...current(), ...(scheduleAt ? { scheduleAt: scheduleAt.toISOString() } : {}) }
+      const parts = await Promise.all(
+        // Images still in the text go inline; removed ones not at all.
+        attachments
+          .filter((a) => !a.cid || draft.html.includes(`cid:${a.cid}`))
+          .map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
+      )
       const outcome = await sendDraft(account, draft, parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
       if (isHeld(outcome)) followHeld(outcome, draft, t, refresh, scheduleAt)
       else reportSent(outcome, t, true)
@@ -718,15 +769,21 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             <ToolbarToggle editor={editor} label={t('compose.quote')} active={!!editor?.isActive('blockquote')} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>
               <Quote />
             </ToolbarToggle>
+            <EmojiButton onPick={(emoji) => editor?.chain().focus().insertContent(emoji).run()} disabled={!editor} />
+            <Tooltip label={t('images.insert')}>
+              <Button variant="ghost" size="icon" className="size-8" aria-label={t('images.insert')} onClick={() => images.current?.click()}>
+                <ImagePlus />
+              </Button>
+            </Tooltip>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto" dir={rtl ? 'rtl' : 'ltr'} style={{ fontFamily: fontFamily(look.fontFace), fontSize: `${look.fontSize}px` }}>
             <EditorContent editor={editor} />
           </div>
           </>
           )}
-          {attachments.length ? (
+          {attachments.some((a) => !a.cid) ? (
             <ul aria-label={t('compose.attachments')} className="flex max-h-28 shrink-0 flex-wrap gap-2 overflow-y-auto border-t border-border p-2">
-              {attachments.map((attachment) => (
+              {attachments.filter((a) => !a.cid).map((attachment) => (
                 <li key={attachment.key} className={cn('flex max-w-60 items-center gap-2 rounded-md border px-2 py-1 text-xs', attachment.status === 'failed' ? 'border-destructive text-destructive' : 'border-border')}>
                   {attachment.status === 'uploading' ? <Loader2 className="size-3.5 animate-spin" aria-label={t('compose.uploading')} /> : <Paperclip className="size-3.5" aria-hidden />}
                   <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
@@ -752,6 +809,28 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               <ScheduleSend disabled={sending} onSchedule={(at) => void send(at)} />
             </span>
             <input ref={files} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files).finally(() => (e.target.value = ''))} />
+            {pendingImages ? (
+              <ImageInsertDialog
+                count={pendingImages.length}
+                onCancel={() => setPendingImages(null)}
+                onChoose={(inline, strip) => {
+                  const chosen = pendingImages
+                  setPendingImages(null)
+                  void addFiles(chosen, inline, strip)
+                }}
+              />
+            ) : null}
+            <input
+              ref={images}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                takeImages(e.target.files)
+                e.target.value = ''
+              }}
+            />
             <Tooltip label={t('compose.attach')}>
               <Button variant="ghost" size="icon" aria-label={t('compose.attach')} onClick={() => files.current?.click()}>
                 <Paperclip />
