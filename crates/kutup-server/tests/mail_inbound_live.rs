@@ -3851,7 +3851,8 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
     let to_carol = send(&alice, &alice_address, &carol_address, "carol'a");
     wait_for(&c, &base, &alice, &from_bob);
     wait_for(&c, &base, &alice, &from_carol);
-    wait_for(&c, &base, &alice, &to_carol);
+    // Alice's own copy is in Sent once Carol has hers.
+    wait_for(&c, &base, &carol, &to_carol);
     let found = |folder: &str, query: &[(&str, &str)]| -> Vec<String> {
         let mut params = vec![("folder", folder)];
         params.extend_from_slice(query);
