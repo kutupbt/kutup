@@ -688,25 +688,22 @@ export function useBatchMessages() {
   })
 }
 
-/** A message's remote image addresses that are known tracking pixels, with their providers (nothing is fetched). */
-export async function checkMailImages(urls: string[]): Promise<Map<string, string>> {
-  const { data } = await api.post<{ trackers: { url: string; provider: string }[] }>('/mail/images/check', { urls: urls.slice(0, 500) })
-  return new Map(data.trackers.map((tracker) => [tracker.url, tracker.provider]))
-}
-
 /** One remote image through the Kutup image proxy (Proton's `core/v4/images`). */
-export type ProxiedImage = { kind: 'image'; blob: Blob } | { kind: 'tracker' } | { kind: 'failed' }
+export type ProxiedImage = { kind: 'image'; blob: Blob } | { kind: 'tracker' } | { kind: 'failed' } | { kind: 'busy' }
 
 export async function fetchMailImage(url: string): Promise<ProxiedImage> {
   try {
-    const response = await api.get<ArrayBuffer>('/mail/images', { params: { url }, responseType: 'arraybuffer' })
+    // The address goes in the body, never in a URL a log would keep.
+    const response = await api.post<ArrayBuffer>('/mail/images', { url }, { responseType: 'arraybuffer' })
     // 204: a known tracking pixel the server would not fetch.
     if (response.status === 204) return { kind: 'tracker' }
     const type = String(response.headers['content-type'] ?? '')
     if (!type.startsWith('image/')) return { kind: 'failed' }
     return { kind: 'image', blob: new Blob([response.data], { type }) }
-  } catch {
-    return { kind: 'failed' }
+  } catch (error) {
+    // Limits a sender could force: never a reason to load the image directly.
+    const status = isAxiosError(error) ? error.response?.status : undefined
+    return status === 429 || status === 503 ? { kind: 'busy' } : { kind: 'failed' }
   }
 }
 

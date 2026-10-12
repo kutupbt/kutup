@@ -7,7 +7,6 @@ const addImageSender = vi.fn()
 let remoteImages: 'ask' | 'always' = 'ask'
 let senders: { address: string }[] = []
 let imageProxy = true
-const checkMailImages = vi.fn((urls: string[]) => Promise.resolve(new Map(urls.filter((url) => url.includes('list-manage')).map((url) => [url, 'Mailchimp']))))
 const fetchMailImage = vi.fn((url: string) =>
   Promise.resolve(url.includes('broken') ? { kind: 'failed' as const } : { kind: 'image' as const, blob: new Blob(['GIF89a'], { type: 'image/gif' }) }),
 )
@@ -15,7 +14,6 @@ vi.mock('@kutup/mail-core/api', () => ({
   useMailSettings: () => ({ data: { confirmLink: true, remoteImages, imageProxy } }),
   useImageSenders: () => ({ data: senders }),
   useAddImageSender: () => ({ mutate: addImageSender }),
-  checkMailImages: (urls: string[]) => checkMailImages(urls),
   fetchMailImage: (url: string) => fetchMailImage(url),
 }))
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }))
@@ -35,7 +33,6 @@ const banner = () => screen.queryByText('Remote images are blocked to protect yo
 
 beforeEach(() => {
   addImageSender.mockClear()
-  checkMailImages.mockClear()
   fetchMailImage.mockClear()
   remoteImages = 'ask'
   senders = []
@@ -128,7 +125,6 @@ describe('tracker protection', () => {
     expect(doc).toContain('src="https://cdn.example.org/logo.png"')
     expect(doc).toContain('utm_source=news')
     expect(screen.queryByRole('button', { name: /tracker/ })).toBeNull()
-    expect(checkMailImages).not.toHaveBeenCalled()
     expect(fetchMailImage).not.toHaveBeenCalled()
   })
 })
