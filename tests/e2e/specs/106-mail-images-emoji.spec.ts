@@ -35,7 +35,7 @@ test('an inline image and an emoji, received in the text', async ({ browser, req
   const ask = mail.getByRole('dialog', { name: 'Insert image' })
   await expect(ask.getByRole('checkbox', { name: /Remove metadata/ })).toBeChecked()
   await ask.getByRole('button', { name: 'Inline' }).click()
-  await expect(mail.getByRole('textbox', { name: 'Message' }).locator('img')).toHaveCount(1)
+  await expect(mail.getByRole('textbox', { name: 'Message' }).getByRole('img', { name: 'kirmizi.png' })).toHaveCount(1)
   // Inline: not among the attached files.
   await expect(named.getByRole('list', { name: 'Attachments' })).toHaveCount(0)
   await expect(named.getByLabel('Uploading')).toHaveCount(0, { timeout: 60_000 })
@@ -47,8 +47,18 @@ test('an inline image and an emoji, received in the text', async ({ browser, req
   await picker.locator('button[aria-label="🚀"]').first().click()
   await expect(mail.getByRole('textbox', { name: 'Message' })).toContainText('🚀')
 
+  // Kept as a draft and opened again: the image is still there, shown.
+  await expect(named.getByText('Saved')).toBeVisible({ timeout: 30_000 })
+  await named.getByRole('button', { name: 'Close and keep the draft' }).click()
+  await mail.getByRole('link', { name: /^Drafts( \d+)?$/ }).click()
+  await mail.getByRole('link', { name: new RegExp(subject) }).click()
+  await mail.getByRole('button', { name: 'Edit draft' }).click()
+  const again = mail.getByRole('textbox', { name: 'Message' }).getByRole('img', { name: 'kirmizi.png' })
+  await expect.poll(() => again.evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBe(2)
+  await expect(mail.getByRole('textbox', { name: 'Message' })).toContainText('🚀')
   await named.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
+  await mail.goto(appUrl('mail', '/inbox'))
   await openWhenArrived(mail, new RegExp(subject))
   const body = mail.frameLocator('iframe[title="Message"]').last()
   await expect(body.getByText(/Bakın/)).toBeVisible({ timeout: 60_000 })

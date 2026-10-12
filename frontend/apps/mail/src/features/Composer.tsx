@@ -518,7 +518,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
         ...(cid ? { cid, url } : {}),
       }
       setAttachments((now) => [...now, attachment])
-      if (cid && url) editor?.chain().focus().setImage({ src: url, alt: file.name }).updateAttributes('image', { cid }).run()
+      if (cid && url) editor?.chain().focus().insertContent({ type: 'image', attrs: { src: url, alt: file.name, cid } }).run()
       void upload(attachment).catch(() =>
         setAttachments((now) => now.map((a) => (a.key === attachment.key ? { ...a, status: 'failed' } : a))),
       )
