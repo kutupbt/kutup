@@ -193,7 +193,13 @@ one database, plus a report of what happened.
   vaults shared by themselves; vaults on other servers stay in Drive for
   now). Drive and Office open a `.kdbx` file in Pass (`appFor` in
   `@kutup/editors/paths`). New vaults are made in a chosen folder with a
-  password and/or key file, optionally kept with the sign-in.
+  password and/or key file, optionally kept with the sign-in; Drive's New
+  menu and right-click menu offer "Password vault", which opens Pass's
+  create dialog with that folder chosen (`/new?folder=`), since Drive holds
+  no vault keys. A folder holds any number of vaults; a taken name gets a
+  free one ("Passwords (2)"). A vault's name is its file's name: renaming in
+  Drive shows in Pass, and renaming in Pass renames the file (and the name
+  inside the KeePass file with it).
 - **The worker.** Vaults live in a long-lived worker
   (`src/vault/worker.ts`) holding `kutup-pass-wasm`; the page gets views and
   values only. Saving derives the key, so edits close together are saved

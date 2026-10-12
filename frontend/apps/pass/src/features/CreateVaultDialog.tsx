@@ -20,7 +20,16 @@ import { VaultHandle } from '../vault/client'
 import { KeyFileInput } from './KeyFileInput'
 
 /** Makes a new vault: a KeePass file in a Drive folder, with its own key. */
-export function CreateVaultDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CreateVaultDialog({
+  open,
+  onOpenChange,
+  folderId: wantedFolder = null,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The folder to make it in (Drive's New menu); else My files. */
+  folderId?: string | null
+}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const session = useRequiredSession()
@@ -47,17 +56,19 @@ export function CreateVaultDialog({ open, onOpenChange }: { open: boolean; onOpe
   useEffect(() => {
     if (!open) return
     setName(t('vaults.defaultName'))
-    setFolderId(root?.id ?? '')
+    setFolderId('')
     setPassword('')
     setConfirm('')
     setKeyFile(null)
     setRemember(true)
     setError(null)
-  }, [open, root, t])
+  }, [open, t])
 
   const mismatch = confirm.length > 0 && password !== confirm
   const noKey = !password && !keyFile
-  const folder = writable.find((f) => f.id === folderId)
+  // Until one is chosen: the folder Drive asked for, else My files.
+  const chosen = folderId || (wantedFolder && writable.some((f) => f.id === wantedFolder) ? wantedFolder : (root?.id ?? ''))
+  const folder = writable.find((f) => f.id === chosen)
 
   const submit = async () => {
     if (!folder || !name.trim() || mismatch || noKey) return
@@ -106,7 +117,7 @@ export function CreateVaultDialog({ open, onOpenChange }: { open: boolean; onOpe
           </Field>
           <Field label={t('vaults.folder')} description={t('vaults.folderDescription')}>
             {(field) => (
-              <Select value={folderId} onValueChange={setFolderId}>
+              <Select value={chosen} onValueChange={setFolderId}>
                 <SelectTrigger id={field.id} aria-describedby={field['aria-describedby']}>
                   <SelectValue />
                 </SelectTrigger>

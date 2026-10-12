@@ -1,4 +1,4 @@
-import { FileSpreadsheet, FileText, FileType, FolderPlus, FolderUp, MapPin, PenTool, Presentation, Upload } from 'lucide-react'
+import { FileSpreadsheet, FileText, FileType, FolderPlus, FolderUp, KeyRound, MapPin, PenTool, Presentation, Upload } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -9,6 +9,7 @@ import { loadFolderFiles } from '@kutup/drive-core/files'
 import type { Folder } from '@kutup/drive-core/model'
 import { useCreateFolder } from '@kutup/drive-core/mutations'
 import { openFile } from '@kutup/editors/paths'
+import { appUrl } from '@kutup/session/apps'
 import type { ExplorerAction } from '../explorer/Explorer'
 import { uploadOne, useUploadActions } from '../uploads/useUploadActions'
 import { newDocumentFile, type NewDocument } from './templates'
@@ -83,6 +84,16 @@ export function useCreateActions(target: Folder | null): {
         separated: i === 0,
       }),
     )
+  }
+  // A password vault is made in Pass, which asks for its password (Drive
+  // holds no vault keys); Pass opens it in this folder.
+  if (folder.source === 'owned' || folder.source === 'shared') {
+    actions.push({
+      id: 'new-vault',
+      label: t('newMenu.vault'),
+      icon: <KeyRound />,
+      onSelect: () => window.location.assign(appUrl('pass', `/new?folder=${encodeURIComponent(folder.id)}`)),
+    })
   }
 
   const elements = (

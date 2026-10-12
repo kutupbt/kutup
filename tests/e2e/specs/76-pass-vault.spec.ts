@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { addEntry, createVault, editEntry, expectSaved, openEntry, openPass, shownValue } from '../fixtures/pass'
 
 const PASSWORD = 'Deneme123*PassVaultAccount'
@@ -109,5 +109,32 @@ test('pass: a vault in Drive, entries with history, one-time codes and attachmen
   // The vault is a KeePass file in Drive.
   const drive = await openDrive(context)
   await expect(drive.getByText('Kişisel.kdbx')).toBeVisible({ timeout: 60_000 })
+
+  // A second vault from Drive's New menu: made in Pass, in this folder.
+  await drive.getByRole('button', { name: 'New' }).first().click()
+  await drive.getByRole('menuitem', { name: 'Password vault' }).click()
+  await expect(drive).toHaveURL(/pass\..*\/new\?folder=/, { timeout: 30_000 })
+  const dialog = drive.getByRole('dialog', { name: 'New vault' })
+  await expect(dialog.getByRole('combobox', { name: 'Folder' })).toHaveText('My files')
+  await dialog.getByLabel('Vault name').fill('Kişisel')
+  await dialog.getByLabel('Vault password', { exact: true }).fill('ikinci-kasa-parola')
+  await dialog.getByLabel('Repeat the vault password').fill('ikinci-kasa-parola')
+  await dialog.getByRole('button', { name: 'Create vault' }).click()
+  // The name was taken in the folder: the second is "Kişisel (2)".
+  await expect(drive.getByRole('heading', { name: 'Kişisel (2)', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
+
+  // Renamed in Pass: the file is renamed in Drive too.
+  await drive.getByRole('button', { name: 'Vault actions' }).click()
+  await drive.getByRole('menuitem', { name: 'Rename vault' }).click()
+  const rename = drive.getByRole('dialog', { name: 'Rename vault' })
+  await rename.getByLabel('Vault name').fill('Kişisel')
+  await rename.getByRole('button', { name: 'Save' }).click()
+  await expect(rename.getByText('A file with that name is already in this folder.')).toBeVisible()
+  await rename.getByLabel('Vault name').fill('Aile')
+  await rename.getByRole('button', { name: 'Save' }).click()
+  await expect(drive.getByRole('heading', { name: 'Aile', exact: true, level: 1 })).toBeVisible({ timeout: 30_000 })
+  await drive.goto(appUrl('drive'))
+  await expect(drive.getByText('Aile.kdbx')).toBeVisible({ timeout: 60_000 })
+  await expect(drive.getByText('Kişisel.kdbx')).toBeVisible()
   await context.close()
 })

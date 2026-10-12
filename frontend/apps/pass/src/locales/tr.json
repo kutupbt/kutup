@@ -113,7 +113,8 @@
     "lock": "Kasayı kilitle",
     "forgetKey": "Oturumumla açmayı bırak",
     "keyForgotten": "Kasanın anahtarı artık hesabınızda tutulmuyor",
-    "forgetFailed": "Kasanın anahtarı unutulamadı. Yeniden deneyin."
+    "forgetFailed": "Kasanın anahtarı unutulamadı. Yeniden deneyin.",
+    "nameTaken": "Bu klasörde bu adda bir dosya zaten var."
   },
   "groups": {
     "label": "Gruplar",

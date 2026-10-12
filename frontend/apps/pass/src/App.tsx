@@ -32,6 +32,8 @@ export function App() {
           <Routes>
             <Route element={<PassShell />}>
               <Route index element={<VaultsPage />} />
+              {/* Drive's New → Password vault: the create dialog, its folder picked. */}
+              <Route path="/new" element={<VaultsPage creating />} />
               <Route path="/v/:fileId" element={<VaultPage />} />
               <Route path="/v/:fileId/e/:entryId" element={<VaultPage />} />
             </Route>

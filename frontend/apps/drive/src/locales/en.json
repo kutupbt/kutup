@@ -91,7 +91,8 @@
       "presentation": "Untitled presentation",
       "whiteboard": "Untitled whiteboard",
       "map": "Untitled map"
-    }
+    },
+    "vault": "Password vault"
   },
   "drive": {
     "encrypted": "Encrypted item",
