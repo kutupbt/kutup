@@ -23,3 +23,6 @@ docs/
 .env
 .env.*
 **/target/
+# The vendored keepass crate builds its documentation from its README
+# (`include_str!`), and the frontend image compiles it into kutup-pass-wasm.
+!crates/kutup-pass/vendor/keepass/README.md

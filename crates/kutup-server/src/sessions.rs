@@ -3,7 +3,7 @@
 //! Design: `docs/plans/multi-app-web-rewrite.md` ("Sessions and forking").
 //!
 //! - Every sign-in creates an `auth_sessions` row with a client type
-//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `cli`, …). Access tokens carry the
+//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `web-pass`, `cli`, …). Access tokens carry the
 //!   session id (`sid`) and every authenticated request checks the row is
 //!   live, so revocation is immediate.
 //! - Refresh tokens are opaque 32-byte secrets, stored as SHA-256 and rotated
@@ -44,6 +44,7 @@ pub enum ClientType {
     WebOffice,
     WebContacts,
     WebMail,
+    WebPass,
     Cli,
 }
 
@@ -58,6 +59,7 @@ impl ClientType {
             Self::WebOffice => "web-office",
             Self::WebContacts => "web-contacts",
             Self::WebMail => "web-mail",
+            Self::WebPass => "web-pass",
             Self::Cli => "cli",
         }
     }
@@ -72,6 +74,7 @@ impl ClientType {
             "web-office" => Some(Self::WebOffice),
             "web-contacts" => Some(Self::WebContacts),
             "web-mail" => Some(Self::WebMail),
+            "web-pass" => Some(Self::WebPass),
             "cli" => Some(Self::Cli),
             _ => None,
         }
@@ -99,6 +102,7 @@ impl ClientType {
                 | Self::WebOffice
                 | Self::WebContacts
                 | Self::WebMail
+                | Self::WebPass
         )
     }
 }

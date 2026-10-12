@@ -168,6 +168,11 @@ kutup register --server https://your.kutup.host --email you@example.com --userna
 # Login (interactive password prompt; password can also come from KUTUP_PASSWORD).
 kutup login --server https://your.kutup.host --email you@example.com
 
+# Against the local Compose stack and its self-signed certificate (which is
+# its own CA, so the CLI's TLS stack refuses it as a server certificate):
+# KUTUP_INSECURE_TLS=1 skips certificate checks. Development only.
+KUTUP_INSECURE_TLS=1 kutup login --server https://localhost:38443 --email you@example.com
+
 # List your folders + files at the Drive root.
 kutup ls
 kutup ls <folder-id>           # contents of a sub-folder

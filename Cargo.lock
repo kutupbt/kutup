@@ -2936,6 +2936,7 @@ name = "keepass"
 version = "0.15.2"
 dependencies = [
  "aes 0.9.3",
+ "base32",
  "base64 0.23.1",
  "block-modes",
  "byteorder",
@@ -2958,7 +2959,9 @@ dependencies = [
  "serde",
  "sha2 0.11.0",
  "thiserror 2.0.18",
+ "totp-lite",
  "twofish 0.8.0",
+ "url",
  "uuid",
  "zeroize",
 ]
@@ -3108,13 +3111,31 @@ dependencies = [
 name = "kutup-pass"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "keepass",
  "proptest",
+ "rust-argon2",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "kutup-pass-wasm"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "kutup-pass",
+ "serde",
+ "serde-wasm-bindgen",
+ "uuid",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5758,6 +5779,18 @@ dependencies = [
  "prost",
  "prost-types",
  "tonic",
+]
+
+[[package]]
+name = "totp-lite"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8e43134db17199f7f721803383ac5854edd0d3d523cc34dba321d6acfbe76c3"
+dependencies = [
+ "digest 0.10.7",
+ "hmac 0.12.1",
+ "sha1 0.10.6",
+ "sha2 0.10.9",
 ]
 
 [[package]]

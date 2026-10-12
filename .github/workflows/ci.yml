@@ -127,6 +127,8 @@ jobs:
         run: pnpm -C frontend exec vitest run --reporter=dot
       - name: Verify generated crypto WASM vectors
         run: pnpm -C frontend run test:crypto-wasm
+      - name: Check the Kutup Pass WASM module
+        run: pnpm -C frontend run test:pass-wasm
       - name: Build production web app
         run: pnpm -C frontend run build
 
@@ -180,6 +182,7 @@ jobs:
       KUTUP_PHOTOS_URL: https://photos.localhost:38443
       KUTUP_CONTACTS_URL: https://contacts.localhost:38443
       KUTUP_MAIL_URL: https://mail.localhost:38443
+      KUTUP_PASS_URL: https://pass.localhost:38443
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -199,7 +202,7 @@ jobs:
             -keyout nginx/certs/privkey.pem \
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
-            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,IP:127.0.0.1
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,DNS:pass.localhost,IP:127.0.0.1
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a
@@ -258,7 +261,7 @@ jobs:
 
   mail-browser:
     name: Mail browser specs
-    # The Mail and Contacts browser lines on their own stack, beside the
+    # The Mail, Contacts and Pass browser lines on their own stack, beside the
     # Chat gate; like it, on master and on demand only.
     if: github.event_name != 'pull_request'
     needs:
@@ -290,6 +293,7 @@ jobs:
       KUTUP_PHOTOS_URL: https://photos.localhost:38443
       KUTUP_CONTACTS_URL: https://contacts.localhost:38443
       KUTUP_MAIL_URL: https://mail.localhost:38443
+      KUTUP_PASS_URL: https://pass.localhost:38443
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -309,7 +313,7 @@ jobs:
             -keyout nginx/certs/privkey.pem \
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
-            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,IP:127.0.0.1
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,DNS:pass.localhost,IP:127.0.0.1
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a
@@ -354,6 +358,9 @@ jobs:
       - name: Run the Contacts browser specs
         working-directory: tests/e2e
         run: npm exec -- playwright test specs/55-contacts.spec.ts specs/56-contact-pickers.spec.ts specs/74-contact-shields.spec.ts --project=chromium
+      - name: Run the Pass browser specs
+        working-directory: tests/e2e
+        run: npm exec -- playwright test specs/76-pass-vault.spec.ts specs/77-pass-merge.spec.ts specs/78-pass-offline.spec.ts specs/79-pass-unlock.spec.ts --project=chromium
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single
