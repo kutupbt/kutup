@@ -907,7 +907,25 @@
     "noSenders": "No senders yet.",
     "remove": "Remove {{address}}",
     "removeShort": "Remove",
-    "removed": "Images from {{address}} will be asked for again."
+    "removed": "Images from {{address}} will be asked for again.",
+    "bodyProxy": "They load through the Kutup server, so the sender does not see your IP address or browser, but can still tell that the message was opened.",
+    "proxyTitle": "Protect against email tracking",
+    "proxyHint": "Remote images come through Kutup instead of your browser, known tracking pixels never load, and tracking parameters are taken out of links."
+  },
+  "tracking": {
+    "trackersBlocked_one": "{{count}} tracker blocked",
+    "trackersBlocked_other": "{{count}} trackers blocked",
+    "linksCleaned_one": "{{count}} link cleaned",
+    "linksCleaned_other": "{{count}} links cleaned",
+    "title": "Email tracker protection",
+    "body": "Tracking pixels tell a sender when and where a message was opened; tracking parameters tie a click to you. Kutup never loads the first and takes the second out of links.",
+    "trackersList": "Blocked trackers",
+    "linksList": "Cleaned links",
+    "unknownProvider": "Tracker",
+    "removed": "Removed: {{names}}",
+    "proxyFailed": "Tracker protection prevented some images from loading. Load them if you trust the sender.",
+    "loadDirect": "Load",
+    "loadDirectHint": "Images will be loaded without the Kutup server"
   },
   "schedule": {
     "menu": "Schedule send",

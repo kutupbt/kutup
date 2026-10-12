@@ -688,6 +688,28 @@ export function useBatchMessages() {
   })
 }
 
+/** A message's remote image addresses that are known tracking pixels, with their providers (nothing is fetched). */
+export async function checkMailImages(urls: string[]): Promise<Map<string, string>> {
+  const { data } = await api.post<{ trackers: { url: string; provider: string }[] }>('/mail/images/check', { urls: urls.slice(0, 500) })
+  return new Map(data.trackers.map((tracker) => [tracker.url, tracker.provider]))
+}
+
+/** One remote image through the Kutup image proxy (Proton's `core/v4/images`). */
+export type ProxiedImage = { kind: 'image'; blob: Blob } | { kind: 'tracker' } | { kind: 'failed' }
+
+export async function fetchMailImage(url: string): Promise<ProxiedImage> {
+  try {
+    const response = await api.get<ArrayBuffer>('/mail/images', { params: { url }, responseType: 'arraybuffer' })
+    // 204: a known tracking pixel the server would not fetch.
+    if (response.status === 204) return { kind: 'tracker' }
+    const type = String(response.headers['content-type'] ?? '')
+    if (!type.startsWith('image/')) return { kind: 'failed' }
+    return { kind: 'image', blob: new Blob([response.data], { type }) }
+  } catch {
+    return { kind: 'failed' }
+  }
+}
+
 const imageSendersKey = ['mail', 'image-senders'] as const
 
 /** Senders whose remote images always load (chosen when loading them). */
@@ -777,6 +799,8 @@ export interface MailSettings {
   spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
+  /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
+  imageProxy: boolean
   /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
   delaySendSeconds: number
   /** Composer defaults (Proton's Composer mode, text direction, default font/size). */

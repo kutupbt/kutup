@@ -3890,6 +3890,69 @@ fn senders_whose_images_always_load() {
 }
 
 #[test]
+fn the_image_proxy_blocks_trackers_and_private_addresses() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    // On by default, and saved when turned off.
+    let settings: Value = bearer(c.get(format!("{base}/api/mail/settings")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(settings["imageProxy"], true);
+    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "imageProxy": false }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(saved["imageProxy"], false);
+    // Trackers are named without fetching anything.
+    let tracker = "https://x.us1.list-manage.com/track/open.php?u=1";
+    let checked: Value = bearer(c.post(format!("{base}/api/mail/images/check")), &user.token)
+        .json(&json!({ "urls": [tracker, "https://cdn.example.org/logo.png", "not a url"] }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        checked["trackers"],
+        json!([{ "url": tracker, "provider": "Mailchimp" }])
+    );
+    let image = |url: &str| {
+        bearer(c.get(format!("{base}/api/mail/images")), &user.token)
+            .query(&[("url", url)])
+            .send()
+            .unwrap()
+    };
+    let r = image(tracker);
+    assert_eq!(r.status(), 204);
+    assert_eq!(r.headers()["x-kutup-tracker"], "Mailchimp");
+    // Never the server's own network, other ports or schemes.
+    for url in [
+        "http://127.0.0.1/a.png",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/a.png",
+        "https://[::1]/a.png",
+        "https://example.org:8443/a.png",
+        "file:///etc/passwd",
+    ] {
+        assert_eq!(image(url).status(), 400, "{url}");
+    }
+    // Signed in only.
+    let r = c
+        .get(format!("{base}/api/mail/images"))
+        .query(&[("url", "https://example.org/a.png")])
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[test]
 fn undo_send_holds_a_draft_then_sends_it() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");

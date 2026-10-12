@@ -907,7 +907,25 @@
     "noSenders": "Henüz gönderen yok.",
     "remove": "{{address}} adresini kaldır",
     "removeShort": "Kaldır",
-    "removed": "{{address}} adresinden gelen görseller yine sorulacak."
+    "removed": "{{address}} adresinden gelen görseller yine sorulacak.",
+    "bodyProxy": "Görseller Kutup sunucusu üzerinden yüklenir; gönderen IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını yine de anlayabilir.",
+    "proxyTitle": "E-posta izlemeye karşı koruma",
+    "proxyHint": "Uzak görseller tarayıcınız yerine Kutup üzerinden gelir, bilinen izleme pikselleri hiç yüklenmez ve bağlantılardaki izleme parametreleri çıkarılır."
+  },
+  "tracking": {
+    "trackersBlocked_one": "{{count}} izleyici engellendi",
+    "trackersBlocked_other": "{{count}} izleyici engellendi",
+    "linksCleaned_one": "{{count}} bağlantı temizlendi",
+    "linksCleaned_other": "{{count}} bağlantı temizlendi",
+    "title": "E-posta izleyici koruması",
+    "body": "İzleme pikselleri gönderene iletinin ne zaman ve nerede açıldığını söyler; izleme parametreleri bir tıklamayı size bağlar. Kutup ilkini hiç yüklemez, ikincisini bağlantılardan çıkarır.",
+    "trackersList": "Engellenen izleyiciler",
+    "linksList": "Temizlenen bağlantılar",
+    "unknownProvider": "İzleyici",
+    "removed": "Çıkarılanlar: {{names}}",
+    "proxyFailed": "İzleyici koruması bazı görsellerin yüklenmesini engelledi. Gönderene güveniyorsanız yükleyin.",
+    "loadDirect": "Yükle",
+    "loadDirectHint": "Görseller Kutup sunucusu olmadan yüklenecek"
   },
   "schedule": {
     "menu": "Gönderimi planla",
