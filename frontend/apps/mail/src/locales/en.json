@@ -953,5 +953,18 @@
     "removeMetadataHint": "No one can then see where, when or on which device the picture was taken.",
     "attachment": "Attachment",
     "inline": "Inline"
+  },
+  "expiry": {
+    "set": "Set expiration",
+    "edit": "Edit expiration time",
+    "title": "Expiring message",
+    "hint": "The message is deleted for everyone at Kutup when the time comes, at most 4 weeks from now.",
+    "outOfRange": "Choose a time from a minute to 4 weeks ahead.",
+    "apply": "Set",
+    "remove": "Remove",
+    "composerBar": "This message expires on {{date}}.",
+    "outside": "Expiring messages go to Kutup recipients only: a copy sent outside Kutup cannot be deleted later.",
+    "banner": "This message will expire on {{date}}.",
+    "row": "Expires {{date}}"
   }
 }

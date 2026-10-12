@@ -383,6 +383,7 @@ async fn main() -> anyhow::Result<()> {
     mail::retention::spawn(state.clone());
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
+    mail::expiry::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched

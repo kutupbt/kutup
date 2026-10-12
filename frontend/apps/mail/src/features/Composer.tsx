@@ -1,7 +1,7 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bell, Bold, ImagePlus, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, MoreHorizontal, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
+import { Bell, Bold, Hourglass, ImagePlus, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, MoreHorizontal, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,7 +35,7 @@ import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-co
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Input } from '@kutup/ui/components/input'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -43,6 +43,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import { closeComposer, composerGeneration, openComposer, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
+import { DateTimeDialog } from './DateTimeDialog'
 import { EmojiButton } from './EmojiPicker'
 import { ImageInsertDialog } from './ImageInsertDialog'
 import { InlineImage, newContentId, withContentIds, withoutMetadata } from './inlineImages'
@@ -328,6 +329,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [plain, setPlain] = useState(start.draft.plain ?? (target.kind === 'new' && mailSettings.data?.draftType === 'plain'))
   const [plainText, setPlainText] = useState(() => (start.draft.plain ? start.draft.text : ''))
   const [rtl, setRtl] = useState(mailSettings.data?.textDirection === 'rtl')
+  // Proton's expiring message: when every Kutup copy is deleted.
+  const [expiresAt, setExpiresAt] = useState<Date | null>(null)
+  const [choosingExpiry, setChoosingExpiry] = useState(false)
   const look: ComposerLook = { fontFace: mailSettings.data?.fontFace ?? 'arial', fontSize: mailSettings.data?.fontSize ?? 14, rtl }
   // Sign starts on for Kutup recipients; for an outside one from its
   // contact's Sign choice, else "Sign outside mail", as Proton's "Sign
@@ -381,9 +385,10 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       // Files only: images in the text are not listed as attachments.
       attachments: attachments.filter((a) => a.id && !a.cid).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
       requestReceipt,
+      ...(expiresAt ? { expiresAt: expiresAt.toISOString() } : {}),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- look is rebuilt from these every render
-    [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt, plain, plainText, rtl, look.fontFace, look.fontSize],
+    [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt, plain, plainText, rtl, look.fontFace, look.fontSize, expiresAt],
   )
 
   /** Saves the draft now, after any save still running; resolves to its id. */
@@ -612,6 +617,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
         toast.error(
           data?.code === 'notAllowed'
             ? t('compose.groupNotAllowed', { address: (data as { address?: string }).address ?? '' })
+            : data?.code === 'expiringOutside'
+            ? t('expiry.outside')
             : data?.code === 'outsideSendingOff'
             ? t('compose.outsideOff')
             : data?.code === 'sendingPaused'
@@ -808,6 +815,30 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               {kutupRecipients ? t('compose.notEncryptedKutup') : t('compose.notEncrypted')}
             </p>
           ) : null}
+          {expiresAt ? (
+            <p role="status" className="flex shrink-0 items-center gap-2 border-t border-border bg-muted/50 px-3 py-1.5 text-xs">
+              <Hourglass className="size-3.5" aria-hidden />
+              <span className="flex-1">{t('expiry.composerBar', { date: expiresAt.toLocaleString(i18n.language) })}</span>
+              <button type="button" className="underline" onClick={() => setExpiresAt(null)}>
+                {t('expiry.remove')}
+              </button>
+            </p>
+          ) : null}
+          {choosingExpiry ? (
+            <DateTimeDialog
+              title={t('expiry.title')}
+              hint={t('expiry.hint')}
+              initial={expiresAt ?? new Date(Date.now() + 24 * 60 * 60_000)}
+              valid={(at) => at.getTime() > Date.now() + 60_000 && at.getTime() <= Date.now() + 28 * 24 * 60 * 60_000}
+              invalidText={t('expiry.outOfRange')}
+              submit={t('expiry.apply')}
+              onCancel={() => setChoosingExpiry(false)}
+              onChoose={(at) => {
+                setChoosingExpiry(false)
+                setExpiresAt(at)
+              }}
+            />
+          ) : null}
           <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
             <span className="flex">
               <Button onClick={() => void send()} disabled={sending} className="rounded-r-none">
@@ -886,6 +917,10 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
                 <DropdownMenuCheckboxItem checked={rtl} onCheckedChange={(on) => setRtl(on)}>
                   {t('compose.rightToLeft')}
                 </DropdownMenuCheckboxItem>
+                <DropdownMenuItem onSelect={() => setChoosingExpiry(true)}>
+                  <Hourglass />
+                  {expiresAt ? t('expiry.edit') : t('expiry.set')}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <span className="flex-1" />

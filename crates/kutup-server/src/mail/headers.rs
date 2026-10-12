@@ -87,6 +87,8 @@ pub struct Readable {
     pub list_unsubscribe: bool,
     /// Its attached files (not inline images), for the list.
     pub attachments: Vec<AttachmentMeta>,
+    /// An expiring message (Proton's): every Kutup copy is deleted then.
+    pub expires_at: Option<time::OffsetDateTime>,
 }
 
 /// A delivery failure report.
@@ -127,6 +129,7 @@ impl Readable {
                 .iter()
                 .any(|(name, value)| name == "list-unsubscribe" && !value.trim().is_empty()),
             attachments: attachments(&message),
+            expires_at: None,
         }
     }
 }

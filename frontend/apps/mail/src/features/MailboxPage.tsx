@@ -1,4 +1,4 @@
-import { AlarmClock, Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { AlarmClock, Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Hourglass, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -767,6 +767,9 @@ export function MailboxPage() {
                 )
                 const meta = (
                   <>
+                    {message.expiresAt ? (
+                      <Hourglass className="size-3.5 text-muted-foreground" aria-label={t('expiry.row', { date: formatInstant(message.expiresAt, i18n.language) ?? '' })} />
+                    ) : null}
                     {attachments > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
                     {message.snoozedUntil ? (
                       // Snoozed: when it comes back.

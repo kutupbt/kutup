@@ -953,5 +953,18 @@
     "removeMetadataHint": "Böylece kimse fotoğrafın nerede, ne zaman ve hangi cihazla çekildiğini göremez.",
     "attachment": "Ek",
     "inline": "Metin içinde"
+  },
+  "expiry": {
+    "set": "Süre sonu belirle",
+    "edit": "Süre sonunu düzenle",
+    "title": "Süreli ileti",
+    "hint": "İleti, zamanı geldiğinde Kutup'taki herkes için silinir; en çok 4 hafta sonrası.",
+    "outOfRange": "Bir dakika ile 4 hafta sonrası arasında bir zaman seçin.",
+    "apply": "Belirle",
+    "remove": "Kaldır",
+    "composerBar": "Bu ileti {{date}} tarihinde silinecek.",
+    "outside": "Süreli iletiler yalnızca Kutup alıcılarına gider: Kutup dışına giden bir kopya sonradan silinemez.",
+    "banner": "Bu ileti {{date}} tarihinde silinecek.",
+    "row": "{{date}} silinecek"
   }
 }

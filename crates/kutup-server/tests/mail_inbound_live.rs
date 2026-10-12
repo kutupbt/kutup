@@ -4286,3 +4286,93 @@ fn snoozed_mail_comes_back_unread() {
     assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
     assert!(find("archive").expect("archived")["snoozedUntil"].is_null());
 }
+
+#[test]
+fn expiring_messages_are_deleted_everywhere() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let domain = address.address.split_once('@').unwrap().1.to_string();
+    let send = |to: &str, expires: time::OffsetDateTime, subject: &str| {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!("From: {0}\r\nTo: {to}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n", address.address);
+        let split =
+            mail_key::encrypt_split(&[&address.public_key], &address.secret_key, mime.as_bytes())
+                .unwrap();
+        let packet = b64(&split.key_packets[0]);
+        let local = to.ends_with(&format!("@{domain}"));
+        let meta = json!({
+            "to": [{ "address": to }],
+            "subject": subject,
+            "messageId": message_id,
+            "expiresAt": expires.format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "keyPackets": if local { json!({ "self": packet, to: packet }) } else { json!({ "self": packet }) },
+        });
+        let mut parts = vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ];
+        if !local {
+            parts.push(("mime", mime.into_bytes()));
+        }
+        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(parts))
+            .send()
+            .unwrap()
+    };
+    let now = time::OffsetDateTime::now_utc;
+    // Too far, or to someone outside (whose copy cannot be deleted later): refused.
+    assert_eq!(
+        send(&address.address, now() + time::Duration::weeks(5), "Uzak").status(),
+        400
+    );
+    let r = send(
+        "someone@outside.test",
+        now() + time::Duration::hours(1),
+        "Dışarı",
+    );
+    assert_eq!(r.status(), 400);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "expiringOutside");
+
+    // To herself, expiring in a minute: both copies say so, then both go.
+    let r = send(
+        &address.address,
+        now() + time::Duration::seconds(65),
+        "Geçici",
+    );
+    assert!(r.status().is_success(), "{}", r.status());
+    let copies = |name: &str| {
+        folder(&c, &base, &user.token, name)
+            .into_iter()
+            .filter(|m| m["subject"] == "Geçici")
+            .collect::<Vec<_>>()
+    };
+    let mut inbox = Vec::new();
+    for _ in 0..50 {
+        inbox = copies("inbox");
+        if !inbox.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(inbox[0]["expiresAt"].is_string());
+    assert!(copies("sent")[0]["expiresAt"].is_string());
+    let used = common::used(&c, &base, &user.token);
+    let mut gone = false;
+    for _ in 0..140 {
+        if copies("inbox").is_empty() && copies("sent").is_empty() {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    assert!(gone, "expired copies deleted");
+    assert!(
+        common::used(&c, &base, &user.token) < used,
+        "their storage freed"
+    );
+}

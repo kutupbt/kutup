@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Code, Download, Forward, MoreHorizontal, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
+import { ChevronDown, Code, Hourglass, Download, Forward, MoreHorizontal, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -325,6 +325,13 @@ export function MessageView({
               <Alert variant="warn">{t('read.signatureFailed')}</Alert>
             ) : null}
             {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}
+            {message.expiresAt ? (
+              // Proton's ExtraExpiration.
+              <p role="status" className="flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm">
+                <Hourglass className="size-4 text-muted-foreground" aria-hidden />
+                {t('expiry.banner', { date: formatInstant(message.expiresAt, i18n.language) ?? '' })}
+              </p>
+            ) : null}
             {draft ? null : <UnsubscribeBanner account={account} message={message} raw={opened.data.raw} group={group} />}
             {draft || group ? null : <ReadReceipt account={account} message={message} parsed={opened.data.parsed} />}
             {code ? (

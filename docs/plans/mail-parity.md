@@ -43,7 +43,7 @@ reference only where Proton has nothing.
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ✅ Inbox conversations: tomorrow, later this week, this weekend, next week (9:00, as Proton's) or a day and time; they wait in Snoozed with when they come back, then return to the Inbox unread (the server's timer); Unsnooze brings them back now; moving them elsewhere ends the snooze (spec 104) |
 | One-time code detection with Copy | `ItemOneTimeCode.tsx` | ✅ on the device, mail under 20 minutes old with a code-like subject (English, Turkish, German, French, Spanish): the code beside the list row (from the subject) and in the opened message (subject and body); Copy puts it on the clipboard and moves the mail to Trash with Undo (spec 99) |
 | Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ deferred (2026-10-12): initials and contact photos for now. Proton loads them from its own API (`core/v4/images/logo`), never from the sender, and only where its server set `DisplaySenderImage`/`BimiSelector` on the message. Kutup's option when taken up: BIMI only, for DMARC-passed mail, fetched and sanitized once per domain by the server and served from it |
-| Expiring message banner | `ExtraExpiration.tsx` | ❌ (with expiring messages) |
+| Expiring message banner | `ExtraExpiration.tsx` | ✅ "This message will expire on …", an hourglass on its row (spec 108) |
 
 ## Writing
 
@@ -62,7 +62,7 @@ reference only where Proton has nothing.
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ✅ Send's menu: tomorrow morning, Monday morning, or a day and time (a minute to 90 days ahead, 100 at most); the server holds it in the outbox, the draft waits in Scheduled (shown only when something is), the row shows when it goes, the message says so with Edit back to Drafts and the composer (spec 103) |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
-| Expiring messages | `ComposerExpirationModal.tsx` | ❌ |
+| Expiring messages | `ComposerExpirationModal.tsx` | 🔶 More options → Set expiration (a minute to 4 weeks, Proton's limit); the server deletes every Kutup copy then and frees its storage (spec 108); outside recipients refused until password-protected mail, as Proton requires a password there |
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
 | Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | 🔶 "Remove metadata" in the insert question, on by default: JPEG, PNG and WebP drawn again without EXIF; ❌ the account-wide toggle |
 | Mailto handler, "default mail app" | `useMailtoHash.ts` | ✅ Settings → General: "Set as default" registers Kutup Mail for mailto links (`#mailto=`, as Proton's); a link opens the composer with its To, Cc, Bcc, subject and body (spec 107) |

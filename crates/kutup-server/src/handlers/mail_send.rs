@@ -105,6 +105,10 @@ pub struct SendMeta {
     /// days ahead; the draft waits in Scheduled.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub schedule_at: Option<OffsetDateTime>,
+    /// An expiring message (Proton's): every Kutup copy is deleted then, at
+    /// most 4 weeks ahead. Kutup recipients only: outside copies cannot be.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     /// Base64 key packets: `self` for the sender's copy, and one per Kutup
     /// recipient address.
     pub key_packets: BTreeMap<String, String>,
@@ -302,6 +306,7 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
                 .iter()
                 .map(|a| headers::AttachmentMeta::clipped(&a.name, &a.mime_type, a.size))
                 .collect(),
+            expires_at: None,
         },
         bcc,
     })
@@ -977,7 +982,16 @@ pub(crate) async fn deliver(
     // Whose mailbox the sent copy goes to: the account's, or the group's.
     let owner = from_group.as_ref().map_or(user_id, |group| group.id);
     let server_name = state.config.chat_server_name.as_str();
-    let checked = check_meta(&meta.mail, &sender, server_name)?;
+    let mut checked = check_meta(&meta.mail, &sender, server_name)?;
+    if let Some(at) = meta.expires_at {
+        let now = OffsetDateTime::now_utc();
+        if at <= now + time::Duration::minutes(1) || at > now + time::Duration::weeks(4) {
+            return Err(AppError::bad_request(
+                "expiration from a minute to 4 weeks ahead",
+            ));
+        }
+        checked.readable.expires_at = Some(at);
+    }
     let readable = &checked.readable;
     let all: Vec<&Mailbox> = readable
         .to
@@ -1170,6 +1184,14 @@ pub(crate) async fn deliver(
             Some(mime)
         }
     };
+    // Copies outside Kutup cannot be deleted later (Proton asks for a
+    // password-protected message there).
+    if meta.expires_at.is_some() && !external.is_empty() {
+        return Err(
+            AppError::bad_request("expiring messages go to Kutup recipients only")
+                .with_details(json!({ "code": "expiringOutside" })),
+        );
+    }
     if !external.is_empty() {
         if !crate::site_settings::mail_outside_sending(
             &state.pool,
