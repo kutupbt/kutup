@@ -25,7 +25,8 @@
     "archive": "Archive",
     "spam": "Spam",
     "trash": "Trash",
-    "all": "All mail"
+    "all": "All mail",
+    "scheduled": "Scheduled"
   },
   "empty": {
     "inbox": "Your inbox is empty",
@@ -884,5 +885,22 @@
     "remove": "Remove {{address}}",
     "removeShort": "Remove",
     "removed": "Images from {{address}} will be asked for again."
+  },
+  "schedule": {
+    "menu": "Schedule send",
+    "tomorrow": "Tomorrow morning",
+    "monday": "Monday morning",
+    "custom": "Custom…",
+    "customTitle": "Schedule send",
+    "customHint": "Choose when the message goes: from a minute to 90 days ahead.",
+    "date": "Date",
+    "time": "Time",
+    "outOfRange": "Choose a time from a minute to 90 days ahead.",
+    "schedule": "Schedule",
+    "scheduledFor": "Message scheduled for {{date}}.",
+    "undone": "Scheduling undone.",
+    "rowAt": "Sends {{date}}",
+    "willSend": "This message will be sent on {{date}}.",
+    "edit": "Edit"
   }
 }

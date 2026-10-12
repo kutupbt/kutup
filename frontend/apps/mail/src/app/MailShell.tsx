@@ -3,6 +3,7 @@ import { feedbackServices } from '@kutup/session/feedback'
 import {
   Archive,
   BookUser,
+  Clock,
   FilePen,
   FileType,
   HardDrive,
@@ -53,6 +54,7 @@ const Composer = lazy(() => import('../features/Composer').then((m) => ({ defaul
 const NAV: { id: FolderId; icon: ReactNode }[] = [
   { id: 'inbox', icon: <Inbox /> },
   { id: 'drafts', icon: <FilePen /> },
+  { id: 'scheduled', icon: <Clock /> },
   { id: 'sent', icon: <Send /> },
   { id: 'starred', icon: <Star /> },
   { id: 'archive', icon: <Archive /> },
@@ -150,7 +152,7 @@ export function MailShell() {
   const actions = useMailActions()
   const groups = useMyGroups()
   const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')
-  const { groupId } = useParams()
+  const { groupId, folder: openFolder } = useParams()
   const composing = useComposer().target !== null
   const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
   const total = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.total ?? 0
@@ -202,7 +204,7 @@ export function MailShell() {
           {t('compose.new')}
         </Button>
       }
-      nav={<>{NAV.map(({ id, icon }) => (
+      nav={<>{NAV.filter(({ id }) => id !== 'scheduled' || total('scheduled') > 0 || openFolder === 'scheduled').map(({ id, icon }) => (
         <SidebarNavLink
           key={id}
           to={`/${id}`}
@@ -228,7 +230,7 @@ export function MailShell() {
               : undefined
           }
           trailing={
-            id === 'drafts' && total(id) > 0 ? (
+            (id === 'drafts' || id === 'scheduled') && total(id) > 0 ? (
               <Count value={total(id)} />
             ) : id !== 'sent' && id !== 'trash' && unread(id) > 0 ? (
               <Count value={unread(id)} />

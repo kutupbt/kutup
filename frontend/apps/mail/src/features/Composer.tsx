@@ -42,6 +42,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import { closeComposer, composerGeneration, openComposer, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
+import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
 
 /** Proton's limit for one message, attachments included. */
@@ -105,11 +106,13 @@ function reportSent(results: SendRecipient[], t: Translate, announce: boolean) {
  * is followed until the send goes, for what its recipients got. Lives past
  * the composer, which has closed.
  */
-function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => void) {
+function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => void, scheduledAt?: Date) {
   const wait = Math.max(0, Date.parse(held.deliverAt) - Date.now())
   let undone = false
-  toast.success(t('compose.sent'), {
-    duration: wait + 500,
+  const unscheduled: Draft = { ...draft, scheduleAt: undefined }
+  // Scheduled: "Message scheduled for …" with Undo for a while; it goes later.
+  toast.success(scheduledAt ? t('schedule.scheduledFor', { date: scheduledAt.toLocaleString() }) : t('compose.sent'), {
+    duration: scheduledAt ? 8_000 : wait + 500,
     action: {
       label: t('compose.undo'),
       onClick: () => {
@@ -120,15 +123,16 @@ function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => v
               toast.info(t('compose.alreadySent'))
               return
             }
-            toast.success(t('compose.sendUndone'))
+            toast.success(t(scheduledAt ? 'schedule.undone' : 'compose.sendUndone'))
             refresh()
-            openComposer({ kind: 'resume', draft })
+            openComposer({ kind: 'resume', draft: unscheduled })
           },
           () => toast.error(t('compose.undoFailed')),
         )
       },
     },
   })
+  if (scheduledAt) return
   void (async () => {
     // A minute past the delay at most; the list shows the outcome anyway.
     const until = Date.now() + wait + 60_000
@@ -488,7 +492,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     closeComposer(mine)
   }
 
-  async function send() {
+  /** Sends now (held for undo send), or at `scheduleAt` (scheduled send). */
+  async function send(scheduleAt?: Date) {
     const everyone = [...to, ...cc, ...bcc]
     if (everyone.length === 0) {
       toast.error(t('compose.noRecipients'))
@@ -517,9 +522,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const draft = current()
+      const draft = { ...current(), ...(scheduleAt ? { scheduleAt: scheduleAt.toISOString() } : {}) }
       const outcome = await sendDraft(account, draft, parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
-      if (isHeld(outcome)) followHeld(outcome, draft, t, refresh)
+      if (isHeld(outcome)) followHeld(outcome, draft, t, refresh, scheduleAt)
       else reportSent(outcome, t, true)
       refresh()
       // A new composer may have opened while this one was sending.
@@ -710,10 +715,13 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             </p>
           ) : null}
           <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
-            <Button onClick={() => void send()} disabled={sending}>
-              {sending ? <Loader2 className="animate-spin" /> : <Send />}
-              {sending ? t('compose.sending') : t('compose.send')}
-            </Button>
+            <span className="flex">
+              <Button onClick={() => void send()} disabled={sending} className="rounded-r-none">
+                {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                {sending ? t('compose.sending') : t('compose.send')}
+              </Button>
+              <ScheduleSend disabled={sending} onSchedule={(at) => void send(at)} />
+            </span>
             <input ref={files} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files).finally(() => (e.target.value = ''))} />
             <Tooltip label={t('compose.attach')}>
               <Button variant="ghost" size="icon" aria-label={t('compose.attach')} onClick={() => files.current?.click()}>

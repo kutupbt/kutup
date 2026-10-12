@@ -36,8 +36,8 @@ import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 // each message opened here with the address key, and messages written here,
 // encrypted once for every Kutup recipient and the sender's own copy.
 
-export type FolderId = 'inbox' | 'drafts' | 'sent' | 'archive' | 'spam' | 'trash' | 'starred' | 'all'
-export const FOLDERS: FolderId[] = ['inbox', 'drafts', 'sent', 'starred', 'archive', 'spam', 'trash']
+export type FolderId = 'inbox' | 'drafts' | 'scheduled' | 'sent' | 'archive' | 'spam' | 'trash' | 'starred' | 'all'
+export const FOLDERS: FolderId[] = ['inbox', 'drafts', 'scheduled', 'sent', 'starred', 'archive', 'spam', 'trash']
 /**
  * What a list shows: a fixed folder, one of the account's own folders
  * (`folder:<id>`) or a label (`label:<id>`), docs/plans/mail-filters.md.
@@ -76,6 +76,9 @@ export interface MailMessage {
   receiptSent?: boolean
   /** Its attached files, for the list. */
   attachments?: AttachmentMeta[]
+  /** A scheduled message: when it goes, and its held send (to take it back). */
+  scheduledAt?: string | null
+  outboxId?: string | null
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -813,6 +816,8 @@ export interface Draft {
   requestReceipt?: boolean
   /** The message is a read receipt for another (RFC 8098). */
   receipt?: Receipt
+  /** Scheduled send: when it goes (ISO 8601); it waits in Scheduled. */
+  scheduleAt?: string
 }
 
 export interface DraftAttachment {
@@ -1149,6 +1154,7 @@ export async function sendDraft(
         [
           JSON.stringify({
             ...meta(account, draft),
+            ...(draft.scheduleAt ? { scheduleAt: draft.scheduleAt } : {}),
             // Every part sent, forwarded ones and an attached key too.
             attachmentCount: attachmentParts.length,
             attachments: attachmentParts.map(describePart),

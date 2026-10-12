@@ -27,6 +27,7 @@ import { Padlock } from './Padlock'
 import { Person, PersonAvatar } from './Person'
 import { OneTimeCodeButton } from './OneTimeCode'
 import { ReadReceipt } from './ReadReceipt'
+import { ScheduledBanner } from './ScheduledBanner'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
 import { UnsubscribeBanner } from './Unsubscribe'
@@ -350,7 +351,9 @@ export function MessageView({
             )}
             <AttachmentList list={opened.data.parsed.attachments} subject={opened.data.parsed.subject || message.subject} />
             <div className="flex flex-wrap gap-2 pt-1">
-              {draft ? (
+              {message.folder === 'scheduled' && message.outboxId ? (
+                <ScheduledBanner message={message} opened={opened.data} />
+              ) : draft ? (
                 <Button size="sm" onClick={() => openComposer({ kind: 'draft', message, opened: opened.data })}>
                   {t('read.editDraft')}
                 </Button>
