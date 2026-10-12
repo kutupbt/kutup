@@ -78,6 +78,9 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
   const trusted = !suspicious && (settings.data?.remoteImages === 'always' || (!!sender && (imageSenders.data?.some((s) => s.address === sender.toLowerCase()) ?? false)))
   const [loaded, setLoaded] = useState(false)
   const allowRemote = loaded || trusted
+  // Proton's "Auto show embedded images": the message's own images, on unless turned off.
+  const [embeddedLoaded, setEmbeddedLoaded] = useState(false)
+  const holdEmbedded = !embeddedLoaded && settings.data?.embeddedImages === false
   const protect = settings.data?.imageProxy ?? true
   // The message's remote addresses, read from the last rendering (they do not
   // depend on what loaded).
@@ -112,11 +115,11 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
           return image === null && direct ? url : null
         }
       : undefined
-    if (parsed.html) return sanitizeMailHtml(parsed.html, { allowRemote, resolveRemote, cleanLinks: protect, inlineImages: inline, look })
+    if (parsed.html) return sanitizeMailHtml(parsed.html, { allowRemote, resolveRemote, cleanLinks: protect, inlineImages: inline, holdEmbedded, look })
     const cleanedLinks: CleanedLink[] = []
     const document = plainTextDocument(parsed.text ?? '', look, protect ? cleanedLinks : undefined)
-    return { document, remoteBlocked: false, remoteUrls: [], cleanedLinks, dark: darkTheme, themed: true }
-  }, [parsed, allowRemote, protect, proxy, direct, inline, darkTheme, t])
+    return { document, remoteBlocked: false, embeddedBlocked: false, remoteUrls: [], cleanedLinks, dark: darkTheme, themed: true }
+  }, [parsed, allowRemote, protect, proxy, direct, inline, holdEmbedded, darkTheme, t])
   const remoteKey = rendered.remoteUrls.join('\n')
   useEffect(() => {
     setRemoteUrls(remoteKey ? remoteKey.split('\n') : [])
@@ -157,6 +160,15 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
           <span className="flex-1">{t('read.remoteBlocked')}</span>
           <Button variant="outline" size="sm" onClick={() => setAskingImages(true)}>
             {t('read.loadRemote')}
+          </Button>
+        </div>
+      ) : null}
+      {rendered.embeddedBlocked ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm">
+          <ImageOff className="size-4 text-muted-foreground" aria-hidden />
+          <span className="flex-1">{t('read.embeddedBlocked')}</span>
+          <Button variant="outline" size="sm" onClick={() => setEmbeddedLoaded(true)}>
+            {t('read.loadEmbedded')}
           </Button>
         </div>
       ) : null}

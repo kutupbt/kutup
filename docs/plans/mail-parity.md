@@ -64,7 +64,7 @@ reference only where Proton has nothing.
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
 | Expiring messages | `ComposerExpirationModal.tsx` | 🔶 More options → Set expiration (a minute to 4 weeks, Proton's limit); the server deletes every Kutup copy then and frees its storage (spec 108); outside recipients refused until password-protected mail, as Proton requires a password there |
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
-| Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | 🔶 "Remove metadata" in the insert question, on by default: JPEG, PNG and WebP drawn again without EXIF; ❌ the account-wide toggle |
+| Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | ✅ "Remove metadata" in the insert question: JPEG, PNG and WebP drawn again without EXIF; where it starts is Settings → General "Remove image metadata" (on by default; Proton's is off) (spec 110) |
 | Mailto handler, "default mail app" | `useMailtoHash.ts` | ✅ Settings → General: "Set as default" registers Kutup Mail for mailto links (`#mailto=`, as Proton's); a link opens the composer with its To, Cc, Bcc, subject and body (spec 107) |
 | Request a read receipt | `MoreActionsExtension.tsx` | ✅ "Read receipt" in the composer (`Disposition-Notification-To`), kept in the draft (spec 100) |
 | Writing assistant | `ComposerAssistant.tsx` | ➖ not planned |
@@ -124,7 +124,7 @@ reference only where Proton has nothing.
 | Mobile apps | | ➖ native apps' plans |
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Calendar invitations in mail (Accept, Decline) | `ExtraEvent.tsx` | ➖ with Calendar |
-| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | 🔶 Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs, Protect against email tracking (on by default); ❌ embedded images |
+| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ✅ Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs, Protect against email tracking (on by default), Auto show embedded images (off: "Load embedded images", spec 110) |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
 | Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |

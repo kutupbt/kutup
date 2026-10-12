@@ -122,7 +122,9 @@
     "headersTitle": "İleti üst bilgileri",
     "download": "İndir",
     "from": "Kimden",
-    "date": "Tarih"
+    "date": "Tarih",
+    "embeddedBlocked": "Bu iletide gömülü görseller var.",
+    "loadEmbedded": "Gömülü görselleri yükle"
   },
   "actions": {
     "archive": "Arşivle",
@@ -910,7 +912,11 @@
     "removed": "{{address}} adresinden gelen görseller yine sorulacak.",
     "bodyProxy": "Görseller Kutup sunucusu üzerinden yüklenir; gönderen IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir.",
     "proxyTitle": "E-posta izlemeye karşı koruma",
-    "proxyHint": "Uzak görseller tarayıcınız yerine Kutup üzerinden gelir; gönderenler IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir. Bilinen izleme pikselleri hiç yüklenmez ve bağlantılardaki izleme parametreleri çıkarılır."
+    "proxyHint": "Uzak görseller tarayıcınız yerine Kutup üzerinden gelir; gönderenler IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir. Bilinen izleme pikselleri hiç yüklenmez ve bağlantılardaki izleme parametreleri çıkarılır.",
+    "embeddedTitle": "Gömülü görselleri otomatik göster",
+    "embeddedHint": "İletinin içinde gönderilen görseller hemen gösterilir. Kapalıyken siz yükleyene kadar bekler.",
+    "metadataTitle": "Görsel üst verisini kaldır",
+    "metadataHint": "Görsel eklerken “Üst veriyi kaldır” seçeneğinin başlangıç değeri: JPEG, PNG ve WebP görsellerden konum, cihaz ve zaman bilgisi çıkarılır."
   },
   "tracking": {
     "trackersBlocked_one": "{{count}} izleyici engellendi",

@@ -2617,7 +2617,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2667,7 +2667,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3904,6 +3904,17 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
         .json()
         .unwrap();
     assert_eq!(settings["imageProxy"], true);
+    assert_eq!(settings["embeddedImages"], true);
+    assert_eq!(settings["removeImageMetadata"], true);
+    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "embeddedImages": false, "removeImageMetadata": false }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(saved["embeddedImages"], false);
+    assert_eq!(saved["removeImageMetadata"], false);
+    assert_eq!(saved["imageProxy"], true);
     let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "imageProxy": false }))
         .send()

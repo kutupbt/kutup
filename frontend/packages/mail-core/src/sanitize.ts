@@ -37,6 +37,8 @@ export interface SanitizeOptions {
   cleanLinks?: boolean
   /** Content-ID (without brackets) → blob: URL of that part. */
   inlineImages?: ReadonlyMap<string, string>
+  /** Hold the message's own (cid:) images back until the reader loads them. */
+  holdEmbedded?: boolean
   look?: FrameLook
 }
 
@@ -45,6 +47,8 @@ export interface SanitizedHtml {
   document: string
   /** Whether something remote was held back. */
   remoteBlocked: boolean
+  /** Whether the message's own (cid:) images were held back. */
+  embeddedBlocked: boolean
   /** Every remote image address in the message (protocol-relative ones as https). */
   remoteUrls: string[]
   /** The links whose tracking parameters were taken out. */
@@ -66,11 +70,11 @@ function absolute(url: string): string {
   return trimmed.startsWith('//') ? `https:${trimmed}` : trimmed
 }
 
-function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: string) => string | null): string {
+function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: string) => string | null, embedded: (cid: string) => string | null): string {
   return style.replace(CSS_URL, (whole, _quote: string, url: string) => {
     const target = url.trim()
     if (target.toLowerCase().startsWith('cid:')) {
-      const blob = options.inlineImages?.get(target.slice(4).replace(/^<|>$/g, ''))
+      const blob = embedded(target)
       return blob ? `url("${blob}")` : 'none'
     }
     if (target.toLowerCase().startsWith('data:image/')) return whole
@@ -87,6 +91,16 @@ function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: str
 export function sanitizeMailHtml(html: string, options: SanitizeOptions): SanitizedHtml {
   const purify = DOMPurify(window)
   let remoteBlocked = false
+  let embeddedBlocked = false
+  // A message part's blob: URL for a cid: address; null when it has none or it is held back.
+  const embedded = (value: string): string | null => {
+    const blob = options.inlineImages?.get(value.trim().slice(4).replace(/^<|>$/g, ''))
+    if (blob && options.holdEmbedded) {
+      embeddedBlocked = true
+      return null
+    }
+    return blob ?? null
+  }
   let direct = false
   const remoteUrls = new Set<string>()
   const cleanedLinks: CleanedLink[] = []
@@ -105,13 +119,13 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
   purify.addHook('uponSanitizeAttribute', (node, data) => {
     const name = data.attrName.toLowerCase()
     if (name === 'style') {
-      data.attrValue = rewriteStyle(data.attrValue, options, remote)
+      data.attrValue = rewriteStyle(data.attrValue, options, remote, embedded)
       return
     }
     if (!URL_ATTRIBUTES.includes(name)) return
     const value = data.attrValue.trim()
     if (value.toLowerCase().startsWith('cid:')) {
-      const blob = options.inlineImages?.get(value.slice(4).replace(/^<|>$/g, ''))
+      const blob = embedded(value)
       if (blob) {
         // Not forceKeepAttr: that keeps the original value, not this one.
         data.attrValue = blob
@@ -166,6 +180,7 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
   return {
     document: frame(foldQuote(body, options.look?.quoteLabel), images, adapts ? options.look : undefined),
     remoteBlocked,
+    embeddedBlocked,
     remoteUrls: [...remoteUrls],
     cleanedLinks,
     dark: adapts && !!options.look?.dark,

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useMailSettings } from '@kutup/mail-core/api'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -7,7 +8,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 /** Proton's ComposerInsertImageModal: inline in the text or attached, with "Remove metadata". */
 export function ImageInsertDialog({ count, onCancel, onChoose }: { count: number; onCancel: () => void; onChoose: (inline: boolean, strip: boolean) => void }) {
   const { t } = useTranslation()
-  const [strip, setStrip] = useState(true)
+  // Starts as Settings → General says (Proton's RemoveImageMetadata).
+  const settings = useMailSettings()
+  const [strip, setStrip] = useState(settings.data?.removeImageMetadata ?? true)
   return (
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
       <DialogContent className="max-w-md">

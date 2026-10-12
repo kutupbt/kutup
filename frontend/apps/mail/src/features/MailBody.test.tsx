@@ -7,11 +7,12 @@ const addImageSender = vi.fn()
 let remoteImages: 'ask' | 'always' = 'ask'
 let senders: { address: string }[] = []
 let imageProxy = true
+let embeddedImages = true
 const fetchMailImage = vi.fn((url: string) =>
   Promise.resolve(url.includes('broken') ? { kind: 'failed' as const } : { kind: 'image' as const, blob: new Blob(['GIF89a'], { type: 'image/gif' }) }),
 )
 vi.mock('@kutup/mail-core/api', () => ({
-  useMailSettings: () => ({ data: { confirmLink: true, remoteImages, imageProxy } }),
+  useMailSettings: () => ({ data: { confirmLink: true, remoteImages, imageProxy, embeddedImages } }),
   useImageSenders: () => ({ data: senders }),
   useAddImageSender: () => ({ mutate: addImageSender }),
   fetchMailImage: (url: string) => fetchMailImage(url),
@@ -37,6 +38,7 @@ beforeEach(() => {
   remoteImages = 'ask'
   senders = []
   imageProxy = true
+  embeddedImages = true
 })
 
 const frameDoc = () => screen.getByTitle('Message').getAttribute('srcdoc') ?? ''
@@ -126,5 +128,26 @@ describe('tracker protection', () => {
     expect(doc).toContain('utm_source=news')
     expect(screen.queryByRole('button', { name: /tracker/ })).toBeNull()
     expect(fetchMailImage).not.toHaveBeenCalled()
+  })
+})
+
+describe('embedded images', () => {
+  const withLogo = {
+    html: '<p>Merhaba</p><img src="cid:logo@x" alt="logo">',
+    text: null,
+    attachments: [{ contentId: 'logo@x', mimeType: 'image/png', content: new Uint8Array([137, 80, 78, 71]) }],
+  } as unknown as ParsedMessage
+
+  it('show at once unless turned off, then wait to be loaded', () => {
+    const shown = render(<MailBody parsed={withLogo} sender="a@example.org" />)
+    expect(frameDoc()).toContain('src="blob:')
+    expect(screen.queryByText('This message contains embedded images.')).toBeNull()
+    shown.unmount()
+    embeddedImages = false
+    render(<MailBody parsed={withLogo} sender="a@example.org" />)
+    expect(frameDoc()).not.toContain('src="blob:')
+    fireEvent.click(screen.getByRole('button', { name: 'Load embedded images' }))
+    expect(frameDoc()).toContain('src="blob:')
+    expect(screen.queryByText('This message contains embedded images.')).toBeNull()
   })
 })

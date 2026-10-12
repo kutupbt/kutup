@@ -798,6 +798,10 @@ export interface MailSettings {
   remoteImages: 'ask' | 'always'
   /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
   imageProxy: boolean
+  /** A message's own (embedded) images show at once (Proton's "Auto show embedded images"). */
+  embeddedImages: boolean
+  /** Where the insert-image question's "Remove metadata" starts (Proton's RemoveImageMetadata). */
+  removeImageMetadata: boolean
   /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
   delaySendSeconds: number
   /** Composer defaults (Proton's Composer mode, text direction, default font/size). */
