@@ -2617,7 +2617,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask" })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "delaySendSeconds": 10 })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2662,12 +2662,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always" }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20 }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always" })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20 })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3887,4 +3887,149 @@ fn senders_whose_images_always_load() {
         204
     );
     assert!(list(&alice.token).is_empty());
+}
+
+#[test]
+fn undo_send_holds_a_draft_then_sends_it() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let domain = address.address.split_once('@').unwrap().1.to_string();
+    let settings = |body: Value| {
+        let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+            .json(&body)
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "settings: {}", r.status());
+    };
+    // A draft to herself, and its send (end to end, her own key packet).
+    let make_draft = |subject: &str| -> (String, String) {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let own =
+            mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
+        let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&json!({ "subject": subject, "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
+                ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
+            ]))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let id = r.json::<Value>().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (id, message_id)
+    };
+    let send = |draft: &str, message_id: &str, subject: &str| {
+        let mime = format!("From: {0}\r\nTo: {0}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n", address.address);
+        let split =
+            mail_key::encrypt_split(&[&address.public_key], &address.secret_key, mime.as_bytes())
+                .unwrap();
+        let packet = b64(&split.key_packets[0]);
+        let meta = json!({
+            "to": [{ "address": address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "draftId": draft,
+            "keyPackets": { "self": packet, address.address.clone(): packet },
+        });
+        bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap()
+    };
+    let status = |id: &str, token: &str| {
+        bearer(c.get(format!("{base}/api/mail/outbox/{id}")), token)
+            .send()
+            .unwrap()
+    };
+    let cancel = |id: &str| {
+        bearer(
+            c.post(format!("{base}/api/mail/outbox/{id}/cancel")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .status()
+        .as_u16()
+    };
+    let in_drafts = |id: &str| {
+        folder(&c, &base, &user.token, "drafts")
+            .iter()
+            .any(|m| m["id"] == id)
+    };
+    settings(json!({ "delaySendSeconds": 5 }));
+
+    // Held: the draft stays, cannot change, and Undo keeps it a draft.
+    let (draft, message_id) = make_draft("Geri al");
+    let r = send(&draft, &message_id, "Geri al");
+    assert_eq!(r.status(), 202, "{}", r.text().unwrap_or_default());
+    let held: Value = r.json().unwrap();
+    let outbox = held["outboxId"].as_str().unwrap().to_string();
+    assert!(in_drafts(&draft));
+    let r = bearer(
+        c.put(format!("{base}/api/mail/drafts/{draft}")),
+        &user.token,
+    )
+    .multipart(form(vec![("meta", b"{}".to_vec())]))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 409, "a held draft does not change");
+    // A second send of the same draft while one waits is refused.
+    assert_eq!(send(&draft, &message_id, "Geri al").status(), 409);
+    // Someone else's: not found.
+    let eve = register(&c, &base);
+    assert_eq!(status(&outbox, &eve.token).status(), 404);
+    assert_eq!(cancel(&outbox), 204);
+    assert_eq!(cancel(&outbox), 409, "taken back once");
+    assert_eq!(
+        status(&outbox, &user.token).json::<Value>().unwrap()["state"],
+        "cancelled"
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    assert!(in_drafts(&draft), "a taken-back send leaves its draft");
+    assert!(!folder(&c, &base, &user.token, "inbox")
+        .iter()
+        .any(|m| m["subject"] == "Geri al"));
+
+    // Sent again and left alone: it goes when the delay is up.
+    let r = send(&draft, &message_id, "Geri al");
+    assert_eq!(r.status(), 202);
+    let outbox = r.json::<Value>().unwrap()["outboxId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut sent = Value::Null;
+    for _ in 0..40 {
+        sent = status(&outbox, &user.token).json().unwrap();
+        if sent["state"] == "sent" || sent["state"] == "failed" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(sent["state"], "sent", "{sent}");
+    assert_eq!(sent["result"]["recipients"][0]["status"], "delivered");
+    assert!(!in_drafts(&draft), "the draft became the sent message");
+    assert!(folder(&c, &base, &user.token, "inbox")
+        .iter()
+        .any(|m| m["subject"] == "Geri al"));
+    assert_eq!(cancel(&outbox), 409);
+
+    // Undo send off: sent at once.
+    settings(json!({ "delaySendSeconds": 0 }));
+    let (draft, message_id) = make_draft("Hemen");
+    assert_eq!(send(&draft, &message_id, "Hemen").status(), 200);
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "delaySendSeconds": 7 }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 400);
 }

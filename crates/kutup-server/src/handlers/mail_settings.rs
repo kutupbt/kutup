@@ -57,13 +57,16 @@ pub struct MailSettings {
     /// Remote images: `ask` (blocked until loaded) or `always` (Proton's
     /// "Auto show remote images"); never automatic in Spam.
     pub remote_images: String,
+    /// Undo send: 0, 5, 10 or 20 seconds a send waits before it goes
+    /// (Proton's `DelaySendSeconds`, 10 by default).
+    pub delay_send_seconds: i32,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
         "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
-                view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images
+                view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -83,6 +86,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         page_size: 50,
         spam_action: "ask".into(),
         remote_images: "ask".into(),
+        delay_send_seconds: 10,
     }))
 }
 
@@ -111,6 +115,7 @@ pub struct UpdateMailSettings {
     pub page_size: Option<i32>,
     pub spam_action: Option<String>,
     pub remote_images: Option<String>,
+    pub delay_send_seconds: Option<i32>,
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
@@ -148,6 +153,12 @@ pub async fn update(
         return Err(AppError::bad_request("page size is 50, 100 or 200"));
     }
     if request
+        .delay_send_seconds
+        .is_some_and(|s| ![0, 5, 10, 20].contains(&s))
+    {
+        return Err(AppError::bad_request("undo send is 0, 5, 10 or 20 seconds"));
+    }
+    if request
         .spam_action
         .as_deref()
         .is_some_and(|a| !["ask", "just_spam", "spam_and_unsubscribe"].contains(&a))
@@ -173,11 +184,12 @@ pub async fn update(
     sqlx::query(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
-              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images)
+              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
                  COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
-                 COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'))
+                 COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
+                 COALESCE($15, 10))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -192,6 +204,7 @@ pub async fn update(
              page_size = COALESCE($12, mail_settings.page_size),
              spam_action = COALESCE($13, mail_settings.spam_action),
              remote_images = COALESCE($14, mail_settings.remote_images),
+             delay_send_seconds = COALESCE($15, mail_settings.delay_send_seconds),
              updated_at = now()",
     )
     .bind(user_id)
@@ -208,6 +221,7 @@ pub async fn update(
     .bind(request.page_size)
     .bind(request.spam_action.as_deref())
     .bind(request.remote_images.as_deref())
+    .bind(request.delay_send_seconds)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))
