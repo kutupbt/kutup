@@ -1,7 +1,7 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
+import { Bell, Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -124,6 +124,7 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
         references: message.references,
         threadId: message.threadId,
         attachments: [],
+        requestReceipt: !!parsed.receiptTo,
       },
       html: parsed.html ?? (parsed.text ? quoted({ ...parsed, html: null }) : ''),
       attachments: [],
@@ -236,6 +237,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [sending, setSending] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
   const [encrypt, setEncrypt] = useState(true)
+  // Proton's "Request read receipt".
+  const [requestReceipt, setRequestReceipt] = useState(start.draft.requestReceipt ?? false)
   // Sign starts on for Kutup recipients; for an outside one from its
   // contact's Sign choice, else "Sign outside mail", as Proton's "Sign
   // external messages" (docs/plans/contact-keys.md). Pressing the button
@@ -272,8 +275,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       html: editor?.getHTML() ?? '',
       text: editor?.getText({ blockSeparator: '\n' }) ?? '',
       attachments: attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name, type: '', size: a.size })),
+      requestReceipt,
     }),
-    [start.draft, to, cc, bcc, subject, editor, attachments],
+    [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt],
   )
 
   /** Saves the draft now, after any save still running; resolves to its id. */
@@ -304,7 +308,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     const timer = setTimeout(() => void save(), AUTOSAVE_MS)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, revision])
+  }, [to, cc, bcc, subject, revision, requestReceipt])
 
   // A saved draft's attachments: the parts are fetched to show their names.
   useEffect(() => {
@@ -662,6 +666,12 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               <Button variant={sign ? 'ghost' : 'outline'} size="sm" aria-pressed={sign} onClick={() => setSignChoice(!sign)}>
                 <Signature className={sign ? 'text-primary' : 'text-muted-foreground'} />
                 {t('compose.sign')}
+              </Button>
+            </Tooltip>
+            <Tooltip label={requestReceipt ? t('compose.receiptOn') : t('compose.receiptOff')}>
+              <Button variant={requestReceipt ? 'outline' : 'ghost'} size="sm" aria-pressed={requestReceipt} onClick={() => setRequestReceipt((on) => !on)}>
+                <Bell className={requestReceipt ? 'text-primary' : 'text-muted-foreground'} />
+                {t('compose.receipt')}
               </Button>
             </Tooltip>
             <span className="flex-1" />

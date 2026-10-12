@@ -26,6 +26,7 @@ import { useGroupScope, useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
 import { Person, PersonAvatar } from './Person'
 import { OneTimeCodeButton } from './OneTimeCode'
+import { ReadReceipt } from './ReadReceipt'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
 import { UnsubscribeBanner } from './Unsubscribe'
@@ -324,6 +325,7 @@ export function MessageView({
             ) : null}
             {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}
             {draft ? null : <UnsubscribeBanner account={account} message={message} raw={opened.data.raw} group={group} />}
+            {draft || group ? null : <ReadReceipt account={account} message={message} parsed={opened.data.parsed} />}
             {code ? (
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 {t('oneTimeCode.found')}

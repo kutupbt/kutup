@@ -39,10 +39,10 @@ reference only where Proton has nothing.
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; on moving list mail to Spam, "Move to spam and unsubscribe" (asked, or always/never in Settings → General as Proton's Auto-unsubscribe): arrival notes only that a message is from a list, the ways out are read on the device |
-| Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ❌ |
+| Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ✅ a message asking for one offers "Send read receipt" (never sent on its own); the client sends an RFC 8098 report, end to end to a Kutup sender, and the message then says "Read receipt sent" (spec 100) |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
 | One-time code detection with Copy | `ItemOneTimeCode.tsx` | ✅ on the device, mail under 20 minutes old with a code-like subject (English, Turkish, German, French, Spanish): the code beside the list row (from the subject) and in the opened message (subject and body); Copy puts it on the clipboard and moves the mail to Trash with Undo (spec 99) |
-| Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ (initials and contact photos) |
+| Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ deferred (2026-10-12): initials and contact photos for now. Proton loads them from its own API (`core/v4/images/logo`), never from the sender, and only where its server set `DisplaySenderImage`/`BimiSelector` on the message. Kutup's option when taken up: BIMI only, for DMARC-passed mail, fetched and sanitized once per domain by the server and served from it |
 | Expiring message banner | `ExtraExpiration.tsx` | ❌ (with expiring messages) |
 
 ## Writing
@@ -66,7 +66,7 @@ reference only where Proton has nothing.
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
 | Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | ❌ |
 | Mailto handler, "default mail app" | `useMailtoHash.ts` | ❌ |
-| Request a read receipt | `MoreActionsExtension.tsx` | ❌ |
+| Request a read receipt | `MoreActionsExtension.tsx` | ✅ "Read receipt" in the composer (`Disposition-Notification-To`), kept in the draft (spec 100) |
 | Writing assistant | `ComposerAssistant.tsx` | ➖ not planned |
 
 ## Organising

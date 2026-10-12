@@ -3587,6 +3587,28 @@ fn one_click_unsubscribe_goes_through_the_server() {
     // Someone else's message: not found.
     let eve = register(&c, &base);
     let r = bearer(
+        c.post(format!("{base}/api/mail/messages/{id}/receipt")),
+        &eve.token,
+    )
+    .json(&json!({}))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 404, "a read receipt for someone else's message");
+    // The reader's read receipt is noted on the message (Proton's "Read receipt sent").
+    assert_eq!(row["receiptSent"], false);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/{id}/receipt")),
+        &alice.token,
+    )
+    .json(&json!({}))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 204);
+    assert_eq!(
+        wait_for(&c, &base, &alice, &message_id)["receiptSent"],
+        true
+    );
+    let r = bearer(
         c.post(format!("{base}/api/mail/messages/{id}/unsubscribe")),
         &eve.token,
     )

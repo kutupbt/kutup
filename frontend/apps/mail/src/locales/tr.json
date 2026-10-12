@@ -231,7 +231,10 @@
     "signOff": "İmzasız. Açın.",
     "notEncryptedKutup": "Uçtan uca şifreli değil: Kutup bu iletiyi Kutup alıcılarına teslim ederken okuyabilir, sonra şifreli saklar. Listeler ve ortak posta kutuları yine uçtan uca alır.",
     "notEncrypted": "Şifreli değil: Kutup dışındaki alıcılar düz posta alır.",
-    "publicKeyFailed": "Açık anahtarınız eklenemedi."
+    "publicKeyFailed": "Açık anahtarınız eklenemedi.",
+    "receipt": "Okundu bilgisi",
+    "receiptOn": "Okundu bilgisi isteniyor",
+    "receiptOff": "Okundu bilgisi iste"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -843,5 +846,13 @@
     "manual_other": "{{count}} listeden yalnızca web sayfalarında çıkılabiliyor: çıkmak için iletilerinden birini açın.",
     "failed_one": "1 listeden çıkılamadı.",
     "failed_other": "{{count}} listeden çıkılamadı."
+  },
+  "readReceipt": {
+    "send": "Okundu bilgisi gönder",
+    "sent": "Okundu bilgisi gönderildi",
+    "asked": "Gönderen okundu bilgisi istedi.",
+    "failed": "Okundu bilgisi gönderilemedi.",
+    "subject": "Okundu: {{subject}}",
+    "body": "{{sent}} tarihinde gönderdiğiniz “{{subject}}” iletisi {{read}} tarihinde okundu."
   }
 }

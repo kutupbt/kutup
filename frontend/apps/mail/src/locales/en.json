@@ -231,7 +231,10 @@
     "signOff": "Not signed. Turn on.",
     "notEncryptedKutup": "Not end-to-end encrypted: Kutup can read this message while delivering it to Kutup recipients, then stores it encrypted. Lists and shared mailboxes still get it end to end.",
     "notEncrypted": "Not encrypted: recipients outside Kutup get plain mail.",
-    "publicKeyFailed": "Your public key could not be attached."
+    "publicKeyFailed": "Your public key could not be attached.",
+    "receipt": "Read receipt",
+    "receiptOn": "A read receipt is requested",
+    "receiptOff": "Request a read receipt"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -843,5 +846,13 @@
     "manual_other": "{{count}} lists can only be left on their web pages: open one of their messages to unsubscribe.",
     "failed_one": "Unsubscribing from 1 list did not work.",
     "failed_other": "Unsubscribing from {{count}} lists did not work."
+  },
+  "readReceipt": {
+    "send": "Send read receipt",
+    "sent": "Read receipt sent",
+    "asked": "The sender has requested a read receipt.",
+    "failed": "The read receipt could not be sent.",
+    "subject": "Read: {{subject}}",
+    "body": "Your message “{{subject}}”, sent on {{sent}}, was read on {{read}}."
   }
 }
