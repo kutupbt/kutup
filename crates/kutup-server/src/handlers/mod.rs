@@ -29,6 +29,7 @@ pub mod mail_identity;
 pub mod mail_image_senders;
 pub mod mail_images;
 pub mod mail_keys;
+pub mod mail_notifications;
 pub mod mail_outbox;
 pub mod mail_send;
 pub mod mail_sender_rules;

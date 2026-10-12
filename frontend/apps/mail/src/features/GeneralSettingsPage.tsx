@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { PAGE_SIZES, useImageSenders, useMailSettings, useRemoveImageSender, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
@@ -8,6 +9,7 @@ import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from './desktopNotifications'
 import { registerMailtoHandler } from './mailto'
 
 function Setting({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (on: boolean) => void }) {
@@ -23,6 +25,32 @@ function Setting({ label, hint, checked, onChange }: { label: string; hint: stri
 }
 
 /** Settings → General (Proton's Messages section, and its External PGP settings): conversation grouping, page size, auto-delete, All mail; signing, the attached key and the PGP scheme for outside mail. */
+/** Proton's DesktopNotificationPanel: the browser's permission, asked for here, and a test. */
+function NotificationSettings() {
+  const { t } = useTranslation()
+  const [status, setStatus] = useState<NotificationStatus>(notificationStatus)
+  return (
+    <section className="mt-8 space-y-3" aria-labelledby="notifications-heading">
+      <h2 id="notifications-heading" className="text-sm font-medium">
+        {t('notifications.settingsTitle')}
+      </h2>
+      <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          <span className="block text-sm font-medium">{t(`notifications.status.${status}`)}</span>
+          <span className="block text-sm text-muted-foreground">{t('notifications.settingsHint')}</span>
+        </span>
+        {status === 'granted' ? (
+          <Button variant="outline" onClick={() => showNotification(t('notifications.testTitle'), { body: t('notifications.testBody'), tag: 'kutup-mail-test' })}>
+            {t('notifications.test')}
+          </Button>
+        ) : status === 'default' ? (
+          <Button onClick={() => void requestNotifications().then(setStatus)}>{t('notifications.enable')}</Button>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
 export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
@@ -132,6 +160,7 @@ export function GeneralSettingsPage() {
           onChange={(on) => save({ almostAllMail: on })}
         />
       </div>
+      <NotificationSettings />
       <section className="mt-8 space-y-3" aria-labelledby="images-heading">
         <h2 id="images-heading" className="text-sm font-medium">
           {t('remoteImages.settingsTitle')}

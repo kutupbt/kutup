@@ -3938,6 +3938,107 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
 }
 
 #[test]
+fn new_mail_notifications_list_unread_inbox_mail() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let new_mail = |after: Option<&str>| -> Value {
+        let mut request = bearer(
+            c.get(format!("{base}/api/mail/notifications")),
+            &alice.token,
+        );
+        if let Some(after) = after {
+            request = request.query(&[("after", after)]);
+        }
+        let r = request.send().unwrap();
+        assert_eq!(r.status(), 200);
+        r.json().unwrap()
+    };
+    // Without `after`: only where to start.
+    let start = new_mail(None);
+    assert_eq!(start["messages"], json!([]));
+    let start = start["now"].as_str().unwrap().to_string();
+
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: haber\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+        bob_address.address, alice_address.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&alice_address.public_key, &bob_address.public_key],
+        &bob_address.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": alice_address.address }],
+        "subject": "haber",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+    let row = wait_for(&c, &base, &alice, &message_id);
+    let id = row["id"].as_str().unwrap().to_string();
+
+    // Arrived unread in the Inbox: told, with its sender and subject.
+    let page = new_mail(Some(&start));
+    let listed = page["messages"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{page}");
+    assert_eq!(listed[0]["id"], id.as_str());
+    assert_eq!(listed[0]["subject"], "haber");
+    assert_eq!(listed[0]["folder"], "inbox");
+    assert_eq!(listed[0]["fromAddress"], bob_address.address.as_str());
+    // Bob's own copy (sent) is not news to him.
+    let bobs: Value = bearer(c.get(format!("{base}/api/mail/notifications")), &bob.token)
+        .query(&[("after", start.as_str())])
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(bobs["messages"], json!([]));
+    // Read, or filed away: no longer.
+    let patch = |body: Value| {
+        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
+            .json(&body)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 200);
+    };
+    patch(json!({ "ids": [id], "folder": "archive" }));
+    assert_eq!(new_mail(Some(&start))["messages"], json!([]));
+    patch(json!({ "ids": [id], "starred": true }));
+    assert_eq!(
+        new_mail(Some(&start))["messages"].as_array().unwrap().len(),
+        1
+    );
+    patch(json!({ "ids": [id], "seen": true }));
+    assert_eq!(new_mail(Some(&start))["messages"], json!([]));
+    // A bad `after` is refused.
+    let r = bearer(
+        c.get(format!("{base}/api/mail/notifications")),
+        &alice.token,
+    )
+    .query(&[("after", "yesterday")])
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 400);
+}
+
+#[test]
 fn senders_whose_images_always_load() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");

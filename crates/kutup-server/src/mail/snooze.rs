@@ -24,7 +24,7 @@ pub fn spawn(state: AppState) {
 /// Brings due snoozed mail back to the Inbox, unread; how many.
 pub async fn wake(state: &AppState) -> sqlx::Result<u64> {
     Ok(sqlx::query(
-        "UPDATE mail_messages SET folder = 'inbox', seen = false, snoozed_until = NULL
+        "UPDATE mail_messages SET folder = 'inbox', seen = false, snoozed_until = NULL, notify_at = now()
           WHERE folder = 'snoozed' AND snoozed_until <= now()",
     )
     .execute(&state.pool)

@@ -44,6 +44,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@kutup/ui/components/po
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { AdvancedSearch } from '../features/AdvancedSearch'
+import { NotificationBanner } from '../features/NotificationBanner'
+import { useNewMailNotifications } from '../features/useNewMailNotifications'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
@@ -166,6 +168,7 @@ export function MailShell() {
   const session = useRequiredSession()
   useAccountUiPreferences()
   const counts = useCounts()
+  useNewMailNotifications()
   const actions = useMailActions()
   const groups = useMyGroups()
   const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')
@@ -303,6 +306,7 @@ export function MailShell() {
       }
     >
       <Outlet />
+      <NotificationBanner />
       <SaveContactHost />
       <PlacesHost />
       <BlockSenderHost />
