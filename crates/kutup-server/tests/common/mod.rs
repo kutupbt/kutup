@@ -482,13 +482,39 @@ pub fn admin_token(c: &Client, base: &str, _email: &str, password: &str, usernam
         .to_string()
 }
 
+/// The password's key-encryption key of `user` (the test password, under the
+/// salt and parameters its preflight answers).
+pub fn password_key_encryption_key(c: &Client, base: &str, user: &User) -> Vec<u8> {
+    let preflight: Value = c
+        .get(format!("{base}/api/auth/login/preflight"))
+        .query(&[("name", &user.username)])
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let salt = kutup_crypto::account_envelope::decode_canonical_b64(
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+    )
+    .unwrap();
+    kutup_crypto::kdf::derive_account_protection_keys(
+        "integrity-pw-123456",
+        &salt,
+        kutup_crypto::kdf::AccountProtectionParameters::V1,
+    )
+    .unwrap()
+    .key_encryption_key
+    .to_vec()
+}
+
 /// A whole `POST /api/user/rebind` body re-sealing `user`'s account keys to
 /// `new_binding` (docs/plans/account-identity.md): the password proved, the
 /// password and recovery wrappings and the recovery check, and the Drive key.
 /// Its Chat backup root, mail keys and Pass vault secrets are the caller's to
 /// add (`chatBackupRootEnvelope`, `mailKeys`, `passVaultSecrets`).
-pub fn rebind_request(user: &User, password_key_encryption_key: &[u8], new_binding: &str) -> Value {
+pub fn rebind_request(c: &Client, base: &str, user: &User, new_binding: &str) -> Value {
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    let kek = password_key_encryption_key(c, base, user);
+    let password_key_encryption_key = kek.as_slice();
     let seal = |plain: &[u8], key: &[u8], purpose| {
         account_envelope::seal_b64(plain, key, purpose, new_binding).unwrap()
     };
