@@ -64,7 +64,13 @@
     "keptStale": "The key your account keeps no longer opens this vault: its password was probably changed elsewhere. Enter the new one.",
     "keepFailed": "The vault's key could not be kept in your account; you will be asked for it next time.",
     "withSignIn": "Unlock with my sign-in",
-    "orKey": "or enter the vault's key:"
+    "orKey": "or enter the vault's key:",
+    "accountPassword": "Your Kutup password",
+    "accountPasswordDescription": "This vault was locked on this device. Your account password opens it again; Kutup checks it as at sign-in.",
+    "withPassword": "Unlock with my password",
+    "wrongAccountPassword": "That is not your Kutup password.",
+    "paused": "Too many wrong passwords: your account is locked for a while, as at sign-in. Use the vault's own key below.",
+    "checkUnreachable": "Kutup could not be reached to check your password. Enter the vault's key instead."
   },
   "sync": {
     "saved": "Saved",
@@ -253,5 +259,11 @@
     "sharedBy_other": "Shared by {{count}} entries",
     "expired": "Expired entries",
     "expiredDescription": "Past the expiry date set on them."
+  },
+  "unlockMode": {
+    "label": "After a lock, open vaults with",
+    "description": "On this device, a vault that locked (by hand or after idling) opens again with this. Vaults without a kept key always ask for their own key.",
+    "password": "My Kutup password",
+    "click": "One click"
   }
 }

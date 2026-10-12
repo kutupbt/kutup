@@ -64,7 +64,13 @@
     "keptStale": "Hesabınızda tutulan anahtar bu kasayı artık açmıyor; parolası büyük olasılıkla başka yerde değiştirildi. Yenisini girin.",
     "keepFailed": "Kasanın anahtarı hesabınızda tutulamadı; bir dahaki sefer yeniden sorulacak.",
     "withSignIn": "Oturumumla aç",
-    "orKey": "ya da kasanın anahtarını girin:"
+    "orKey": "ya da kasanın anahtarını girin:",
+    "accountPassword": "Kutup parolanız",
+    "accountPasswordDescription": "Bu kasa bu cihazda kilitlendi. Hesap parolanız onu yeniden açar; Kutup onu oturum açmadaki gibi denetler.",
+    "withPassword": "Parolamla aç",
+    "wrongAccountPassword": "Bu, Kutup parolanız değil.",
+    "paused": "Çok fazla yanlış parola: hesabınız, oturum açmadaki gibi bir süre kilitlendi. Aşağıda kasanın kendi anahtarını kullanın.",
+    "checkUnreachable": "Parolanızı denetlemek için Kutup'a ulaşılamadı. Bunun yerine kasanın anahtarını girin."
   },
   "sync": {
     "saved": "Kaydedildi",
@@ -253,5 +259,11 @@
     "sharedBy_other": "{{count}} kayıtta ortak",
     "expired": "Süresi dolan kayıtlar",
     "expiredDescription": "Üzerlerinde ayarlı bitiş tarihi geçmiş."
+  },
+  "unlockMode": {
+    "label": "Kilitten sonra kasaları şununla aç",
+    "description": "Bu cihazda kilitlenen (elle ya da boşta kalınca) bir kasa bununla yeniden açılır. Anahtarı tutulmayan kasalar her zaman kendi anahtarını sorar.",
+    "password": "Kutup parolam",
+    "click": "Tek tıklama"
   }
 }

@@ -54,6 +54,45 @@ export function useAutoLockMinutes(): AutoLockMinutes {
   )
 }
 
+/**
+ * What opens a vault locked in this tab with its key kept in the account:
+ * the account password again (as Proton Pass's password lock), or a click.
+ */
+export type UnlockMode = 'password' | 'click'
+export const DEFAULT_UNLOCK_MODE: UnlockMode = 'password'
+const MODE_KEY = 'kutup-pass-unlock-mode'
+let currentMode: UnlockMode = DEFAULT_UNLOCK_MODE
+
+export function unlockMode(): UnlockMode {
+  try {
+    const stored = localStorage.getItem(MODE_KEY)
+    if (stored === 'password' || stored === 'click') return stored
+  } catch {
+    // Storage blocked: the default.
+  }
+  return DEFAULT_UNLOCK_MODE
+}
+
+export function setUnlockMode(mode: UnlockMode): void {
+  try {
+    localStorage.setItem(MODE_KEY, mode)
+  } catch {
+    // Kept for this visit only.
+  }
+  currentMode = mode
+  for (const listener of listeners) listener()
+}
+
+export function useUnlockMode(): UnlockMode {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    () => currentMode,
+  )
+}
+
 /** Whether vaults idle since `lastActivity` lock at `now`. */
 export function idleExpired(lastActivity: number, now: number, minutes: number): boolean {
   return minutes > 0 && now - lastActivity >= minutes * 60_000
@@ -71,6 +110,7 @@ export async function lockAndForget(userId: string | null): Promise<void> {
  */
 export function startAutoLock(): () => void {
   current = autoLockMinutes()
+  currentMode = unlockMode()
   let lastActivity = Date.now()
   let userId = getSession()?.userId ?? null
   const touch = () => {

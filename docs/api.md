@@ -1408,6 +1408,16 @@ served instead when there is one).
 
 ## Kutup Pass
 
+### POST /api/user/reauth
+
+Checks the signed-in account's password again (Kutup Pass's lock) exactly as
+sign-in does. **Body:** `{loginKey}`, derived from the typed password with the
+public `GET /api/auth/login/preflight` parameters. Verified against the stored
+hash under the sign-in lockout (`LOGIN_LOCKOUT_*`: misses here and at sign-in
+count together) and the sign-in rate limit; failures are logged. Nothing
+secret is returned. **Auth:** Bearer JWT. **Response:** `204`, `401` for
+another password, `429` during the lockout.
+
 Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
 file in Drive with its own key; each person may keep, per vault they can
 open, that key sealed under their master key: an `AccountEnvelopeV1` with

@@ -219,10 +219,15 @@ one database, plus a report of what happened.
   Pass tab, or refused by the server because it was revoked elsewhere, which
   the minute's refresh notices), and by hand. A vault locked in a tab waits
   for a click before its kept key opens it again, also after a reload of the
-  tab. Signing out also deletes the vaults this device kept for offline use;
-  a refused session keeps them, unsaved edits included, for the next
-  sign-in. A PIN or the account password to unlock after idling, as Proton
-  Pass offers, comes later.
+  tab. **What opens it again** is a setting on the device, as Proton Pass's
+  lock modes: the account password (the default; checked by the server as
+  at sign-in, `POST /api/user/reauth` with the login key, under the sign-in
+  lockout, so a stolen access token gives no way to guess the password
+  offline) or one click. A vault without a
+  kept key always asks for its own key. Signing out also deletes the vaults
+  this device kept for offline use; a refused session keeps them, unsaved
+  edits included, for the next sign-in. A PIN (Proton's other mode) is not
+  offered.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
   (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
