@@ -81,6 +81,8 @@ export interface MailMessage {
   outboxId?: string | null
   /** Snoozed: when it comes back to the Inbox. */
   snoozedUntil?: string | null
+  /** An expiring message: when every Kutup copy is deleted. */
+  expiresAt?: string | null
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -837,6 +839,8 @@ export interface Draft {
   scheduleAt?: string
   /** Plain text: sent as text/plain alone (Proton's plain text mode). */
   plain?: boolean
+  /** An expiring message (ISO 8601): every Kutup copy is deleted then. */
+  expiresAt?: string
 }
 
 export interface DraftAttachment {
@@ -1175,6 +1179,7 @@ export async function sendDraft(
           JSON.stringify({
             ...meta(account, draft),
             ...(draft.scheduleAt ? { scheduleAt: draft.scheduleAt } : {}),
+            ...(draft.expiresAt ? { expiresAt: draft.expiresAt } : {}),
             // Every part sent, forwarded ones and an attached key too.
             attachmentCount: attachmentParts.filter((part) => !inlineContentId(part)).length,
             attachments: attachmentParts.filter((part) => !inlineContentId(part)).map(describePart),
