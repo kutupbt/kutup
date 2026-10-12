@@ -25,7 +25,7 @@ test('snooze: out of the Inbox into Snoozed, and Unsnooze', async ({ browser, re
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await mail.getByRole('textbox', { name: 'Message' }).fill('Sonra bakarım.')
   await mail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
-  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
   const list = mail.getByRole('list', { name: 'Messages' })
   const row = () => list.getByRole('listitem').filter({ hasText: subject })

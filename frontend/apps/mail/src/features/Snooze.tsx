@@ -24,16 +24,14 @@ export function SnoozeButton({ rows, group, onDone }: { rows: MailMessage[]; gro
     .filter((m) => m.folder === 'inbox' || m.folder === 'snoozed')
     .map((m) => m.id)
   const when = (at: Date) => at.toLocaleString(i18n.language, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+  // mutateAsync: the rows leave the list, and this button with them, before it settles.
   const go = (at: Date) =>
-    snooze.mutate(
-      { ids, until: at.toISOString(), group },
-      {
-        onSuccess: () => {
-          toast.success(t('snooze.done', { count: rows.length, date: at.toLocaleString(i18n.language) }))
-          onDone?.()
-        },
-        onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+    void snooze.mutateAsync({ ids, until: at.toISOString(), group }).then(
+      () => {
+        toast.success(t('snooze.done', { count: rows.length, date: at.toLocaleString(i18n.language) }))
+        onDone?.()
       },
+      (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
     )
   return (
     <>
@@ -89,15 +87,12 @@ export function UnsnoozeButton({ rows, group, onDone }: { rows: MailMessage[]; g
       size="sm"
       disabled={ids.length === 0 || snooze.isPending}
       onClick={() =>
-        snooze.mutate(
-          { ids, group },
-          {
-            onSuccess: () => {
-              toast.success(t('snooze.undone', { count: rows.length }))
-              onDone?.()
-            },
-            onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+        void snooze.mutateAsync({ ids, group }).then(
+          () => {
+            toast.success(t('snooze.undone', { count: rows.length }))
+            onDone?.()
           },
+          (error: unknown) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
         )
       }
     >

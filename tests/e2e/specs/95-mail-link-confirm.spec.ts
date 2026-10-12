@@ -43,7 +43,7 @@ test('links ask first; Don’t ask again; spam always asks', async ({ browser, r
   await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(bobMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
   await expect(async () => {
     await mail.reload()

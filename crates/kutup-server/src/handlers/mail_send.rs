@@ -932,16 +932,24 @@ pub async fn send(
         }
         None => None,
     };
-    if let (Some(until), Some(draft)) = (until, draft) {
-        deliver(&state, user_id, user.is_admin, &parts, true).await?;
-        let held =
-            crate::mail::outbox::hold(&state, user_id, user.is_admin, draft, &parts, until).await?;
-        return Ok((StatusCode::ACCEPTED, Json(held)).into_response());
-    }
-    let result = deliver(&state, user_id, user.is_admin, &parts, false)
-        .await?
-        .expect("a delivery, not a check");
-    Ok(Json(result).into_response())
+    // Run to the end even when the browser goes away mid-send (a reload,
+    // a closed tab): a send cut short could leave its draft behind after
+    // the mail went out.
+    let is_admin = user.is_admin;
+    tokio::spawn(async move {
+        if let (Some(until), Some(draft)) = (until, draft) {
+            deliver(&state, user_id, is_admin, &parts, true).await?;
+            let held =
+                crate::mail::outbox::hold(&state, user_id, is_admin, draft, &parts, until).await?;
+            return Ok((StatusCode::ACCEPTED, Json(held)).into_response());
+        }
+        let result = deliver(&state, user_id, is_admin, &parts, false)
+            .await?
+            .expect("a delivery, not a check");
+        Ok(Json(result).into_response())
+    })
+    .await
+    .map_err(|_| AppError::internal("send task"))?
 }
 
 /// Sends what `POST /api/mail/send` received (`parts`), now or from the

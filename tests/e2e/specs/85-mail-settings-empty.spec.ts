@@ -25,7 +25,7 @@ async function write(page: Page, to: string, subject: string) {
   await page.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
-  await expect(page.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
+  await expect(page.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 }
 
 test('All mail, Exclude Spam/Trash, Delete all in Trash, and auto-delete', async ({ browser, request }) => {
