@@ -142,6 +142,18 @@ export function GeneralSettingsPage() {
           checked={settings.data.imageProxy}
           onChange={(on) => save({ imageProxy: on })}
         />
+        <Setting
+          label={t('remoteImages.embeddedTitle')}
+          hint={t('remoteImages.embeddedHint')}
+          checked={settings.data.embeddedImages}
+          onChange={(on) => save({ embeddedImages: on })}
+        />
+        <Setting
+          label={t('remoteImages.metadataTitle')}
+          hint={t('remoteImages.metadataHint')}
+          checked={settings.data.removeImageMetadata}
+          onChange={(on) => save({ removeImageMetadata: on })}
+        />
         <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           <span>
             <label htmlFor="remote-images" className="block text-sm font-medium">

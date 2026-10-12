@@ -3904,6 +3904,17 @@ fn the_image_proxy_blocks_trackers_and_private_addresses() {
         .json()
         .unwrap();
     assert_eq!(settings["imageProxy"], true);
+    assert_eq!(settings["embeddedImages"], true);
+    assert_eq!(settings["removeImageMetadata"], true);
+    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "embeddedImages": false, "removeImageMetadata": false }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(saved["embeddedImages"], false);
+    assert_eq!(saved["removeImageMetadata"], false);
+    assert_eq!(saved["imageProxy"], true);
     let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "imageProxy": false }))
         .send()

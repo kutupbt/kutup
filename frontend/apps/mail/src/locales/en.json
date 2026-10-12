@@ -122,7 +122,9 @@
     "headersTitle": "Message headers",
     "download": "Download",
     "from": "From",
-    "date": "Date"
+    "date": "Date",
+    "embeddedBlocked": "This message contains embedded images.",
+    "loadEmbedded": "Load embedded images"
   },
   "actions": {
     "archive": "Archive",
@@ -910,7 +912,11 @@
     "removed": "Images from {{address}} will be asked for again.",
     "bodyProxy": "They load through the Kutup server, so the sender does not see your IP address or browser, but can still tell that the message was opened.",
     "proxyTitle": "Protect against email tracking",
-    "proxyHint": "Remote images come through Kutup instead of your browser, known tracking pixels never load, and tracking parameters are taken out of links."
+    "proxyHint": "Remote images come through Kutup instead of your browser, known tracking pixels never load, and tracking parameters are taken out of links.",
+    "embeddedTitle": "Auto show embedded images",
+    "embeddedHint": "Images sent inside a message show at once. Turned off, they wait until you load them.",
+    "metadataTitle": "Remove image metadata",
+    "metadataHint": "Where “Remove metadata” starts when you insert an image: location, device and time are taken out of JPEG, PNG and WebP images."
   },
   "tracking": {
     "trackersBlocked_one": "{{count}} tracker blocked",
