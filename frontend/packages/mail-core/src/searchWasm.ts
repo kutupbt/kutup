@@ -34,6 +34,7 @@ export interface IndexDoc {
 
 /** The generated `MailSearch` class's surface. */
 export interface MailSearchIndex {
+  storeName(): string
   directoryId(): string
   openDirectory(sealed: Uint8Array | undefined): boolean
   size(): number
@@ -53,7 +54,7 @@ export interface MailSearchIndex {
 
 interface MailSearchModule {
   default(input?: unknown): Promise<unknown>
-  MailSearch: new (masterKey: Uint8Array, account: string) => MailSearchIndex
+  MailSearch: new (masterKey: Uint8Array) => MailSearchIndex
 }
 
 let modulePromise: Promise<MailSearchModule> | null = null
@@ -73,8 +74,8 @@ async function getModule(): Promise<MailSearchModule> {
   return modulePromise
 }
 
-/** An account's index, its keys derived from the master key. */
-export async function createMailSearch(masterKey: Uint8Array, account: string): Promise<MailSearchIndex> {
+/** An account's index, its keys derived from the master key (bound to no name). */
+export async function createMailSearch(masterKey: Uint8Array): Promise<MailSearchIndex> {
   const module = await getModule()
-  return new module.MailSearch(masterKey, account)
+  return new module.MailSearch(masterKey)
 }

@@ -125,10 +125,11 @@ export class ContentSearch {
     private index: MailSearchIndex,
   ) {}
 
+  /** Bound to the account's keys, never to a name (an address may change). */
   static async open(masterKey: Uint8Array, account: MailAccount): Promise<ContentSearch> {
-    const dbName = `kutup-mail-search:${account.address}`
+    const index = await createMailSearch(masterKey)
+    const dbName = `kutup-mail-search:${index.storeName()}`
     const store = await SealedStore.open(dbName)
-    const index = await createMailSearch(masterKey, account.address)
     const search = new ContentSearch(account, dbName, store, index)
     await search.load()
     return search
@@ -336,11 +337,11 @@ export function useContentSearch(): ContentSearch | null {
     if (!account.data || typeof indexedDB === 'undefined') return
     let live = true
     const data = account.data
-    let promise = opened.get(data.address)
+    let promise = opened.get(session.userId)
     if (!promise) {
       promise = ContentSearch.open(session.masterKey, data)
-      opened.set(data.address, promise)
-      promise.catch(() => opened.delete(data.address))
+      opened.set(session.userId, promise)
+      promise.catch(() => opened.delete(session.userId))
     }
     promise.then((s) => live && setSearch(s)).catch(() => undefined)
     return () => {

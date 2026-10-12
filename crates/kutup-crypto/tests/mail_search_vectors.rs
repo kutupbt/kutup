@@ -18,7 +18,7 @@ const PATH: &str = concat!(
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     master_key: String,
-    account: String,
+    store_name: String,
     name: String,
     record_id: String,
     value: String,
@@ -33,13 +33,13 @@ fn write_vectors() {
         return;
     }
     let master = [0x5au8; 32];
-    let keys = MailSearchKeys::derive(&master, "alice@kutup.dev").unwrap();
+    let keys = MailSearchKeys::derive(&master).unwrap();
     let name = "shard/680/fat";
     let value = "fatura → İş".as_bytes();
     let nonce = [0x44u8; 24];
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
-        account: "alice@kutup.dev".into(),
+        store_name: keys.store_name(),
         name: name.into(),
         record_id: keys.record_id(name),
         value: STANDARD.encode(value),
@@ -57,7 +57,8 @@ fn vectors_hold() {
         .unwrap()
         .try_into()
         .unwrap();
-    let keys = MailSearchKeys::derive(&master, &vectors.account).unwrap();
+    let keys = MailSearchKeys::derive(&master).unwrap();
+    assert_eq!(keys.store_name(), vectors.store_name);
     assert_eq!(keys.record_id(&vectors.name), vectors.record_id);
     let nonce: [u8; 24] = STANDARD.decode(&vectors.nonce).unwrap().try_into().unwrap();
     let value = STANDARD.decode(&vectors.value).unwrap();

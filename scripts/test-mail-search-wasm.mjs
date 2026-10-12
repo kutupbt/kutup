@@ -11,14 +11,13 @@ const wasm = await import(new URL('../frontend/wasm/mail-search-wasm/kutup_mail_
 await wasm.default({ module_or_path: await readFile(`${root}/frontend/wasm/mail-search-wasm/kutup_mail_search_wasm_bg.wasm`) })
 
 const masterKey = new Uint8Array(32).fill(0x5a)
-const account = 'alice@kutup.dev'
 const store = new Map()
 const load = (needed) => needed.filter(({ id }) => store.has(id)).map(({ name, id }) => ({ name, sealed: store.get(id) }))
 const keep = (sealed) => sealed.forEach(({ id, sealed }) => store.set(id, sealed))
 
 const day = 24 * 60 * 60 * 1000
 const t0 = Date.UTC(2026, 9, 1)
-const index = new wasm.MailSearch(masterKey, account)
+const index = new wasm.MailSearch(masterKey)
 assert.equal(index.openDirectory(undefined), false)
 const docs = [
   { id: 'm1', timeMs: t0, text: 'Ekim faturası ektedir' },
@@ -38,7 +37,7 @@ assert.deepEqual(search(index, 'TESEKKUR'), ['m2'])
 assert.deepEqual(search(index, 'yok'), [])
 
 // Reopened from the stored directory alone.
-const again = new wasm.MailSearch(masterKey, account)
+const again = new wasm.MailSearch(masterKey)
 assert.equal(again.openDirectory(store.get(again.directoryId())), true)
 assert.deepEqual(search(again, 'fatura ekim'), ['m1'])
 
@@ -47,8 +46,9 @@ const gone = [{ id: 'm1', timeMs: t0 }]
 keep(again.remove(gone, load(again.planRemove([t0]))))
 assert.deepEqual(search(again, 'fatura'), ['m2'])
 
-// Another key or account opens nothing: the directory reads as empty.
-const other = new wasm.MailSearch(new Uint8Array(32).fill(0x5b), account)
+// Another account (another master key) opens nothing, and its database has another name.
+assert.notEqual(new wasm.MailSearch(new Uint8Array(32).fill(0x5b)).storeName(), index.storeName())
+const other = new wasm.MailSearch(new Uint8Array(32).fill(0x5b))
 assert.equal(other.openDirectory(store.get(index.directoryId())), false)
 
 // Nothing stored shows a word or a name.

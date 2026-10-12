@@ -94,14 +94,20 @@ pub struct MailSearch {
 impl MailSearch {
     /// The account's index, empty until [`MailSearch::open_directory`].
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key: &[u8], account: &str) -> Result<MailSearch, JsValue> {
+    pub fn new(master_key: &[u8]) -> Result<MailSearch, JsValue> {
         let master: [u8; 32] = master_key
             .try_into()
             .map_err(|_| js_error("the master key is 32 bytes"))?;
         Ok(MailSearch {
-            keys: MailSearchKeys::derive(&master, account).map_err(js_error)?,
+            keys: MailSearchKeys::derive(&master).map_err(js_error)?,
             index: Index::open(None).map_err(js_error)?,
         })
+    }
+
+    /// The browser database's name for this account (derived from its keys; names no one).
+    #[wasm_bindgen(js_name = storeName)]
+    pub fn store_name(&self) -> String {
+        self.keys.store_name()
     }
 
     /// The record id the directory is stored under.
