@@ -163,13 +163,15 @@ export function MailShell() {
   const composeTo = params.get('to')
 
   // A mailto link, with Kutup Mail as the browser's mail app (`#mailto=mailto:…`).
+  // Read while rendering: the route's redirect to the Inbox drops the hash before effects run.
+  const [startHash] = useState(() => window.location.hash)
   useEffect(() => {
-    const hash = window.location.hash
+    const hash = startHash
     if (!hash.startsWith(MAILTO_HASH)) return
     const link = parseMailto(hash.slice(MAILTO_HASH.length))
     window.history.replaceState(null, '', window.location.pathname + window.location.search)
     if (link) openComposer({ kind: 'new', mailto: link })
-  }, [])
+  }, [startHash])
 
   // "Write to" from another app: open the composer with that address.
   useEffect(() => {
