@@ -70,6 +70,9 @@ pub struct Config {
     /// Messages one statement of a select-all batch changes at most
     /// (`MAIL_BATCH_CHUNK`, 5,000); each chunk is its own transaction.
     pub mail_batch_chunk: usize,
+    /// Undo send's delay for accounts that did not choose one
+    /// (`MAIL_DEFAULT_DELAY_SEND_SECONDS`: 0, 5, 10 or 20; 10, as Proton's).
+    pub mail_default_delay_send_seconds: i32,
     /// An account's first days, and the outside recipients a day it may
     /// send to in them (most abuse comes from new accounts).
     pub mail_new_account_days: i64,
@@ -339,6 +342,13 @@ impl Config {
             mail_test_key_origin: get_env("MAIL_TEST_KEY_ORIGIN", ""),
             mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
             mail_batch_chunk: get_env_i64("MAIL_BATCH_CHUNK", 5_000).max(1) as usize,
+            mail_default_delay_send_seconds: match get_env_i64(
+                "MAIL_DEFAULT_DELAY_SEND_SECONDS",
+                10,
+            ) {
+                seconds @ (0 | 5 | 10 | 20) => seconds as i32,
+                _ => 10,
+            },
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),

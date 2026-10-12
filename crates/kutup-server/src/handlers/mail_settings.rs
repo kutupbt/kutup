@@ -86,7 +86,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         page_size: 50,
         spam_action: "ask".into(),
         remote_images: "ask".into(),
-        delay_send_seconds: 10,
+        delay_send_seconds: state.config.mail_default_delay_send_seconds,
     }))
 }
 
@@ -189,7 +189,7 @@ pub async fn update(
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
                  COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
                  COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
-                 COALESCE($15, 10))
+                 COALESCE($15, $16))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -222,6 +222,7 @@ pub async fn update(
     .bind(request.spam_action.as_deref())
     .bind(request.remote_images.as_deref())
     .bind(request.delay_send_seconds)
+    .bind(state.config.mail_default_delay_send_seconds)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

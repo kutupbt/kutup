@@ -283,6 +283,8 @@ jobs:
       # off in Administration and back on (tests/e2e/README.md).
       ADMIN_ACCOUNT: "admin@kutup.dev:admin:Bootstrap*Temporary123"
       MAIL_OUTSIDE_SENDING: "on"
+      # Sends go at once in the browser specs; spec 102 turns undo send on.
+      MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443

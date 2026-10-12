@@ -28,9 +28,14 @@ test('undo send: taken back into the composer, then sent after the delay', async
   const bobMail = await openMail(bobContext)
   const subject = `Geri al ${Date.now().toString(36)}`
 
-  // Undo send is on by default (10 seconds), as Proton's.
+  // Undo send: 10 seconds, Proton's default (the test stack starts with it
+  // off, MAIL_DEFAULT_DELAY_SEND_SECONDS=0, so other specs' mail goes at once).
   await bobMail.goto(appUrl('mail', '/settings/general'))
-  await expect(bobMail.getByRole('combobox', { name: 'Undo send' })).toHaveText('10 seconds', { timeout: 60_000 })
+  const undo = bobMail.getByRole('combobox', { name: 'Undo send' })
+  await expect(undo).toHaveText('Off', { timeout: 60_000 })
+  await undo.click()
+  await bobMail.getByRole('option', { name: '10 seconds' }).click()
+  await expect(bobMail.getByText('Preference saved.')).toBeVisible({ timeout: 30_000 })
   await bobMail.goto(appUrl('mail'))
   await expect(bobMail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 60_000 })
 
