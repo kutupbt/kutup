@@ -13,21 +13,27 @@ export function GroupDialog({
   title,
   initial,
   onSubmit,
+  describeError,
+  label,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   title: string
   initial: string
   onSubmit: (name: string) => Promise<void>
+  /** The field's label; the group name's by default. */
+  label?: string
+  /** What to say when `onSubmit` fails; a generic message otherwise. */
+  describeError?: (error: unknown) => string | null
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(initial)
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     if (open) {
       setName(initial)
-      setError(false)
+      setError(null)
     }
   }, [open, initial])
   return (
@@ -44,14 +50,14 @@ export function GroupDialog({
             setPending(true)
             onSubmit(name.trim())
               .then(() => onOpenChange(false))
-              .catch(() => setError(true))
+              .catch((failure: unknown) => setError(describeError?.(failure) ?? t('entry.saveFailed')))
               .finally(() => setPending(false))
           }}
         >
-          <Field label={t('groups.name')} required>
+          <Field label={label ?? t('groups.name')} required>
             {(field) => <Input {...field} value={name} onChange={(e) => setName(e.target.value)} maxLength={256} required autoFocus />}
           </Field>
-          {error ? <Alert variant="error">{t('entry.saveFailed')}</Alert> : null}
+          {error ? <Alert variant="error">{error}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
               {t('common.cancel')}

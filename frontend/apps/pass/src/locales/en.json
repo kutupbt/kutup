@@ -113,7 +113,8 @@
     "lock": "Lock vault",
     "forgetKey": "Stop unlocking with my sign-in",
     "keyForgotten": "The vault's key is no longer kept in your account",
-    "forgetFailed": "The vault's key could not be forgotten. Try again."
+    "forgetFailed": "The vault's key could not be forgotten. Try again.",
+    "nameTaken": "A file with that name is already in this folder."
   },
   "groups": {
     "label": "Groups",

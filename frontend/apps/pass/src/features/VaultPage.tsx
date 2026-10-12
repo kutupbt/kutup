@@ -18,8 +18,10 @@ import { Input } from '@kutup/ui/components/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { cn } from '@kutup/ui/lib/cn'
+import { asNameTaken } from '@kutup/drive-core/names'
+import { useRenameFile } from '@kutup/drive-core/mutations'
 import { useForgetVaultKey, useVaultSecrets } from '../drive/secrets'
-import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
+import { refreshVaultFile, useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
@@ -83,6 +85,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const { view, status, merge } = state
   const secrets = useVaultSecrets()
   const forgetKey = useForgetVaultKey()
+  const renameFile = useRenameFile()
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<EntryView | 'new' | null>(null)
   const [groupDialog, setGroupDialog] = useState<{ kind: 'new'; parent: string } | { kind: 'rename'; group: GroupView } | null>(null)
@@ -154,7 +157,9 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
     }
   }
 
-  const title = view.name || vaultTitle(vault?.file.name)
+  // The vault's name is its file's name, as Drive shows it; the name inside
+  // the KeePass file follows it when renamed here.
+  const title = vaultTitle(vault?.file.name) || view.name
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
@@ -403,8 +408,14 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         open={renamingVault}
         onOpenChange={setRenamingVault}
         title={t('vault.renameTitle')}
-        initial={view.name}
+        label={t('vaults.name')}
+        initial={title}
+        describeError={(failure) => (asNameTaken(failure) ? t('vault.nameTaken') : null)}
         onSubmit={async (name) => {
+          if (!vault) return
+          // The file, as its folder lists it now (the vault's own saves move it on).
+          const file = await refreshVaultFile(vault.folder, vault.file)
+          await renameFile.mutateAsync({ folder: vault.folder, file, name: `${name}.kdbx` })
           await session.apply({ op: 'updateVault', name, description: view.description, defaultUserName: view.defaultUserName })
         }}
       />

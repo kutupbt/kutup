@@ -1,7 +1,7 @@
 import { LockKeyhole, LockKeyholeOpen, Plus, Vault } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
@@ -90,10 +90,13 @@ function AutoLockSetting() {
 }
 
 /** Every vault the account can open, and a way to make one. */
-export function VaultsPage() {
+export function VaultsPage({ creating: startCreating = false }: { creating?: boolean }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const [params] = useSearchParams()
   const { vaults, loading, error } = useVaultFiles()
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(startCreating)
+  const folderId = startCreating ? params.get('folder') : null
   if (loading) return <LoadingPanel label={t('vaults.loading')} />
   return (
     <PageBody className="px-4 py-6 md:px-8 md:py-8">
@@ -128,7 +131,15 @@ export function VaultsPage() {
       )}
       <AutoLockSetting />
       <p className="mt-8 max-w-3xl text-xs text-muted-foreground">{t('vaults.keepassNote')}</p>
-      <CreateVaultDialog open={creating} onOpenChange={setCreating} />
+      <CreateVaultDialog
+        open={creating}
+        folderId={folderId}
+        onOpenChange={(open) => {
+          setCreating(open)
+          // Closed without making one: back to the list, not this address again.
+          if (!open && startCreating) void navigate('/', { replace: true })
+        }}
+      />
     </PageBody>
   )
 }
