@@ -61,7 +61,6 @@
     "selected_one": "{{count}} seçili",
     "selected_other": "{{count}} seçili",
     "hasAttachments": "Eki var",
-    "more": "Daha eski postaları göster",
     "searchResults": "“{{q}}” için sonuçlar",
     "noMatches": "Eşleşme yok",
     "noMatchesHint": "Arama konulara, gönderenlere ve alıcılara bakar.",
@@ -76,7 +75,6 @@
     "inConversation_other": "Bu konuşmada {{count}} ileti"
   },
   "read": {
-    "pick": "Okumak için bir posta seçin.",
     "notFound": "Bu yazışma artık yok.",
     "back": "Listeye dön",
     "opening": "Posta açılıyor",
@@ -524,7 +522,9 @@
     "pgpSchemeHint": "Dışarıdaki PGP kullanıcılarına giden postanın nasıl şifreleneceği ya da imzalanacağı. Satır içi PGP yalnızca düz metin gönderir; her ek ayrı ayrı işlenir.",
     "inline": "Satır içi",
     "confirmLink": "Bağlantı adreslerini onayla",
-    "confirmLinkHint": "Bir iletideki Kutup dışına giden bir bağlantıya tıkladığınızda, açılmadan önce gerçekte nereye gittiğini görün. İstenmeyen klasöründeki bağlantılar her zaman sorar."
+    "confirmLinkHint": "Bir iletideki Kutup dışına giden bir bağlantıya tıkladığınızda, açılmadan önce gerçekte nereye gittiğini görün. İstenmeyen klasöründeki bağlantılar her zaman sorar.",
+    "pageSizeConversations": "Sayfa başına konuşma",
+    "pageSizeMessages": "Sayfa başına ileti"
   },
   "senders": {
     "title": "Engelle ve izin ver",
@@ -678,6 +678,50 @@
     "requestSent": "Abonelikten çıkma isteği gönderildi.",
     "done": "E-posta listesinden çıkıldı.",
     "failed": "Abonelikten çıkma isteği iletilemedi."
+  },
+  "paging": {
+    "label": "Sayfalar",
+    "previous": "Önceki sayfa",
+    "next": "Sonraki sayfa",
+    "pageOf": "Sayfa {{page}} / {{pages}}",
+    "page": "Sayfa {{page}}",
+    "goPrevious": "Önceki sayfaya git",
+    "goNext": "Sonraki sayfaya git",
+    "goTo": "{{page}}. sayfaya git"
+  },
+  "selectionPane": {
+    "label": "Seçim bölmesi",
+    "clear": "Seçimi temizle",
+    "results_one": "{{name}} içinde <strong>{{count}}</strong> sonuç bulundu",
+    "results_other": "{{name}} içinde <strong>{{count}}</strong> sonuç bulundu",
+    "selected": {
+      "folder": {
+        "conversations_one": "Bu klasörden <strong>{{count}} konuşma</strong> seçtiniz",
+        "conversations_other": "Bu klasörden <strong>{{count}} konuşma</strong> seçtiniz",
+        "messages_one": "Bu klasörden <strong>{{count}} ileti</strong> seçtiniz",
+        "messages_other": "Bu klasörden <strong>{{count}} ileti</strong> seçtiniz"
+      },
+      "label": {
+        "conversations_one": "Bu etiketle <strong>{{count}} konuşma</strong> seçtiniz",
+        "conversations_other": "Bu etiketle <strong>{{count}} konuşma</strong> seçtiniz",
+        "messages_one": "Bu etiketle <strong>{{count}} ileti</strong> seçtiniz",
+        "messages_other": "Bu etiketle <strong>{{count}} ileti</strong> seçtiniz"
+      }
+    },
+    "stored": {
+      "folder": {
+        "conversations_one": "<strong>{{count}} konuşma</strong> bu klasörde duruyor",
+        "conversations_other": "<strong>{{count}} konuşma</strong> bu klasörde duruyor",
+        "messages_one": "<strong>{{count}} ileti</strong> bu klasörde duruyor",
+        "messages_other": "<strong>{{count}} ileti</strong> bu klasörde duruyor"
+      },
+      "label": {
+        "conversations_one": "<strong>{{count}} konuşma</strong> bu etiketle işaretli",
+        "conversations_other": "<strong>{{count}} konuşma</strong> bu etiketle işaretli",
+        "messages_one": "<strong>{{count}} ileti</strong> bu etiketle işaretli",
+        "messages_other": "<strong>{{count}} ileti</strong> bu etiketle işaretli"
+      }
+    }
   },
   "attachments": {
     "count_one": "{{count}} dosya ekli",

@@ -112,6 +112,9 @@ pub struct MailMessagePage {
     pub messages: Vec<MailMessage>,
     /// Pass as `before` for the next, older page; absent on the last.
     pub next: Option<String>,
+    /// With `page`: how many messages (or conversations) the place holds
+    /// with these filters, for Proton's "page N of M".
+    pub total: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -125,6 +128,9 @@ pub struct MailListQuery {
     pub q: Option<String>,
     /// The `next` of the previous page.
     pub before: Option<String>,
+    /// Page number from 0, `limit` to a page (Proton's paging), instead of
+    /// `before`; the answer then carries `total`.
+    pub page: Option<i64>,
     pub limit: Option<i64>,
     /// A shared mailbox (its group id) instead of your own.
     pub group: Option<String>,
@@ -398,6 +404,13 @@ pub async fn list_messages(
         .as_deref()
         .map(|value| parse_cursor(value, sort))
         .transpose()?;
+    let page = match (query.page, &before) {
+        (Some(_), Some(_)) => return Err(AppError::bad_request("page or before, not both")),
+        (Some(page), None) if !(0..=MAX_PAGE_NUMBER).contains(&page) => {
+            return Err(AppError::bad_request("page is out of range"))
+        }
+        (page, _) => page,
+    };
     let filters = Filters {
         unread: query.unread,
         attachments: query.attachments,
@@ -432,38 +445,28 @@ pub async fn list_messages(
                 END
             AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
                  OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
+    let listing = Listing {
+        owner,
+        place,
+        place_id,
+        almost_all,
+        search,
+        before,
+        filters,
+        place_filter: WHERE,
+    };
     if query.conversations {
-        return list_conversations(
-            &state, owner, place, place_id, almost_all, search, before, limit, WHERE, filters,
-        )
-        .await;
+        return list_conversations(&state, &listing, limit, page).await;
     }
-    let after = sort.after("received_at", "size_bytes", "id");
-    let order = sort.order("received_at", "size_bytes", "id");
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS}
-           FROM mail_messages
-          WHERE {WHERE}
-            AND ($10::bool IS NULL OR seen <> $10)
-            AND (NOT $11 OR attachment_count > 0)
-            AND {after}
-          ORDER BY {order}
-          LIMIT $5"
-    ))
-    .bind(owner)
-    .bind(place)
-    .bind(before.and_then(|c| c.time))
-    .bind(before.map(|c| c.id))
-    .bind(limit + 1)
-    .bind(search)
-    .bind(place_id)
-    .bind(almost_all)
-    .bind(before.and_then(|c| c.size))
-    .bind(filters.unread)
-    .bind(filters.attachments)
-    .fetch_all(&state.pool)
-    .await?;
+    let (mut rows, mut total) = message_rows(&state, &listing, limit, page.unwrap_or(0)).await?;
+    // Past the end (mail moved away since): the total still answers.
+    if rows.is_empty() && page.is_some_and(|p| p > 0) {
+        total = message_rows(&state, &listing, 1, 0).await?.1;
+    }
     let more = rows.len() as i64 > limit;
+    if page.is_some() {
+        rows.truncate(limit as usize);
+    }
     let messages: Vec<MailMessage> = rows
         .into_iter()
         .take(limit as usize)
@@ -477,7 +480,74 @@ pub async fn list_messages(
         };
         cursor(key, Uuid::parse_str(&last.id).expect("own id"))
     });
-    Ok(Json(MailMessagePage { messages, next }))
+    Ok(Json(MailMessagePage {
+        messages,
+        next,
+        total: page.map(|_| total),
+    }))
+}
+
+/// Pages past this are refused (`page × limit` stays small for `OFFSET`).
+const MAX_PAGE_NUMBER: i64 = 10_000;
+
+/// What a listing asks for, beyond its page.
+struct Listing<'a> {
+    owner: Uuid,
+    place: &'a str,
+    place_id: Option<Uuid>,
+    almost_all: bool,
+    search: Option<String>,
+    before: Option<Cursor>,
+    filters: Filters,
+    /// The place and the search, as SQL over `mail_messages`.
+    place_filter: &'a str,
+}
+
+#[derive(sqlx::FromRow)]
+struct CountedRow {
+    #[sqlx(flatten)]
+    row: Row,
+    full_count: i64,
+}
+
+/// One page of messages (one more than `limit`, to tell whether more
+/// follow), skipping `page` pages, and how many there are in all.
+async fn message_rows(
+    state: &AppState,
+    listing: &Listing<'_>,
+    limit: i64,
+    page: i64,
+) -> AppResult<(Vec<Row>, i64)> {
+    let sort = listing.filters.sort;
+    let after = sort.after("received_at", "size_bytes", "id");
+    let order = sort.order("received_at", "size_bytes", "id");
+    let place_filter = listing.place_filter;
+    let rows: Vec<CountedRow> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS}, count(*) OVER () AS full_count
+           FROM mail_messages
+          WHERE {place_filter}
+            AND ($10::bool IS NULL OR seen <> $10)
+            AND (NOT $11 OR attachment_count > 0)
+            AND {after}
+          ORDER BY {order}
+          LIMIT $5 OFFSET $12"
+    ))
+    .bind(listing.owner)
+    .bind(listing.place)
+    .bind(listing.before.and_then(|c| c.time))
+    .bind(listing.before.map(|c| c.id))
+    .bind(limit + 1)
+    .bind(listing.search.as_deref())
+    .bind(listing.place_id)
+    .bind(listing.almost_all)
+    .bind(listing.before.and_then(|c| c.size))
+    .bind(listing.filters.unread)
+    .bind(listing.filters.attachments)
+    .bind(page * limit)
+    .fetch_all(&state.pool)
+    .await?;
+    let total = rows.first().map_or(0, |r| r.full_count);
+    Ok((rows.into_iter().map(|r| r.row).collect(), total))
 }
 
 /// The list's filters and order beyond the place and the search.
@@ -497,26 +567,80 @@ type ConversationRow = (
     sqlx::types::Json<Vec<MailMailbox>>,
     i64,
     i64,
+    i64,
 );
 
 /// [`list_messages`] by conversation: each thread's newest message in the
 /// place, in the sort's order (by its newest arrival, or by its messages'
 /// size together, as Proton sorts conversations), with what the row stands
 /// for.
-#[allow(clippy::too_many_arguments)]
 async fn list_conversations(
     state: &AppState,
-    owner: Uuid,
-    place: &str,
-    place_id: Option<Uuid>,
-    almost_all: bool,
-    search: Option<String>,
-    before: Option<Cursor>,
+    listing: &Listing<'_>,
     limit: i64,
-    place_filter: &str,
-    filters: Filters,
+    page: Option<i64>,
 ) -> AppResult<Json<MailMessagePage>> {
-    let sort = filters.sort;
+    let owner = listing.owner;
+    let sort = listing.filters.sort;
+    let (mut threads, mut total) =
+        conversation_rows(state, listing, limit, page.unwrap_or(0)).await?;
+    if threads.is_empty() && page.is_some_and(|p| p > 0) {
+        total = conversation_rows(state, listing, 1, 0).await?.1;
+    }
+    let more = threads.len() as i64 > limit;
+    threads.truncate(limit as usize);
+    let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
+    ))
+    .bind(owner)
+    .bind(&latest)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut by_id: std::collections::HashMap<Uuid, Row> =
+        rows.into_iter().map(|r| (r.id, r)).collect();
+    let next = more.then(|| threads.last()).flatten().map(|row| {
+        let key = if sort.by_size() {
+            i128::from(row.7)
+        } else {
+            row.1.unix_timestamp_nanos()
+        };
+        cursor(key, row.0)
+    });
+    let messages = threads
+        .into_iter()
+        .filter_map(
+            |(id, _, members, unread, starred, senders, attachments, _, _)| {
+                // Moved or deleted between the two reads: left for the next refresh.
+                let mut message = MailMessage::from(by_id.remove(&id)?);
+                message.conversation = Some(MailConversation {
+                    members: members.0,
+                    unread,
+                    starred,
+                    senders: senders.0,
+                    attachment_count: attachments,
+                });
+                Some(message)
+            },
+        )
+        .collect();
+    Ok(Json(MailMessagePage {
+        messages,
+        next,
+        total: page.map(|_| total),
+    }))
+}
+
+/// One page of conversations (one more than `limit`), skipping `page`
+/// pages, and how many there are in all.
+async fn conversation_rows(
+    state: &AppState,
+    listing: &Listing<'_>,
+    limit: i64,
+    page: i64,
+) -> AppResult<(Vec<ConversationRow>, i64)> {
+    let sort = listing.filters.sort;
+    let place_filter = listing.place_filter;
     let after = sort.after("t.last_at", "t.total_size", "t.latest");
     let order = sort.order("t.last_at", "t.total_size", "t.latest");
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
@@ -545,65 +669,30 @@ async fn list_conversations(
                                          min(received_at) AS first_at
                                     FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
                                    GROUP BY from_address) s), '[]'::jsonb),
-                t.attachments, t.total_size
+                t.attachments, t.total_size, count(*) OVER ()
            FROM threads t
           WHERE ($10::bool IS NULL OR (t.unread > 0) = $10)
             AND (NOT $11 OR t.attachments > 0)
             AND {after}
           ORDER BY {order}
-          LIMIT $5"
+          LIMIT $5 OFFSET $12"
     ))
-    .bind(owner)
-    .bind(place)
-    .bind(before.and_then(|c| c.time))
-    .bind(before.map(|c| c.id))
+    .bind(listing.owner)
+    .bind(listing.place)
+    .bind(listing.before.and_then(|c| c.time))
+    .bind(listing.before.map(|c| c.id))
     .bind(limit + 1)
-    .bind(search)
-    .bind(place_id)
-    .bind(almost_all)
-    .bind(before.and_then(|c| c.size))
-    .bind(filters.unread)
-    .bind(filters.attachments)
+    .bind(listing.search.as_deref())
+    .bind(listing.place_id)
+    .bind(listing.almost_all)
+    .bind(listing.before.and_then(|c| c.size))
+    .bind(listing.filters.unread)
+    .bind(listing.filters.attachments)
+    .bind(page * limit)
     .fetch_all(&state.pool)
     .await?;
-    let more = threads.len() as i64 > limit;
-    let threads: Vec<ConversationRow> = threads.into_iter().take(limit as usize).collect();
-    let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
-    ))
-    .bind(owner)
-    .bind(&latest)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut by_id: std::collections::HashMap<Uuid, Row> =
-        rows.into_iter().map(|r| (r.id, r)).collect();
-    let next = more.then(|| threads.last()).flatten().map(|row| {
-        let key = if sort.by_size() {
-            i128::from(row.7)
-        } else {
-            row.1.unix_timestamp_nanos()
-        };
-        cursor(key, row.0)
-    });
-    let messages = threads
-        .into_iter()
-        .filter_map(
-            |(id, _, members, unread, starred, senders, attachments, _)| {
-                // Moved or deleted between the two reads: left for the next refresh.
-                let mut message = MailMessage::from(by_id.remove(&id)?);
-                message.conversation = Some(MailConversation {
-                    members: members.0,
-                    unread,
-                    starred,
-                    senders: senders.0,
-                    attachment_count: attachments,
-                });
-                Some(message)
-            },
-        )
-        .collect();
-    Ok(Json(MailMessagePage { messages, next }))
+    let total = threads.first().map_or(0, |t| t.8);
+    Ok((threads, total))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

@@ -26,8 +26,8 @@ reference only where Proton has nothing.
 | Conversation or message mode in the list | `ViewModeToggle.tsx` | ✅ conversation grouping on by default, as Proton's (Settings → General); a row stands for the thread's messages there: count, senders, unread and starred as a whole, actions on all; counters count conversations |
 | Layout (column or row), resizable list, density | `ViewLayoutCards.tsx`, `DensityRadiosCards.tsx` | ✅ Settings → Appearance: column or row, comfortable or compact, composer normal or maximized; the list resizes (drag or arrow keys), remembered per browser |
 | Quick filters (unread, has attachments), sort (date, size) | `FilterList.tsx` | ✅ Unread at hand; Read, Has attachments and Newest/Oldest/Largest/Smallest in Filter; Reset; in the address bar, by message or by conversation |
-| Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | 🔶 "load more" only |
-| Selection pane for several messages | `SelectionPane.tsx` | ❌ |
+| Paging, page size, select all across pages | `PagingControls.tsx`, `SelectAllBanner.tsx` | ✅ pages: previous, "page/pages" with every page, next in the toolbar; numbered pages at the foot; `?page=` in the address bar; 50, 100 or 200 per page in Settings → General (spec 97); ❌ select all across pages |
+| Selection pane for several messages | `SelectionPane.tsx` | ✅ beside the list with nothing open or rows checked: the place and how many it holds, results for a search, how many are chosen, Clear selection (spec 97) |
 | Right-click menu, Shift/Ctrl selection, drag to folders, undo | `ItemContextMenu.tsx` | ✅ |
 | Sender card, Save to contacts, Chat and Call | recipient dropdown | ✅ (Chat, Call are Kutup's) |
 | Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | ✅ list keys; message keys R (reply), Shift+R (reply all), Shift+F (forward) with a conversation open |

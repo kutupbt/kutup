@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -44,6 +44,9 @@ import { PickerButton, PickerDialog, type PickerMode } from './PlacePicker'
 import { openPlacesDialog } from './placesState'
 import { ShortcutsDialog } from './ShortcutsDialog'
 import { ThreadView } from './ThreadView'
+import { ListPagination, PagingControls } from './Paging'
+import { pageCount, pageFromParams } from './paging'
+import { SelectionPane } from './SelectionPane'
 
 const KNOWN = new Set<string>([...FOLDERS, 'all'])
 const FILTERS: ListFilter[] = ['unread', 'read', 'attachments']
@@ -108,8 +111,18 @@ export function MailboxPage() {
   // Proton's filter and sort, kept in the address bar.
   const filter = FILTERS.find((f) => f === params.get('filter')) ?? null
   const sort = SORTS.find((s) => s === params.get('sort')) ?? 'newest'
+  // Proton's paging: the page (from 1) in the address bar, gone on page 1.
+  const page = pageFromParams(params)
+  const setPage = (to: number) => {
+    const next = new URLSearchParams(params)
+    if (to > 1) next.set('page', String(to))
+    else next.delete('page')
+    setParams(next)
+  }
+  // A new filter or sort starts from the first page, as Proton's.
   const setView = (change: { filter?: ListFilter | null; sort?: ListSort }) => {
     const next = new URLSearchParams(params)
+    next.delete('page')
     if ('filter' in change) {
       if (change.filter) next.set('filter', change.filter)
       else next.delete('filter')
@@ -148,7 +161,11 @@ export function MailboxPage() {
   const oneLine = layout === 'row'
   const [paneSize, setPaneSize] = usePaneSize(layout)
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
-  const list = useFolder(place, { q, group, conversations: (settings.data?.viewMode ?? 'conversation') === 'conversation', filter, sort }, !settings.isPending)
+  const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
+  const pageSize = settings.data?.pageSize ?? DEFAULT_PAGE_SIZE
+  const list = useFolder(place, { q, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending)
+  const total = list.data?.pages[0]?.total ?? null
+  const pages = pageCount(total ?? 0, pageSize)
   const own = account.data?.address.toLowerCase() ?? ''
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
@@ -174,7 +191,13 @@ export function MailboxPage() {
     setSelected(new Set())
     anchor.current = null
     setCursor(null)
-  }, [place, q])
+  }, [place, q, page])
+  // Past the last page (mail moved away): the last one.
+  const pastEnd = total !== null && !list.isPlaceholderData && page > pages
+  useEffect(() => {
+    if (pastEnd) setPage(pages)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the list says so
+  }, [pastEnd, pages])
   // Opening a thread puts the keyboard on it.
   useEffect(() => {
     if (openIndex >= 0) setCursor(openIndex)
@@ -590,7 +613,9 @@ export function MailboxPage() {
           </>
         )}
       </div>
-      {chosen.length === 0 ? <ListFilters filter={filter} sort={sort} onChange={setView} /> : null}
+      <ListFilters filter={filter} sort={sort} onChange={setView} filtersHidden={chosen.length > 0}>
+        <PagingControls page={page} pages={pages} onPage={setPage} disabled={total === null || list.isPlaceholderData} />
+      </ListFilters>
       {unwanted && !group && settings.data ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">{settings.data.autoDeleteDays ? t('emptyFolder.autoDeleteOn') : t('emptyFolder.autoDeleteOffer')}</span>
@@ -757,11 +782,9 @@ export function MailboxPage() {
                   </li>
                 )
               })}
-              {list.hasNextPage ? (
-                <li className="p-3 text-center">
-                  <Button variant="outline" size="sm" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-                    {t('list.more')}
-                  </Button>
+              {pages > 1 ? (
+                <li>
+                  <ListPagination page={page} pages={pages} onPage={setPage} disabled={list.isPlaceholderData} />
                 </li>
               ) : null}
             </ul>
@@ -777,14 +800,19 @@ export function MailboxPage() {
       {listPane}
       <PaneSplitter layout={layout} size={paneSize} onResize={setPaneSize} />
       <div className={cn('min-h-0 min-w-0 flex-1 overflow-hidden', !threadId && 'hidden md:block')}>
-        {threadId && account.data ? (
+        {/* Proton: rows checked beside the list show the selection pane, over an open conversation too. */}
+        {threadId && account.data && !(layout === 'column' && chosen.length > 0) ? (
           <ThreadView account={account.data} folder={folder} base={base} threadId={threadId} onClose={() => void navigate(`${base}${search}`)} />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-            <Mail className="size-10" aria-hidden />
-            <p className="text-sm">{t('read.pick')}</p>
-            <p className="text-xs">{t('shortcuts.hint')}</p>
-          </div>
+          <SelectionPane
+            name={title}
+            label={placeKind === 'label'}
+            conversations={conversations}
+            checked={chosen.length}
+            total={total}
+            q={q}
+            onClear={() => setSelected(new Set())}
+          />
         )}
       </div>
       <ConfirmDestructive

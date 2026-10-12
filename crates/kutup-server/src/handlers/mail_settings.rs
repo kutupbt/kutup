@@ -48,13 +48,16 @@ pub struct MailSettings {
     /// A link in a message that leads outside Kutup asks first (Proton's
     /// `ConfirmLink`).
     pub confirm_link: bool,
+    /// Messages or conversations on a page of the list: 50, 100 or 200
+    /// (Proton's `PageSize`).
+    pub page_size: i32,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
         "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
-                view_layout, density, composer_mode, view_mode, confirm_link
+                view_layout, density, composer_mode, view_mode, confirm_link, page_size
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -71,6 +74,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         composer_mode: "popup".into(),
         view_mode: "conversation".into(),
         confirm_link: true,
+        page_size: 50,
     }))
 }
 
@@ -96,6 +100,7 @@ pub struct UpdateMailSettings {
     pub attach_public_key: Option<bool>,
     pub pgp_scheme: Option<String>,
     pub confirm_link: Option<bool>,
+    pub page_size: Option<i32>,
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
@@ -111,7 +116,7 @@ pub struct UpdateMailSettings {
     request_body = UpdateMailSettings,
     responses(
         (status = 200, description = "Saved", body = MailSettings),
-        (status = 400, description = "Auto-delete is 0 or 30 days; an unknown layout, density or composer mode"),
+        (status = 400, description = "Auto-delete is 0 or 30 days; page size 50, 100 or 200; an unknown layout, density or composer mode"),
     )
 )]
 pub async fn update(
@@ -125,6 +130,12 @@ pub async fn update(
         .is_some_and(|days| days != 0 && days != 30)
     {
         return Err(AppError::bad_request("auto-delete is 0 or 30 days"));
+    }
+    if request
+        .page_size
+        .is_some_and(|size| ![50, 100, 200].contains(&size))
+    {
+        return Err(AppError::bad_request("page size is 50, 100 or 200"));
     }
     let one_of = |value: &Option<String>, allowed: [&str; 2]| {
         value.as_deref().is_none_or(|v| allowed.contains(&v))
@@ -142,10 +153,11 @@ pub async fn update(
     sqlx::query(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
-              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link)
+              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
-                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true))
+                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
+                 COALESCE($12, 50))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -157,6 +169,7 @@ pub async fn update(
              attach_public_key = COALESCE($9, mail_settings.attach_public_key),
              pgp_scheme = COALESCE($10, mail_settings.pgp_scheme),
              confirm_link = COALESCE($11, mail_settings.confirm_link),
+             page_size = COALESCE($12, mail_settings.page_size),
              updated_at = now()",
     )
     .bind(user_id)
@@ -170,6 +183,7 @@ pub async fn update(
     .bind(request.attach_public_key)
     .bind(request.pgp_scheme.as_deref())
     .bind(request.confirm_link)
+    .bind(request.page_size)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))
