@@ -229,11 +229,24 @@ one database, plus a report of what happened.
   lock modes: the account password (the default; checked by the server as
   at sign-in, `POST /api/user/reauth` with the login key, under the sign-in
   lockout, so a stolen access token gives no way to guess the password
-  offline) or one click. A vault without a
+  offline), the account's PIN, or one click. A vault without a
   kept key always asks for its own key. Signing out also deletes the vaults
   this device kept for offline use; a refused session keeps them, unsaved
-  edits included, for the next sign-in. A PIN (Proton's other mode) is not
-  offered.
+  edits included, for the next sign-in.
+- **The PIN** (as Proton Pass's PIN lock): six digits per account, used on
+  every device whose mode is the PIN. The server keeps only its bcrypt hash
+  (`pass_pins`, migration 156) and checks it, `POST /api/pass/pin/verify`,
+  so a stolen session cannot guess it offline; the sixth digit sends it.
+  Three wrong PINs in a row end the sign-in that tried them (every session
+  of it) and the app signs out; the count is shared by the account's devices
+  and each try is reserved before the check, so parallel tries get no more.
+  A right PIN starts the count again. Setting, changing (`PUT
+  /api/pass/pin`) or removing it (`DELETE /api/pass/pin`) takes the account
+  password, under the sign-in lockout. Choosing the PIN mode without a PIN
+  asks for one first; a PIN removed on another device sends this one back
+  to the password. These password re-checks never trigger the client's
+  token refresh and retry on 401, which would count a wrong password twice.
+  Specs 151 and `pass_live`.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
   (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
@@ -249,7 +262,7 @@ one database, plus a report of what happened.
 - **Specs** 76 (vault, entries, history, attachments, groups, recycle bin,
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
-  wrong key, kept and forgotten keys, lock), 150 (CSV import).
+  wrong key, kept and forgotten keys, lock), 150 (CSV import), 151 (PIN).
 - **Security report** (the vault's Security button): weak passwords,
   passwords shared by several entries, and expired entries, worked out on
   the device from the open vault; nothing is sent anywhere, so there is no

@@ -636,6 +636,19 @@ fn build_router(state: AppState) -> Router {
                 .delete(handlers::pass::delete_vault_secret)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
+        .route("/api/pass/pin", get(handlers::pass::pin_status))
+        .route(
+            "/api/pass/pin",
+            put(handlers::pass::set_pin)
+                .delete(handlers::pass::remove_pin)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/pass/pin/verify",
+            // Bounded by the account's three tries, not the sign-in limit.
+            post(handlers::pass::verify_pin).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
         .route(
             "/api/user/reauth",
             post(auth::reauth)

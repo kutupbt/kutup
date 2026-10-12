@@ -139,9 +139,10 @@ api.interceptors.response.use(
     }
 
     // A 401 from these means "wrong credentials / invalid fork", not an expired
-    // access token.
+    // access token. (The password re-checks: a retry would count a wrong
+    // password twice toward the sign-in lockout.)
     const skipRefresh = originalRequest.url?.match(
-      /\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/,
+      /\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)|\/user\/reauth|\/pass\/pin/,
     )
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
