@@ -129,6 +129,8 @@ jobs:
         run: pnpm -C frontend run test:crypto-wasm
       - name: Check the Kutup Pass WASM module
         run: pnpm -C frontend run test:pass-wasm
+      - name: Check Mail's search index WASM module
+        run: pnpm -C frontend run test:mail-search-wasm
       - name: Build production web app
         run: pnpm -C frontend run build
 

@@ -180,10 +180,12 @@ impl Index {
         let mut shards: BTreeMap<(i64, String), Shard> = BTreeMap::new();
         for doc in docs {
             let period = period_of(doc.time_ms);
-            if !tables.contains_key(&period) {
-                tables.insert(period, decode(records, &docs_key(period))?);
-            }
-            let table = tables.get_mut(&period).expect("loaded");
+            let table = match tables.entry(period) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(decode(records, &docs_key(period))?)
+                }
+            };
             if table.docs.iter().any(|d| d.live && d.id == doc.id) {
                 continue;
             }
@@ -501,9 +503,10 @@ mod tests {
 
     #[test]
     fn another_version_is_built_again() {
-        let mut stored = Directory::default();
-        stored.version = INDEX_VERSION + 1;
-        stored.periods.insert(1, PeriodInfo::default());
+        let stored = Directory {
+            version: INDEX_VERSION + 1,
+            periods: BTreeMap::from([(1, PeriodInfo::default())]),
+        };
         let bytes = encode(&stored).unwrap();
         assert!(Index::open(Some(&bytes)).unwrap().is_empty());
         assert!(Index::open(Some(b"\xff")).is_err());
