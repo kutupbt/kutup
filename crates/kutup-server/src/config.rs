@@ -172,6 +172,8 @@ pub struct AppOrigins {
     pub contacts: String,
     /// The Mail app (docs/plans/mail.md).
     pub mail: String,
+    /// Kutup Pass, the password manager (docs/plans/pass.md).
+    pub pass: String,
 }
 
 impl AppOrigins {
@@ -187,6 +189,7 @@ impl AppOrigins {
             ClientType::WebOffice => Some(&self.office),
             ClientType::WebContacts => Some(&self.contacts),
             ClientType::WebMail => Some(&self.mail),
+            ClientType::WebPass => Some(&self.pass),
             ClientType::Cli => None,
         }
     }
@@ -204,7 +207,7 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
     Ok(origin.ascii_serialization())
 }
 
-/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS,MAIL}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS,MAIL,PASS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
 /// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
 /// (`http://<app>.localhost:<port>`) and production refuses to start.
 pub fn resolve_app_origins(
@@ -234,6 +237,7 @@ pub fn resolve_app_origins(
         photos: pick("photos", "KUTUP_PHOTOS_URL", 5178)?,
         contacts: pick("contacts", "KUTUP_CONTACTS_URL", 5180)?,
         mail: pick("mail", "KUTUP_MAIL_URL", 5181)?,
+        pass: pick("pass", "KUTUP_PASS_URL", 5182)?,
     };
     let all = [
         &origins.account,
@@ -245,6 +249,7 @@ pub fn resolve_app_origins(
         &origins.photos,
         &origins.contacts,
         &origins.mail,
+        &origins.pass,
     ];
     for (i, a) in all.iter().enumerate() {
         if all[i + 1..].contains(a) {
@@ -473,6 +478,7 @@ mod tests {
         assert_eq!(o.photos, "https://photos.example.org");
         assert_eq!(o.contacts, "https://contacts.example.org");
         assert_eq!(o.mail, "https://mail.example.org");
+        assert_eq!(o.pass, "https://pass.example.org");
     }
 
     #[test]
@@ -501,6 +507,7 @@ mod tests {
         assert_eq!(o.photos, "http://photos.localhost:5178");
         assert_eq!(o.contacts, "http://contacts.localhost:5180");
         assert_eq!(o.mail, "http://mail.localhost:5181");
+        assert_eq!(o.pass, "http://pass.localhost:5182");
     }
 
     #[test]

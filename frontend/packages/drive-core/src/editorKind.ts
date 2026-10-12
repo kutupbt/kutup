@@ -41,6 +41,11 @@ export function editorKindFor(filename: string): EditorKind | null {
   return null
 }
 
+/** Whether a file is a KeePass vault, which opens in Kutup Pass (docs/plans/pass.md). */
+export function isVaultName(filename: string | null | undefined): boolean {
+  return Boolean(filename && /^.+\.kdbx$/i.test(filename))
+}
+
 /**
  * Whether a file opens on the Office site: what is edited there (notes and
  * code, office documents, whiteboards) and PDFs. Everything else opens in

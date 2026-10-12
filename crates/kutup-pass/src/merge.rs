@@ -32,7 +32,8 @@ use crate::refs;
 pub const REVIEW_KEY: &str = "KutupMergeReview";
 
 /// What a merge did.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MergeReport {
     /// Entries only one side had, now in the result.
     pub added: Vec<Uuid>,
@@ -91,7 +92,8 @@ impl MergeReport {
 }
 
 /// One entry or group whose fields both sides changed differently.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Conflict {
     /// The entry's or group's UUID.
     pub id: Uuid,
@@ -1089,25 +1091,7 @@ impl Merger<'_> {
                 kept.push(item);
             }
         }
-        if let Some(limit) = self.out.meta.history_max_items.filter(|limit| *limit >= 0) {
-            let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-            let excess = kept.len().saturating_sub(limit);
-            kept.drain(..excess);
-        }
-        if let Some(limit) = self.out.meta.history_max_size.filter(|limit| *limit >= 0) {
-            let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-            let mut total = 0usize;
-            let mut keep = 0;
-            for item in kept.iter().rev() {
-                total = total.saturating_add(entry_size(&self.out, item));
-                if total > limit {
-                    break;
-                }
-                keep += 1;
-            }
-            let excess = kept.len() - keep;
-            kept.drain(..excess);
-        }
+        trim_history(&self.out, &mut kept);
         result.history = Some(History { entries: kept });
     }
 
@@ -1211,6 +1195,30 @@ fn merge_custom_data(
 }
 
 /// An entry's size for the history size limit: its strings and attachments.
+/// Trims history `items` (oldest first) to the vault's limits on the number
+/// of items and their size, dropping the oldest, as KeePass apps do.
+pub(crate) fn trim_history(db: &Database, items: &mut Vec<Entry>) {
+    if let Some(limit) = db.meta.history_max_items.filter(|limit| *limit >= 0) {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        let excess = items.len().saturating_sub(limit);
+        items.drain(..excess);
+    }
+    if let Some(limit) = db.meta.history_max_size.filter(|limit| *limit >= 0) {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        let mut total = 0usize;
+        let mut keep = 0;
+        for item in items.iter().rev() {
+            total = total.saturating_add(entry_size(db, item));
+            if total > limit {
+                break;
+            }
+            keep += 1;
+        }
+        let excess = items.len() - keep;
+        items.drain(..excess);
+    }
+}
+
 fn entry_size(db: &Database, entry: &Entry) -> usize {
     let strings: usize = entry
         .fields

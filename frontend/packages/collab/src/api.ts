@@ -50,6 +50,8 @@ export interface VersionRow {
   keyGeneration: number
   /** Saved by someone on another server (`user@server`); the owner is `authorUserId` then. */
   remoteAuthor?: string
+  /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
+  parentVersionId?: string | null
 }
 
 /**
@@ -107,6 +109,20 @@ export interface NewVersion {
   docKeyId: number
   label?: string | null
   keepForever?: boolean
+  /**
+   * A conditional save (docs/plans/pass.md): stored only if the file still
+   * holds this version (an id, or `original`); otherwise
+   * {@link VersionConflictError}.
+   */
+  basedOn?: string
+}
+
+/** A conditional save lost: the file holds `current` now (a version id, or `original`). */
+export class VersionConflictError extends Error {
+  constructor(readonly current: string) {
+    super('the file changed since')
+    this.name = 'VersionConflictError'
+  }
 }
 
 /**
@@ -128,6 +144,7 @@ export async function createVersion(
   form.append('docKeyId', String(version.docKeyId))
   form.append('keepForever', String(Boolean(version.keepForever)))
   if (version.label) form.append('label', version.label)
+  if (version.basedOn) form.append('basedOn', version.basedOn)
   form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
     const r = await api.post<VersionRow>(`${base}/versions`, form)
@@ -135,6 +152,10 @@ export async function createVersion(
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 413) {
       throw new QuotaExceededError()
+    }
+    const body = axios.isAxiosError(err) ? (err.response?.data as { code?: string; current?: string } | undefined) : undefined
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
+      throw new VersionConflictError(body.current)
     }
     throw err
   }

@@ -11,8 +11,8 @@ import { reloadGuardScript } from './src/reloadGuard.ts'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail'
-export type WasmModule = 'crypto' | 'chat'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass'
+export type WasmModule = 'crypto' | 'chat' | 'pass'
 
 /**
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
@@ -30,22 +30,35 @@ export function wasmHash(module: WasmModule): string {
   return hash.digest('hex').slice(0, 16)
 }
 
-/** The reload guard ([`reloadGuard`]) inline in each app page, ahead of the bundle it watches. */
-function reloadOnceOnLoadFailure(): Plugin {
+/** Where the reload guard is served from when a page allows no inline script. */
+const RELOAD_GUARD_FILE = 'kutup-reload-guard.js'
+
+/**
+ * The reload guard ([`reloadGuard`]) in each app page, ahead of the bundle it
+ * watches: inline, or with `strictCsp` (a page whose policy allows no inline
+ * script, such as Pass) as a classic script file loaded the same way.
+ */
+function reloadOnceOnLoadFailure(strictCsp: boolean): Plugin {
   const build = Date.now().toString(36)
   return {
     name: 'kutup-reload-once',
     apply: 'build',
-    transformIndexHtml: () => [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+    transformIndexHtml: () =>
+      strictCsp
+        ? [{ tag: 'script', attrs: { src: `/${RELOAD_GUARD_FILE}` }, injectTo: 'head-prepend' }]
+        : [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+    generateBundle() {
+      if (strictCsp) this.emitFile({ type: 'asset', fileName: RELOAD_GUARD_FILE, source: reloadGuardScript(build) })
+    },
   }
 }
 
 /**
  * The WASM runtimes are fetched from absolute paths on the page's own origin,
- * `/crypto-wasm/<hash>/…` and `/chat-wasm/<hash>/…` (see @kutup/crypto/rustWasm
- * and @kutup/chat-core/wasm), the hash being the files' own: a new build is a
+ * `/crypto-wasm/<hash>/…`, `/chat-wasm/<hash>/…` and `/pass-wasm/<hash>/…` (see
+ * @kutup/crypto/rustWasm, @kutup/chat-core/wasm and the Pass app), the hash being the files' own: a new build is a
  * new URL, so they can be cached for good. The bundle learns the hashes as
- * `__KUTUP_CRYPTO_WASM__` and `__KUTUP_CHAT_WASM__`. `pnpm build:wasm` writes
+ * `__KUTUP_CRYPTO_WASM__`, `__KUTUP_CHAT_WASM__` and `__KUTUP_PASS_WASM__`. `pnpm build:wasm` writes
  * the files once to frontend/wasm; this serves them in dev and copies them
  * into each app's dist on build.
  */
@@ -59,6 +72,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         define: {
           __KUTUP_CRYPTO_WASM__: JSON.stringify(wasmHash('crypto')),
           __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
+          __KUTUP_PASS_WASM__: JSON.stringify(wasmHash('pass')),
         },
       }
     },
@@ -88,7 +102,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         if (!existsSync(src)) {
           throw new Error(`${src} is missing — run \`pnpm -C frontend build:wasm\` first`)
         }
-        const hash = wasmHash(dir === 'crypto-wasm' ? 'crypto' : 'chat')
+        const hash = wasmHash(dir.replace(/-wasm$/, '') as WasmModule)
         cpSync(src, path.join(outDir, dir, hash), { recursive: true })
       }
     },
@@ -96,7 +110,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181 }
+export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own
@@ -105,7 +119,12 @@ export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, d
  * KUTUP_DEV_DOMAIN and KUTUP_DEV_PORT_OFFSET move the apps for a second
  * local server (docs/contributing.md).
  */
-export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfig {
+export function kutupApp(opts: {
+  app: KutupApp
+  wasm: WasmModule[]
+  /** The page allows no inline script (its CSP; frontend/docker/40-kutup-hosts.sh). */
+  strictCsp?: boolean
+}): UserConfig {
   const requireFromCrypto = createRequire(path.join(FRONTEND, 'packages/crypto/package.json'))
   const apiTarget = process.env.KUTUP_API_TARGET ?? 'http://localhost:3000'
   // A second local server (federation testing) runs its apps on
@@ -113,7 +132,7 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
   const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
   const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
-    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure()],
+    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure(Boolean(opts.strictCsp))],
     worker: { format: 'es' },
     resolve: {
       alias: {

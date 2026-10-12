@@ -1,4 +1,4 @@
-import { BookUser, FileType, HardDrive, Images, Mail, Map, MessagesSquare } from 'lucide-react'
+import { BookUser, FileType, HardDrive, Images, KeyRound, Mail, Map, MessagesSquare } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { appUrl } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
@@ -10,6 +10,7 @@ const APPS = [
   { id: 'office', Icon: FileType },
   { id: 'chat', Icon: MessagesSquare },
   { id: 'contacts', Icon: BookUser },
+  { id: 'pass', Icon: KeyRound },
   { id: 'photos', Icon: Images },
   { id: 'maps', Icon: Map },
 ] as const

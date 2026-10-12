@@ -147,7 +147,8 @@
     "maps": "Lists of places, shared and edited together, end-to-end encrypted.",
     "photos": "Your photos and videos, by when and where they were taken, end-to-end encrypted.",
     "contacts": "Everyone you write to, chat with and share with, in one encrypted address book.",
-    "mail": "Your mail, end-to-end encrypted with other Kutup users and encrypted the moment it arrives from anyone else."
+    "mail": "Your mail, end-to-end encrypted with other Kutup users and encrypted the moment it arrives from anyone else.",
+    "pass": "Your passwords in KeePass vaults kept in Drive, usable offline and with KeePassXC."
   },
   "settings": {
     "account": {

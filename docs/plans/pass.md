@@ -1,7 +1,8 @@
 # Kutup Pass (password manager)
 
 **Status:** plan, 2026-10-11. K0 (`crates/kutup-pass`), K1 (conditional
-saves, `kutup sync` merging vaults) and K2a (vault secrets) built. The research and every product
+saves, `kutup sync` merging vaults), K2a (vault secrets), K2b (vault
+editing, `kutup-pass-wasm`) and K2c (the website) built. The research and every product
 decision are in
 [`../research/19-password-manager.md`](../research/19-password-manager.md)
 ("Priorities", "Direction", "SSH agent in the `kutup` CLI", "Unlocking, key
@@ -136,8 +137,12 @@ one database, plus a report of what happened.
   and stores nothing. Without `basedOn` the endpoint behaves as today.
 - Each version records the version it replaced (`parent_version_id`, a
   migration numbered one above the highest on master and in open PRs at the
-  time). Two versions with the same parent are a divergence; clients fetch
-  the parent as the merge base.
+  time): the version current when it was stored. Because whole-file saves of
+  a file are serialized and every Pass client (the website, `kutup sync`)
+  saves conditionally, two versions never replace the same one: divergence is
+  prevented, not repaired afterwards (K3, as built). A save without `basedOn`
+  (a Drive restore or upload of a `.kdbx`) is a deliberate replacement; Pass
+  clients merge it like any other remote change, against their base.
 - Downloads name what they serve (`X-Kutup-Version`: a version id or
   `original`), so a client records the exact version its copy came from.
 - Whole-file saves of one file are serialized (a row lock on the file) and
@@ -182,6 +187,79 @@ one database, plus a report of what happened.
 
 ### The website (K2, `pass.<domain>`)
 
+**Built in K2c** (`frontend/apps/pass`):
+
+- **The app.** Vaults are listed from Drive (own folders, shared folders and
+  vaults shared by themselves; vaults on other servers stay in Drive for
+  now). Drive and Office open a `.kdbx` file in Pass (`appFor` in
+  `@kutup/editors/paths`). New vaults are made in a chosen folder with a
+  password and/or key file, optionally kept with the sign-in; Drive's New
+  menu and right-click menu offer "Password vault", which opens Pass's
+  create dialog with that folder chosen (`/new?folder=`), since Drive holds
+  no vault keys. A folder holds any number of vaults; a taken name gets a
+  free one ("Passwords (2)"). A vault's name is its file's name: renaming in
+  Drive shows in Pass, and renaming in Pass renames the file (and the name
+  inside the KeePass file with it).
+- **The worker.** Vaults live in a long-lived worker
+  (`src/vault/worker.ts`) holding `kutup-pass-wasm`; the page gets views and
+  values only. Saving derives the key, so edits close together are saved
+  once.
+- **Saving** (`src/sync/vaultSession.ts`). Each edit is applied at once and
+  kept in the outbox; the vault is saved as a version made from the version
+  it started from. On `409` the other device's version is merged here (base,
+  ours, theirs) and saved on top of it; a merge with conflicts or restored
+  entries shows a notice, and the entries carry the review mark until marked
+  reviewed. A vault saved elsewhere under a new key asks for it, merges, and
+  keeps it. Every minute while the tab is visible, and when it comes back,
+  the open vault takes in another device's save.
+- **Offline** (`src/sync/outbox.ts`). Per vault, IndexedDB keeps the base
+  version (id and contents) and the edited vault waiting to be saved: both
+  KeePass files under the vault's own key, so no readable secret is stored.
+  Without a connection the edits wait and go when it is back, also after the
+  tab was closed (spec 78). Opening a vault while Drive cannot be reached
+  uses the kept copy; a reload without network still needs the sign-in to
+  work offline first (research 19 §5.6).
+- **Locking.** Open vaults lock after a while without use on the device
+  (15 minutes unless changed on the vault list; "only when I sign out" is a
+  choice), when the account's session ends (signed out in Pass or another
+  Pass tab, or refused by the server because it was revoked elsewhere, which
+  the minute's refresh notices), and by hand. A vault locked in a tab waits
+  for a click before its kept key opens it again, also after a reload of the
+  tab. **What opens it again** is a setting on the device, as Proton Pass's
+  lock modes: the account password (the default; checked by the server as
+  at sign-in, `POST /api/user/reauth` with the login key, under the sign-in
+  lockout, so a stolen access token gives no way to guess the password
+  offline) or one click. A vault without a
+  kept key always asks for its own key. Signing out also deletes the vaults
+  this device kept for offline use; a refused session keeps them, unsaved
+  edits included, for the next sign-in. A PIN (Proton's other mode) is not
+  offered.
+- **Page policy.** The pass host allows no inline or eval'd script
+  (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
+  (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
+  reload guard load as files (`strictCsp` in the shared Vite config). Spec 79
+  checks the headers and that the page breaks none of it.
+- **Entries.** Standard fields, the TOTP secret (`otp`, an otpauth:// URI or
+  a base32 key) with a live code, custom fields (hidden or not), tags,
+  expiry, attachments up to 50 MB, history with restore, groups, the recycle
+  bin; copied secrets leave the clipboard after 30 seconds if still there. A
+  password generator from `crypto.getRandomValues` without modulo bias, and
+  a strength hint. Auto-type settings and other KeePass data are kept as they
+  are.
+- **Specs** 76 (vault, entries, history, attachments, groups, recycle bin,
+  Drive), 77 (two devices: disjoint edits merge, one field on both is marked
+  for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
+  wrong key, kept and forgotten keys, lock).
+- **Security report** (the vault's Security button): weak passwords,
+  passwords shared by several entries, and expired entries, worked out on
+  the device from the open vault; nothing is sent anywhere, so there is no
+  breach lookup (a k-anonymity check against an outside service would send
+  hash prefixes away).
+- **Not yet:** custom icons, importing CSV from other managers, sharing
+  single entries; on the roadmap.
+
+**The plan as written:**
+
 - A new app on its own origin, like the others: `apps.pass` in the server's
   app origins, client type `web-pass`, a frontend host, the app switcher, the
   nginx and compose wiring, DNS and a certificate for `pass.kutup.dev`
@@ -212,6 +290,27 @@ one database, plus a report of what happened.
   key entries shown and editable as data.
 - Generator, search, and a simple security report (weak, reused) on the
   client.
+- **Editing (built in K2b).** `kutup_pass::view` gives the website a plain
+  snapshot (groups depth-first, entries with their fields, standard ones
+  first, tags, icon, colours, expiry, times, attachments by name and size,
+  auto-type as data, history count, review marks, recycle-bin flags) and
+  one-time codes from KeePassXC's `otp` field. `kutup_pass::edit::Op` is the
+  only way to change a vault: create, update (the entry's previous state
+  into its history, trimmed to the vault's limits; nothing recorded when
+  nothing changed), delete (into the recycle bin, made when first needed; for
+  good from inside it or with it off, recorded in the deleted objects), move,
+  restore a history item, clear a review mark, attachments, groups, empty
+  the recycle bin, the vault's name. A refused operation changes nothing.
+  Times come from the caller, so the browser and tests control the clock.
+  New vaults get KeePassXC's defaults (recycle bin, ten history items up to
+  6 MiB) and Argon2id with 64 MiB and 10 iterations: about 0.4 s per
+  derivation in WASM on the development VM (`scripts/test-pass-wasm.mjs`
+  prints it), against the crate's 1 GiB and 50 iterations.
+- **`kutup-pass-wasm`** holds one open vault (`Vault`: `create`, `open`,
+  `view`, `apply`, `history`, `attachment`, `otp`, `save`, `mergeWith`,
+  `changeKey`) and runs in a worker, since key derivation blocks.
+  `mergeWith` takes another key for the other side when the key changed
+  elsewhere, and adopts it.
 
 ### Phones
 
@@ -225,6 +324,42 @@ As decided in research 19, "SSH agent in the `kutup` CLI": opt-in
 keeps, approval per use, keys listed while locked, memory only,
 `kutup ssh-add` push mode.
 
+**Built in K3b:**
+
+- `kutup_pass::ssh` (shared with the website later): KeeAgent settings
+  (KeePassXC's UTF-8 and KeeAgent's UTF-16 files), the agent keys of a vault
+  (entries outside the recycle bin that allow use, the key attached to the
+  entry; keys in outside files are reported, not read), the public half
+  without the passphrase, the private key decrypted with the entry's
+  password, signatures (Ed25519, ECDSA, RSA with `rsa-sha2-256/512`; SHA-1
+  `ssh-rsa` refused; RSA keys under 2048 bits refused). The RSA key is built
+  from its parts here: ssh-key 0.6.7's own conversion passes `p` twice.
+- `kutup ssh-agent <folder> <collection>` serves the vaults in a folder
+  `kutup sync` keeps, on `$XDG_RUNTIME_DIR/kutup/ssh-agent.sock` (or
+  `--socket`) in a directory only the user can enter; it prints the
+  `SSH_AUTH_SOCK=…` line, refuses to replace a live agent, and serves only
+  its own user (`SO_PEERCRED` / `getpeereid`). Vaults open with the key kept
+  in the account, `KUTUP_VAULT_PASSWORD`, or a prompt, and are read again
+  when they change on disk.
+- **Approval per use** on the agent's terminal: the requesting process (on
+  Linux), the key, a login as which user to which host (`session-bind`, its
+  host signature verified, names from `known_hosts`) or the SSHSIG namespace
+  (git), and **FORWARDED** for `ssh -A`. Allow once, for this host until the
+  agent locks, or deny; without a terminal, deny. `--no-confirm` skips asking
+  except for forwarded requests.
+- Memory only: decrypted keys and approvals are forgotten after
+  `--idle` minutes unused (15).
+- `kutup ssh-add <folder> <collection> <entry>` pushes a key into the
+  running agent with the entry's KeeAgent lifetime and confirm constraints,
+  or `--lifetime` / `--confirm`.
+- Checked by unit tests and `scripts/verify-pass-ssh.sh` against OpenSSH:
+  `ssh-add -l`, a git signature through the agent verified by
+  `ssh-keygen -Y verify`, a key added while running, denial without a
+  terminal, and push mode into a system `ssh-agent`.
+- **Not yet:** `kutup ssh-agent install` (systemd / launchd units), desktop
+  notifications for approval, Windows (named pipe), and detecting another
+  agent (KeePassXC, Strongbox) already serving.
+
 ## Slices
 
 | Slice | Contents | Done when |
@@ -233,10 +368,10 @@ keeps, approval per use, keys listed while locked, memory only,
 | **K0b** ✅ | Three-way merge with the report and review marks; fixtures and property tests | all merge cases and properties pass |
 | **K1** ✅ | `basedOn` and parent versions on the server (+ migration); `kutup sync` saves `.kdbx` as versions and merges on conflict | two machines editing one vault offline, then syncing, lose nothing (live test) |
 | **K2a** ✅ | Vault secrets: `kutup_crypto::pass_vault` (+ vectors, WASM), the server records (+ migration), `kutup sync` and `kutup pass` using them | sync merges a vault with no password given once its key is kept |
-| **K2b** | Vault editing in `kutup-pass` (a view and edit operations as KeePass apps make them) and `kutup-pass-wasm` | the website's operations round-trip through KDBX and merge |
-| **K2c** | The `pass.<domain>` app: vault list, unlock, entry editor, offline outbox, conflict review | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
-| **K3** | Divergence handling and re-merge; the website on phone browsers | diverged versions are merged by the next client that opens the vault |
-| **K3b** | The `kutup` SSH agent | `ssh` and `git commit -S` work through it with approvals |
+| **K2b** ✅ | Vault editing in `kutup-pass` (a view and edit operations as KeePass apps make them) and `kutup-pass-wasm` | the website's operations round-trip through KDBX and merge |
+| **K2c** ✅ | The `pass.<domain>` app: vault list, unlock, entry editor, offline outbox, conflict review | a vault can be created, edited offline in the browser and merged with a KeePassXC edit |
+| **K3** ✅ | Divergence handling and re-merge; the website on phone browsers | divergence is prevented by serialized conditional saves (see above); the website works at phone width (spec 76) |
+| **K3b** ✅ | The `kutup` SSH agent | `ssh` and `git commit -S` work through it with approvals |
 | **K4** | Native apps (separate repositories, later) | — |
 
 Each slice ships production-grade with its tests and docs, English and
