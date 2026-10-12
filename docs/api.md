@@ -1186,6 +1186,24 @@ and its refusal fails the whole send). Errors: `409` `keyChanged` with
 recipients by default), `413` over 25 MB or quota, `503` when Stalwart is
 unreachable.
 
+With undo send on (`delaySendSeconds` in `/api/mail/settings`: 5, 10 or 20)
+and a `draftId`, the send is checked at once (every error above still comes
+now) and held: **202** `{ "outboxId", "deliverAt" }`. The server sends it at
+`deliverAt`, also with the browser closed; until then the draft stays and
+cannot change (`409`, code `sending`). A send that was going out when the
+server stopped fails rather than going twice.
+
+### GET /api/mail/outbox/:id
+
+A held send's `state` (`pending`, `sending`, `sent`, `cancelled`, `failed`)
+and `result`: `{ "recipients": [...] }` once sent, the send's error body once
+failed. `404` unless it is yours.
+
+### POST /api/mail/outbox/:id/cancel
+
+Undo: the held send does not go; its draft stays. `204`, or `409` once it has
+gone out.
+
 ### GET /api/mail/sending
 
 Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
