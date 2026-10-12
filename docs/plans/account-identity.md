@@ -2,7 +2,7 @@
 
 **Status:** plan (2026-10-12). Decided by the user: an account's identity is
 its Kutup address; the email it signed up with becomes an optional recovery
-email; keys are bound to the account's permanent id and re-sealed properly.
+email; keys are bound to the account's permanent id and re-sealed properly; no seal binds a name.
 
 ## Why
 
@@ -23,9 +23,12 @@ username) is a name, and names change.
 1. **Sign in with the username or the Kutup address** (`dev` or
    `dev@kutup.dev`), as Proton. The account menu shows the display name and
    the Kutup address only.
-2. **Keys are bound to the account's id** (`users.id`, a UUID, lowercase,
-   never changes), not to any name. The envelope format stays as it is (its
-   header's context string becomes the id; no format or suite change).
+2. **Keys are bound to a random, permanent key binding** of the account
+   (`users.key_binding`: a random 128-bit value in UUID form, drawn by the
+   browser at sign-up, never changed, never a name, not the database id, and
+   carried with the account if it ever moves to another server). No seal
+   binds a name. The envelope format stays as it is (its header's context
+   string becomes the key binding; no format or suite change).
 3. **The signup email becomes an optional recovery email** (Proton/Gmail):
    confirmed by a code, used for security notices and later password reset
    (encrypted data still needs the 24-word phrase). Emails on the server's own
@@ -36,33 +39,45 @@ username) is a name, and names change.
 
 ### Binding
 
-- `users.envelope_binding TEXT NOT NULL`: the string the account's envelopes
-  carry. Backfilled with `lower(email)` (what they carry today); a new account
-  starts with its id. Every server check that compares an envelope header with
-  `users.email` (`validate_account_envelope`, Chat backup, mail keys, Pass
-  vault secrets) compares with `envelope_binding` instead.
-- **Registration** binds to the id from the start: the browser draws the
-  account id (UUID v4) before it seals, and sends it; the server makes it
-  `users.id` (a taken id is refused and the browser draws again).
+How Proton does it: nothing is sealed to a name. Keys form a hierarchy (the
+password unlocks the user key, the user key each address key), every key and
+object has its own random id, and what keeps a secret in its place is the key
+it is sealed under plus a fixed purpose string. CryptPad derives its login
+keys from username and password, which is why a CryptPad username cannot
+simply change. Kutup follows Proton: a seal binds the account's **key
+binding**, the **purpose**, and the object's own **permanent id** where it has
+one (a vault file, a mail key, a folder), under the account's own keys.
+
+- `users.key_binding TEXT`: the random value the account's seals carry, and
+  `users.envelope_binding TEXT NOT NULL`: the string its envelopes carry
+  *now*, backfilled with `lower(email)` (what they carry today) and set to
+  `key_binding` by the re-seal. Every server check that compares an envelope
+  header with `users.email` (`validate_account_envelope`, Chat backup, mail
+  keys, Pass vault secrets) compares with `envelope_binding` instead.
+- **Registration** binds to the key binding from the start: the browser draws
+  it (UUID v4 form) before it seals and sends it; the server stores it (a
+  value already taken is refused and the browser draws again).
 - The binding is returned by sign-in's preflight and kept in the session
   (`session.envelopeBinding`, CLI `Session.envelope_binding`); every seal and
-  open uses it, never `session.email`.
+  open uses it, never `session.email`, `session.username` or an address.
+- Other at-rest formats that bound a name (found by the audit, below) move to
+  the key binding in the same re-seal.
 
 ### Re-sealing (next sign-in)
 
-When the binding is not yet the id, the account app, right after unlocking,
+When the envelopes do not carry the key binding yet, the account app, right after unlocking,
 re-seals everything bound to the old string and sends it in **one request**
 (`POST /api/user/rebind`), which the server applies in one transaction and only
-whole: every envelope's header must name the id, every row of the account must
-be covered (counts checked), then `envelope_binding = id`.
+whole: every envelope's header must name the key binding, every row of the account must
+be covered (counts checked), then `envelope_binding = key_binding`.
 
 | What | How the browser re-seals it |
 |---|---|
 | Password wrapping of the master key | from the master key and the password key it just derived |
 | Recovery wrapping + recovery check | needs the 24 words: **asked once** ("Confirm your recovery phrase"); or **make a new phrase** (shown to write down), which replaces the old one |
 | Drive private key | from the master key |
-| Chat backup root | opened with the old binding, sealed with the id |
-| Mail address keys (each) | opened with the old binding, sealed with the id |
+| Chat backup root | opened with the old binding, sealed with the key binding |
+| Mail address keys (each) | opened with the old binding, sealed with the key binding |
 | Pass vault secrets (each) | the same (Pass part by the third session, on this branch) |
 
 Until it is done the account works as before (the server keeps the old
@@ -116,12 +131,12 @@ known there).
 - TOTP label: the Kutup address.
 - CLI: `--username` (the address works too) on `register`, `login`, `recover`.
 - Tests: `newAccount`/`signIn` fixtures sign in by username; specs that type
-  an email change; live tests seal with the id.
+  an email change; live tests seal with the key binding.
 
 ## Security review
 
 - **Re-binding:** the server accepts a rebind only whole (every row of the
-  account, headers naming the id), in one transaction, from a fresh session;
+  account, headers naming the key binding), in one transaction, from a fresh session;
   a partial or replayed request changes nothing. The old binding is not kept
   after the switch.
 - **Recovery check:** the new check is derived only from the phrase the user
@@ -135,8 +150,9 @@ known there).
 - **Recovery email:** codes hashed, short-lived, few attempts, rate limits per
   account and per target address; an unconfirmed address receives nothing but
   its code; changing it notifies the old one.
-- **Client-chosen account id:** a UUID v4, checked for form and uniqueness; it
-  carries no authority (the server still owns sessions and roles).
+- **Client-drawn key binding:** random, UUID-shaped, checked for form and
+  uniqueness; not secret and carries no authority (the server still owns
+  sessions and roles); never shown as an identity.
 
 ## Slices
 
