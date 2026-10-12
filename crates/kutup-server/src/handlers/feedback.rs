@@ -189,13 +189,13 @@ pub async fn list_feedback(
     };
     let rows: Vec<FeedbackRow> = sqlx::query_as(if resolved {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
-                u.id, u.email, u.username, f.resolved_at, f.resolution, f.github_url
+                u.id, COALESCE(u.email, ''), u.username, f.resolved_at, f.resolution, f.github_url
            FROM feedback f LEFT JOIN users u ON u.id = f.user_id
           WHERE f.resolved_at IS NOT NULL
           ORDER BY f.resolved_at DESC LIMIT 100"
     } else {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
-                u.id, u.email, u.username, f.resolved_at, f.resolution, f.github_url
+                u.id, COALESCE(u.email, ''), u.username, f.resolved_at, f.resolution, f.github_url
            FROM feedback f LEFT JOIN users u ON u.id = f.user_id
           WHERE f.resolved_at IS NULL
           ORDER BY f.created_at ASC LIMIT 500"

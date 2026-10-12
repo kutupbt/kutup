@@ -134,11 +134,8 @@ pub async fn put_vault_secret(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let login_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    let envelope = checked_envelope(&req.envelope, &login_email)?;
+    let binding = crate::handlers::auth::envelope_binding(&state.pool, user_id).await?;
+    let envelope = checked_envelope(&req.envelope, &binding)?;
     let live: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(file_id)
@@ -187,9 +184,6 @@ fn checked_envelope(b64: &str, binding: &str) -> AppResult<Vec<u8>> {
 /// account-identity.md): re-sealed for the account's new binding, or `None`
 /// for one that no longer opened with the old binding (useless already),
 /// which is dropped.
-// Called from the rebind transaction (account-identity core); remove the
-// allow once it is wired.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RebindVaultSecret {
@@ -202,7 +196,6 @@ pub struct RebindVaultSecret {
 /// vault secret the account has (any one added or removed since the browser
 /// listed them refuses the whole rebind), each re-sealed envelope must be a
 /// vault secret bound to `binding`, and no vault may appear twice.
-#[allow(dead_code)]
 pub async fn rebind_vault_secrets(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,

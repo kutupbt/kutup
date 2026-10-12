@@ -82,6 +82,9 @@ pub struct AdminSettingsResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightLoginResponse {
+    /// What the account's envelopes carry now (docs/plans/account-identity.md):
+    /// its key binding, or its old sign-in email until they are re-sealed.
+    pub envelope_binding: String,
     pub account_protection_suite: u16,
     pub account_protection_salt: String,
     pub argon_memory_kib: u32,
@@ -94,6 +97,8 @@ pub struct PreflightLoginResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PreflightRecoverResponse {
     pub recovery_key_envelope: String,
+    /// What the envelopes carry now (the recovery check is derived with it too).
+    pub envelope_binding: String,
 }
 
 /// `POST /api/auth/refresh` — mirrors `handlers.RefreshResponse`.
@@ -112,7 +117,10 @@ pub struct RefreshResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub id: String,
-    pub email: String,
+    /// The account's Kutup address (`username@<domain>`): its identity.
+    pub address: String,
+    /// What the account's envelopes carry now (docs/plans/account-identity.md).
+    pub envelope_binding: String,
     pub username: String,
     pub public_key: String,
     pub totp_enabled: bool,

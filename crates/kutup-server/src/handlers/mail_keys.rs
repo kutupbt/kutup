@@ -383,15 +383,11 @@ pub async fn add_key(
     let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let login_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let binding = crate::handlers::auth::envelope_binding(&state.pool, user_id).await?;
     let header = account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
     if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey
-        || Some(header.canonical_login_email)
-            != account_envelope::canonical_login_email(&login_email).ok()
+        || header.canonical_login_email != binding
     {
         return Err(AppError::bad_request(
             "privateKeyEnvelope is not this account's mail key",

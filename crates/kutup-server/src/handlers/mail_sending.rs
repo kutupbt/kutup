@@ -170,7 +170,7 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
                FROM mail_sending_events
               WHERE created_at > now() - interval '7 days'
               GROUP BY user_id)
-         SELECT u.id, u.email, u.username,
+         SELECT u.id, COALESCE(u.email, ''), u.username,
                 COALESCE(s.day, 0) AS sent_day, COALESCE(s.week, 0) AS sent_week,
                 COALESCE(e.bounces, 0) AS bounces_week, COALESCE(e.spam, 0) AS spam_week,
                 p.per_hour, p.per_day, p.paused_at, p.paused_reason, p.flagged_at, p.flag_reason

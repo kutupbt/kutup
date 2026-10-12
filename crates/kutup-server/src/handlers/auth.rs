@@ -41,8 +41,15 @@ const FAKE_BCRYPT_HASH: &str = "$2a$10$fakehashfortimingprotectiononly";
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterRequest {
+    /// Ignored (older clients): an account signs in with its username, and a
+    /// recovery email is added in Settings.
+    #[serde(default)]
+    #[allow(dead_code)]
     email: String,
     username: String,
+    /// The account's key binding, drawn by the browser (a UUID v4): what its
+    /// envelopes are bound to, for good (docs/plans/account-identity.md).
+    key_binding: String,
     login_key: String,
     master_key_envelope: String,
     recovery_key_envelope: String,
@@ -69,7 +76,10 @@ pub struct RegisterRequest {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LoginRequest {
-    email: String,
+    /// The username or the Kutup address (`email`: older clients; an account
+    /// not yet re-sealed may still give its old sign-in email).
+    #[serde(alias = "email")]
+    name: String,
     login_key: String,
 }
 
@@ -114,7 +124,9 @@ pub struct TwoFALoginRequest {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecoverRequest {
-    email: String,
+    /// As at sign-in.
+    #[serde(alias = "email")]
+    name: String,
     new_login_key: String,
     new_master_key_envelope: String,
     new_account_protection_suite: u16,
@@ -147,11 +159,79 @@ pub struct CodeRequest {
     code: String,
 }
 
-/// `?email=` query for the preflight endpoints.
+/// `?name=` query for the preflight endpoints (`?email=` from older clients).
 #[derive(Debug, Deserialize)]
-pub struct EmailQuery {
+pub struct NameQuery {
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     email: Option<String>,
+}
+
+impl NameQuery {
+    fn name(self) -> AppResult<String> {
+        self.name
+            .or(self.email)
+            .map(|n| n.trim().to_ascii_lowercase())
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| AppError::bad_request("name required"))
+    }
+}
+
+/// The account a person names at sign-in (docs/plans/account-identity.md):
+/// its username, or its Kutup address on this server. An account whose
+/// envelopes still carry its old sign-in email may also give that email,
+/// until they are re-sealed; an address on this server is its owner's first.
+pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<Option<Uuid>> {
+    let name = name.trim().to_ascii_lowercase();
+    if name.is_empty() || name.len() > 320 {
+        return Ok(None);
+    }
+    let (local, domain) = match name.split_once('@') {
+        Some((local, domain)) => (local, Some(domain)),
+        None => (name.as_str(), None),
+    };
+    if domain.is_none_or(|d| d == state.config.chat_server_name.to_ascii_lowercase()) {
+        let by_username: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+                .bind(local)
+                .fetch_optional(&state.pool)
+                .await?;
+        if by_username.is_some() {
+            return Ok(by_username);
+        }
+    }
+    if domain.is_none() {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM users WHERE lower(btrim(email)) = $1 AND envelope_binding = lower(btrim(email))",
+    )
+    .bind(&name)
+    .fetch_optional(&state.pool)
+    .await?)
+}
+
+/// The sign-in lockout's key: the account once the name resolves (sign-in,
+/// reauth and the Pass PIN share it), the name otherwise.
+fn lockout_key(account: Option<Uuid>, name: &str) -> String {
+    match account {
+        Some(id) => format!("account:{id}"),
+        None => format!("name:{name}"),
+    }
+}
+
+/// A fake binding for a name that is not an account, the same each time,
+/// shaped as a real one (a key binding), so preflight tells nothing.
+fn fake_binding(name: &str) -> String {
+    let bytes = STANDARD
+        .decode(deterministic_fake_bytes(name, "envelope-binding", 16))
+        .unwrap_or_else(|_| vec![0; 16]);
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&bytes[..16]);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(b).to_string()
 }
 
 /// Mirrors the `fiber.Map` returned by `CompleteSetup`.
@@ -173,7 +253,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-fn decode_canonical_base64_exact(
+pub(crate) fn decode_canonical_base64_exact(
     value: &str,
     expected_len: usize,
     field: &str,
@@ -211,15 +291,34 @@ fn validate_account_protection(
     .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
 }
 
-fn validate_account_envelope(
+/// The string an account's envelopes carry now: its key binding once they
+/// are re-sealed, its sign-in email (canonical) before
+/// (docs/plans/account-identity.md). Every envelope header is checked
+/// against it, never against a name.
+pub(crate) async fn envelope_binding(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<String> {
+    Ok(
+        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+/// A key binding as drawn: a UUID v4, lowercase and hyphenated.
+pub(crate) fn is_key_binding(value: &str) -> bool {
+    Uuid::parse_str(value)
+        .is_ok_and(|id| id.get_version_num() == 4 && id.hyphenated().to_string() == value)
+}
+
+pub(crate) fn validate_account_envelope(
     value: &str,
     purpose: kutup_crypto::account_envelope::AccountEnvelopePurpose,
-    email: &str,
+    binding: &str,
     field: &str,
 ) -> AppResult<()> {
     let envelope = kutup_crypto::account_envelope::decode_canonical_b64(value)
         .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
-    kutup_crypto::account_envelope::validate(&envelope, purpose, email, 32)
+    kutup_crypto::account_envelope::validate(&envelope, purpose, binding, 32)
         .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
 }
 
@@ -283,7 +382,7 @@ fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
     Ok(())
 }
 
-fn hash_recovery_proof(proof: &str) -> AppResult<String> {
+pub(crate) fn hash_recovery_proof(proof: &str) -> AppResult<String> {
     if proof.is_empty() {
         return Err(AppError::bad_request("recoveryProof is required"));
     }
@@ -420,8 +519,11 @@ pub async fn register(
 
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
-    if req.email.is_empty() || req.login_key.is_empty() {
+    if req.login_key.is_empty() {
         return Err(AppError::bad_request("missing required fields"));
+    }
+    if !is_key_binding(&req.key_binding) {
+        return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
     if !is_valid_username(&req.username) {
         return Err(AppError::bad_request(
@@ -453,19 +555,19 @@ pub async fn register(
     validate_account_envelope(
         &req.master_key_envelope,
         AccountEnvelopePurpose::PasswordMasterKey,
-        &req.email,
+        &req.key_binding,
         "masterKeyEnvelope",
     )?;
     validate_account_envelope(
         &req.recovery_key_envelope,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &req.email,
+        &req.key_binding,
         "recoveryKeyEnvelope",
     )?;
     validate_account_envelope(
         &req.drive_private_key_envelope,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &req.email,
+        &req.key_binding,
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
@@ -490,10 +592,11 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)"#,
+            login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
+            key_binding, envelope_binding
+        ) VALUES (NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1,$1)"#,
     )
-    .bind(&req.email)
+    .bind(&req.key_binding)
     .bind(&req.username)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
@@ -533,37 +636,39 @@ pub async fn register(
     get,
     path = "/api/auth/login/preflight",
     tag = "auth",
-    params(("email" = String, Query, description = "Account email")),
-    responses((status = 200, description = "Account-protection suite and parameters", body = PreflightLoginResponse))
+    params(("name" = String, Query, description = "The username or the Kutup address")),
+    responses((status = 200, description = "Account-protection suite, parameters and envelope binding", body = PreflightLoginResponse))
 )]
 pub async fn get_login_preflight(
     State(state): State<AppState>,
-    Query(q): Query<EmailQuery>,
+    Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
-    let email = q
-        .email
-        .filter(|e| !e.is_empty())
-        .ok_or_else(|| AppError::bad_request("email required"))?;
+    let name = q.name()?;
+    let account = account_by_name(&state, &name).await?;
+    let row: Option<(i16, String, i32, i32, i32, String)> = match account {
+        Some(id) => sqlx::query_as(
+            "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism, envelope_binding FROM users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?,
+        None => None,
+    };
 
-    let row: Option<(i16, String, i32, i32, i32)> = sqlx::query_as(
-        "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism FROM users WHERE email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    let (suite, salt, memory_kib, iterations, parallelism) = match row {
+    let (suite, salt, memory_kib, iterations, parallelism, binding) = match row {
         Some(row) => row,
         None => (
             kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(&email, "account-protection", 16),
+            deterministic_fake_bytes(&name, "account-protection", 16),
             kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
+            fake_binding(&name),
         ),
     };
 
     Ok(Json(PreflightLoginResponse {
+        envelope_binding: binding,
         account_protection_suite: u16::try_from(suite).unwrap_or(0),
         account_protection_salt: salt,
         argon_memory_kib: u32::try_from(memory_kib).unwrap_or(0),
@@ -618,13 +723,14 @@ pub async fn verify_account_login_key(
     login_key: &str,
 ) -> AppResult<()> {
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
-    let (email, login_key_hash): (String, String) =
-        sqlx::query_as("SELECT email, login_key_hash FROM users WHERE id = $1 AND is_active")
+    let login_key_hash: String =
+        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| AppError::unauthorized("invalid credentials"))?;
-    if ratelimit::LOGIN_LOCKOUT.is_locked(&email) {
+    let lockout = lockout_key(Some(user_id), "");
+    if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
         return Err(AppError::too_many_requests(
             "too many failed attempts, try again later",
         ));
@@ -633,11 +739,11 @@ pub async fn verify_account_login_key(
         .decode(login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
     if !bcrypt::verify(&login_key, &login_key_hash).unwrap_or(false) {
-        ratelimit::LOGIN_LOCKOUT.record(&email, false);
+        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         tracing::warn!(user_id = %user_id, "account password re-check failed");
         return Err(AppError::unauthorized("invalid credentials"));
     }
-    ratelimit::LOGIN_LOCKOUT.record(&email, true);
+    ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
     Ok(())
 }
 
@@ -658,9 +764,12 @@ pub async fn login(
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     // Per-account lockout (on top of the per-IP route limiter): N failed password
-    // attempts lock the email out for a cooldown. Checked for unknown emails too, so
-    // the 429 is not an account-existence oracle.
-    if ratelimit::LOGIN_LOCKOUT.is_locked(&req.email) {
+    // attempts lock the account out for a cooldown. Checked for unknown names too,
+    // so the 429 is not an account-existence oracle.
+    let name = req.name.trim().to_ascii_lowercase();
+    let account = account_by_name(&state, &name).await?;
+    let lockout = lockout_key(account, &name);
+    if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
         return Err(AppError::too_many_requests(
             "too many failed attempts, try again later",
         ));
@@ -687,9 +796,9 @@ pub async fn login(
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   account_protection_salt,
                   COALESCE(username, ''), COALESCE(color, '')
-           FROM users WHERE email = $1"#,
+           FROM users WHERE id = $1"#,
     )
-    .bind(&req.email)
+    .bind(account)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -711,7 +820,7 @@ pub async fn login(
     else {
         // Run bcrypt anyway to keep timing constant.
         let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
-        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
+        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         return Err(AppError::unauthorized("invalid credentials"));
     };
 
@@ -724,10 +833,10 @@ pub async fn login(
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
 
     if !bcrypt::verify(&login_key_bytes, &login_key_hash).unwrap_or(false) {
-        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
+        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         return Err(AppError::unauthorized("invalid credentials"));
     }
-    ratelimit::LOGIN_LOCKOUT.record(&req.email, true);
+    ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
 
     let user_id = id.to_string();
 
@@ -876,31 +985,38 @@ pub async fn login_two_fa(
     get,
     path = "/api/auth/recover/preflight",
     tag = "auth",
-    params(("email" = String, Query, description = "Account email")),
-    responses((status = 200, description = "Encrypted recovery key material", body = PreflightRecoverResponse))
+    params(("name" = String, Query, description = "The username or the Kutup address")),
+    responses((status = 200, description = "Encrypted recovery key material and its binding", body = PreflightRecoverResponse))
 )]
 pub async fn get_recovery_preflight(
     State(state): State<AppState>,
-    Query(q): Query<EmailQuery>,
+    Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
-    let email = q
-        .email
-        .filter(|e| !e.is_empty())
-        .ok_or_else(|| AppError::bad_request("email required"))?;
-
-    let row: Option<String> =
-        sqlx::query_scalar("SELECT recovery_key_envelope FROM users WHERE email = $1")
-            .bind(&email)
+    let name = q.name()?;
+    let row: Option<(String, String)> = match account_by_name(&state, &name).await? {
+        Some(id) => {
+            sqlx::query_as(
+                "SELECT recovery_key_envelope, envelope_binding FROM users WHERE id = $1",
+            )
+            .bind(id)
             .fetch_optional(&state.pool)
-            .await?;
+            .await?
+        }
+        None => None,
+    };
 
     let resp = match row {
-        Some(recovery_key_envelope) => PreflightRecoverResponse {
+        Some((recovery_key_envelope, envelope_binding)) => PreflightRecoverResponse {
             recovery_key_envelope,
+            envelope_binding,
         },
-        None => PreflightRecoverResponse {
-            recovery_key_envelope: deterministic_fake_account_envelope(&email),
-        },
+        None => {
+            let binding = fake_binding(&name);
+            PreflightRecoverResponse {
+                recovery_key_envelope: deterministic_fake_account_envelope(&binding),
+                envelope_binding: binding,
+            }
+        }
     };
     Ok(Json(resp).into_response())
 }
@@ -929,22 +1045,29 @@ pub async fn recover(
         req.new_argon_iterations,
         req.new_argon_parallelism,
     )?;
+    let account = account_by_name(&state, &req.name).await?;
+    let stored: Option<(String, String)> = match account {
+        Some(id) => {
+            sqlx::query_as(
+                "SELECT recovery_key_verifier, envelope_binding FROM users WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+        }
+        None => None,
+    };
+    // An unknown name is refused as a wrong phrase is: nothing tells it apart.
+    let (Some(user_id), Some((stored_verifier, binding))) = (account, stored) else {
+        let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
+        return Err(AppError::unauthorized("invalid recovery proof"));
+    };
     validate_account_envelope(
         &req.new_master_key_envelope,
         kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
-        &req.email,
+        &binding,
         "newMasterKeyEnvelope",
     )?;
-
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT recovery_key_verifier FROM users WHERE email = $1")
-            .bind(&req.email)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(stored_verifier) = stored else {
-        let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
-        return Err(AppError::not_found("user not found"));
-    };
 
     if stored_verifier.is_empty() {
         return Err(AppError::unauthorized(
@@ -971,7 +1094,7 @@ pub async fn recover(
               argon_parallelism = $7,
               is_first_login = false,
               updated_at = NOW()
-           WHERE email = $8"#,
+           WHERE id = $8"#,
     )
     .bind(&hash)
     .bind(&req.new_master_key_envelope)
@@ -980,18 +1103,14 @@ pub async fn recover(
     .bind(i32::try_from(req.new_argon_memory_kib).unwrap_or(i32::MAX))
     .bind(i32::try_from(req.new_argon_iterations).unwrap_or(i32::MAX))
     .bind(i32::try_from(req.new_argon_parallelism).unwrap_or(i32::MAX))
-    .bind(&req.email)
+    .bind(user_id)
     .execute(&state.pool)
     .await?;
 
     if res.rows_affected() == 0 {
-        return Err(AppError::not_found("user not found"));
+        return Err(AppError::unauthorized("invalid recovery proof"));
     }
     // New password, new key wrapping: every existing sign-in ends.
-    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
-        .bind(&req.email)
-        .fetch_one(&state.pool)
-        .await?;
     sessions::revoke_all_for_user(&state.pool, user_id, None).await?;
     Ok(Json(MessageResponse {
         message: "password reset".to_string(),
@@ -1088,7 +1207,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
+        r#"SELECT id, envelope_binding, COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days,
                   drive_key_binding IS NOT NULL
@@ -1100,7 +1219,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
 
     let Some((
         id,
-        email,
+        envelope_binding,
         username,
         public_key,
         totp_enabled,
@@ -1114,9 +1233,15 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     else {
         return Err(AppError::not_found("user not found"));
     };
+    let address = if username.is_empty() {
+        String::new()
+    } else {
+        format!("{username}@{}", state.config.chat_server_name)
+    };
     Ok(Json(MeResponse {
         id: id.to_string(),
-        email,
+        address,
+        envelope_binding,
         username,
         public_key,
         totp_enabled,
@@ -1224,27 +1349,20 @@ pub async fn get_user_by_email(
         String,
         Option<String>,
     );
-    let mut row: Option<Row> = None;
-    if let Some(username) = local_account_username(&email, &state.config.chat_server_name) {
-        row = sqlx::query_as(
-            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key, drive_key_binding
-             FROM users WHERE username = $1 AND is_active = true",
-        )
-        .bind(&username)
-        .fetch_optional(&state.pool)
-        .await?;
-    }
-    if row.is_none() {
-        row = sqlx::query_as(
-            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key, drive_key_binding
-             FROM users WHERE email = $1 AND is_active = true",
-        )
-        .bind(&email)
-        .fetch_optional(&state.pool)
-        .await?;
-    }
+    // People are found by their Kutup address only; a sign-in email names no one
+    // (docs/plans/account-identity.md).
+    let row: Option<Row> =
+        match local_account_username(&email, &state.config.chat_server_name) {
+            Some(username) => sqlx::query_as(
+                "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
+                        account_authority_public_key, drive_key_binding
+                 FROM users WHERE username = $1 AND is_active = true",
+            )
+            .bind(&username)
+            .fetch_optional(&state.pool)
+            .await?,
+            None => None,
+        };
     let Some((id, username, public_key, incarnation_id, signing_public_key, authority, binding)) =
         row
     else {
@@ -1275,16 +1393,23 @@ pub async fn get_user_by_email(
     responses((status = 200, description = "TOTP secret + provisioning URI", body = TotpSetupResponse))
 )]
 pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .fetch_optional(&state.pool)
-        .await?;
-    let Some(email) = email else {
+    let username: Option<Option<String>> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+            .bind(parse_uuid(&user.user_id)?)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(username) = username else {
         return Err(AppError::not_found("user not found"));
     };
+    // Labelled with the account's identity, its Kutup address.
+    let label = format!(
+        "{}@{}",
+        username.unwrap_or_default(),
+        state.config.chat_server_name
+    );
 
     let (secret, qr_uri) =
-        totp::generate_totp(&email, "Kutup").map_err(|_| AppError::internal("totp"))?;
+        totp::generate_totp(&label, "Kutup").map_err(|_| AppError::internal("totp"))?;
 
     sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2")
         .bind(&secret)
@@ -1406,16 +1531,21 @@ pub async fn complete_setup(
     let user_id = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| AppError::unauthorized("invalid setup token"))?;
 
-    let account: Option<(bool, String, String)> =
-        sqlx::query_as("SELECT is_active, email, COALESCE(username, '') FROM users WHERE id = $1")
+    let account: Option<(bool, String)> =
+        sqlx::query_as("SELECT is_active, COALESCE(username, '') FROM users WHERE id = $1")
             .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((true, account_email, account_username)) = account else {
+    let Some((true, account_username)) = account else {
         return Err(AppError::unauthorized("account disabled"));
     };
 
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    // The keys made here are bound to the key binding the browser drew.
+    if !is_key_binding(&req.key_binding) {
+        return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
+    }
+    let account_binding = req.key_binding.clone();
 
     validate_account_protection(
         req.account_protection_suite,
@@ -1428,19 +1558,19 @@ pub async fn complete_setup(
     validate_account_envelope(
         &req.master_key_envelope,
         AccountEnvelopePurpose::PasswordMasterKey,
-        &account_email,
+        &account_binding,
         "masterKeyEnvelope",
     )?;
     validate_account_envelope(
         &req.recovery_key_envelope,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &account_email,
+        &account_binding,
         "recoveryKeyEnvelope",
     )?;
     validate_account_envelope(
         &req.drive_private_key_envelope,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &account_email,
+        &account_binding,
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
@@ -1467,6 +1597,7 @@ pub async fn complete_setup(
               argon_memory_kib = $12, argon_iterations = $13,
               argon_parallelism = $14, recovery_key_verifier = $15,
               drive_key_binding = $17,
+              key_binding = $18, envelope_binding = $18,
               is_first_login = false, updated_at = NOW()
            WHERE id = $16 AND account_protection_salt = ''"#,
     )
@@ -1487,6 +1618,7 @@ pub async fn complete_setup(
     .bind(&recovery_verifier)
     .bind(uid)
     .bind(&drive_key_binding)
+    .bind(&account_binding)
     .execute(&state.pool)
     .await;
     match res {
@@ -1656,6 +1788,9 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
             let constraint = db.constraint().unwrap_or("");
             if constraint.contains("username") {
                 return AppError::conflict("username already taken");
+            }
+            if constraint.contains("key_binding") {
+                return AppError::conflict("keyBinding is taken; draw another");
             }
             return AppError::conflict("email already registered");
         }

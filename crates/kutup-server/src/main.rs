@@ -456,12 +456,14 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         return;
     }
 
-    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email=$1")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = $1 OR username = $2")
+            .bind(email)
+            .bind(username)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
     if exists.unwrap_or(0) > 0 {
         return;
     }
@@ -610,6 +612,7 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route("/api/user/rebind", post(handlers::account_rebind::rebind))
         .route(
             "/api/user/drive-key-binding",
             put(identity::put_drive_key_binding),
