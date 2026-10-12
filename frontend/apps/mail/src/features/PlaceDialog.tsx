@@ -107,7 +107,7 @@ export function PlaceDialog({
             ...(color !== target.folder.color ? { color } : {}),
             ...(parentId !== target.folder.parentId ? { parentId } : {}),
           },
-          { onSuccess: () => done('places.updated'), onError: failed },
+          { onSuccess: () => done('places.folderSaved'), onError: failed },
         )
       } else {
         createFolder.mutate(
@@ -115,7 +115,7 @@ export function PlaceDialog({
           {
             onSuccess: (id) => {
               onCreated?.(id, trimmed)
-              done('places.created')
+              done('places.folderCreated')
             },
             onError: failed,
           },
@@ -124,7 +124,7 @@ export function PlaceDialog({
     } else if (target.label) {
       updateLabel.mutate(
         { id: target.label.id, ...(trimmed !== target.label.name ? { name: trimmed } : {}), ...(color !== target.label.color ? { color } : {}) },
-        { onSuccess: () => done('places.updated'), onError: failed },
+        { onSuccess: () => done('places.labelSaved'), onError: failed },
       )
     } else {
       createLabel.mutate(
@@ -132,7 +132,7 @@ export function PlaceDialog({
         {
           onSuccess: (id) => {
             onCreated?.(id, trimmed)
-            done('places.created')
+            done('places.labelCreated')
           },
           onError: failed,
         },
