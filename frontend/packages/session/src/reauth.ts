@@ -27,13 +27,13 @@ export class ReauthLockedError extends Error {
 }
 
 /**
- * Whether `password` is the signed-in account's password. Throws
- * {@link ReauthLockedError} during the lockout, and when Kutup cannot be
- * reached.
+ * The signed-in account's login key for `password` (base64), derived as
+ * sign-in derives it, for the server to check: the re-check below, and
+ * setting or removing Kutup Pass's PIN.
  */
-export async function verifyAccountPassword(password: string): Promise<boolean> {
+export async function accountLoginKey(password: string): Promise<string> {
   const session = getSession()
-  if (!session || !password) return false
+  if (!session) throw new Error('not signed in')
   const { data } = await api.get<Preflight>('/auth/login/preflight', { params: { email: session.email } })
   const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(password, {
     suite: data.accountProtectionSuite,
@@ -44,13 +44,26 @@ export async function verifyAccountPassword(password: string): Promise<boolean> 
   })
   keyEncryptionKey.fill(0)
   try {
-    await api.post('/user/reauth', { loginKey: toBase64(loginKey) })
+    return toBase64(loginKey)
+  } finally {
+    loginKey.fill(0)
+  }
+}
+
+/**
+ * Whether `password` is the signed-in account's password. Throws
+ * {@link ReauthLockedError} during the lockout, and when Kutup cannot be
+ * reached.
+ */
+export async function verifyAccountPassword(password: string): Promise<boolean> {
+  if (!getSession() || !password) return false
+  const loginKey = await accountLoginKey(password)
+  try {
+    await api.post('/user/reauth', { loginKey })
     return true
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 401) return false
     if (isAxiosError(error) && error.response?.status === 429) throw new ReauthLockedError()
     throw error
-  } finally {
-    loginKey.fill(0)
   }
 }

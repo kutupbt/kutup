@@ -70,7 +70,14 @@
     "withPassword": "Unlock with my password",
     "wrongAccountPassword": "That is not your Kutup password.",
     "paused": "Too many wrong passwords: your account is locked for a while, as at sign-in. Use the vault's own key below.",
-    "checkUnreachable": "Kutup could not be reached to check your password. Enter the vault's key instead."
+    "checkUnreachable": "Kutup could not be reached to check your password. Enter the vault's key instead.",
+    "pin": "PIN",
+    "pinDescription": "The six-digit PIN of your Kutup account.",
+    "withPin": "Unlock with PIN",
+    "wrongPin_one": "Wrong PIN. {{count}} more try, then you are signed out.",
+    "wrongPin_other": "Wrong PIN. {{count}} more tries, then you are signed out.",
+    "pinSignedOut": "Too many wrong PINs: you were signed out. Sign in again with your password.",
+    "pinRemoved": "The PIN was removed, perhaps on another device. Use your account password; you can set a PIN again in the settings."
   },
   "sync": {
     "saved": "Saved",
@@ -265,7 +272,8 @@
     "label": "After a lock, open vaults with",
     "description": "On this device, a vault that locked (by hand or after idling) opens again with this. Vaults without a kept key always ask for their own key.",
     "password": "My Kutup password",
-    "click": "One click"
+    "click": "One click",
+    "pin": "My PIN"
   },
   "import": {
     "open": "Import from another app…",
@@ -307,5 +315,31 @@
       "missingColumns": "The file lacks columns this format has: {{detail}}.",
       "tooMany": "The file holds more than 50,000 entries."
     }
+  },
+  "pin": {
+    "title": {
+      "set": "Set a PIN",
+      "change": "Change the PIN",
+      "remove": "Remove the PIN"
+    },
+    "description": "Six digits that unlock your vaults after Kasa locks them, on every device where you choose the PIN. Kutup checks it; three wrong PINs in a row sign you out.",
+    "removeDescription": "Vaults then unlock with your account password where the PIN was used.",
+    "passwordDescription": "Your Kutup account password, to confirm it is you.",
+    "new": "New PIN (six digits)",
+    "again": "The PIN again",
+    "mismatch": "The two PINs differ.",
+    "submit": {
+      "set": "Set PIN",
+      "change": "Change PIN",
+      "remove": "Remove PIN"
+    },
+    "done": {
+      "set": "PIN set",
+      "change": "PIN changed",
+      "remove": "PIN removed"
+    },
+    "isSet": "Your account has a PIN.",
+    "change": "Change PIN",
+    "remove": "Remove PIN"
   }
 }
