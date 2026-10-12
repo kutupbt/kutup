@@ -31,7 +31,7 @@ fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
     let id = uuid::Uuid::parse_str(file_id).unwrap();
     b64(&seal_vault_secret(
         &user.master_key,
-        &user.email,
+        &user.binding,
         id.as_bytes(),
         &secret(password),
     )
@@ -106,7 +106,7 @@ fn vault_secrets() {
         account_envelope::decode_canonical_b64(mine[0]["envelope"].as_str().unwrap()).unwrap();
     let id = uuid::Uuid::parse_str(&vault.id).unwrap();
     let opened =
-        open_vault_secret(&envelope, &owner.master_key, &owner.email, id.as_bytes()).unwrap();
+        open_vault_secret(&envelope, &owner.master_key, &owner.binding, id.as_bytes()).unwrap();
     assert_eq!(opened.password.unwrap().as_str(), "o");
     assert_eq!(list(&c, &base, &member).len(), 1);
 
@@ -149,7 +149,7 @@ fn vault_secrets() {
         b"x",
         &owner.master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
-        &owner.email,
+        &owner.binding,
     )
     .unwrap();
     assert_eq!(
@@ -241,7 +241,7 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
     // The login key from the public preflight, as the app derives it.
     let preflight: Value = c
         .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("email", &user.email)])
+        .query(&[("name", &user.username)])
         .send()
         .unwrap()
         .json()
@@ -297,7 +297,7 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
 fn login_key(c: &Client, base: &str, user: &User, password: &str) -> String {
     let preflight: Value = c
         .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("email", &user.email)])
+        .query(&[("name", &user.username)])
         .send()
         .unwrap()
         .json()
@@ -434,7 +434,7 @@ fn sign_in(c: &Client, base: &str, user: &User) -> String {
     let r = c
         .post(format!("{base}/api/auth/login"))
         .header("x-kutup-client", "cli")
-        .json(&json!({ "email": user.email, "loginKey": login_key }))
+        .json(&json!({ "name": user.username, "loginKey": login_key }))
         .send()
         .unwrap();
     assert!(r.status().is_success(), "login: {}", r.status());

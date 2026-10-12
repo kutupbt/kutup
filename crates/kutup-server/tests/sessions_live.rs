@@ -40,7 +40,8 @@ fn set_refresh_cookie(r: &Response) -> Option<String> {
 }
 
 struct Account {
-    email: String,
+    /// The username it signs in with.
+    name: String,
     login_key: String,
 }
 
@@ -49,7 +50,7 @@ fn register(c: &Client, base: &str) -> Account {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let email = format!("sessions-{ts}@example.com");
+    let binding = uuid::Uuid::new_v4().to_string();
     let username = format!("sess{}", ts % 1_000_000);
     let password = "sessions-pw-123456";
     let mut rng = rand::thread_rng();
@@ -66,14 +67,14 @@ fn register(c: &Client, base: &str) -> Account {
     )
     .unwrap();
     let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
+        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(plain, key, purpose, &email).unwrap()
+        account_envelope::seal_b64(plain, key, purpose, &binding).unwrap()
     };
     let reg = json!({
-        "email": email, "username": username,
+        "keyBinding": binding, "username": username,
         "loginKey": b64(keys.login_key.as_slice()),
         "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
         "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
@@ -95,7 +96,7 @@ fn register(c: &Client, base: &str) -> Account {
         .unwrap();
     assert!(r.status().is_success(), "register: {}", r.status());
     Account {
-        email,
+        name: username.clone(),
         login_key: b64(keys.login_key.as_slice()),
     }
 }
@@ -103,7 +104,7 @@ fn register(c: &Client, base: &str) -> Account {
 fn login(c: &Client, base: &str, a: &Account, client_type: Option<&str>) -> Response {
     let mut req = c
         .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": a.email, "loginKey": a.login_key }));
+        .json(&json!({ "name": a.name, "loginKey": a.login_key }));
     if let Some(ct) = client_type {
         req = req.header("x-kutup-client", ct);
     }

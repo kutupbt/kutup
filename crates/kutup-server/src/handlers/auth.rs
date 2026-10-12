@@ -179,9 +179,10 @@ impl NameQuery {
 }
 
 /// The account a person names at sign-in (docs/plans/account-identity.md):
-/// its username, or its Kutup address on this server. An account whose
-/// envelopes still carry its old sign-in email may also give that email,
-/// until they are re-sealed; an address on this server is its owner's first.
+/// its username, or its Kutup address on this server. An account without a
+/// key binding yet (not re-sealed, or an administrator's new account before
+/// its first sign-in) may also give its old sign-in email; an address on this
+/// server is its owner's first.
 pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<Option<Uuid>> {
     let name = name.trim().to_ascii_lowercase();
     if name.is_empty() || name.len() > 320 {
@@ -205,7 +206,7 @@ pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<O
         return Ok(None);
     }
     Ok(sqlx::query_scalar(
-        "SELECT id FROM users WHERE lower(btrim(email)) = $1 AND envelope_binding = lower(btrim(email))",
+        "SELECT id FROM users WHERE lower(btrim(email)) = $1 AND key_binding IS NULL",
     )
     .bind(&name)
     .fetch_optional(&state.pool)

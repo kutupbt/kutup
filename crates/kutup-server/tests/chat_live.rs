@@ -68,9 +68,9 @@ fn client() -> Client {
         .unwrap()
 }
 
-fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> String {
+fn login_with_password(c: &Client, base: &str, name: &str, password: &str) -> String {
     let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight?email={email}"))
+        .get(format!("{base}/api/auth/login/preflight?name={name}"))
         .send()
         .unwrap()
         .json()
@@ -78,7 +78,7 @@ fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> S
     if preflight["accountProtectionSuite"] == 0 {
         let bootstrap: Value = c
             .post(format!("{base}/api/auth/login"))
-            .json(&json!({ "email": email, "loginKey": b64(password.as_bytes()) }))
+            .json(&json!({ "name": name, "loginKey": b64(password.as_bytes()) }))
             .send()
             .unwrap()
             .json()
@@ -95,23 +95,25 @@ fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> S
         let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
         let keys =
             kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+        // The admin's key binding, drawn at its first sign-in.
+        let binding = uuid::Uuid::new_v4().to_string();
         let recovery_proof =
-            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
+            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
         let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
         use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
         let setup = json!({
-            "email": email,
+            "keyBinding": binding,
             "username": "backupadmin",
             "loginKey": b64(keys.login_key.as_slice()),
             "masterKeyEnvelope": account_envelope::seal_b64(
                 &master_key, keys.key_encryption_key.as_slice(),
-                AccountEnvelopePurpose::PasswordMasterKey, email).unwrap(),
+                AccountEnvelopePurpose::PasswordMasterKey, &binding).unwrap(),
             "recoveryKeyEnvelope": account_envelope::seal_b64(
                 &master_key, &recovery_entropy,
-                AccountEnvelopePurpose::RecoveryMasterKey, email).unwrap(),
+                AccountEnvelopePurpose::RecoveryMasterKey, &binding).unwrap(),
             "drivePrivateKeyEnvelope": account_envelope::seal_b64(
                 identity.drive_hpke_private_key(), &master_key,
-                AccountEnvelopePurpose::DriveHpkePrivateKey, email).unwrap(),
+                AccountEnvelopePurpose::DriveHpkePrivateKey, &binding).unwrap(),
             "publicKey": b64(&identity.drive_hpke_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
@@ -149,7 +151,7 @@ fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> S
     .unwrap();
     let response = c
         .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .json(&json!({ "name": name, "loginKey": b64(keys.login_key.as_slice()) }))
         .send()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK, "test admin login");
@@ -159,7 +161,7 @@ fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> S
         .to_string()
 }
 
-/// Registers a fresh account and returns `(email, username, access_token)`.
+/// Registers a fresh account and returns `(key binding, username, access_token, …)`.
 fn register_and_login(
     c: &Client,
     base: &str,
@@ -169,7 +171,7 @@ fn register_and_login(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let email = format!("chat-{tag}-{ts}@example.com");
+    let binding = uuid::Uuid::new_v4().to_string();
     let username = format!("chat{tag}{}", ts % 100000);
     let password = "chat-pw-123456";
 
@@ -188,33 +190,33 @@ fn register_and_login(
     )
     .unwrap();
     let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
+        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     let master_key_envelope = account_envelope::seal_b64(
         &master_key,
         keys.key_encryption_key.as_slice(),
         AccountEnvelopePurpose::PasswordMasterKey,
-        &email,
+        &binding,
     )
     .unwrap();
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &email,
+        &binding,
     )
     .unwrap();
     let drive_private_key_envelope = account_envelope::seal_b64(
         identity.drive_hpke_private_key(),
         &master_key,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &email,
+        &binding,
     )
     .unwrap();
 
     let reg = json!({
-        "email": email, "username": username,
+        "keyBinding": binding, "username": username,
         "loginKey": b64(keys.login_key.as_slice()),
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
@@ -238,7 +240,7 @@ fn register_and_login(
 
     // login: preflight → derive login key from returned salt → POST login.
     let pf: Value = c
-        .get(format!("{base}/api/auth/login/preflight?email={email}"))
+        .get(format!("{base}/api/auth/login/preflight?name={username}"))
         .send()
         .unwrap()
         .json()
@@ -251,7 +253,7 @@ fn register_and_login(
     .unwrap();
     let resp: Value = c
         .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .json(&json!({ "name": username, "loginKey": b64(keys.login_key.as_slice()) }))
         .send()
         .unwrap()
         .json()
@@ -260,7 +262,7 @@ fn register_and_login(
     let authority = identity.authority_signing_key().clone();
     let drive_signing_public_key = b64(&identity.drive_signing_public_key());
     (
-        email,
+        binding,
         username,
         token,
         b64(&identity.drive_hpke_public_key()),
@@ -458,7 +460,7 @@ fn publish_manifest(
 fn chat_backup_lifecycle(
     c: &Client,
     base: &str,
-    email: &str,
+    binding: &str,
     owner_token: &str,
     foreign_token: &str,
     master_key: &[u8; 32],
@@ -521,7 +523,7 @@ fn chat_backup_lifecycle(
             &backup_root,
             master_key,
             AccountEnvelopePurpose::ChatBackupRoot,
-            email,
+            binding,
         )
         .unwrap(),
         signer_authorization: authorization.clone(),
@@ -548,7 +550,7 @@ fn chat_backup_lifecycle(
         &[0x92; 32],
         master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
-        email,
+        binding,
     )
     .unwrap();
     assert_eq!(
@@ -1278,10 +1280,10 @@ fn chat_v1_contract() {
     let c = client();
     let live_admin = std::env::var("KUTUP_LIVE_ADMIN").ok();
     let admin_token = live_admin.as_deref().map(|admin| {
-        let (email, password) = admin
+        let (name, password) = admin
             .split_once(':')
-            .expect("KUTUP_LIVE_ADMIN must be email:password");
-        login_with_password(&c, &base, email, password)
+            .expect("KUTUP_LIVE_ADMIN must be username:password");
+        login_with_password(&c, &base, name, password)
     });
 
     // Capability block is unauthenticated (§10).
@@ -1306,7 +1308,7 @@ fn chat_v1_contract() {
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (email_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
+    let (binding_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
         register_and_login(&c, &base, "a");
     let (_eb, ub, tb, drive_b, authority_b, drive_sign_b, _master_b) =
         register_and_login(&c, &base, "b");
@@ -1381,7 +1383,7 @@ fn chat_v1_contract() {
     chat_backup_lifecycle(
         &c,
         &base,
-        &email_a,
+        &binding_a,
         &ta,
         &tb,
         &master_a,

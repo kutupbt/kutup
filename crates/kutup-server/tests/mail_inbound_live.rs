@@ -45,7 +45,7 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
         .as_secs() as u32;
     let key = mail_key::generate_address_key(&address, now).unwrap();
     let envelope =
-        mail_key::seal_address_key(&user.master_key, &user.email, &address, &key.secret_key)
+        mail_key::seal_address_key(&user.master_key, &user.binding, &address, &key.secret_key)
             .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
@@ -1244,7 +1244,7 @@ fn address_keys_rotate_and_change_flags() {
     let new = mail_key::generate_address_key(&first.address, now).unwrap();
     let envelope = mail_key::seal_address_key(
         &user.master_key,
-        &user.email,
+        &user.binding,
         &first.address,
         &new.secret_key,
     )

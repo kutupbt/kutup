@@ -47,7 +47,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   "http://127.0.0.1:$port/api/health" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  KUTUP_LIVE_ADMIN="$test_admin_email:$test_admin_password" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test chat_live chat_v1_contract -- --exact --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \

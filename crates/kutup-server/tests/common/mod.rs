@@ -57,8 +57,13 @@ pub fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
 
 pub struct User {
     pub id: String,
-    pub email: String,
+    /// What the account's keys are bound to: its key binding (a UUID v4
+    /// drawn at registration; docs/plans/account-identity.md).
+    pub binding: String,
     pub username: String,
+    /// The password's login key (base64), for re-checks and a re-seal.
+    pub login_key: String,
+    pub recovery_entropy: [u8; 32],
     pub token: String,
     pub identity: AccountIdentityKeysV1,
     pub master_key: [u8; 32],
@@ -79,7 +84,7 @@ pub fn register_without_binding(c: &Client, base: &str) -> User {
 fn register_with(c: &Client, base: &str, binding: bool) -> User {
     let mut rng = rand::thread_rng();
     let tag = rng.next_u64() % 1_000_000_000;
-    let email = format!("integrity-{tag}@example.com");
+    let key_binding = uuid::Uuid::new_v4().to_string();
     let username = format!("int{tag}");
     let password = "integrity-pw-123456";
     let mut master_key = [0u8; 32];
@@ -95,14 +100,14 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
     )
     .unwrap();
     let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
+        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(plain, key, purpose, &email).unwrap()
+        account_envelope::seal_b64(plain, key, purpose, &key_binding).unwrap()
     };
     let mut body = json!({
-            "email": email, "username": username,
+            "keyBinding": key_binding, "username": username,
             "loginKey": b64(keys.login_key.as_slice()),
             "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
@@ -133,7 +138,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
     let r = c
         .post(format!("{base}/api/auth/login"))
         .header("x-kutup-client", "cli")
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .json(&json!({ "name": username, "loginKey": b64(keys.login_key.as_slice()) }))
         .send()
         .unwrap();
     assert!(r.status().is_success(), "login: {}", r.status());
@@ -152,7 +157,9 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
     let account = format!("{username}@{}", server_domain(c, base));
     User {
         id,
-        email,
+        binding: key_binding,
+        login_key: b64(keys.login_key.as_slice()),
+        recovery_entropy,
         username,
         account,
         token,
@@ -383,9 +390,11 @@ pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> Strin
 
 /// Signs in as the bootstrap admin (`ADMIN_ACCOUNT`), completing its
 /// first-login setup on a fresh server.
-pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username: &str) -> String {
+/// The administrator's token, signing in by username (its email, from
+/// `ADMIN_ACCOUNT`, no longer signs in once it is set up).
+pub fn admin_token(c: &Client, base: &str, _email: &str, password: &str, username: &str) -> String {
     let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight?email={email}"))
+        .get(format!("{base}/api/auth/login/preflight?name={username}"))
         .send()
         .unwrap()
         .json()
@@ -394,7 +403,7 @@ pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username
         let bootstrap: Value = c
             .post(format!("{base}/api/auth/login"))
             .header("x-kutup-client", "cli")
-            .json(&json!({ "email": email, "loginKey": b64(password.as_bytes()) }))
+            .json(&json!({ "name": username, "loginKey": b64(password.as_bytes()) }))
             .send()
             .unwrap()
             .json()
@@ -412,19 +421,20 @@ pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username
         let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
         let keys =
             kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+        let binding = uuid::Uuid::new_v4().to_string();
         let recovery_proof =
-            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
+            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
         let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
         use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
         let seal = |plain: &[u8], key: &[u8], purpose| {
-            account_envelope::seal_b64(plain, key, purpose, email).unwrap()
+            account_envelope::seal_b64(plain, key, purpose, &binding).unwrap()
         };
         let completed = c
             .post(format!("{base}/api/auth/complete-setup"))
             .header("x-kutup-client", "cli")
             .bearer_auth(setup_token)
             .json(&json!({
-                "email": email, "username": username,
+                "keyBinding": binding, "username": username,
                 "loginKey": b64(keys.login_key.as_slice()),
                 "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
                 "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
@@ -462,7 +472,7 @@ pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username
     let response = c
         .post(format!("{base}/api/auth/login"))
         .header("x-kutup-client", "cli")
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .json(&json!({ "name": username, "loginKey": b64(keys.login_key.as_slice()) }))
         .send()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK, "admin login");
@@ -470,4 +480,29 @@ pub fn admin_token(c: &Client, base: &str, email: &str, password: &str, username
         .as_str()
         .unwrap()
         .to_string()
+}
+
+/// A whole `POST /api/user/rebind` body re-sealing `user`'s account keys to
+/// `new_binding` (docs/plans/account-identity.md): the password proved, the
+/// password and recovery wrappings and the recovery check, and the Drive key.
+/// Its Chat backup root, mail keys and Pass vault secrets are the caller's to
+/// add (`chatBackupRootEnvelope`, `mailKeys`, `passVaultSecrets`).
+pub fn rebind_request(user: &User, password_key_encryption_key: &[u8], new_binding: &str) -> Value {
+    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    let seal = |plain: &[u8], key: &[u8], purpose| {
+        account_envelope::seal_b64(plain, key, purpose, new_binding).unwrap()
+    };
+    let proof =
+        kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, new_binding).unwrap();
+    json!({
+        "loginKey": user.login_key,
+        "keyBinding": new_binding,
+        "masterKeyEnvelope": seal(&user.master_key, password_key_encryption_key, AccountEnvelopePurpose::PasswordMasterKey),
+        "recoveryKeyEnvelope": seal(&user.master_key, &user.recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
+        "recoveryProof": b64(proof.as_slice()),
+        "drivePrivateKeyEnvelope": seal(user.identity.drive_hpke_private_key(), &user.master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
+        "chatBackupRootEnvelope": null,
+        "mailKeys": [],
+        "passVaultSecrets": [],
+    })
 }

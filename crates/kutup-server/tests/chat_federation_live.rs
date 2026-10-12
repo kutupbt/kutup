@@ -222,7 +222,7 @@ fn chat_media_round_trip(
     chat_media_capability_and_quota_recovery(c, a, b, alice_token, bob_token, admin_b);
 }
 
-fn admin_user_id(c: &Client, base: &str, admin: &str, email: &str) -> String {
+fn admin_user_id(c: &Client, base: &str, admin: &str, username: &str) -> String {
     let users = json_response(
         c.get(format!("{base}/api/admin/users"))
             .bearer_auth(admin)
@@ -234,7 +234,7 @@ fn admin_user_id(c: &Client, base: &str, admin: &str, email: &str) -> String {
         .as_array()
         .unwrap()
         .iter()
-        .find(|user| user["email"] == email)
+        .find(|user| user["username"] == username)
         .and_then(|user| user["id"].as_str())
         .expect("registered Chat-media recipient must be visible to its admin")
         .to_owned()
@@ -322,7 +322,7 @@ fn chat_media_capability_and_quota_recovery(
         404
     );
 
-    let bob_id = admin_user_id(c, b, admin_b, BOB_EMAIL);
+    let bob_id = admin_user_id(c, b, admin_b, BOB_USERNAME);
     set_user_quota(c, b, admin_b, &bob_id, 1);
     let full = json_response(
         c.post(format!("{a}/api/chat/media/deliveries"))
@@ -463,6 +463,16 @@ fn test_master_key(email: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// The key binding the account seeded by `email` registers with, the same
+/// each time (docs/plans/account-identity.md): a UUID v4 from a hash.
+fn test_binding(email: &str) -> String {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&test_master_key(&format!("binding:{email}"))[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 fn json_response(response: Response, context: &str) -> Value {
     let status = response.status();
     let body = response.text().unwrap();
@@ -496,6 +506,7 @@ fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
 fn registration_payload(email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
     let master_key = test_master_key(email);
+    let binding = test_binding(email);
     let mut recovery_entropy = [0u8; 32];
     let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut recovery_entropy);
@@ -508,33 +519,33 @@ fn registration_payload(email: &str, username: &str) -> Value {
     )
     .unwrap();
     let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
+        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     let master_key_envelope = account_envelope::seal_b64(
         &master_key,
         keys.key_encryption_key.as_slice(),
         AccountEnvelopePurpose::PasswordMasterKey,
-        email,
+        &binding,
     )
     .unwrap();
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        email,
+        &binding,
     )
     .unwrap();
     let drive_private_key_envelope = account_envelope::seal_b64(
         identity.drive_hpke_private_key(),
         &master_key,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        email,
+        &binding,
     )
     .unwrap();
 
     json!({
-        "email": email,
+        "keyBinding": binding,
         "username": username,
         "loginKey": b64(keys.login_key.as_slice()),
         "masterKeyEnvelope": master_key_envelope,
@@ -563,12 +574,12 @@ fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (Str
         .send()
         .unwrap();
     json_response(response, &format!("register {username}"));
-    (login(c, base, email), public_key)
+    (login(c, base, username), public_key)
 }
 
 fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     let preflight = json_response(
-        c.get(format!("{base}/api/auth/login/preflight?email={email}"))
+        c.get(format!("{base}/api/auth/login/preflight?name={username}"))
             .send()
             .unwrap(),
         "bootstrap admin preflight",
@@ -577,12 +588,12 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
         .as_str()
         .is_some_and(|salt| !salt.is_empty())
     {
-        return login(c, base, email);
+        return login(c, base, username);
     }
     let login = json_response(
         c.post(format!("{base}/api/auth/login"))
             .json(&json!({
-                "email": email,
+                "name": username,
                 "loginKey": b64(ADMIN_TEMP_PASSWORD.as_bytes()),
             }))
             .send()
@@ -703,9 +714,9 @@ fn delete_feature_rule(c: &Client, base: &str, admin: &str, feature: &str, domai
     )
 }
 
-fn login(c: &Client, base: &str, email: &str) -> String {
+fn login(c: &Client, base: &str, name: &str) -> String {
     let preflight = json_response(
-        c.get(format!("{base}/api/auth/login/preflight?email={email}"))
+        c.get(format!("{base}/api/auth/login/preflight?name={name}"))
             .send()
             .unwrap(),
         "login preflight",
@@ -718,7 +729,7 @@ fn login(c: &Client, base: &str, email: &str) -> String {
     .unwrap();
     let response = json_response(
         c.post(format!("{base}/api/auth/login"))
-            .json(&json!({"email": email, "loginKey": b64(keys.login_key.as_slice())}))
+            .json(&json!({"name": name, "loginKey": b64(keys.login_key.as_slice())}))
             .send()
             .unwrap(),
         "login",
@@ -2669,7 +2680,7 @@ fn calls_phase(c: &Client, a: &str, b: &str) {
 }
 
 fn queue_phase(c: &Client, a: &str) {
-    let alice_token = login(c, a, ALICE_EMAIL);
+    let alice_token = login(c, a, ALICE_USERNAME);
     let response = send(
         c,
         a,
@@ -2723,7 +2734,7 @@ fn queue_phase(c: &Client, a: &str) {
 }
 
 fn verify_retry_phase(c: &Client, a: &str, b: &str) {
-    let bob_token = login(c, b, BOB_EMAIL);
+    let bob_token = login(c, b, BOB_USERNAME);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let first = mailbox(c, b, &bob_token, 1);
@@ -2767,7 +2778,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    let alice_token = login(c, a, ALICE_EMAIL);
+    let alice_token = login(c, a, ALICE_USERNAME);
 
     let follow_up = b"after-origin-restart";
     json_response(
