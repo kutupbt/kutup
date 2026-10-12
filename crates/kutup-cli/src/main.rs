@@ -52,9 +52,6 @@ enum Commands {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email for the new account.
-        #[arg(long)]
-        email: Option<String>,
         /// Username (3-32 chars: lowercase letters, numbers, _ and -).
         #[arg(long)]
         username: Option<String>,
@@ -64,18 +61,18 @@ enum Commands {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email (for non-interactive login; password via KUTUP_PASSWORD env).
-        #[arg(long)]
-        email: Option<String>,
+        /// Username or Kutup address (non-interactive: password via KUTUP_PASSWORD env).
+        #[arg(long = "username", visible_alias = "email")]
+        username: Option<String>,
     },
     /// Reset your password with the 24-word recovery phrase, then log in.
     Recover {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
-        #[arg(long)]
-        email: Option<String>,
+        /// Username or Kutup address (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
+        #[arg(long = "username", visible_alias = "email")]
+        username: Option<String>,
     },
     /// Clear stored session.
     Logout,
@@ -247,22 +244,21 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
-        Commands::Register {
-            server,
-            email,
-            username,
-        } => commands::register::run(
+        Commands::Register { server, username } => {
+            commands::register::run(cli.json, server.as_deref(), username.as_deref())
+        }
+        Commands::Login { server, username } => commands::login::run(
+            &cli.profile,
             cli.json,
             server.as_deref(),
-            email.as_deref(),
             username.as_deref(),
         ),
-        Commands::Login { server, email } => {
-            commands::login::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
-        }
-        Commands::Recover { server, email } => {
-            commands::recover::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
-        }
+        Commands::Recover { server, username } => commands::recover::run(
+            &cli.profile,
+            cli.json,
+            server.as_deref(),
+            username.as_deref(),
+        ),
         Commands::Logout => commands::logout::run(&cli.profile, cli.json),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
         Commands::Ls { tree, folder_id } => {

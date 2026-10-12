@@ -15,7 +15,7 @@ pub fn run(
     profile: &str,
     json: bool,
     server_flag: Option<&str>,
-    email_flag: Option<&str>,
+    name_flag: Option<&str>,
 ) -> Result<()> {
     let mut server = server_flag.unwrap_or("").to_string();
     if server.is_empty() {
@@ -23,18 +23,18 @@ pub fn run(
     }
     let server = server.trim_end_matches('/').to_string();
 
-    // Email: --email flag, else prompt. Password: KUTUP_PASSWORD env (for
+    // Username or Kutup address: --username flag, else prompt. Password: KUTUP_PASSWORD env (for
     // non-interactive automation/CI), else a hidden prompt.
-    let email = match email_flag {
+    let name = match name_flag {
         Some(e) => e.to_string(),
-        None => prompt_line("Email: ")?,
+        None => prompt_line("Username: ")?,
     };
     let password = match std::env::var("KUTUP_PASSWORD") {
         Ok(p) if !p.is_empty() => p,
         _ => rpassword::prompt_password("Password: ")?,
     };
 
-    let sess = login_with_password(profile, &server, &email, &password)?;
+    let sess = login_with_password(profile, &server, &name, &password)?;
     // An account made before Drive key bindings signs its own now, as the web
     // app does at sign-in (docs/plans/drive-identity-pins.md). Best effort:
     // the next sign-in tries again.
@@ -47,12 +47,12 @@ pub fn run(
     if json {
         crate::output::print_json(&serde_json::json!({
             "username": sess.username,
-            "email": sess.email,
+            "name": sess.name,
             "server": sess.server,
             "userId": sess.user_id,
         }))?;
     } else {
-        println!("Logged in as {} ({})", sess.username, sess.email);
+        println!("Logged in as {}", sess.username);
     }
     Ok(())
 }
@@ -63,7 +63,7 @@ pub fn run(
 pub(crate) fn login_with_password(
     profile: &str,
     server: &str,
-    email: &str,
+    name: &str,
     password: &str,
 ) -> Result<Session> {
     let b64 = base64::engine::general_purpose::STANDARD;
@@ -71,7 +71,14 @@ pub(crate) fn login_with_password(
 
     // Step 1: preflight — fetch the complete account-protection revision.
     eprintln!("Deriving keys…");
-    let preflight = client.login_preflight(email).context("preflight")?;
+    let preflight = client.login_preflight(name).context("preflight")?;
+    // What the account's keys are bound to: its key binding (or, before the
+    // web app re-seals them, its old sign-in email); never re-sealed here.
+    let binding = if preflight.envelope_binding.is_empty() {
+        name.to_string()
+    } else {
+        preflight.envelope_binding.clone()
+    };
 
     // Step 2: run Argon2id once, then expand the KEK and login key.
     kdf::AccountProtectionSuiteId::try_from(preflight.account_protection_suite)
@@ -90,7 +97,7 @@ pub(crate) fn login_with_password(
     // Step 3: login.
     let mut resp = client
         .login(&LoginRequest {
-            email: email.to_string(),
+            name: name.to_string(),
             login_key: b64.encode(account_keys.login_key.as_slice()),
         })
         .context("login")?;
@@ -116,14 +123,14 @@ pub(crate) fn login_with_password(
         &resp.master_key_envelope,
         account_keys.key_encryption_key.as_slice(),
         AccountEnvelopePurpose::PasswordMasterKey,
-        email,
+        &binding,
     )
     .context("decrypt master key")?;
     let private_key = account_envelope::open_b64(
         &resp.drive_private_key_envelope,
         &master_key,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        email,
+        &binding,
     )
     .context("decrypt private key")?;
 
@@ -131,7 +138,8 @@ pub(crate) fn login_with_password(
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),
-        email: email.to_string(),
+        name: name.to_string(),
+        envelope_binding: binding,
         user_id: resp.user_id,
         username: resp.username,
         access_token: resp.access_token,

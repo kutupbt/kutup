@@ -22,7 +22,7 @@ pub fn run(
     profile: &str,
     json: bool,
     server_flag: Option<&str>,
-    email_flag: Option<&str>,
+    name_flag: Option<&str>,
 ) -> Result<()> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
@@ -31,9 +31,9 @@ pub fn run(
         server = prompt_line("Server URL: ")?;
     }
     let server = server.trim_end_matches('/').to_string();
-    let email = match email_flag {
+    let name = match name_flag {
         Some(e) => e.to_string(),
-        None => prompt_line("Email: ")?,
+        None => prompt_line("Username: ")?,
     };
 
     // Phrase: KUTUP_RECOVERY_PHRASE env for non-interactive use — never a
@@ -68,19 +68,24 @@ pub fn run(
 
     let client = Client::new(&server, "");
     let pre = client
-        .recover_preflight(&email)
+        .recover_preflight(&name)
         .context("recovery preflight (rate-limited — a few attempts per hour)")?;
+    let binding = if pre.envelope_binding.is_empty() {
+        name.clone()
+    } else {
+        pre.envelope_binding.clone()
+    };
 
-    // A wrong phrase — or an unknown email, which the server answers with
+    // A wrong phrase — or an unknown name, which the server answers with
     // deterministic fake data — fails to unwrap here, before anything changes.
     let master_key = account_envelope::open_b64(
         &pre.recovery_key_envelope,
         &entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &email,
+        &binding,
     )
     .map_err(|_| {
-        anyhow::anyhow!("recovery phrase does not match this account (wrong phrase or email)")
+        anyhow::anyhow!("recovery phrase does not match this account (wrong phrase or username)")
     })?;
 
     eprintln!("Deriving new keys…");
@@ -93,19 +98,19 @@ pub fn run(
         kdf::AccountProtectionParameters::V1,
     )
     .context("derive account-protection keys")?;
-    let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &email)
+    let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &binding)
         .context("derive recovery authorization proof")?;
     let new_master_key_envelope = account_envelope::seal_b64(
         &master_key,
         account_keys.key_encryption_key.as_slice(),
         AccountEnvelopePurpose::PasswordMasterKey,
-        &email,
+        &binding,
     )
     .context("seal master-key envelope")?;
 
     client
         .recover(&RecoverRequest {
-            email: email.clone(),
+            name: name.clone(),
             new_login_key: b64.encode(account_keys.login_key.as_slice()),
             new_master_key_envelope,
             new_account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1
@@ -119,20 +124,17 @@ pub fn run(
         .context("recover")?;
 
     // Log straight in with the new password so the user ends up ready to work.
-    let sess = super::login::login_with_password(profile, &server, &email, &password)?;
+    let sess = super::login::login_with_password(profile, &server, &name, &password)?;
 
     if json {
         crate::output::print_json(&serde_json::json!({
-            "email": email,
+            "name": name,
             "username": sess.username,
             "recovered": true,
             "loggedIn": true,
         }))?;
     } else {
-        println!(
-            "Password reset. Logged in as {} ({})",
-            sess.username, sess.email
-        );
+        println!("Password reset. Logged in as {}", sess.username);
     }
     Ok(())
 }

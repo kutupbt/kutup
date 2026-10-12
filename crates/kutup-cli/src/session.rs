@@ -40,7 +40,14 @@ fn keyring_service(profile: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub server: String,
-    pub email: String,
+    /// What the account signed in with: its username or Kutup address
+    /// (`email` in caches from before one identity per account).
+    #[serde(alias = "email")]
+    pub name: String,
+    /// What the account's sealed keys are bound to (preflight's
+    /// `envelopeBinding`); empty in caches from before, where it was `name`.
+    #[serde(default)]
+    pub envelope_binding: String,
     pub user_id: String,
     pub username: String,
     pub access_token: String,
@@ -54,6 +61,17 @@ pub struct Session {
     pub drive_private_key_envelope: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+}
+
+impl Session {
+    /// The string every seal and open uses (docs/plans/account-identity.md).
+    pub fn binding(&self) -> &str {
+        if self.envelope_binding.is_empty() {
+            &self.name
+        } else {
+            &self.envelope_binding
+        }
+    }
 }
 
 impl Session {
@@ -496,7 +514,8 @@ mod tests {
             assert!(store.has_device_key());
             assert!(store.load_session().unwrap().is_none());
             let sess = Session {
-                email: "a@b.c".into(),
+                name: "a@b.c".into(),
+                envelope_binding: String::new(),
                 username: "alice".into(),
                 master_key: "bWtleQ==".into(),
                 ..Default::default()
@@ -506,7 +525,7 @@ mod tests {
         {
             let store = Store::open(profile).unwrap();
             let loaded = store.load_session().unwrap().expect("session present");
-            assert_eq!(loaded.email, "a@b.c");
+            assert_eq!(loaded.name, "a@b.c");
             assert_eq!(loaded.username, "alice");
             assert_eq!(loaded.master_key, "bWtleQ==");
             store.clear_session().unwrap();

@@ -237,12 +237,12 @@ impl Client {
         check_ok(resp)
     }
 
-    pub fn login_preflight(&self, email: &str) -> Result<PreflightResponse> {
+    pub fn login_preflight(&self, name: &str) -> Result<PreflightResponse> {
         // .query() form-encodes the value — a raw `+` in an email would
         // otherwise decode server-side as a space.
         let resp = self
             .request(Method::GET, "/auth/login/preflight")
-            .query(&[("email", email)])
+            .query(&[("name", name)])
             .send()?;
         decode_json(resp)
     }
@@ -257,10 +257,10 @@ impl Client {
         decode_json(resp)
     }
 
-    pub fn recover_preflight(&self, email: &str) -> Result<RecoverPreflightResponse> {
+    pub fn recover_preflight(&self, name: &str) -> Result<RecoverPreflightResponse> {
         let resp = self
             .request(Method::GET, "/auth/recover/preflight")
-            .query(&[("email", email)])
+            .query(&[("name", name)])
             .send()?;
         decode_json(resp)
     }

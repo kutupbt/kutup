@@ -18,12 +18,7 @@ use kutup_crypto::{
     kdf, mnemonic,
 };
 
-pub fn run(
-    json: bool,
-    server_flag: Option<&str>,
-    email_flag: Option<&str>,
-    username_flag: Option<&str>,
-) -> Result<()> {
+pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -> Result<()> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
     let mut server = server_flag.unwrap_or("").to_string();
@@ -32,10 +27,6 @@ pub fn run(
     }
     let server = server.trim_end_matches('/').to_string();
 
-    let email = match email_flag {
-        Some(e) => e.to_string(),
-        None => prompt_line("Email: ")?,
-    };
     let username = match username_flag {
         Some(u) => u.to_string(),
         None => prompt_line("Username: ")?,
@@ -73,7 +64,10 @@ pub fn run(
         kdf::AccountProtectionParameters::V1,
     )
     .context("derive account-protection keys")?;
-    let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &email)
+    // The account's key binding: drawn here, what its keys are bound to for
+    // good (docs/plans/account-identity.md), never a name.
+    let key_binding = uuid::Uuid::new_v4().to_string();
+    let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding)
         .context("derive recovery authorization proof")?;
     let account_identity =
         AccountIdentityKeysV1::derive(&master_key).context("derive account identity")?;
@@ -82,21 +76,21 @@ pub fn run(
         &master_key,
         account_keys.key_encryption_key.as_slice(),
         AccountEnvelopePurpose::PasswordMasterKey,
-        &email,
+        &key_binding,
     )
     .context("seal master-key envelope")?;
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &email,
+        &key_binding,
     )
     .context("seal recovery envelope")?;
     let drive_private_key_envelope = account_envelope::seal_b64(
         account_identity.drive_hpke_private_key(),
         &master_key,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &email,
+        &key_binding,
     )
     .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
@@ -116,8 +110,8 @@ pub fn run(
     .context("sign the Drive key binding")?;
 
     let req = RegisterRequest {
-        email: email.clone(),
         username: username.clone(),
+        key_binding: key_binding.clone(),
         login_key: b64.encode(account_keys.login_key.as_slice()),
         master_key_envelope,
         recovery_key_envelope,
@@ -141,16 +135,15 @@ pub fn run(
     if json {
         // Machine-readable: include the phrase so automation can capture it once.
         crate::output::print_json(&serde_json::json!({
-            "email": email,
             "username": username,
             "recoveryPhrase": phrase,
         }))?;
     } else {
-        println!("\nAccount created for {email} (@{username}).\n");
+        println!("\nAccount created: {username}.\n");
         println!("RECOVERY PHRASE — write this down and store it safely. It is shown ONCE and");
         println!("is the ONLY way to recover your account if you forget your password:\n");
         println!("    {phrase}\n");
-        println!("Then log in with:  kutup login --server {server} --email {email}");
+        println!("Then log in with:  kutup login --server {server} --username {username}");
     }
     Ok(())
 }

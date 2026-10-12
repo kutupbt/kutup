@@ -93,7 +93,7 @@ fn keep(
     keep_secret(
         &ctx.client,
         &master_key,
-        &ctx.session.email,
+        ctx.session.binding(),
         file_id,
         &contents,
         password.as_deref().map(String::as_str),

@@ -20,6 +20,9 @@ pub struct ChatSettings {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResponse {
+    /// What the account's sealed keys are bound to.
+    #[serde(default)]
+    pub envelope_binding: String,
     pub account_protection_suite: u16,
     pub account_protection_salt: String,
     pub argon_memory_kib: u32,
@@ -30,7 +33,8 @@ pub struct PreflightResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
-    pub email: String,
+    /// The username or the Kutup address.
+    pub name: String,
     /// base64-encoded login key.
     pub login_key: String,
 }
@@ -41,8 +45,9 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
-    pub email: String,
     pub username: String,
+    /// The account's key binding, drawn here (a UUID v4).
+    pub key_binding: String,
     pub login_key: String,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
@@ -108,6 +113,8 @@ pub struct TotpRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
     #[serde(default)]
+    pub envelope_binding: String,
+    #[serde(default)]
     pub recovery_key_envelope: String,
 }
 
@@ -116,7 +123,7 @@ pub struct RecoverPreflightResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverRequest {
-    pub email: String,
+    pub name: String,
     pub new_login_key: String,
     pub new_master_key_envelope: String,
     pub new_account_protection_suite: u16,
@@ -155,7 +162,9 @@ pub struct SetupTotpResponse {
 #[serde(rename_all = "camelCase")]
 pub struct UserMe {
     pub id: String,
-    pub email: String,
+    /// The account's Kutup address.
+    #[serde(default)]
+    pub address: String,
     pub username: String,
     #[serde(default)]
     pub is_admin: bool,
@@ -475,7 +484,7 @@ mod tests {
     #[test]
     fn recover_request_keys() {
         let req = RecoverRequest {
-            email: "a@b.c".into(),
+            name: "a@b.c".into(),
             new_login_key: "lk".into(),
             new_master_key_envelope: "envelope".into(),
             new_account_protection_suite: 1,
@@ -487,7 +496,7 @@ mod tests {
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         for key in [
-            "email",
+            "name",
             "newLoginKey",
             "newMasterKeyEnvelope",
             "newAccountProtectionSuite",

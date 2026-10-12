@@ -130,7 +130,7 @@ impl VaultKeys {
     pub fn sign_in(&mut self, session: &crate::session::Session) -> Result<()> {
         self.account = Some(Account {
             master_key: Zeroizing::new(session.master_key_bytes()?),
-            email: session.email.clone(),
+            email: session.binding().to_string(),
         });
         self.stored = None;
         Ok(())
