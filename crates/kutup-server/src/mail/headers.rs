@@ -23,6 +23,36 @@ pub struct Mailbox {
     pub name: String,
 }
 
+/// One attached file, as Proton's `AttachmentsMetadata`: shown in the
+/// list (inline images are not attachments here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AttachmentMeta {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub mime_type: String,
+    pub size: i64,
+    /// In a conversation's list: the message it is attached to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Files a message lists at most, and how long a name or type may be.
+pub const MAX_ATTACHMENTS: usize = 100;
+const ATTACHMENT_NAME_CHARS: usize = 255;
+
+impl AttachmentMeta {
+    /// Clipped to fit: a long name or type is cut, a negative size is 0.
+    pub fn clipped(name: &str, mime_type: &str, size: i64) -> Self {
+        AttachmentMeta {
+            name: clip(single_line(name).trim(), ATTACHMENT_NAME_CHARS),
+            mime_type: clip(single_line(mime_type).trim(), ATTACHMENT_NAME_CHARS)
+                .to_ascii_lowercase(),
+            size: size.max(0),
+            message: None,
+        }
+    }
+}
+
 /// The readable fields of one message.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Readable {
@@ -55,6 +85,8 @@ pub struct Readable {
     /// it to Spam may unsubscribe (Proton's SpamAction). Only the flag is
     /// kept; the ways out stay in the encrypted message.
     pub list_unsubscribe: bool,
+    /// Its attached files (not inline images), for the list.
+    pub attachments: Vec<AttachmentMeta>,
 }
 
 /// A delivery failure report.
@@ -94,8 +126,33 @@ impl Readable {
             list_unsubscribe: fields(raw)
                 .iter()
                 .any(|(name, value)| name == "list-unsubscribe" && !value.trim().is_empty()),
+            attachments: attachments(&message),
         }
     }
+}
+
+/// The files attached to `message`: parts with a file name or an
+/// attachment disposition, not inline ones (an image the HTML shows).
+fn attachments(message: &Message<'_>) -> Vec<AttachmentMeta> {
+    message
+        .attachments()
+        .filter(|part| !part.content_disposition().is_some_and(|d| d.is_inline()))
+        .take(MAX_ATTACHMENTS)
+        .map(|part| {
+            let mime_type = part
+                .content_type()
+                .map(|t| match t.subtype() {
+                    Some(sub) => format!("{}/{}", t.ctype(), sub),
+                    None => t.ctype().to_string(),
+                })
+                .unwrap_or_else(|| "application/octet-stream".into());
+            AttachmentMeta::clipped(
+                part.attachment_name().unwrap_or("attachment"),
+                &mime_type,
+                i64::try_from(part.contents().len()).unwrap_or(i64::MAX),
+            )
+        })
+        .collect()
 }
 
 /// Whether our Stalwart's `Authentication-Results` says DMARC passed.
@@ -400,6 +457,26 @@ JVBERi0=\r\n\
 --b--\r\n";
 
     #[test]
+    fn inline_images_are_not_listed_as_attachments() {
+        let raw = b"From: a@example.org\r\nSubject: x\r\nMIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=r\r\n\r\n\
+--r\r\nContent-Type: text/html\r\n\r\n<img src=cid:logo>\r\n\
+--r\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=logo.png\r\n\
+Content-ID: <logo>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0K\r\n\
+--r\r\nContent-Type: text/plain; name=\"notlar.txt\"\r\nContent-Disposition: attachment; filename*=UTF-8''not%C3%A7lar.txt\r\n\r\nhi\r\n\
+--r--\r\n";
+        let names: Vec<_> = Readable::parse(raw)
+            .attachments
+            .into_iter()
+            .map(|a| (a.name, a.mime_type))
+            .collect();
+        assert_eq!(
+            names,
+            [("notçlar.txt".to_string(), "text/plain".to_string())]
+        );
+    }
+
+    #[test]
     fn reads_the_readable_fields() {
         let r = Readable::parse(MESSAGE);
         assert_eq!(r.subject, "Toplantı şubat");
@@ -422,6 +499,15 @@ JVBERi0=\r\n\
         assert_eq!(r.in_reply_to.as_deref(), Some("parent@example.org"));
         assert_eq!(r.references, ["root@example.org", "parent@example.org"]);
         assert_eq!(r.attachment_count, 1);
+        assert_eq!(
+            r.attachments,
+            [AttachmentMeta {
+                name: "a.pdf".into(),
+                mime_type: "application/pdf".into(),
+                size: 8,
+                message: None,
+            }]
+        );
         // Only the topmost verdict, which Stalwart wrote, counts.
         assert!(!r.spam);
     }

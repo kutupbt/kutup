@@ -43,3 +43,14 @@ export function zipAttachments(files: Pick<ParsedAttachment, 'filename' | 'conte
   }
   return zipSync(entries, { level: 0 })
 }
+
+/** Proton's list never shows calendar invites or keys as files (`filterAttachmentToPreview`). */
+const NOT_LISTED_TYPES = new Set(['text/calendar', 'application/ics', 'application/pgp-keys'])
+
+/** The files a list row shows, of those its message (or conversation) has. */
+export function listedAttachments<T extends { name: string; type: string }>(files: T[]): T[] {
+  return files.filter((file) => !NOT_LISTED_TYPES.has(file.type.toLowerCase()) && !/\.(ics|asc|key|pub)$/i.test(file.name))
+}
+
+/** How many chips a row shows before "+N" (Proton's 3 in the row layout, 2 in columns). */
+export const chipsShown = (layout: 'column' | 'row') => (layout === 'row' ? 3 : 2)

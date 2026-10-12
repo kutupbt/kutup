@@ -49,6 +49,8 @@ import { ListPagination, PagingControls } from './Paging'
 import { pageCount, pageFromParams } from './paging'
 import { SelectionPane } from './SelectionPane'
 import { OneTimeCodeButton } from './OneTimeCode'
+import { AttachmentChips } from './AttachmentChips'
+import { chipsShown } from './attachments'
 import { SelectAllBanner, SelectAllConfirm } from './SelectAll'
 import { canSelectAll, type AllAction } from './selectAll'
 
@@ -833,29 +835,33 @@ export function MailboxPage() {
                           aria-label={t('list.select', { subject: message.subject || t('list.noSubject') })}
                         />
                       </span>
-                      <Link
-                        to={`${base}/${message.threadId}${search}`}
-                        onClick={(e) => onRowClick(e, index)}
-                        draggable={false}
-                        className="min-w-0 flex-1 py-1"
-                        aria-current={open ? 'true' : undefined}
-                      >
-                        {oneLine ? (
-                          <span className="flex items-center gap-3">
-                            {sender('w-48 shrink-0')}
-                            <span className="flex min-w-0 flex-1 items-center gap-2">{subjectLine}</span>
-                            {meta}
-                          </span>
-                        ) : (
-                          <>
-                            <span className="flex items-center gap-2">
-                              {sender('min-w-0 flex-1')}
+                      <div className="min-w-0 flex-1 py-1">
+                        <Link
+                          to={`${base}/${message.threadId}${search}`}
+                          onClick={(e) => onRowClick(e, index)}
+                          draggable={false}
+                          className="block"
+                          aria-current={open ? 'true' : undefined}
+                        >
+                          {oneLine ? (
+                            <span className="flex items-center gap-3">
+                              {sender('w-48 shrink-0')}
+                              <span className="flex min-w-0 flex-1 items-center gap-2">{subjectLine}</span>
                               {meta}
                             </span>
-                            <span className="mt-0.5 flex items-center gap-2">{subjectLine}</span>
-                          </>
-                        )}
-                      </Link>
+                          ) : (
+                            <>
+                              <span className="flex items-center gap-2">
+                                {sender('min-w-0 flex-1')}
+                                {meta}
+                              </span>
+                              <span className="mt-0.5 flex items-center gap-2">{subjectLine}</span>
+                            </>
+                          )}
+                        </Link>
+                        {/* Proton's attachment thumbnails: not in compact rows, never in Spam. */}
+                        {!compact && message.folder !== 'spam' ? <AttachmentChips row={message} max={chipsShown(layout)} /> : null}
+                      </div>
                       {code ? <OneTimeCodeButton code={code} className="my-1 ml-1 shrink-0" onCopied={() => move([message], 'trash')} /> : null}
                       <button
                         type="button"

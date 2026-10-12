@@ -32,7 +32,7 @@ reference only where Proton has nothing.
 | Sender card, Save to contacts, Chat and Call | recipient dropdown | ✅ (Chat, Call are Kutup's) |
 | Keyboard shortcuts and their overlay | `MailShortcutsModal.tsx` | ✅ list keys; message keys R (reply), Shift+R (reply all), Shift+F (forward) with a conversation open |
 | Dark mode body, folded quotes | `ExtraDarkStyle.tsx`, blockquote toggle | ✅ |
-| Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ✅ preview (images, PDF, text, audio, video) with previous/next, Download all as `Attachments-<subject>.zip` (spec 96); ❌ thumbnails in list rows (needs attachment metadata in the list) |
+| Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ✅ preview (images, PDF, text, audio, video) with previous/next, Download all as `Attachments-<subject>.zip` (spec 96); the files as chips under list rows, 2 in columns or 3 in rows then "+N", not in compact rows or Spam, invites and keys left out, a chip opening the preview (spec 96). Names, types and sizes are readable metadata, as Proton's AttachmentsMetadata |
 | Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | ✅ a message's More actions: Export, Print, View headers (and download), View HTML / rendered |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
