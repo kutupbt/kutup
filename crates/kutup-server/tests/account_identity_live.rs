@@ -201,3 +201,202 @@ fn unknown_names_look_like_accounts() {
         .unwrap();
     assert_eq!(r.status(), 401);
 }
+
+/// Kutup Pass's kept vault keys (docs/plans/pass.md, "Vault secrets and the
+/// account's binding") move with the rest: every record, vaults in the trash
+/// included, re-sealed to the key binding; one that no longer opened is
+/// dropped; the set must be exactly the account's.
+#[test]
+fn kept_vault_keys_are_re_sealed_with_the_account() {
+    use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecretV1};
+    use zeroize::Zeroizing;
+
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let user = register(&c, &base);
+    let folder = common::create_folder(&c, &base, &user);
+    let vaults: Vec<common::Sealed> = (0..3)
+        .map(|_| {
+            let vault = common::seal_file(&folder, &common::uuid(), b"a KeePass file");
+            assert!(common::upload(&c, &base, &user.token, &folder, &vault)
+                .status()
+                .is_success());
+            vault
+        })
+        .collect();
+    let (live, trashed, dead) = (&vaults[0].id, &vaults[1].id, &vaults[2].id);
+    let old_email = format!("{}@old.example", user.username);
+    make_old(&c, &base, &database_url, &user, &old_email);
+
+    let seal = |master: &[u8], binding: &str, file_id: &str, password: &str| {
+        let id = uuid::Uuid::parse_str(file_id).unwrap();
+        let secret = VaultSecretV1 {
+            password: Some(Zeroizing::new(password.to_owned())),
+            key_file: None,
+        };
+        b64(&seal_vault_secret(master, binding, id.as_bytes(), &secret).unwrap())
+    };
+    let put = |file_id: &str, envelope: &str| {
+        bearer(
+            c.put(format!("{base}/api/pass/vault-secrets/{file_id}")),
+            &user.token,
+        )
+        .json(&json!({ "envelope": envelope }))
+        .send()
+        .unwrap()
+    };
+    let listed = |all: bool| -> Vec<Value> {
+        let url = format!(
+            "{base}/api/pass/vault-secrets{}",
+            if all { "?all=true" } else { "" }
+        );
+        bearer(c.get(url), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    // Kept as an account made before keeps them: bound to the old email. The
+    // third under another master key, so it no longer opens (as after a
+    // recovery that replaced the master key).
+    assert_eq!(
+        put(live, &seal(&user.master_key, &old_email, live, "live")).status(),
+        204
+    );
+    assert_eq!(
+        put(
+            trashed,
+            &seal(&user.master_key, &old_email, trashed, "trashed")
+        )
+        .status(),
+        204
+    );
+    assert_eq!(
+        put(dead, &seal(&[9u8; 32], &old_email, dead, "dead")).status(),
+        204
+    );
+    let trash = bearer(c.delete(format!("{base}/api/files/{trashed}")), &user.token)
+        .send()
+        .unwrap();
+    assert!(trash.status().is_success(), "trash: {}", trash.status());
+    assert_eq!(listed(false).len(), 2);
+    let all = listed(true);
+    assert_eq!(all.len(), 3);
+    assert_eq!(
+        all.iter().filter(|row| row["inTrash"] == true).count(),
+        1,
+        "{all:?}"
+    );
+
+    // What the browser sends: each record opened with the old binding and
+    // sealed with the key binding; the one that does not open, null.
+    let key_binding = uuid::Uuid::new_v4().to_string();
+    let reseal = |file_id: &str| -> Value {
+        let row = all.iter().find(|row| row["fileId"] == file_id).unwrap();
+        let envelope =
+            account_envelope::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
+        let id = uuid::Uuid::parse_str(file_id).unwrap();
+        match open_vault_secret(&envelope, &user.master_key, &old_email, id.as_bytes()) {
+            Ok(secret) => json!({
+                "fileId": file_id,
+                "envelope": seal(&user.master_key, &key_binding, file_id, secret.password.unwrap().as_str()),
+            }),
+            Err(_) => json!({ "fileId": file_id, "envelope": null }),
+        }
+    };
+    let pass_rows = json!([reseal(live), reseal(trashed), reseal(dead)]);
+    assert!(pass_rows[2]["envelope"].is_null());
+    let mut body = rebind_request(&c, &base, &user, &key_binding);
+    body["passVaultSecrets"] = pass_rows.clone();
+    let rebind = |body: &Value| {
+        bearer(c.post(format!("{base}/api/user/rebind")), &user.token)
+            .json(body)
+            .send()
+            .unwrap()
+    };
+    let with_pass = |rows: Value| {
+        let mut b = body.clone();
+        b["passVaultSecrets"] = rows;
+        b
+    };
+
+    // Refused whole, nothing changed: a record left out (the trashed one),
+    // one the account does not have, one named twice, one still sealed for
+    // the old email, one of another purpose.
+    let r = rebind(&with_pass(json!([pass_rows[0], pass_rows[2]])));
+    assert_eq!(r.status(), 409, "missing: {}", r.text().unwrap_or_default());
+    let mut stranger = pass_rows.as_array().unwrap().clone();
+    stranger.push(json!({ "fileId": common::uuid(), "envelope": null }));
+    assert_eq!(rebind(&with_pass(Value::Array(stranger))).status(), 409);
+    let mut twice = pass_rows.as_array().unwrap().clone();
+    twice.push(pass_rows[0].clone());
+    assert_eq!(rebind(&with_pass(Value::Array(twice))).status(), 400);
+    let mut stale = pass_rows.clone();
+    stale[0]["envelope"] = json!(seal(&user.master_key, &old_email, live, "live"));
+    let r = rebind(&with_pass(stale));
+    assert_eq!(r.status(), 409, "old binding");
+    assert_eq!(r.json::<Value>().unwrap()["code"], "bindingChanged");
+    let mut purpose = pass_rows.clone();
+    purpose[0]["envelope"] = body["drivePrivateKeyEnvelope"].clone();
+    assert_eq!(rebind(&with_pass(purpose)).status(), 400);
+    assert_eq!(preflight_binding(&c, &base, &user.username), old_email);
+    assert_eq!(listed(true).len(), 3);
+
+    // Whole.
+    let r = rebind(&body);
+    assert_eq!(r.status(), 200, "{}", r.text().unwrap_or_default());
+    let after = listed(true);
+    assert_eq!(after.len(), 2, "the record that did not open is gone");
+    for (file_id, password) in [(live, "live"), (trashed, "trashed")] {
+        let row = after
+            .iter()
+            .find(|row| row["fileId"] == file_id.as_str())
+            .unwrap();
+        let envelope =
+            account_envelope::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
+        let id = uuid::Uuid::parse_str(file_id).unwrap();
+        let secret =
+            open_vault_secret(&envelope, &user.master_key, &key_binding, id.as_bytes()).unwrap();
+        assert_eq!(secret.password.unwrap().as_str(), password);
+    }
+    assert_eq!(listed(false).len(), 1, "the trashed one is still unlisted");
+
+    // A page still sealing for the old email is told the binding changed;
+    // sealed for the key binding, it is kept.
+    let r = put(live, &seal(&user.master_key, &old_email, live, "again"));
+    assert_eq!(r.status(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "bindingChanged");
+    assert_eq!(
+        put(live, &seal(&user.master_key, &key_binding, live, "again")).status(),
+        204
+    );
+
+    // Leave no stored bytes behind (the integration script checks).
+    for vault in &vaults {
+        let _ = bearer(
+            c.delete(format!("{base}/api/files/{}", vault.id)),
+            &user.token,
+        )
+        .send();
+    }
+    let emptied = bearer(c.delete(format!("{base}/api/trash")), &user.token)
+        .send()
+        .unwrap();
+    assert!(
+        emptied.status().is_success(),
+        "empty trash: {}",
+        emptied.status()
+    );
+    assert_eq!(
+        listed(true).len(),
+        0,
+        "purging the vaults deletes their records"
+    );
+}

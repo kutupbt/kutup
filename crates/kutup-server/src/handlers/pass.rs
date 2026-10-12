@@ -92,7 +92,10 @@ pub async fn list_vault_secrets(
         if trashed && !all {
             continue;
         }
-        if !can_access_file(&state.pool, user_id, file_id).await {
+        // Access is checked on live vaults only: the check sees a trashed
+        // file as out of reach, and its record must wait for a restore (or
+        // a purge, which deletes it).
+        if !trashed && !can_access_file(&state.pool, user_id, file_id).await {
             // Access was taken away: the record goes with it.
             sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
                 .bind(user_id)

@@ -191,6 +191,18 @@ fn vault_secrets() {
     .unwrap();
     assert!(trashed.status().is_success(), "trash: {}", trashed.status());
     assert_eq!(list(&c, &base, &owner).len(), 0);
+    // Every record (a rebind's list) has it, marked, and listing it so
+    // keeps it.
+    let all: Vec<Value> = bearer(
+        c.get(format!("{base}/api/pass/vault-secrets?all=true")),
+        &owner.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0]["inTrash"], true);
     let restored = bearer(
         c.post(format!("{base}/api/trash/{}/restore", vault.id)),
         &owner.token,
