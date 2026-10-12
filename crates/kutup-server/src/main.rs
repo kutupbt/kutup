@@ -674,6 +674,10 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail_keys::list_addresses),
         )
         .route(
+            "/api/mail/search-addresses",
+            get(handlers::mail::search_addresses),
+        )
+        .route(
             "/api/mail/messages",
             get(handlers::mail::list_messages).patch(handlers::mail::update_messages),
         )

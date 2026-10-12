@@ -159,6 +159,17 @@ pub struct MailListQuery {
     pub folder: String,
     /// Searches subjects and addresses.
     pub q: Option<String>,
+    /// Advanced search (Proton's): the sender's address or name contains this.
+    pub from: Option<String>,
+    /// A recipient's (To, Cc or Bcc) address or name contains this.
+    pub to: Option<String>,
+    /// Arrived at or after this moment (RFC 3339).
+    pub since: Option<String>,
+    /// Arrived before this moment (RFC 3339).
+    pub until: Option<String>,
+    /// Came to or went from this address of yours, or came through this
+    /// distribution list (Proton's Address field).
+    pub address: Option<String>,
     /// The `next` of the previous page.
     pub before: Option<String>,
     /// Page number from 0, `limit` to a page (Proton's paging), instead of
@@ -444,9 +455,11 @@ pub async fn list_messages(
         _ if FOLDERS.contains(&folder) || folder == "starred" || folder == "all" => (folder, None),
         _ => return Err(AppError::bad_request("unknown folder")),
     };
+    let criteria = Criteria::parse(&query)?;
     // All mail leaves out Spam and Trash only when the account asks
     // (Proton's "Exclude Spam/Trash from All mail"); a search always does.
     let almost_all = query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
+        || criteria.any()
         || crate::handlers::mail_settings::settings_of(&state, user_id)
             .await?
             .almost_all_mail;
@@ -469,28 +482,14 @@ pub async fn list_messages(
         attachments: query.attachments,
         sort,
     };
-    let search = query
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|q| !q.is_empty())
-        .map(|q| {
-            let escaped: String = q
-                .chars()
-                .take(200)
-                .flat_map(|c| match c {
-                    '%' | '_' | '\\' => vec!['\\', c],
-                    c => vec![c],
-                })
-                .collect();
-            format!("%{escaped}%")
-        });
+    let search = contains(query.q.as_deref());
     let listing = Listing {
         owner,
         place,
         place_id,
         almost_all,
         search,
+        criteria,
         before,
         filters,
         place_filter: PLACE_WHERE,
@@ -527,6 +526,125 @@ pub async fn list_messages(
     }))
 }
 
+/// A `LIKE` pattern for "contains", escaped; none for an empty value.
+fn contains(value: Option<&str>) -> Option<String> {
+    let value = value.map(str::trim).filter(|v| !v.is_empty())?;
+    let escaped: String = value
+        .chars()
+        .take(200)
+        .flat_map(|c| match c {
+            '%' | '_' | '\\' => vec!['\\', c],
+            c => vec![c],
+        })
+        .collect();
+    Some(format!("%{escaped}%"))
+}
+
+/// Proton's advanced search beyond the keyword: sender, recipient, dates.
+#[derive(Debug, Default)]
+struct Criteria {
+    from: Option<String>,
+    to: Option<String>,
+    since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
+    address: Option<String>,
+}
+
+impl Criteria {
+    fn parse(query: &MailListQuery) -> AppResult<Self> {
+        let moment = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| {
+                    OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339)
+                        .map_err(|_| AppError::bad_request("since and until are RFC 3339 times"))
+                })
+                .transpose()
+        };
+        let criteria = Criteria {
+            from: contains(query.from.as_deref()),
+            to: contains(query.to.as_deref()),
+            since: moment(query.since.as_deref())?,
+            until: moment(query.until.as_deref())?,
+            address: query
+                .address
+                .as_deref()
+                .map(|a| a.trim().to_lowercase())
+                .filter(|a| !a.is_empty()),
+        };
+        if let (Some(since), Some(until)) = (criteria.since, criteria.until) {
+            if until <= since {
+                return Err(AppError::bad_request("until comes after since"));
+            }
+        }
+        Ok(criteria)
+    }
+
+    fn any(&self) -> bool {
+        self.from.is_some()
+            || self.to.is_some()
+            || self.since.is_some()
+            || self.until.is_some()
+            || self.address.is_some()
+    }
+}
+
+/// The advanced search over `mail_messages`: $13 sender, $14 recipient,
+/// $15 since, $16 until, $17 the address it came to or went from (one of
+/// the mailbox's own, or a distribution list it came through).
+const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR from_name ILIKE $13)
+        AND ($14::text IS NULL OR to_list::text ILIKE $14 OR cc_list::text ILIKE $14
+             OR bcc_list::text ILIKE $14)
+        AND ($15::timestamptz IS NULL OR received_at >= $15)
+        AND ($16::timestamptz IS NULL OR received_at < $16)
+        AND ($17::text IS NULL OR EXISTS (
+            SELECT 1 FROM mail_addresses a
+             WHERE a.address = $17
+               AND (a.id = mail_messages.address_id OR a.group_id = mail_messages.group_id)))";
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct SearchAddressesQuery {
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `GET /api/mail/search-addresses` — what advanced search's Address can
+/// be (Proton's): your own addresses and the distribution lists you are
+/// in, or a shared mailbox's own address.
+#[utoipa::path(
+    get,
+    path = "/api/mail/search-addresses",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(SearchAddressesQuery),
+    responses((status = 200, description = "Addresses, in order", body = Vec<String>))
+)]
+pub async fn search_addresses(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<SearchAddressesQuery>,
+) -> AppResult<Json<Vec<String>>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, query.group.as_deref())
+        .await?
+        .owner();
+    let addresses: Vec<String> = sqlx::query_scalar(
+        "SELECT address FROM mail_addresses WHERE user_id = $1 OR group_id = $1
+         UNION
+         SELECT a.address
+           FROM mail_group_members m
+           JOIN mail_groups g ON g.id = m.group_id AND g.kind = 'list'
+           JOIN mail_addresses a ON a.group_id = g.id
+          WHERE m.user_id = $1
+         ORDER BY 1",
+    )
+    .bind(owner)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(addresses))
+}
+
 /// Pages past this are refused (`page × limit` stays small for `OFFSET`).
 const MAX_PAGE_NUMBER: i64 = 10_000;
 
@@ -537,6 +655,7 @@ struct Listing<'a> {
     place_id: Option<Uuid>,
     almost_all: bool,
     search: Option<String>,
+    criteria: Criteria,
     before: Option<Cursor>,
     filters: Filters,
     /// The place and the search, as SQL over `mail_messages`.
@@ -566,6 +685,7 @@ async fn message_rows(
         "SELECT {ROW_COLUMNS}, count(*) OVER () AS full_count
            FROM mail_messages
           WHERE {place_filter}
+            AND {CRITERIA_WHERE}
             AND ($10::bool IS NULL OR seen <> $10)
             AND (NOT $11 OR attachment_count > 0)
             AND {after}
@@ -584,6 +704,11 @@ async fn message_rows(
     .bind(listing.filters.unread)
     .bind(listing.filters.attachments)
     .bind(page * limit)
+    .bind(listing.criteria.from.as_deref())
+    .bind(listing.criteria.to.as_deref())
+    .bind(listing.criteria.since)
+    .bind(listing.criteria.until)
+    .bind(listing.criteria.address.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = rows.first().map_or(0, |r| r.full_count);
@@ -707,6 +832,7 @@ async fn conversation_rows(
                     attachments
                FROM mail_messages
               WHERE {place_filter}
+                AND {CRITERIA_WHERE}
          ), threads AS (
              SELECT thread_id,
                     (array_agg(id ORDER BY received_at DESC, id DESC))[1] AS latest,
@@ -751,6 +877,11 @@ async fn conversation_rows(
     .bind(listing.filters.unread)
     .bind(listing.filters.attachments)
     .bind(page * limit)
+    .bind(listing.criteria.from.as_deref())
+    .bind(listing.criteria.to.as_deref())
+    .bind(listing.criteria.since)
+    .bind(listing.criteria.until)
+    .bind(listing.criteria.address.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = threads.first().map_or(0, |t| t.8);

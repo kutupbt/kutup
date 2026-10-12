@@ -82,7 +82,7 @@ reference only where Proton has nothing.
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
-| Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ❌ |
+| Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ✅ the search box's options: keyword, location (any folder, label or All mail), start and end date (the end day included, the reader's time zone), sender, recipient (To, Cc, Bcc), address (your own and the distribution lists you are in, Kutup's own: Proton lists your addresses only; a shared mailbox's own), has attachments; kept in the address bar (`q`, `from`, `to`, `since`, `until`, `address`, `filter`); Reset; over the readable fields, no body search yet (spec 111) |
 | Body search in the browser (encrypted local index) | `contentSearch/` | ❌ (C2f; [`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Category tabs (Primary, Promotions, …) | `categoriesTabs` | ❌ |
 | Newsletter subscriptions view | `NewsletterSubscriptionView.tsx` | ❌ |

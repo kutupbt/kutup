@@ -15,7 +15,20 @@
   },
   "search": {
     "label": "Postalarda ara",
-    "placeholder": "Konu ve adreslerde ara"
+    "placeholder": "Konu ve adreslerde ara",
+    "advanced": "Gelişmiş arama",
+    "keyword": "Anahtar kelime",
+    "location": "Konum",
+    "since": "Başlangıç tarihi",
+    "until": "Bitiş tarihi",
+    "from": "Gönderen",
+    "to": "Alıcı",
+    "personPlaceholder": "Ad veya e-posta adresi",
+    "address": "Adres",
+    "allAddresses": "Tümü",
+    "hasAttachments": "Eki olanlar",
+    "reset": "Sıfırla",
+    "submit": "Ara"
   },
   "folders": {
     "inbox": "Gelen kutusu",
@@ -74,7 +87,8 @@
     "resize": "Listeyi yeniden boyutlandır",
     "me": "ben",
     "inConversation_one": "Bu konuşmada {{count}} ileti",
-    "inConversation_other": "Bu konuşmada {{count}} ileti"
+    "inConversation_other": "Bu konuşmada {{count}} ileti",
+    "advancedResults": "{{place}} içinde arama sonuçları"
   },
   "read": {
     "notFound": "Bu yazışma artık yok.",
