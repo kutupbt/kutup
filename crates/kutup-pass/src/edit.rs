@@ -96,6 +96,17 @@ pub enum Op {
         parent_id: String,
     },
     EmptyRecycleBin,
+    /// Imports another password manager's CSV export (`import::parse`)
+    /// into a new group `group_name` under the top group, its folders as
+    /// groups inside. All or nothing.
+    ImportCsv {
+        /// The file, base64.
+        data: String,
+        /// `import::Provider` id; detected when absent.
+        #[serde(default)]
+        provider: Option<String>,
+        group_name: String,
+    },
     UpdateVault {
         name: String,
         #[serde(default)]
@@ -345,6 +356,19 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                     changed: true,
                 }
             }
+        }
+        Op::ImportCsv {
+            data,
+            provider,
+            group_name,
+        } => {
+            // All or nothing: a refused entry undoes the whole import.
+            let before = db.clone();
+            let applied = import_csv(db, data, provider.as_deref(), group_name, now);
+            if applied.is_err() {
+                *db = before;
+            }
+            applied?
         }
         Op::EmptyRecycleBin => match recycle_bin(db) {
             Some(bin) => {
@@ -680,5 +704,166 @@ fn restore_history(
         entry.times.expires = earlier.times.expires;
         entry.times.expiry = earlier.times.expiry;
         Ok(())
+    })
+}
+
+/// The group named `name` directly under `parent`, made if there is none.
+fn child_group(
+    db: &mut Database,
+    parent: GroupId,
+    name: &str,
+    now: NaiveDateTime,
+) -> Result<GroupId, EditError> {
+    let existing = db.groups[&parent]
+        .groups
+        .iter()
+        .copied()
+        .find(|id| db.groups.get(id).is_some_and(|g| g.name == name));
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let name = check_name(name, "group name")?;
+    let mut parent = db.group_mut(parent).ok_or(EditError::NotFound("group"))?;
+    let mut group = parent.add_group();
+    group.name = name;
+    group.icon = Some(Icon::BuiltIn(GROUP_ICON));
+    set_all_times(&mut group.times, now);
+    Ok(group.id)
+}
+
+/// Names cut to the longest a field or tag may be.
+fn clip(name: &str) -> String {
+    name.trim().chars().take(MAX_NAME_CHARS).collect()
+}
+
+/// An imported entry's fields, named so none clash: a custom field named
+/// like a standard one, or twice, gets " (2)"…
+fn imported_fields(entry: &crate::import::ImportedEntry) -> Vec<FieldView> {
+    let mut fields = vec![
+        FieldView {
+            key: "Title".into(),
+            value: entry.title.clone(),
+            protected: false,
+        },
+        FieldView {
+            key: "UserName".into(),
+            value: entry.username.clone(),
+            protected: false,
+        },
+        FieldView {
+            key: "Password".into(),
+            value: entry.password.clone(),
+            protected: true,
+        },
+        FieldView {
+            key: "URL".into(),
+            value: entry.urls.first().cloned().unwrap_or_default(),
+            protected: false,
+        },
+        FieldView {
+            key: "Notes".into(),
+            value: entry.notes.clone(),
+            protected: false,
+        },
+    ];
+    for (n, url) in entry.urls.iter().skip(1).enumerate() {
+        fields.push(FieldView {
+            key: format!("KP2A_URL_{}", n + 1),
+            value: url.clone(),
+            protected: false,
+        });
+    }
+    if let Some(otp) = &entry.otp {
+        fields.push(FieldView {
+            key: "otp".into(),
+            value: otp.clone(),
+            protected: true,
+        });
+    }
+    for field in &entry.fields {
+        let base = {
+            let clipped = clip(&field.key);
+            if clipped.is_empty() || clipped.chars().any(char::is_control) {
+                "Field".to_owned()
+            } else {
+                clipped
+            }
+        };
+        let mut key = base.clone();
+        let mut n = 2;
+        while fields.iter().any(|f| f.key == key) {
+            key = format!("{base} ({n})");
+            n += 1;
+        }
+        fields.push(FieldView {
+            key,
+            value: field.value.clone(),
+            protected: field.protected,
+        });
+    }
+    fields
+}
+
+fn import_csv(
+    db: &mut Database,
+    data: &str,
+    provider: Option<&str>,
+    group_name: &str,
+    now: NaiveDateTime,
+) -> Result<Applied, EditError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| invalid("the file is base64"))?;
+    let provider = match provider {
+        Some(id) => Some(
+            crate::import::Provider::from_id(id).ok_or_else(|| invalid("no such import format"))?,
+        ),
+        None => None,
+    };
+    let parsed = crate::import::parse(&bytes, provider).map_err(|e| invalid(e.to_string()))?;
+    let root = db.root;
+    let top = {
+        let name = check_name(group_name, "group name")?;
+        let mut root = db.group_mut(root).ok_or(EditError::NotFound("group"))?;
+        let mut group = root.add_group();
+        group.name = name;
+        group.icon = Some(Icon::BuiltIn(GROUP_ICON));
+        set_all_times(&mut group.times, now);
+        group.id
+    };
+    for entry in &parsed.entries {
+        let mut group = top;
+        for part in &entry.group {
+            group = child_group(db, group, &clip(part), now)?;
+        }
+        let input = EntryInput {
+            fields: imported_fields(entry),
+            tags: entry
+                .tags
+                .iter()
+                .map(|t| clip(t))
+                .filter(|t| !t.is_empty())
+                .collect(),
+            ..EntryInput::default()
+        };
+        let made = create_entry(db, &group.uuid().to_string(), &input, now)?;
+        if let Some(id) = made
+            .id
+            .as_deref()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+        {
+            if let Some(made) = db.entries.get_mut(&EntryId::from(id)) {
+                if let Some(created) = entry.created {
+                    made.times.creation = Some(created);
+                }
+                if let Some(modified) = entry.modified.or(entry.created) {
+                    made.times.last_modification = Some(modified);
+                }
+            }
+        }
+    }
+    Ok(Applied {
+        id: Some(top.uuid().to_string()),
+        changed: true,
     })
 }

@@ -11,6 +11,7 @@
 //! `keepass` crate in `crates/kutup-pass/vendor/keepass`, re-exported here as [`keepass`].
 
 pub mod edit;
+pub mod import;
 pub mod kdbx;
 pub mod merge;
 mod refs;

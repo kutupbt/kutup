@@ -12,6 +12,7 @@ import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
 import { HistoryDialog } from './HistoryDialog'
+import { bytesToBase64 } from '../lib/bytes'
 
 /** A copied secret is cleared from the clipboard after this, if it is still there. */
 const CLEAR_CLIPBOARD_MS = 30_000
@@ -114,11 +115,6 @@ function downloadBytes(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return btoa(binary)
-}
 
 /** One entry: its fields to copy, its one-time code, attachments, history and what to do with it. */
 export function EntryDetail({ session, entry, view, onEdit, onGone }: { session: VaultSession; entry: EntryView; view: VaultView; onEdit: () => void; onGone: () => void }) {

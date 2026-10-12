@@ -34,6 +34,8 @@ interface PassWasm {
     open(contents: Uint8Array, password: string | null | undefined, keyFile: Uint8Array | null | undefined): WasmVault
   }
   keyFileSecret(contents: Uint8Array): Uint8Array
+  importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
+  importFormats(): unknown
 }
 
 let wasm: Promise<PassWasm> | null = null
@@ -97,6 +99,10 @@ async function run(request: Request): Promise<unknown> {
     }
     case 'keyFileSecret':
       return module.keyFileSecret(request.contents)
+    case 'importPreview':
+      return module.importPreview(request.contents, request.provider)
+    case 'importFormats':
+      return module.importFormats()
   }
 }
 
