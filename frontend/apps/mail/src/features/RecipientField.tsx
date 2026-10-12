@@ -1,6 +1,8 @@
 import { X } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useId, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useContactGroups, useContacts } from '@kutup/contacts-core/api'
+import { displayName } from '@kutup/contacts-core/model'
 import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import type { PinnedKeys } from '@kutup/mail-core/api'
 import { groupDirectory } from '@kutup/mail-core/groups'
@@ -15,6 +17,16 @@ const GROUP_SUGGESTIONS = {
   search: async (query: string) =>
     (await groupDirectory(query)).map((group) => ({ contactId: '', name: group.displayName, address: group.address, label: null })),
 }
+
+/** A contact group in the suggestions (Proton's AddressesGroupItem): its members are added. */
+const CONTACT_GROUP = 'contact-group:'
+
+/**
+ * Proton's drag between To, Cc and Bcc: the chip being dragged, and how to
+ * take it out of the field it came from.
+ */
+let dragged: { mailbox: Mailbox; from: string; remove: () => void } | null = null
+const RECIPIENT_DRAG = 'application/x-kutup-recipient'
 
 /**
  * To, Cc or Bcc: chips for the people added, and a field that suggests from
@@ -44,6 +56,40 @@ export function RecipientField({
   const { t } = useTranslation()
   const id = useId()
   const [text, setText] = useState('')
+  const [dropping, setDropping] = useState(false)
+  const contactGroups = useContactGroups()
+  const contacts = useContacts()
+  // Mail groups (lists, shared mailboxes) and the reader's contact groups.
+  const suggestions = useMemo(
+    () => ({
+      key: `${GROUP_SUGGESTIONS.key}:${contactGroups.dataUpdatedAt}`,
+      search: async (query: string) => {
+        const q = query.toLocaleLowerCase()
+        const groups = (contactGroups.data ?? [])
+          .filter((group) => group.members > 0 && group.name.toLocaleLowerCase().includes(q))
+          .map((group) => ({ contactId: '', name: group.name, address: `${CONTACT_GROUP}${group.id}`, label: null, hint: t('compose.contactGroup', { count: group.members }) }))
+        return [...groups, ...(await GROUP_SUGGESTIONS.search(query))]
+      },
+    }),
+    [contactGroups.data, contactGroups.dataUpdatedAt, t],
+  )
+
+  /** A contact group's members, each address of each. */
+  function members(groupId: string): Mailbox[] {
+    return (contacts.data?.contacts ?? [])
+      .filter((contact) => contact.draft.groups.includes(groupId))
+      .flatMap((contact) => contact.draft.emails.map((email) => ({ address: email.address.toLowerCase(), name: displayName(contact.draft) })))
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    setDropping(false)
+    if (!dragged || dragged.from === id) return
+    const { mailbox, remove } = dragged
+    dragged = null
+    if (!value.some((m) => m.address === mailbox.address)) onChange([...value, mailbox])
+    remove()
+  }
 
   function add(entries: Mailbox[]) {
     const known = new Set(value.map((m) => m.address))
@@ -53,7 +99,16 @@ export function RecipientField({
   }
 
   return (
-    <div className="flex min-h-10 flex-wrap items-center gap-1 border-b border-border px-3 py-1">
+    <div
+      className={cn('flex min-h-10 flex-wrap items-center gap-1 border-b border-border px-3 py-1', dropping && 'bg-primary/5 ring-1 ring-inset ring-primary/40')}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(RECIPIENT_DRAG) || dragged?.from === id) return
+        e.preventDefault()
+        setDropping(true)
+      }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={onDrop}
+    >
       <label htmlFor={id} className="w-10 shrink-0 text-sm text-muted-foreground">
         {label}
       </label>
@@ -63,6 +118,15 @@ export function RecipientField({
           <span
             key={mailbox.address}
             title={mailbox.address}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(RECIPIENT_DRAG, mailbox.address)
+              e.dataTransfer.effectAllowed = 'move'
+              dragged = { mailbox, from: id, remove: () => onChange(value.filter((m) => m.address !== mailbox.address)) }
+            }}
+            onDragEnd={() => {
+              dragged = null
+            }}
             className={cn(
               'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-sm',
               valid ? 'border-border bg-muted/60' : 'border-destructive text-destructive',
@@ -90,8 +154,10 @@ export function RecipientField({
           if (/[,;]/.test(next)) add(parseRecipients(next))
           else setText(next)
         }}
-        onPick={(match) => add([{ address: match.address, name: match.name }])}
-        extraSuggestions={GROUP_SUGGESTIONS}
+        onPick={(match) =>
+          add(match.address.startsWith(CONTACT_GROUP) ? members(match.address.slice(CONTACT_GROUP.length)) : [{ address: match.address, name: match.name }])
+        }
+        extraSuggestions={suggestions}
         onKeyDown={(e) => {
           // A suggestion was picked: that added it already.
           if (e.defaultPrevented) return

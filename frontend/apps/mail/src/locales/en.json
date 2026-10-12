@@ -245,7 +245,9 @@
     "moreOptions": "More options",
     "plainText": "Plain text",
     "rightToLeft": "Right to left",
-    "emoji": "Insert emoji"
+    "emoji": "Insert emoji",
+    "contactGroup_one": "Contact group · {{count}} member",
+    "contactGroup_other": "Contact group · {{count}} members"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",

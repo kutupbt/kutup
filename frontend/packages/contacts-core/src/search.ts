@@ -9,6 +9,8 @@ export interface ContactEmailMatch {
   name: string
   address: string
   label: string | null
+  /** Shown in place of the address (a contact group's "N members"). */
+  hint?: string
 }
 
 /** Addresses matching `q` (name or address), for recipient and share pickers. */

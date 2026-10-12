@@ -245,7 +245,9 @@
     "moreOptions": "Diğer seçenekler",
     "plainText": "Düz metin",
     "rightToLeft": "Sağdan sola",
-    "emoji": "Emoji ekle"
+    "emoji": "Emoji ekle",
+    "contactGroup_one": "Kişi grubu · {{count}} üye",
+    "contactGroup_other": "Kişi grubu · {{count}} üye"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
