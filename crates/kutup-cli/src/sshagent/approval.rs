@@ -31,16 +31,28 @@ pub trait Approver: Send + Sync {
 
 /// What the person is asked.
 pub fn prompt_text(request: &SignRequest) -> String {
+    let mut lines = vec![String::new()];
+    lines.extend(summary(request).into_iter().map(|line| format!("  {line}")));
+    let choices = if request.connection.host.is_some() {
+        "  Allow? [o]nce, [h]ost until the agent locks, [N]o: "
+    } else {
+        "  Allow? [o]nce, [N]o: "
+    };
+    lines.push(choices.into());
+    lines.join("\n")
+}
+
+/// The request in a few lines: forwarded or not, who, which key, and what
+/// for.
+pub fn summary(request: &SignRequest) -> Vec<String> {
     let c = request.connection;
     let mut lines = Vec::new();
-    lines.push(String::new());
     if c.forwarded {
-        lines.push(
-            "  !! FORWARDED: this request comes from another machine through `ssh -A`.".into(),
-        );
+        lines
+            .push("!! FORWARDED: this request comes from another machine through `ssh -A`.".into());
     }
     lines.push(format!(
-        "  {} wants to use the key \"{}\" ({}) from {}",
+        "{} wants to use the key \"{}\" ({}) from {}",
         c.process.as_deref().unwrap_or("A program"),
         request.key_title,
         request.key_fingerprint,
@@ -48,17 +60,11 @@ pub fn prompt_text(request: &SignRequest) -> String {
     ));
     let what = describe(request.purpose);
     match (&c.host, c.host_names.first()) {
-        (Some(_), Some(name)) => lines.push(format!("  for a {what} to {name}")),
-        (Some(host), None) => lines.push(format!("  for a {what} to the host with key {host}")),
-        (None, _) => lines.push(format!("  for a {what}")),
+        (Some(_), Some(name)) => lines.push(format!("for a {what} to {name}")),
+        (Some(host), None) => lines.push(format!("for a {what} to the host with key {host}")),
+        (None, _) => lines.push(format!("for a {what}")),
     }
-    let choices = if c.host.is_some() {
-        "  Allow? [o]nce, [h]ost until the agent locks, [N]o: "
-    } else {
-        "  Allow? [o]nce, [N]o: "
-    };
-    lines.push(choices.into());
-    lines.join("\n")
+    lines
 }
 
 /// Reads the answer.
@@ -92,7 +98,7 @@ impl Approver for TerminalApprover {
             .write(true)
             .open("/dev/tty")
         else {
-            eprintln!("kutup ssh-agent: no terminal to ask on; denied (start it with --no-confirm for unattended use)");
+            eprintln!("kutup ssh-agent: no terminal to ask on; denied (start it with --approve desktop, or --no-confirm for unattended use)");
             return Decision::Deny;
         };
         let mut out = match tty.try_clone() {

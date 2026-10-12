@@ -308,7 +308,7 @@ one database, plus a report of what happened.
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
   wrong key, kept and forgotten keys, lock), 150 (CSV import), 151 (PIN),
-  152 (site icons).
+  152 (site icons), 153 (custom icons).
 - **Security report** (the vault's Security button): weak passwords,
   passwords shared by several entries, and expired entries, worked out on
   the device from the open vault; nothing is sent anywhere, so there is no
@@ -329,8 +329,22 @@ one database, plus a report of what happened.
   `KP2A_URL_n`, custom fields kept (secret-looking ones hidden), times kept;
   it applies all or nothing. The dialog asks to delete the plaintext export
   afterwards. Spec 150.
-- **Not yet:** custom icons (the vault's own pictures: shown, uploaded, a
-  site icon saved into the vault), sharing single entries; on the roadmap.
+- **Custom icons** (KeePass's own pictures, kept in the vault, so KeePassXC
+  and other KeePass apps show them too): an entry's or group's picture
+  shows before its website's icon (entries) or the folder (groups). "Change
+  icon" (the entry's icon, the group's menu) offers the vault's pictures,
+  an uploaded image, or, for an entry when icons come through Kutup, its
+  website's icon saved into the vault; or the default icon again. The tab
+  redraws a new picture as a PNG of at most 64 px a side (KeePassXC keeps
+  128), which drops everything but the pixels; inputs up to 5 MB, raster
+  types only. The edits are `setEntryIcon` (the previous state into the
+  entry's history) and `setGroupIcon`, which take a PNG of at most 256 KiB
+  and reuse a picture with the same bytes. The view lists the vault's
+  pictures browsers can show (PNG, JPEG, GIF, WebP, ICO, BMP; never SVG) as
+  base64, shown as `data:` addresses, so the pass host still loads no
+  outside images. As KeePass apps, a picture nothing uses any more stays in
+  the vault (merges union them). Spec 153 and `tests/edit.rs`.
+- **Not yet:** sharing single entries; on the roadmap.
 
 **The plan as written:**
 
@@ -430,9 +444,43 @@ keeps, approval per use, keys listed while locked, memory only,
   `ssh-add -l`, a git signature through the agent verified by
   `ssh-keygen -Y verify`, a key added while running, denial without a
   terminal, and push mode into a system `ssh-agent`.
-- **Not yet:** `kutup ssh-agent install` (systemd / launchd units), desktop
-  notifications for approval, Windows (named pipe), and detecting another
-  agent (KeePassXC, Strongbox) already serving.
+- **Asking on the desktop** (`--approve desktop`; `auto`, the default, asks
+  on the terminal when there is one): the same question in a dialog that
+  gives up after a minute: an OpenSSH askpass program from
+  `KUTUP_SSH_ASKPASS` or `SSH_ASKPASS` (`SSH_ASKPASS_PROMPT=confirm`, as
+  `ssh-agent` asks for a confirm-constrained key; allows once), else
+  `zenity`, else `kdialog` on Linux, and `osascript` on macOS, with "Allow
+  once", "Allow for this host" and "Deny". The text goes in as an argument
+  (never through a shell or into the AppleScript), without markup or
+  control characters. No dialog program, no answer or an error: denied.
+- **`kutup ssh-agent install <folder> <collection>`** starts the agent at
+  every login with the user's own service manager: a systemd user unit
+  (`~/.config/systemd/user/kutup-ssh-agent.service`, enabled and started)
+  on Linux, a launchd agent (`~/Library/LaunchAgents/dev.kutup.ssh-agent.plist`,
+  bootstrapped into the GUI domain, logging to
+  `~/Library/Logs/kutup-ssh-agent.log`) on macOS. Nothing system-wide and no
+  secret in the file: it runs this `kutup` with `--approve desktop` on the
+  default socket, and carries only the askpass program (and
+  `KUTUP_INSECURE_TLS` for a test server, said when it does). As a service
+  has no prompt, install checks first that you are signed in and which
+  vaults open with the keys your account keeps (`kutup pass keep`), and
+  refuses with `KUTUP_DEVICE_KEY` set, with nothing to ask with (unless
+  `--no-confirm`), or with another agent on the socket. It prints the
+  `SSH_AUTH_SOCK` line for the shell profile and the `IdentityAgent` line
+  for `~/.ssh/config`, says when the shell uses another agent, and on
+  Linux when systemd has no display to show dialogs on
+  (`systemctl --user import-environment DISPLAY WAYLAND_DISPLAY
+  XAUTHORITY`). `--print` shows the file instead. A vault that did not
+  open (at login the network may not be up) is tried again, with a fresh
+  sign-in, at most every 30 seconds when a client asks.
+  `kutup ssh-agent status` says whether it is installed, running and
+  serving (and how many keys), and whether the shell uses another agent;
+  `uninstall` stops it and removes the file. Checked by
+  `scripts/verify-pass-ssh.sh` (askpass allow and deny; where a systemd
+  user manager runs, a real install, a signature through it, status and
+  uninstall) and unit tests. macOS's launchd agent and dialog are built
+  but have not been run on a Mac yet.
+- **Not yet:** Windows (named pipe).
 
 ## Slices
 

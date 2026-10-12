@@ -7,10 +7,12 @@
 //! memory only, and wiped after a while unused.
 
 pub mod approval;
+pub mod desktop;
 pub mod hosts;
 pub mod peer;
 pub mod proto;
 pub mod server;
+pub mod service;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};

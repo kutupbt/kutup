@@ -14,7 +14,9 @@ use std::str::FromStr as _;
 use base64::Engine as _;
 use chrono::NaiveDateTime;
 use keepass::config::{DatabaseConfig, KdfConfig};
-use keepass::db::{Color, Entry, EntryId, GroupId, History, Icon, Times, Value};
+use keepass::db::{
+    Color, CustomIcon, CustomIconId, Entry, EntryId, GroupId, History, Icon, Times, Value,
+};
 use keepass::Database;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,9 @@ const RECYCLE_BIN_ICON: usize = 43;
 const MAX_NAME_CHARS: usize = 256;
 /// The largest attachment, in bytes.
 pub const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+/// The largest picture an entry or group may be given, in bytes. The
+/// website sends PNGs of at most 128 px a side, far smaller.
+pub const MAX_ICON_BYTES: usize = 256 * 1024;
 
 /// One change to a vault.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -75,6 +80,21 @@ pub enum Op {
     RemoveAttachment {
         entry_id: String,
         name: String,
+    },
+    /// Gives the entry its own picture (a KeePass custom icon; a PNG,
+    /// base64), reusing one of the vault's with the same bytes, or with
+    /// `None` the default key icon again. The previous state goes into the
+    /// entry's history.
+    SetEntryIcon {
+        id: String,
+        #[serde(default)]
+        data: Option<String>,
+    },
+    /// The same for a group (the default being the folder icon).
+    SetGroupIcon {
+        id: String,
+        #[serde(default)]
+        data: Option<String>,
     },
     CreateGroup {
         parent_id: String,
@@ -297,6 +317,31 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 Ok(())
             })?
         }
+        Op::SetEntryIcon { id, data } => {
+            let id = entry_id(db, id)?;
+            let icon = match data {
+                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
+                None => Icon::BuiltIn(ENTRY_ICON),
+            };
+            edit_entry(db, id, now, |_, e| {
+                e.icon = Some(icon);
+                Ok(())
+            })?
+        }
+        Op::SetGroupIcon { id, data } => {
+            let id = group_id(db, id)?;
+            let icon = match data {
+                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
+                None => Icon::BuiltIn(GROUP_ICON),
+            };
+            let group = db.groups.get_mut(&id).ok_or(EditError::NotFound("group"))?;
+            let changed = group.icon.as_ref() != Some(&icon);
+            if changed {
+                group.icon = Some(icon);
+                group.times.last_modification = Some(now);
+            }
+            Applied { id: None, changed }
+        }
         Op::CreateGroup { parent_id, name } => {
             let parent = group_id(db, parent_id)?;
             let name = check_name(name, "group name")?;
@@ -424,6 +469,46 @@ fn content(entry: &Entry) -> Entry {
     copy.history = None;
     copy.times = Times::default();
     copy
+}
+
+/// The vault's picture with the bytes of `data` (a PNG, base64), adding it
+/// if none has them, as KeePassXC does.
+fn custom_icon(
+    db: &mut Database,
+    data: &str,
+    now: NaiveDateTime,
+) -> Result<CustomIconId, EditError> {
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| invalid("a picture's data is base64"))?;
+    if data.len() > MAX_ICON_BYTES {
+        return Err(invalid("a picture is at most 256 KiB"));
+    }
+    if crate::view::raster_kind(&data) != Some("image/png") {
+        return Err(invalid("a picture is a PNG"));
+    }
+    let mut same: Vec<&CustomIcon> = db
+        .custom_icons
+        .values()
+        .filter(|icon| icon.data == data)
+        .collect();
+    same.sort_by_key(|icon| icon.id.uuid());
+    if let Some(icon) = same.first() {
+        return Ok(icon.id);
+    }
+    let id = CustomIconId::from_uuid(uuid::Uuid::new_v4());
+    db.custom_icons.insert(
+        id,
+        CustomIcon {
+            id,
+            entries: Default::default(),
+            groups: Default::default(),
+            name: None,
+            last_modification_time: Some(now),
+            data,
+        },
+    );
+    Ok(id)
 }
 
 /// Edits entry `id` as KeePass apps do: its previous state into its history

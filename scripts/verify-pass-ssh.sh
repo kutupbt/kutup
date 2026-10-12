@@ -7,9 +7,12 @@
 # Checked: the agent lists the vault's keys (`ssh-add -l`) after opening the
 # vault with the key kept in the account (no password given); a git-style
 # signature made through it verifies (`ssh-keygen -Y sign/verify`); without
-# a terminal to ask on, a request is denied unless --no-confirm; a key added
+# a terminal to ask on, a request is denied unless --no-confirm; asking on the
+# desktop goes through an askpass program (allowed and denied); a key added
 # to the vault later is listed without restarting; `kutup ssh-add` pushes a
-# key into a system ssh-agent with a lifetime.
+# key into a system ssh-agent with a lifetime; `kutup ssh-agent install`
+# writes a service with no secret in it and, where a systemd user manager
+# runs, starts it at login, serves through it, reports it and removes it.
 #
 # Required env:
 #   KUTUP_SERVER     e.g. http://<backend>:3000
@@ -23,7 +26,9 @@ TMP="$(mktemp -d)"
 P="pass-ssh-$$"
 AGENT_PID=""
 SYS_AGENT_PID=""
+INSTALLED=""
 cleanup() {
+  [ -n "$INSTALLED" ] && "$BIN" --profile "$P" ssh-agent uninstall >/dev/null 2>&1
   [ -n "$AGENT_PID" ] && kill "$AGENT_PID" 2>/dev/null
   [ -n "$SYS_AGENT_PID" ] && kill "$SYS_AGENT_PID" 2>/dev/null
   [ -n "${BIN:-}" ] && "$BIN" --profile "$P" logout >/dev/null 2>&1
@@ -97,7 +102,7 @@ pass "a key added to the vault is listed without restarting"
 stop_agent
 
 # --- asking: without a terminal, denied ---
-start_agent
+start_agent --approve terminal
 rm -f "$TMP/message.sig"
 if SSH_AUTH_SOCK="$TMP/agent.sock" ssh-keygen -q -Y sign -f "$TMP/id_ed25519.pub" -n git "$TMP/message" 2>/dev/null; then
   fail "a request nobody allowed was signed"
@@ -105,6 +110,64 @@ fi
 grep -q "denied" "$TMP/agent.log" || { cat "$TMP/agent.log"; fail "the agent says it denied"; }
 pass "without a terminal to ask on, the agent denies"
 stop_agent
+
+# --- asking on the desktop, through an askpass program ---
+printf '#!/bin/sh\nprintf "%%s\\n%%s" "$SSH_ASKPASS_PROMPT" "$1" > "%s/asked"\nexit 0\n' "$TMP" > "$TMP/askpass-yes"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/askpass-no"
+chmod +x "$TMP/askpass-yes" "$TMP/askpass-no"
+KUTUP_SSH_ASKPASS="$TMP/askpass-yes" start_agent --approve desktop
+rm -f "$TMP/message.sig"
+SSH_AUTH_SOCK="$TMP/agent.sock" ssh-keygen -q -Y sign -f "$TMP/id_ed25519.pub" -n git "$TMP/message" 2>/dev/null ||
+  { cat "$TMP/agent.log"; fail "a request allowed on the desktop is signed"; }
+head -1 "$TMP/asked" | grep -qx confirm || fail "the askpass program is asked to confirm"
+grep -q 'wants to use the key "Sunucu"' "$TMP/asked" || { cat "$TMP/asked"; fail "the dialog names the key"; }
+grep -q "for a git signature" "$TMP/asked" || { cat "$TMP/asked"; fail "the dialog says what it is for"; }
+stop_agent
+KUTUP_SSH_ASKPASS="$TMP/askpass-no" start_agent --approve desktop
+rm -f "$TMP/message.sig"
+if SSH_AUTH_SOCK="$TMP/agent.sock" ssh-keygen -q -Y sign -f "$TMP/id_ed25519.pub" -n git "$TMP/message" 2>/dev/null; then
+  fail "a request denied on the desktop was signed"
+fi
+pass "asking on the desktop: an askpass program allows and denies"
+stop_agent
+
+# --- install: a service with no secret; started at login where systemd runs ---
+"$BIN" --profile "$P" ssh-agent install "$TMP/sync" "$FOLDER" --print > "$TMP/unit"
+grep -q -- '"ssh-agent" "'"$TMP"'/sync" "'"$FOLDER"'"' "$TMP/unit" || { cat "$TMP/unit"; fail "the unit runs the agent on the folder"; }
+grep -q -- '"--approve" "desktop"' "$TMP/unit" || fail "the unit asks on the desktop"
+if grep -qi password "$TMP/unit"; then fail "the unit holds no secret"; fi
+pass "ssh-agent install --print: the service runs the agent, asking on the desktop, with no secret"
+SOCK="${XDG_RUNTIME_DIR:-}/kutup/ssh-agent.sock"
+UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/kutup-ssh-agent.service"
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || ! systemctl --user is-system-running >/dev/null 2>&1; then
+  echo "  --  no systemd user manager here: the live install is skipped"
+elif [ -e "$UNIT_FILE" ] || SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1 || [ $? -ne 2 ]; then
+  echo "  --  a Kutup SSH agent is already installed or serving here: the live install is skipped"
+else
+  INSTALLED=1
+  env -u KUTUP_VAULT_PASSWORD KUTUP_SSH_ASKPASS="$TMP/askpass-yes" "$BIN" --profile "$P" ssh-agent install "$TMP/sync" "$FOLDER" </dev/null >"$TMP/install.out" 2>&1 ||
+    { cat "$TMP/install.out"; fail "ssh-agent install"; }
+  grep -q "KUTUP_SSH_ASKPASS=$TMP/askpass-yes" "$UNIT_FILE" || fail "the unit carries the askpass program"
+  for _ in $(seq 1 50); do
+    if SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1 || [ $? -ne 2 ]; then break; fi
+    sleep 0.2
+  done
+  systemctl --user is-enabled --quiet kutup-ssh-agent.service || fail "the service starts at login"
+  SSH_AUTH_SOCK="$SOCK" ssh-add -l | grep -q "$WANT" || { journalctl --user -u kutup-ssh-agent -n 30 --no-pager; fail "the service lists the key"; }
+  rm -f "$TMP/message.sig" "$TMP/asked"
+  SSH_AUTH_SOCK="$SOCK" ssh-keygen -q -Y sign -f "$TMP/id_ed25519.pub" -n git "$TMP/message" 2>/dev/null ||
+    { journalctl --user -u kutup-ssh-agent -n 30 --no-pager; fail "the service signs once allowed on the desktop"; }
+  [ -s "$TMP/asked" ] || fail "the service asked before signing"
+  STATUS="$("$BIN" --profile "$P" --json ssh-agent status)"
+  echo "$STATUS" | jq -e '.installed and .running and .serving and .keys == 2' >/dev/null || { echo "$STATUS"; fail "status reports it"; }
+  "$BIN" --profile "$P" ssh-agent uninstall >/dev/null
+  INSTALLED=""
+  [ ! -e "$UNIT_FILE" ] || fail "uninstall removes the unit"
+  for _ in $(seq 1 25); do [ -S "$SOCK" ] && SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1 || break; sleep 0.2; done
+  if SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1; then fail "uninstall stops the agent"; fi
+  "$BIN" --profile "$P" --json ssh-agent status | jq -e '(.installed | not) and (.serving | not)' >/dev/null || fail "status after uninstall"
+  pass "ssh-agent install: started by systemd, serving and asking; status; uninstall stops and removes it"
+fi
 
 # --- push mode: into a system ssh-agent, with a lifetime ---
 eval "$(ssh-agent -s -a "$TMP/sys.sock")" >/dev/null
