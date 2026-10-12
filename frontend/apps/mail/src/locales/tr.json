@@ -552,7 +552,12 @@
     "delaySendHint": "Gönder'den sonra iletiyi ne kadar süre geri alabileceğiniz.",
     "delaySendSeconds_one": "{{count}} saniye",
     "delaySendSeconds_other": "{{count}} saniye",
-    "delaySendOff": "Kapalı"
+    "delaySendOff": "Kapalı",
+    "mailtoTitle": "Varsayılan e-posta uygulaması",
+    "mailtoHint": "E-posta bağlantılarını (mailto:) Kutup Posta'da açın. Tarayıcınız onay ister.",
+    "mailtoAction": "Varsayılan yap",
+    "mailtoAsked": "Tarayıcınız e-posta bağlantılarını Kutup Posta'da açmak için onay isteyecek.",
+    "mailtoUnsupported": "Bu tarayıcı e-posta bağlantılarını bir web uygulamasında açamıyor."
   },
   "senders": {
     "title": "Engelle ve izin ver",

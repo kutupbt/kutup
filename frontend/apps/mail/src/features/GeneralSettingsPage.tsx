@@ -8,6 +8,7 @@ import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { registerMailtoHandler } from './mailto'
 
 function Setting({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (on: boolean) => void }) {
   return (
@@ -99,6 +100,18 @@ export function GeneralSettingsPage() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            <span className="block text-sm font-medium">{t('general.mailtoTitle')}</span>
+            <span className="block text-sm text-muted-foreground">{t('general.mailtoHint')}</span>
+          </span>
+          <Button
+            variant="outline"
+            onClick={() => (registerMailtoHandler() ? toast.success(t('general.mailtoAsked')) : toast.error(t('general.mailtoUnsupported')))}
+          >
+            {t('general.mailtoAction')}
+          </Button>
         </div>
         <Setting
           label={t('general.confirmLink')}

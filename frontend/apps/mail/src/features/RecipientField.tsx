@@ -100,6 +100,8 @@ export function RecipientField({
 
   return (
     <div
+      role="group"
+      aria-label={label}
       className={cn('flex min-h-10 flex-wrap items-center gap-1 border-b border-border px-3 py-1', dropping && 'bg-primary/5 ring-1 ring-inset ring-primary/40')}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes(RECIPIENT_DRAG) || dragged?.from === id) return

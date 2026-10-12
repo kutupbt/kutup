@@ -176,9 +176,17 @@ function withSignature(account: MailAccount, rest = ''): string {
 function initial(account: MailAccount, target: ComposerTarget, t: (key: string, options?: Record<string, unknown>) => string, locale: string): Initial {
   if (target.kind === 'resume') return { draft: target.draft, html: target.draft.html, attachments: [] }
   if (target.kind === 'new') {
+    // A mailto link (the default mail app): its recipients, subject and body.
+    const link = target.mailto
+    const body = link?.body ? plainToHtml(link.body) : ''
     return {
-      draft: emptyDraft(account, { to: target.to ? [{ address: target.to.toLowerCase(), name: '' }] : [] }),
-      html: account.signature ? withSignature(account) : '',
+      draft: emptyDraft(account, {
+        to: link ? link.to : target.to ? [{ address: target.to.toLowerCase(), name: '' }] : [],
+        cc: link?.cc ?? [],
+        bcc: link?.bcc ?? [],
+        subject: link?.subject ?? '',
+      }),
+      html: account.signature ? withSignature(account, body) : body,
       attachments: [],
     }
   }

@@ -42,6 +42,7 @@ import { Input } from '@kutup/ui/components/input'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { openComposer, useComposer } from '../features/composerState'
+import { MAILTO_HASH, parseMailto } from '../features/mailto'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
 import { BlockSenderHost } from '../features/BlockSenderHost'
 import { SpamUnsubscribeDialog } from '../features/SpamUnsubscribeDialog'
@@ -160,6 +161,15 @@ export function MailShell() {
   const total = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.total ?? 0
   const [params, setParams] = useSearchParams()
   const composeTo = params.get('to')
+
+  // A mailto link, with Kutup Mail as the browser's mail app (`#mailto=mailto:…`).
+  useEffect(() => {
+    const hash = window.location.hash
+    if (!hash.startsWith(MAILTO_HASH)) return
+    const link = parseMailto(hash.slice(MAILTO_HASH.length))
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    if (link) openComposer({ kind: 'new', mailto: link })
+  }, [])
 
   // "Write to" from another app: open the composer with that address.
   useEffect(() => {

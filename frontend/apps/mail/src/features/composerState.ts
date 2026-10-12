@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from 'react'
+import type { Mailto } from './mailto'
 import type { Draft, MailMessage, OpenedMessage } from '@kutup/mail-core/api'
 
 // What the composer is writing, shared by Compose, Reply, Reply all,
 // Forward and opening a draft. One composer at a time, docked like Proton's.
 
 export type ComposerTarget = (
-  | { kind: 'new'; to?: string }
+  | { kind: 'new'; to?: string; mailto?: Mailto }
   | { kind: 'reply' | 'replyAll' | 'forward'; message: MailMessage; opened: OpenedMessage }
   | { kind: 'draft'; message: MailMessage; opened: OpenedMessage }
   // A send taken back (undo send): the draft as it was sent.

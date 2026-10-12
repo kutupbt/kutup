@@ -552,7 +552,12 @@
     "delaySendHint": "How long you can take a message back after Send.",
     "delaySendSeconds_one": "{{count}} second",
     "delaySendSeconds_other": "{{count}} seconds",
-    "delaySendOff": "Off"
+    "delaySendOff": "Off",
+    "mailtoTitle": "Default email application",
+    "mailtoHint": "Open email links (mailto:) in Kutup Mail. Your browser asks you to confirm.",
+    "mailtoAction": "Set as default",
+    "mailtoAsked": "Your browser will now ask to open email links in Kutup Mail.",
+    "mailtoUnsupported": "This browser cannot open email links in a web app."
   },
   "senders": {
     "title": "Block and allow",
