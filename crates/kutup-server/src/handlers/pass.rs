@@ -134,8 +134,6 @@ pub async fn put_vault_secret(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let binding = crate::handlers::auth::envelope_binding(&state.pool, user_id).await?;
-    let envelope = checked_envelope(&req.envelope, &binding)?;
     let live: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(file_id)
@@ -144,6 +142,16 @@ pub async fn put_vault_secret(
     if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await {
         return Err(AppError::not_found("not found"));
     }
+    // The binding is read under a share lock on the account, which a rebind
+    // holds for update: a secret sealed for the old binding cannot land
+    // after the rebind re-sealed the rest (it waits, then is refused).
+    let mut tx = state.pool.begin().await?;
+    let binding: String =
+        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1 FOR SHARE")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let envelope = checked_envelope(&req.envelope, &binding)?;
     sqlx::query(
         "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
          ON CONFLICT (user_id, file_id) DO UPDATE SET envelope = $3, updated_at = NOW()",
@@ -151,8 +159,9 @@ pub async fn put_vault_secret(
     .bind(user_id)
     .bind(file_id)
     .bind(&envelope)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
