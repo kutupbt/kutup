@@ -2617,7 +2617,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -3851,7 +3851,8 @@ fn advanced_search_by_sender_recipient_dates_and_address() {
     let to_carol = send(&alice, &alice_address, &carol_address, "carol'a");
     wait_for(&c, &base, &alice, &from_bob);
     wait_for(&c, &base, &alice, &from_carol);
-    wait_for(&c, &base, &alice, &to_carol);
+    // Alice's own copy is in Sent once Carol has hers.
+    wait_for(&c, &base, &carol, &to_carol);
     let found = |folder: &str, query: &[(&str, &str)]| -> Vec<String> {
         let mut params = vec![("folder", folder)];
         params.extend_from_slice(query);
