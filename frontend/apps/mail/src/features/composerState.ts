@@ -40,6 +40,16 @@ export function openComposer(next: ComposerTarget) {
   set(next)
 }
 
-export function closeComposer() {
+/**
+ * Closes the composer; with `of`, only if it is still that generation, so
+ * a send that finishes after another composer opened leaves that one be.
+ */
+export function closeComposer(of?: number) {
+  if (of !== undefined && of !== generation) return
   set(null)
+}
+
+/** The current generation, for a composer to close only itself later. */
+export function composerGeneration() {
+  return generation
 }

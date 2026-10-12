@@ -67,6 +67,8 @@ test('attach public key, and an Inline signed message the reader verifies', asyn
   await expect(named.getByRole('button', { name: 'Encrypt' })).toHaveAttribute('aria-pressed', 'false')
   await named.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
+  // The toast may be the last send's: wait for this composer to close.
+  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
 
   // Bob: the text, and a verified signature over it and the key file (its
   // .sig is checked, not shown).

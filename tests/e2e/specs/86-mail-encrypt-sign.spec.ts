@@ -53,6 +53,8 @@ test('Encrypt off (readable, signed, verified) and Sign off (end to end, unsigne
   if (SHOTS) await mail.screenshot({ path: `${SHOTS}/composer-encrypt-off.png` })
   await composer.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
+  // The toast may be the last send's: wait for this composer to close.
+  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
 
   // Bob: zero-access, signed by a verified sender, body readable.
   await bobMail.reload()
@@ -68,6 +70,8 @@ test('Encrypt off (readable, signed, verified) and Sign off (end to end, unsigne
   await expect(composer.getByRole('button', { name: 'Sign' })).toHaveAttribute('aria-pressed', 'false')
   await composer.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(mail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
+  // The toast may be the last send's: wait for this composer to close.
+  await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   await bobMail.goto(appUrl('mail', '/inbox'))
   await bobMail.getByRole('link', { name: new RegExp(unsigned) }).click()
   await expect(bobMail.frameLocator('iframe[title="Message"]').last().getByText(`${unsigned} gövdesi`)).toBeVisible({ timeout: 60_000 })
