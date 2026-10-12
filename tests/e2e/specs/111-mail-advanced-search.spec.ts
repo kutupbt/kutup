@@ -61,7 +61,7 @@ test('advanced search: sender, attachments, dates, address; kept in the address 
   // Address offers Alice's own.
   await form.getByRole('combobox', { name: 'Address' }).click()
   await expect(mail.getByRole('option', { name: `${alice.username}@${domain}` })).toBeVisible()
-  await mail.keyboard.press('Escape')
+  await mail.getByRole('option', { name: 'All', exact: true }).click()
   await form.getByRole('button', { name: 'Search' }).click()
   await expect(mail).toHaveURL(new RegExp(`/all\\?from=${bob.username}&filter=attachments$`))
   await expect(mail.getByRole('heading', { name: 'Search results in All mail' })).toBeVisible({ timeout: 30_000 })
