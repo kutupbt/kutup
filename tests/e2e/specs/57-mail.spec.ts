@@ -43,6 +43,8 @@ test('two Kutup users exchange end-to-end encrypted mail, with replies, filing a
   await expect(sending.getByLabel('Uploading')).toHaveCount(0, { timeout: 60_000 })
   await sending.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(aliceMail.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
+  // The toast may be the last send's: wait for this composer to close.
+  await expect(aliceMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
 
   // Alice's copy is in Sent.
   await aliceMail.getByRole('link', { name: /^Sent( \d+)?$/ }).click()
@@ -65,6 +67,8 @@ test('two Kutup users exchange end-to-end encrypted mail, with replies, filing a
   await bobMail.keyboard.type('Uygun, görüşürüz.')
   await reply.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
+  // The toast may be the last send's: wait for this composer to close.
+  await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   await aliceMail.getByRole('link', { name: /^Inbox( \d+)?$/ }).click()
   await aliceMail.reload()
   await aliceMail.getByRole('link', { name: new RegExp(`Re: ${subject}`) }).click()

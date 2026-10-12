@@ -8,8 +8,10 @@ interface Props {
   /** A label (rows tagged with it) rather than a folder. */
   label: boolean
   conversations: boolean
-  /** Rows checked in the list. */
+  /** Rows checked in the list (with select all, the place's count). */
   checked: number
+  /** Proton's select all: every message of the place. */
+  allOfPlace?: boolean
   /** Rows in the place with the list's filters; unknown while loading. */
   total: number | null
   /** The list's search. */
@@ -22,11 +24,11 @@ interface Props {
  * checked: the place and how many it holds, or how many are chosen, with
  * Clear selection.
  */
-export function SelectionPane({ name, label, conversations, checked, total, q, onClear }: Props) {
+export function SelectionPane({ name, label, conversations, checked, allOfPlace = false, total, q, onClear }: Props) {
   const { t } = useTranslation()
   const unit = conversations ? 'conversations' : 'messages'
   const count = checked || total || 0
-  const key = q && !checked ? 'results' : `${checked ? 'selected' : 'stored'}.${label ? 'label' : 'folder'}.${unit}`
+  const key = allOfPlace ? `selectedIn.${unit}` : q && !checked ? 'results' : `${checked ? 'selected' : 'stored'}.${label ? 'label' : 'folder'}.${unit}`
   const bold = { strong: <strong className="font-semibold text-foreground" /> }
   return (
     <section aria-label={t('selectionPane.label')} className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">

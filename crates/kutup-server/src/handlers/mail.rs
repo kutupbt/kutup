@@ -432,19 +432,6 @@ pub async fn list_messages(
                 .collect();
             format!("%{escaped}%")
         });
-    // The place and the search, shared by both listings.
-    const WHERE: &str = "owner = $1
-            AND CASE $2
-                  WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
-                  WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
-                  WHEN 'folder' THEN custom_folder = $7
-                  WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
-                      SELECT 1 FROM mail_message_labels l
-                       WHERE l.message_id = mail_messages.id AND l.label_id = $7)
-                  ELSE folder = $2
-                END
-            AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
-                 OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
     let listing = Listing {
         owner,
         place,
@@ -453,7 +440,7 @@ pub async fn list_messages(
         search,
         before,
         filters,
-        place_filter: WHERE,
+        place_filter: PLACE_WHERE,
     };
     if query.conversations {
         return list_conversations(&state, &listing, limit, page).await;
@@ -549,6 +536,21 @@ async fn message_rows(
     let total = rows.first().map_or(0, |r| r.full_count);
     Ok((rows.into_iter().map(|r| r.row).collect(), total))
 }
+
+/// The place and the search, shared by the listings and batch changes: $1
+/// owner, $2 place, $6 search, $7 the folder or label, $8 almost all mail.
+const PLACE_WHERE: &str = "owner = $1
+        AND CASE $2
+              WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
+              WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
+              WHEN 'folder' THEN custom_folder = $7
+              WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
+                  SELECT 1 FROM mail_message_labels l
+                   WHERE l.message_id = mail_messages.id AND l.label_id = $7)
+              ELSE folder = $2
+            END
+        AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
+             OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
 
 /// The list's filters and order beyond the place and the search.
 #[derive(Clone, Copy, Debug)]
@@ -884,6 +886,19 @@ pub async fn update_messages(
         .await?
         .owner();
     let ids = parse_ids(&request.ids)?;
+    let updated = update_ids(&state, user_id, owner, &ids, &request).await?;
+    Ok(Json(UpdatedMailMessages { updated }))
+}
+
+/// [`update_messages`]' change, on `ids` of `owner`'s mailbox (any number:
+/// a batch over a whole place passes them all).
+async fn update_ids(
+    state: &AppState,
+    user_id: Uuid,
+    owner: Uuid,
+    ids: &[Uuid],
+    request: &UpdateMailMessages,
+) -> AppResult<u64> {
     let add: Vec<Uuid> = request
         .add_labels
         .iter()
@@ -961,7 +976,7 @@ pub async fn update_messages(
                      OR (direction = 'outbound' AND $5 IN ('sent', 'archive', 'trash')))))",
         )
         .bind(owner)
-        .bind(&ids)
+        .bind(ids)
         .bind(request.seen)
         .bind(request.starred)
         .bind(request.folder.as_deref())
@@ -975,7 +990,7 @@ pub async fn update_messages(
             "SELECT COUNT(*) FROM mail_messages WHERE owner = $1 AND id = ANY($2)",
         )
         .bind(owner)
-        .bind(&ids)
+        .bind(ids)
         .fetch_one(&mut *tx)
         .await? as u64
     };
@@ -987,7 +1002,7 @@ pub async fn update_messages(
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
-        .bind(&ids)
+        .bind(ids)
         .bind(&add)
         .execute(&mut *tx)
         .await?;
@@ -998,12 +1013,103 @@ pub async fn update_messages(
               WHERE l.message_id = m.id AND m.user_id = $1 AND m.id = ANY($2) AND l.label_id = ANY($3)",
         )
         .bind(user_id)
-        .bind(&ids)
+        .bind(ids)
         .bind(&remove)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
+    Ok(updated)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchMailMessages {
+    /// Every message here: one of inbox, drafts, sent, archive, spam, trash,
+    /// `starred`, `folder:<id>` or `label:<id>`, as the list's `folder`.
+    /// All mail is not one (Proton's select all leaves it out).
+    pub place: String,
+    pub seen: Option<bool>,
+    /// As in `PATCH /api/mail/messages`.
+    pub folder: Option<String>,
+    pub custom_folder: Option<String>,
+    #[serde(default)]
+    pub add_labels: Vec<String>,
+    #[serde(default)]
+    pub remove_labels: Vec<String>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `POST /api/mail/messages/batch` — Proton's select all: marks read or
+/// unread, files or labels every message in a place at once, past the
+/// loaded page; the same rules as `PATCH /api/mail/messages`.
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/batch",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    request_body = BatchMailMessages,
+    responses(
+        (status = 200, description = "How many changed", body = UpdatedMailMessages),
+        (status = 400, description = "No change asked, All mail, an unknown place or folder"),
+    )
+)]
+pub async fn batch_messages(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(request): Json<BatchMailMessages>,
+) -> AppResult<Json<UpdatedMailMessages>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
+    let (place, place_id) = match request.place.split_once(':') {
+        Some((kind @ ("folder" | "label"), id)) => (
+            kind,
+            Some(Uuid::parse_str(id).map_err(|_| AppError::bad_request("unknown place"))?),
+        ),
+        _ if FOLDERS.contains(&request.place.as_str()) || request.place == "starred" => {
+            (request.place.as_str(), None)
+        }
+        _ => return Err(AppError::bad_request("unknown place")),
+    };
+    // $6 search, $7 place id, $8 almost all, renumbered for this query.
+    let place_filter = PLACE_WHERE
+        .replace("$6", "$3")
+        .replace("$7", "$4")
+        .replace("$8", "$5");
+    let ids: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT id FROM mail_messages WHERE {place_filter}"
+    ))
+    .bind(owner)
+    .bind(place)
+    .bind(None::<String>)
+    .bind(place_id)
+    .bind(true)
+    .fetch_all(&state.pool)
+    .await?;
+    let change = UpdateMailMessages {
+        ids: Vec::new(),
+        seen: request.seen,
+        starred: None,
+        folder: request.folder,
+        custom_folder: request.custom_folder,
+        add_labels: request.add_labels,
+        remove_labels: request.remove_labels,
+        group: request.group,
+    };
+    // In chunks, each its own transaction: a large mailbox never holds one
+    // long row lock or one long statement. A failure part way leaves the
+    // chunks before it done, as Proton's background tasks do.
+    let mut updated = 0;
+    for chunk in ids.chunks(state.config.mail_batch_chunk) {
+        updated += update_ids(&state, user_id, owner, chunk, &change).await?;
+    }
+    if ids.is_empty() {
+        // Still checks the change (nothing to change, unknown folder or label).
+        update_ids(&state, user_id, owner, &[], &change).await?;
+    }
     Ok(Json(UpdatedMailMessages { updated }))
 }
 

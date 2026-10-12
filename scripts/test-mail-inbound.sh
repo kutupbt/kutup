@@ -36,6 +36,8 @@ export RATE_LIMIT_LOGIN_PER_MIN=1000
 # Key lookups go to the gate's WKD stand-in (only on a test stack).
 export APP_ENV=test
 export MAIL_OUTSIDE_SENDING=on
+# Select all in chunks of 2, so the live tests cross chunk boundaries.
+export MAIL_BATCH_CHUNK=2
 
 command -v gpg >/dev/null || { echo "the mail gate needs GnuPG (gpg)" >&2; exit 1; }
 output="$(mktemp)"

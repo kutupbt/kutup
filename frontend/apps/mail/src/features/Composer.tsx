@@ -35,7 +35,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
-import { closeComposer, useComposer, type ComposerTarget } from './composerState'
+import { closeComposer, composerGeneration, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
 import { isAddress } from './recipients'
 
@@ -208,6 +208,8 @@ export function Composer() {
 
 function ComposerPanel({ account, target }: { account: MailAccount; target: ComposerTarget }) {
   const { t, i18n } = useTranslation()
+  // Which opening this panel is (it is keyed by it): it closes only itself.
+  const [mine] = useState(composerGeneration)
   const refresh = useMailRefresh()
   const sendingStatus = useSendingStatus()
   const pinned = usePinnedKeys()
@@ -406,7 +408,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       toast(t('compose.draftSaved'))
     }
     closed.current = true
-    closeComposer()
+    closeComposer(mine)
   }
 
   async function discard() {
@@ -416,7 +418,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       await api.post('/mail/messages/delete', { ids: [draftId.current] }).catch(() => undefined)
       refresh()
     }
-    closeComposer()
+    closeComposer(mine)
   }
 
   async function send() {
@@ -452,7 +454,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       if (failed.length) toast.warning(t('compose.notSentRefused', { addresses: failed.join(', ') }))
       if (!full.length && !failed.length) toast.success(t('compose.sent'))
       refresh()
-      closeComposer()
+      // A new composer may have opened while this one was sending.
+      closeComposer(mine)
     } catch (error) {
       closed.current = false
       setSending(false)
