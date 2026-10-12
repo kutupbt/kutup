@@ -26,7 +26,7 @@ End-to-end encrypted, self-hosted Drive, real-time collaboration, and federated 
 
 ## Repo layout (top level)
 
-`crates/` the Rust Cargo workspace — `kutup-server` (Axum API, binary **`kutup-server`**; migrations under `crates/kutup-server/migrations/`), `kutup-cli` (binary **`kutup`**), `kutup-crypto` (shared E2EE primitives), `kutup-pass` (Kutup Pass core: KeePass vaults and their three-way merge, with a patched copy of the `keepass` crate under `vendor/`), plus the excluded standalone `kutup-chat-core` and `kutup-client-ffi` · `frontend/` React SPA + editors · the native apps, one repository per product (not started), will consume the generated bindings · `brand/` logo sources · `nginx/` prod config · `Dockerfile.server` · `docker-compose*.yml` · `docs/`.
+`crates/` the Rust Cargo workspace — `kutup-server` (Axum API, binary **`kutup-server`**; migrations under `crates/kutup-server/migrations/`), `kutup-cli` (binary **`kutup`**), `kutup-crypto` (shared E2EE primitives), `kutup-pass` (Kutup Pass core: KeePass vaults, their edits and three-way merge, with a patched copy of the `keepass` crate under `vendor/`) and its browser build `kutup-pass-wasm`, plus the excluded standalone `kutup-chat-core` and `kutup-client-ffi` · `frontend/` React SPA + editors · the native apps, one repository per product (not started), will consume the generated bindings · `brand/` logo sources · `nginx/` prod config · `Dockerfile.server` · `docker-compose*.yml` · `docs/`.
 
 ## Dev workflow (cheat-sheet — full detail in `docs/contributing.md`)
 

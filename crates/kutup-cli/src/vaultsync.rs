@@ -133,7 +133,7 @@ impl VaultKeys {
     /// Opens a version of vault `rel` (Drive file `file_id`) with a key
     /// already known for it, its vault secret, a configured one, or (`ask`)
     /// one the person types. The index is which known key opened it.
-    fn open(
+    pub(crate) fn open(
         &mut self,
         client: &Client,
         rel: &str,

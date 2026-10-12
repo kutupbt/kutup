@@ -36,7 +36,8 @@
     "office": "Office",
     "photos": "Photos",
     "contacts": "Contacts",
-    "mail": "Mail"
+    "mail": "Mail",
+    "pass": "Pass"
   },
   "theme": {
     "dark": "Dark theme",

@@ -17,6 +17,7 @@ pub mod register;
 pub mod rm;
 pub mod sessions;
 pub mod share;
+pub mod ssh;
 pub mod sync;
 pub mod trash;
 pub mod twofa;

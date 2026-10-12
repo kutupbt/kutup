@@ -1419,6 +1419,16 @@ served instead when there is one).
 
 ## Kutup Pass
 
+### POST /api/user/reauth
+
+Checks the signed-in account's password again (Kutup Pass's lock) exactly as
+sign-in does. **Body:** `{loginKey}`, derived from the typed password with the
+public `GET /api/auth/login/preflight` parameters. Verified against the stored
+hash under the sign-in lockout (`LOGIN_LOCKOUT_*`: misses here and at sign-in
+count together) and the sign-in rate limit; failures are logged. Nothing
+secret is returned. **Auth:** Bearer JWT. **Response:** `204`, `401` for
+another password, `429` during the lockout.
+
 Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
 file in Drive with its own key; each person may keep, per vault they can
 open, that key sealed under their master key: an `AccountEnvelopeV1` with
@@ -3677,9 +3687,10 @@ List all versions newest-first.
 **Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
 `parentVersionId` is, for a whole-file version, the version it replaced (the
 file's current content when it was stored); `null` for the original upload,
-for notes' states and for versions stored before it was recorded. Two versions
-with the same parent are a divergence; the parent is the base to merge them
-against (docs/plans/pass.md).
+for notes' states and for versions stored before it was recorded. Whole-file
+saves of a file are serialized, so each version replaces the one before it;
+with conditional saves (`basedOn`, below) no edit is overwritten unseen
+(docs/plans/pass.md).
 
 ### GET /api/files/:fileId/versions/:vid/download
 Get the encrypted snapshot bytes for a specific version. Returns

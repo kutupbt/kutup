@@ -1,4 +1,4 @@
-# The Kutup web apps (account, drive, chat, maps, photos, office, contacts, mail) and the
+# The Kutup web apps (account, drive, chat, maps, photos, office, contacts, mail, pass) and the
 # OnlyOffice editor sandbox, each
 # served on its own hostname by one nginx (frontend/docker/). Build context is
 # the repository root, so the WASM crates compile here.
@@ -18,6 +18,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY scripts/build-chat-wasm.sh scripts/build-chat-wasm.sh
 COPY scripts/build-crypto-wasm.sh scripts/build-crypto-wasm.sh
+COPY scripts/build-pass-wasm.sh scripts/build-pass-wasm.sh
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # The workspace sources are touched before compiling, as Dockerfile.server
 # does: Cargo decides what to rebuild by file time, the target directories
@@ -31,6 +32,7 @@ RUN --mount=type=cache,id=kutup-browser-cargo-registry,target=/usr/local/cargo/r
     rustup target add wasm32-unknown-unknown \
     && find crates -type f -exec touch {} + \
     && bash scripts/build-crypto-wasm.sh \
+    && bash scripts/build-pass-wasm.sh \
     && bash scripts/build-chat-wasm.sh
 
 FROM node:22-alpine AS builder
@@ -66,7 +68,7 @@ RUN o=apps/editor/public/onlyoffice \
     && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
 RUN pnpm run build \
     && mkdir -p /out \
-    && for app in account drive chat maps photos office contacts mail editor; do cp -r apps/$app/dist /out/$app; done \
+    && for app in account drive chat maps photos office contacts mail pass editor; do cp -r apps/$app/dist /out/$app; done \
     && find /out -name '*.map' -delete
 
 # Every text file and WASM over 1 KB is stored compressed beside itself,

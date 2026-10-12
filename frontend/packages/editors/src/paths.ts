@@ -3,24 +3,37 @@ import { isListName } from '@kutup/map/list'
 import { appUrl } from '@kutup/session/apps'
 import { getClientType } from '@kutup/session/client'
 import type { Folder } from '@kutup/drive-core/model'
-import { opensInOffice } from '@kutup/drive-core/editorKind'
+import { isVaultName, opensInOffice } from '@kutup/drive-core/editorKind'
 
 // Each file has one address, whichever app it was opened from
 // (docs/architecture.md, "File editor route"): what is edited opens in Office —
 // notes and code, office documents, PDFs, whiteboards — a place list in
-// Maps, and anything else (photos, videos, audio, other files) in Drive.
+// Maps, a KeePass vault in Pass, and anything else (photos, videos, audio,
+// other files) in Drive.
 
 /** The app a file opens in. */
-export type FileApp = 'drive' | 'office' | 'maps'
+export type FileApp = 'drive' | 'office' | 'maps' | 'pass'
 
 /** The apps that hold the file page: Drive and Office. */
-export type FilePageApp = Exclude<FileApp, 'maps'>
+export type FilePageApp = Exclude<FileApp, 'maps' | 'pass'>
 
-export function appFor(name: string | null): FileApp {
+type FolderPlace = Partial<Pick<Folder, 'source' | 'remoteShareId' | 'remoteFileShareId'>>
+
+/**
+ * The app `name` opens in. A vault on another server stays in Drive: Pass
+ * opens this server's vaults only.
+ */
+export function appFor(name: string | null, folder?: FolderPlace): FileApp {
   if (!name) return 'drive'
   if (isListName(name)) return 'maps'
+  if (isVaultName(name)) return folder && (folder.remoteFileShareId || (folder.source === 'remote' && folder.remoteShareId)) ? 'drive' : 'pass'
   if (opensInOffice(name)) return 'office'
   return 'drive'
+}
+
+/** Where a vault opens: its page in Pass. */
+export function passVaultUrl(fileId: string): string {
+  return appUrl('pass', `/v/${fileId}`)
 }
 
 /** The app this page belongs to. */
@@ -66,16 +79,17 @@ export function mapsListUrl(folder: Pick<Folder, 'id' | 'source' | 'remoteShareI
  * A file's address in the app that opens it, marked with the app it was
  * opened from (`from`) so that its back button returns there.
  */
-export function fileUrl(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'>, file: { id: string; name: string | null }, from: FilePageApp): string {
-  const app = appFor(file.name)
+export function fileUrl(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'> & FolderPlace, file: { id: string; name: string | null }, from: FilePageApp): string {
+  const app = appFor(file.name, folder)
   if (app === 'maps') return mapsListUrl(folder, file.id, from === 'drive')
+  if (app === 'pass') return passVaultUrl(file.id)
   return appUrl(app, `${filePath(folder, file.id)}?from=${from}`)
 }
 
 /** Open a file: on this page when this app opens it, otherwise in the app that does. */
-export function openFile(navigate: NavigateFunction, folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'>, file: { id: string; name: string | null }): void {
+export function openFile(navigate: NavigateFunction, folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'> & FolderPlace, file: { id: string; name: string | null }): void {
   const here = currentApp()
-  if (appFor(file.name) === here) void navigate(filePath(folder, file.id))
+  if (appFor(file.name, folder) === here) void navigate(filePath(folder, file.id))
   else window.location.assign(fileUrl(folder, file, here))
 }
 

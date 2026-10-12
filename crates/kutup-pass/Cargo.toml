@@ -8,14 +8,28 @@ rust-version.workspace = true
 
 [dependencies]
 # The patched copy of the `keepass` crate (vendor/keepass/KUTUP.md).
-keepass = { path = "vendor/keepass", features = ["save_kdbx4"] }
+keepass = { path = "vendor/keepass", features = ["save_kdbx4", "totp"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 uuid.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+serde.workspace = true
+base64.workspace = true
+# SSH keys kept in vault entries (KeeAgent), for the `kutup` agent.
+ssh-key = { version = "0.6", features = ["std", "ed25519", "rsa", "p256", "p384", "encryption"] }
+rsa = { version = "0.9", features = ["sha2"] }
 sha2.workspace = true
+quick-xml = "0.42"
+signature = "2"
+ssh-encoding = { version = "0.2", features = ["alloc"] }
+# The Argon2 version of new vaults' key derivation (the `keepass` crate's).
+argon2 = { package = "rust-argon2", version = "3" }
 
 [dev-dependencies]
 proptest = "1"
+serde_json.workspace = true
+# Test keys are made at test time, never checked in.
+ssh-key = { version = "0.6", features = ["std", "ed25519", "rsa", "p256", "p384", "encryption", "rand_core", "getrandom"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 # The `vault` example stamps edits with the current time.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

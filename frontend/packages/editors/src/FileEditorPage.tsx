@@ -30,7 +30,7 @@ import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
 import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
-import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom } from './paths'
+import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom, passVaultUrl } from './paths'
 import { contentAt, currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
@@ -172,8 +172,9 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     // A file has one address: one opened in the other app goes there (a
     // link from before, or one typed in), and a place list to Maps.
     else if (folder && file && appFor(file.name) === 'maps') window.location.replace(mapsListUrl(folder, file.id))
-    else if (folder && file && appFor(file.name) !== currentApp()) {
-      const app = appFor(file.name) as 'drive' | 'office'
+    else if (folder && file && appFor(file.name, folder) === 'pass') window.location.replace(passVaultUrl(file.id))
+    else if (folder && file && appFor(file.name, folder) !== currentApp()) {
+      const app = appFor(file.name, folder) as 'drive' | 'office'
       window.location.replace(appUrl(app, `${filePath(folder, file.id)}${window.location.search}`))
     }
     else if (folder && file) setPicked({ folder, file })

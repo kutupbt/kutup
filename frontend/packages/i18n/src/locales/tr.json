@@ -36,7 +36,8 @@
     "office": "Ofis",
     "photos": "Galeri",
     "contacts": "Kişiler",
-    "mail": "Posta"
+    "mail": "Posta",
+    "pass": "Kasa"
   },
   "theme": {
     "dark": "Koyu tema",

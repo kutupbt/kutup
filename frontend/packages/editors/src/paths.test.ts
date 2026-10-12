@@ -18,6 +18,14 @@ describe('appFor', () => {
   it('opens a place list in Maps', () => {
     expect(appFor('Trip.kutupmap')).toBe('maps')
   })
+
+  it('opens a KeePass vault in Pass, unless it is on another server', () => {
+    expect(appFor('Passwords.kdbx')).toBe('pass')
+    expect(appFor('Team.KDBX', { source: 'shared' })).toBe('pass')
+    expect(appFor('Passwords.kdbx', { source: 'remote', remoteShareId: 's1' })).toBe('drive')
+    expect(appFor('Passwords.kdbx', { source: 'file', remoteFileShareId: 's2' })).toBe('drive')
+    expect(appFor('.kdbx')).toBe('drive')
+  })
 })
 
 describe('filePath', () => {

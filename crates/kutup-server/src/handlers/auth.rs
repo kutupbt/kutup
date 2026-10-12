@@ -573,6 +573,62 @@ pub async fn get_login_preflight(
     .into_response())
 }
 
+/// `POST /api/user/reauth` body: the login key derived from the typed
+/// password, as for sign-in.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReauthRequest {
+    pub login_key: String,
+}
+
+/// `POST /api/user/reauth` — checks the signed-in account's password again
+/// (Kutup Pass's lock, docs/plans/pass.md) exactly as sign-in checks it: the
+/// login key against `login_key_hash`, under the same per-account lockout and
+/// per-address rate limit. Nothing comes back but yes or no; the session
+/// already holds what the password would unlock.
+#[utoipa::path(
+    post,
+    path = "/api/user/reauth",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = ReauthRequest,
+    responses(
+        (status = 204, description = "The password is the account's"),
+        (status = 401, description = "It is not"),
+        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+    )
+)]
+pub async fn reauth(
+    State(state): State<AppState>,
+    user: AuthUser,
+    body: Result<Json<ReauthRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let (email, login_key_hash): (String, String) =
+        sqlx::query_as("SELECT email, login_key_hash FROM users WHERE id = $1 AND is_active")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| AppError::unauthorized("invalid credentials"))?;
+    // The sign-in lockout: misses here and at sign-in count together.
+    if ratelimit::LOGIN_LOCKOUT.is_locked(&email) {
+        return Err(AppError::too_many_requests(
+            "too many failed attempts, try again later",
+        ));
+    }
+    let login_key = STANDARD
+        .decode(&req.login_key)
+        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
+    if !bcrypt::verify(&login_key, &login_key_hash).unwrap_or(false) {
+        ratelimit::LOGIN_LOCKOUT.record(&email, false);
+        tracing::warn!(user_id = %user_id, "account password re-check failed");
+        return Err(AppError::unauthorized("invalid credentials"));
+    }
+    ratelimit::LOGIN_LOCKOUT.record(&email, true);
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+}
+
 /// `POST /api/auth/login` — mirrors `Login`.
 #[utoipa::path(
     post,
