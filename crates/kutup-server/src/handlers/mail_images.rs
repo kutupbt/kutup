@@ -40,9 +40,13 @@ const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
 /// `x-pm-tracker-provider`).
 pub const TRACKER_HEADER: &str = "x-kutup-tracker";
 
-/// 600 images a minute per account: a newsletter can carry a hundred.
+/// 600 images a minute per account: a newsletter can carry a hundred. Nothing
+/// is cached, so each one is a fetch.
 static MAIL_IMAGES: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+/// Images fetched at once on this server, for all accounts.
+static FETCHING: LazyLock<tokio::sync::Semaphore> =
+    LazyLock::new(|| tokio::sync::Semaphore::new(32));
 
 /// Known open-tracking addresses: a host (or its subdomains) and, when the
 /// host also serves real images, the path where its pixels live.
@@ -164,6 +168,7 @@ pub struct ImageQuery {
         (status = 400, description = "Not a public http or https address"),
         (status = 422, description = "The site did not answer with an image"),
         (status = 429, description = "Too many images"),
+        (status = 503, description = "The proxy is busy"),
     ),
     security(("BearerAuth" = []))
 )]
@@ -181,6 +186,16 @@ pub async fn fetch(
     if let Some(provider) = tracker_of(&url) {
         return Ok(tracker_response(provider));
     }
+    // Busy for longer than one fetch may take: try again later.
+    let _permit = tokio::time::timeout(TOTAL_TIMEOUT, FETCHING.acquire())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the image proxy is busy; try again shortly",
+            )
+        })?
+        .map_err(|_| AppError::internal("image fetches closed"))?;
     let (mime, body) = fetch_image(url, &Checks::PUBLIC).await?;
     Ok((
         StatusCode::OK,
@@ -194,6 +209,10 @@ pub async fn fetch(
             (
                 header::CONTENT_DISPOSITION,
                 HeaderValue::from_static("inline"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
             ),
         ],
         body,
