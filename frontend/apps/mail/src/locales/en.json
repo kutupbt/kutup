@@ -241,7 +241,10 @@
     "sendUndone": "Sending undone.",
     "alreadySent": "The message was already sent.",
     "undoFailed": "Sending could not be undone.",
-    "sendFailedLater": "The message could not be sent and is still in Drafts. {{reason}}"
+    "sendFailedLater": "The message could not be sent and is still in Drafts. {{reason}}",
+    "moreOptions": "More options",
+    "plainText": "Plain text",
+    "rightToLeft": "Right to left"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -654,7 +657,18 @@
     "density": "Density",
     "densityHint": "How much of the list fits on screen.",
     "comfortable": "Comfortable",
-    "compact": "Compact"
+    "compact": "Compact",
+    "composerDefaults": "Composer",
+    "draftType": "Composer mode",
+    "draftHtml": "Normal",
+    "draftPlain": "Plain text",
+    "textDirection": "Composer text direction",
+    "ltr": "Left to right",
+    "rtl": "Right to left",
+    "fontFace": "Default font",
+    "fontSize": "Default font size",
+    "pixels_one": "{{count}} px",
+    "pixels_other": "{{count}} px"
   },
   "listFilter": {
     "unread": "Unread",

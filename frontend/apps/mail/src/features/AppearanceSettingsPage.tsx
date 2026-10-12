@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 import { useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
 import { Alert } from '@kutup/ui/components/alert'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { FONT_FACES, FONT_SIZES } from './composerLook'
 
 interface Card<T extends string> {
   value: T
@@ -15,6 +17,23 @@ interface Card<T extends string> {
 }
 
 /** A radio group of picture cards, as Proton's layout cards; arrow keys move between them. */
+/** One labelled select, as Settings → General's. */
+function ChoiceRow({ id, label, value, onChange, children }: { id: string; label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id={id} className="sm:w-56">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>{children}</SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 function Cards<T extends string>({ label, hint, value, cards, disabled, onChange }: { label: string; hint: string; value: T; cards: Card<T>[]; disabled: boolean; onChange: (value: T) => void }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
   function onKeyDown(e: KeyboardEvent, index: number) {
@@ -151,6 +170,33 @@ export function AppearanceSettingsPage() {
           ]}
         />
       </div>
+      <section className="mt-8 space-y-3" aria-labelledby="composer-defaults">
+        <h2 id="composer-defaults" className="text-sm font-medium">
+          {t('appearance.composerDefaults')}
+        </h2>
+        <ChoiceRow id="draft-type" label={t('appearance.draftType')} value={settings.data.draftType} onChange={(draftType) => save({ draftType: draftType as MailSettings['draftType'] })}>
+          <SelectItem value="html">{t('appearance.draftHtml')}</SelectItem>
+          <SelectItem value="plain">{t('appearance.draftPlain')}</SelectItem>
+        </ChoiceRow>
+        <ChoiceRow id="text-direction" label={t('appearance.textDirection')} value={settings.data.textDirection} onChange={(textDirection) => save({ textDirection: textDirection as MailSettings['textDirection'] })}>
+          <SelectItem value="ltr">{t('appearance.ltr')}</SelectItem>
+          <SelectItem value="rtl">{t('appearance.rtl')}</SelectItem>
+        </ChoiceRow>
+        <ChoiceRow id="font-face" label={t('appearance.fontFace')} value={settings.data.fontFace} onChange={(fontFace) => save({ fontFace })}>
+          {FONT_FACES.map((font) => (
+            <SelectItem key={font.id} value={font.id}>
+              <span style={{ fontFamily: font.family }}>{font.label}</span>
+            </SelectItem>
+          ))}
+        </ChoiceRow>
+        <ChoiceRow id="font-size" label={t('appearance.fontSize')} value={String(settings.data.fontSize)} onChange={(size) => save({ fontSize: Number(size) })}>
+          {FONT_SIZES.map((size) => (
+            <SelectItem key={size} value={String(size)}>
+              {t('appearance.pixels', { count: size })}
+            </SelectItem>
+          ))}
+        </ChoiceRow>
+      </section>
     </PageBody>
   )
 }
