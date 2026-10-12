@@ -31,7 +31,7 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(8);
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupLinkPreview/1.0)";
 
 /// 30 fetches a minute per account: a preview is one page and one image.
-static LINK_PREVIEWS: LazyLock<RateLimiter> =
+pub(crate) static LINK_PREVIEWS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::new(30, Duration::from_secs(60)));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]

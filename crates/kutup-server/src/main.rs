@@ -733,8 +733,7 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/image-senders",
             get(handlers::mail_image_senders::list).post(handlers::mail_image_senders::add),
         )
-        .route("/api/mail/images", get(handlers::mail_images::fetch))
-        .route("/api/mail/images/check", post(handlers::mail_images::check))
+        .route("/api/mail/images", post(handlers::mail_images::fetch))
         .route(
             "/api/mail/image-senders/delete",
             post(handlers::mail_image_senders::delete),
