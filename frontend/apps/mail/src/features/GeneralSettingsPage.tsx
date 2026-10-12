@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { PAGE_SIZES, useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
+import { PAGE_SIZES, useImageSenders, useMailSettings, useRemoveImageSender, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
 import { Alert } from '@kutup/ui/components/alert'
+import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
@@ -25,6 +26,8 @@ export function GeneralSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
   const update = useUpdateMailSettings()
+  const imageSenders = useImageSenders()
+  const removeImageSender = useRemoveImageSender()
   if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
   if (settings.isError) return <Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert>
   const save = (change: Partial<MailSettings>) =>
@@ -96,6 +99,57 @@ export function GeneralSettingsPage() {
           onChange={(on) => save({ almostAllMail: on })}
         />
       </div>
+      <section className="mt-8 space-y-3" aria-labelledby="images-heading">
+        <h2 id="images-heading" className="text-sm font-medium">
+          {t('remoteImages.settingsTitle')}
+        </h2>
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            <label htmlFor="remote-images" className="block text-sm font-medium">
+              {t('remoteImages.setting')}
+            </label>
+            <span className="block text-sm text-muted-foreground">{t('remoteImages.settingHint')}</span>
+          </span>
+          <Select value={settings.data.remoteImages} onValueChange={(remoteImages) => save({ remoteImages: remoteImages as MailSettings['remoteImages'] })}>
+            <SelectTrigger id="remote-images" className="sm:w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ask">{t('remoteImages.ask')}</SelectItem>
+              <SelectItem value="always">{t('remoteImages.alwaysAll')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="rounded-lg border border-border p-4">
+          <p className="text-sm font-medium">{t('remoteImages.sendersTitle')}</p>
+          <p className="text-sm text-muted-foreground">{t('remoteImages.sendersHint')}</p>
+          {imageSenders.data?.length ? (
+            <ul className="mt-3 divide-y divide-border" aria-label={t('remoteImages.sendersTitle')}>
+              {imageSenders.data.map((sender) => (
+                <li key={sender.address} className="flex items-center gap-2 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{sender.address}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t('remoteImages.remove', { address: sender.address })}
+                    disabled={removeImageSender.isPending}
+                    onClick={() =>
+                      removeImageSender.mutate(sender.address, {
+                        onSuccess: () => toast.success(t('remoteImages.removed', { address: sender.address })),
+                        onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+                      })
+                    }
+                  >
+                    {t('remoteImages.removeShort')}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">{t('remoteImages.noSenders')}</p>
+          )}
+        </div>
+      </section>
       <section className="mt-8 space-y-3" aria-labelledby="pgp-heading">
         <h2 id="pgp-heading" className="text-sm font-medium">
           {t('general.pgpTitle')}

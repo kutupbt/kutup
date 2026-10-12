@@ -856,5 +856,23 @@
     "failed": "Okundu bilgisi gönderilemedi.",
     "subject": "Okundu: {{subject}}",
     "body": "{{sent}} tarihinde gönderdiğiniz “{{subject}}” iletisi {{read}} tarihinde okundu."
+  },
+  "remoteImages": {
+    "title": "Uzak görseller yüklensin mi?",
+    "body": "Uzak görseller gönderenin sunucularından gelir: yüklemek, gönderene bu iletiyi açtığınızı, ne zaman açtığınızı ve IP adresinizi bildirebilir.",
+    "always": "{{address}} adresinden gelen görselleri her zaman yükle",
+    "load": "Görselleri yükle",
+    "remembered": "{{address}} adresinden gelen görseller artık her zaman yüklenecek.",
+    "settingsTitle": "Uzak görseller",
+    "setting": "Uzak görselleri yükle",
+    "settingHint": "Gönderenin sunucularından gelen görseller, iletiyi açtığınızı ona bildirebilir. Spam'de kendiliğinden hiç yüklenmez.",
+    "ask": "Her seferinde sor",
+    "alwaysAll": "Her zaman",
+    "sendersTitle": "Görselleri her zaman yüklenen gönderenler",
+    "sendersHint": "Bir iletinin görsellerini yüklerken “Her zaman” seçtiğinizde eklenir.",
+    "noSenders": "Henüz gönderen yok.",
+    "remove": "{{address}} adresini kaldır",
+    "removeShort": "Kaldır",
+    "removed": "{{address}} adresinden gelen görseller yine sorulacak."
   }
 }

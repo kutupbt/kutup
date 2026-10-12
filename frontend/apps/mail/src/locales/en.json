@@ -856,5 +856,23 @@
     "failed": "The read receipt could not be sent.",
     "subject": "Read: {{subject}}",
     "body": "Your message “{{subject}}”, sent on {{sent}}, was read on {{read}}."
+  },
+  "remoteImages": {
+    "title": "Load remote images?",
+    "body": "Remote images come from the sender’s servers: loading them can tell the sender that you opened this message, when, and your IP address.",
+    "always": "Always load images from {{address}}",
+    "load": "Load images",
+    "remembered": "Images from {{address}} will always load.",
+    "settingsTitle": "Remote images",
+    "setting": "Load remote images",
+    "settingHint": "Images from the sender’s servers can tell them you opened a message. In Spam they are never loaded on their own.",
+    "ask": "Ask each time",
+    "alwaysAll": "Always",
+    "sendersTitle": "Senders whose images always load",
+    "sendersHint": "Added when you load a message’s images and choose “Always”.",
+    "noSenders": "No senders yet.",
+    "remove": "Remove {{address}}",
+    "removeShort": "Remove",
+    "removed": "Images from {{address}} will be asked for again."
   }
 }

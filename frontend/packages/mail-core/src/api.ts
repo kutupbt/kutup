@@ -680,6 +680,37 @@ export function useBatchMessages() {
   })
 }
 
+const imageSendersKey = ['mail', 'image-senders'] as const
+
+/** Senders whose remote images always load (chosen when loading them). */
+export function useImageSenders() {
+  return useQuery({
+    queryKey: imageSendersKey,
+    staleTime: 5 * 60_000,
+    queryFn: async () => (await api.get<{ address: string; createdAt: string }[]>('/mail/image-senders')).data,
+  })
+}
+
+export function useAddImageSender() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (address: string) => {
+      await api.post('/mail/image-senders', { address })
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: imageSendersKey }),
+  })
+}
+
+export function useRemoveImageSender() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (address: string) => {
+      await api.post('/mail/image-senders/delete', { address })
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: imageSendersKey }),
+  })
+}
+
 /** Deletes for good (from Trash, Spam and Drafts). */
 export function useDeleteMessages() {
   const queryClient = useQueryClient()
@@ -726,6 +757,8 @@ export interface MailSettings {
   pageSize: number
   /** Moving list mail to Spam: ask, just move, or move and unsubscribe (Proton's SpamAction). */
   spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
+  /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
+  remoteImages: 'ask' | 'always'
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */

@@ -35,7 +35,7 @@ reference only where Proton has nothing.
 | Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ✅ preview (images, PDF, text, audio, video) with previous/next, Download all as `Attachments-<subject>.zip` (spec 96); the files as chips under list rows, 2 in columns or 3 in rows then "+N", not in compact rows or Spam, invites and keys left out, a chip opening the preview (spec 96). Names, types and sizes are readable metadata, as Proton's AttachmentsMetadata |
 | Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | ✅ a message's More actions: Export, Print, View headers (and download), View HTML / rendered |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
-| Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ❌ |
+| Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | 🔶 remote images blocked until loaded; loading asks first and can remember the sender ("Always load images from …", Kutup's own: Proton asks each time), never automatic in Spam (spec 101); ❌ image proxy, tracker stripping |
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; on moving list mail to Spam, "Move to spam and unsubscribe" (asked, or always/never in Settings → General as Proton's Auto-unsubscribe): arrival notes only that a message is from a list, the ways out are read on the device |
@@ -124,7 +124,7 @@ reference only where Proton has nothing.
 | Mobile apps | | ➖ native apps' plans |
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Calendar invitations in mail (Accept, Decline) | `ExtraEvent.tsx` | ➖ with Calendar |
-| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ❌ |
+| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | 🔶 Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs; ❌ tracker protection, embedded images |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
 | Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |

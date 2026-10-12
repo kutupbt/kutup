@@ -2617,7 +2617,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask" })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask" })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2662,12 +2662,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe" }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always" }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe" })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always" })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3802,4 +3802,89 @@ fn select_all_changes_a_whole_place() {
     ] {
         assert_eq!(batch(body.clone()).status(), 400, "{body}");
     }
+}
+
+#[test]
+fn senders_whose_images_always_load() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let eve = register(&c, &base);
+    let list = |token: &str| -> Vec<String> {
+        let rows: Value = bearer(c.get(format!("{base}/api/mail/image-senders")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["address"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let post = |path: &str, token: &str, body: Value| {
+        bearer(c.post(format!("{base}{path}")), token)
+            .json(&body)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    // Kept lowercase, once; a domain or nonsense is not a sender.
+    assert_eq!(
+        post(
+            "/api/mail/image-senders",
+            &alice.token,
+            json!({ "address": "News@Example.org" })
+        ),
+        204
+    );
+    assert_eq!(
+        post(
+            "/api/mail/image-senders",
+            &alice.token,
+            json!({ "address": "news@example.org" })
+        ),
+        204
+    );
+    assert_eq!(list(&alice.token), ["news@example.org"]);
+    assert_eq!(
+        post(
+            "/api/mail/image-senders",
+            &alice.token,
+            json!({ "address": "example.org" })
+        ),
+        400
+    );
+    assert_eq!(
+        post(
+            "/api/mail/image-senders",
+            &alice.token,
+            json!({ "address": "not an address" })
+        ),
+        400
+    );
+    // Each account's own.
+    assert!(list(&eve.token).is_empty());
+    assert_eq!(
+        post(
+            "/api/mail/image-senders/delete",
+            &eve.token,
+            json!({ "address": "news@example.org" })
+        ),
+        204
+    );
+    assert_eq!(list(&alice.token), ["news@example.org"]);
+    assert_eq!(
+        post(
+            "/api/mail/image-senders/delete",
+            &alice.token,
+            json!({ "address": "NEWS@example.org" })
+        ),
+        204
+    );
+    assert!(list(&alice.token).is_empty());
 }
