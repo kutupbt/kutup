@@ -147,7 +147,8 @@
     "maps": "Paylaşılan ve birlikte düzenlenen, uçtan uca şifreli yer listeleri.",
     "photos": "Fotoğraflarınız ve videolarınız, ne zaman ve nerede çekildiklerine göre, uçtan uca şifreli.",
     "contacts": "Yazıştığınız, sohbet ettiğiniz ve paylaştığınız herkes, tek bir şifreli adres defterinde.",
-    "mail": "Postalarınız: diğer Kutup kullanıcılarıyla uçtan uca şifreli, başkalarından gelenler ulaştığı anda şifrelenir."
+    "mail": "Postalarınız: diğer Kutup kullanıcılarıyla uçtan uca şifreli, başkalarından gelenler ulaştığı anda şifrelenir.",
+    "pass": "Parolalarınız, Depo'daki KeePass kasalarında; çevrimdışı ve KeePassXC ile de kullanılabilir."
   },
   "settings": {
     "account": {

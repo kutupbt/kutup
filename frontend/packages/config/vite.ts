@@ -11,8 +11,8 @@ import { reloadGuardScript } from './src/reloadGuard.ts'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail'
-export type WasmModule = 'crypto' | 'chat'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass'
+export type WasmModule = 'crypto' | 'chat' | 'pass'
 
 /**
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
@@ -42,10 +42,10 @@ function reloadOnceOnLoadFailure(): Plugin {
 
 /**
  * The WASM runtimes are fetched from absolute paths on the page's own origin,
- * `/crypto-wasm/<hash>/…` and `/chat-wasm/<hash>/…` (see @kutup/crypto/rustWasm
- * and @kutup/chat-core/wasm), the hash being the files' own: a new build is a
+ * `/crypto-wasm/<hash>/…`, `/chat-wasm/<hash>/…` and `/pass-wasm/<hash>/…` (see
+ * @kutup/crypto/rustWasm, @kutup/chat-core/wasm and the Pass app), the hash being the files' own: a new build is a
  * new URL, so they can be cached for good. The bundle learns the hashes as
- * `__KUTUP_CRYPTO_WASM__` and `__KUTUP_CHAT_WASM__`. `pnpm build:wasm` writes
+ * `__KUTUP_CRYPTO_WASM__`, `__KUTUP_CHAT_WASM__` and `__KUTUP_PASS_WASM__`. `pnpm build:wasm` writes
  * the files once to frontend/wasm; this serves them in dev and copies them
  * into each app's dist on build.
  */
@@ -59,6 +59,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         define: {
           __KUTUP_CRYPTO_WASM__: JSON.stringify(wasmHash('crypto')),
           __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
+          __KUTUP_PASS_WASM__: JSON.stringify(wasmHash('pass')),
         },
       }
     },
@@ -88,7 +89,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
         if (!existsSync(src)) {
           throw new Error(`${src} is missing — run \`pnpm -C frontend build:wasm\` first`)
         }
-        const hash = wasmHash(dir === 'crypto-wasm' ? 'crypto' : 'chat')
+        const hash = wasmHash(dir.replace(/-wasm$/, '') as WasmModule)
         cpSync(src, path.join(outDir, dir, hash), { recursive: true })
       }
     },
@@ -96,7 +97,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181 }
+export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own

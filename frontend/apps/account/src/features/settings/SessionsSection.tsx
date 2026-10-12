@@ -48,6 +48,7 @@ const CLIENT_KEYS: Record<string, string> = {
   'web-office': 'apps.office',
   'web-contacts': 'apps.contacts',
   'web-mail': 'apps.mail',
+  'web-pass': 'apps.pass',
   cli: 'settings.sessions.cli',
 }
 

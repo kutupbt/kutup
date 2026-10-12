@@ -586,6 +586,7 @@ Each file has **one address**, whichever app it is opened from (`appFor` in `pac
 
 - **Office** (`office.<domain>`) opens what is edited: notes and code, `.docx`/`.xlsx`/`.pptx`, PDFs (in OnlyOffice's PDF editor, or the viewer when the file is read-only or on another server) and whiteboards.
 - **Maps** opens place lists (`.kutupmap`).
+- **Pass** opens KeePass vaults (`.kdbx`) at `pass.<domain>/v/:fid`; a vault on another server stays in Drive.
 - **Drive** opens everything else: photos, videos, audio and other files.
 
 Drive's lists, search and New menu link a document straight to Office (`?from=drive`, so its back button returns to the folder); the Office home opens it in place. A file opened in the other app (an older `drive.<domain>/file/…` link, say) is replaced by its address in the right one, keeping `?from=`. The back button goes to the app named in `from` (only `drive` or `office` are honoured), or else to Office's home or the file's Drive folder. Only Office may frame the OnlyOffice sandbox (its `frame-ancestors`, and Office's `frame-src`; `frontend/docker/40-kutup-hosts.sh`).

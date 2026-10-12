@@ -665,8 +665,13 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 - **K2a** ✅: vault secrets sealed under the account key
   (`kutup_crypto::pass_vault`, `/api/pass/vault-secrets`); `kutup sync`
   opens vaults with the sign-in, `kutup pass keep|ls|forget`.
-- **K2b/K2c**: vault editing in `kutup-pass` and its WASM build; the website
-  with the offline outbox.
+- **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
+  recycle bin, deletions recorded) and `kutup-pass-wasm`.
+- **K2c** ✅: the website at `pass.<domain>`: vaults from Drive, unlock with
+  the sign-in, entries with TOTP, attachments and history, the offline
+  outbox, merges with review marks (specs 76–79).
+- **Pass next** (with K3): the security report (weak, reused), custom
+  icons, CSV import from other password managers.
 - **K3**: re-merging diverged versions; phone browsers. **K3b**: the opt-in
   SSH agent in the `kutup` CLI.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
