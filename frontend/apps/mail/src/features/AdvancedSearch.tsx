@@ -46,14 +46,17 @@ export function AdvancedSearch({ onDone }: { onDone: () => void }) {
     void navigate(query ? `${path}?${query}` : path)
     onDone()
   }
+  // The form sits in a portal inside the search box's form: React would bubble its submit there too.
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    event.stopPropagation()
     go(model, place)
   }
 
   return (
     <form className="grid gap-3" aria-label={t('search.advanced')} onSubmit={submit} onReset={(event) => {
       event.preventDefault()
+      event.stopPropagation()
       setModel(EMPTY_SEARCH)
       go(EMPTY_SEARCH, place)
     }}>
