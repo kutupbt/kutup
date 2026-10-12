@@ -109,7 +109,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Unread count in the title | `useMailboxFavicon.ts` | ✅ (favicon count missing) |
-| Desktop notifications for new mail | `useNewEmailNotification.ts` | ❌ |
+| Desktop notifications for new mail | `useNewEmailNotification.ts` | ✅ while Mail is open: "New email received", "From: sender - subject" for each new unread message in the Inbox, Starred or a folder with notifications on (snoozed mail coming back too), one "N new messages" past three (Proton groups on Windows only); a click opens it; Settings → General shows the browser's permission, Enable and Send test notification; a banner asks once (`GET /api/mail/notifications`, `notify_at`; spec 112). Your own mailbox only, as Proton |
 | Web push | | ❌ (C2f) |
 | Daily email summary | `DailyEmailNotificationToggle` | ❌ |
 | Per-folder notifications | label `Notify` | 🔶 F1 (the switch), with push |
