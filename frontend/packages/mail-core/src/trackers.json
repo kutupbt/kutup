@@ -1,0 +1,147 @@
+[
+  {
+    "host": "list-manage.com",
+    "path": "/track/open",
+    "provider": "Mailchimp"
+  },
+  {
+    "host": "mandrillapp.com",
+    "path": "/track/open",
+    "provider": "Mandrill"
+  },
+  {
+    "host": "sendgrid.net",
+    "path": "/wf/open",
+    "provider": "SendGrid"
+  },
+  {
+    "host": "hubspotemail.net",
+    "path": "",
+    "provider": "HubSpot"
+  },
+  {
+    "host": "hubspotlinks.com",
+    "path": "",
+    "provider": "HubSpot"
+  },
+  {
+    "host": "track.hubspot.com",
+    "path": "",
+    "provider": "HubSpot"
+  },
+  {
+    "host": "t.sidekickopen01.com",
+    "path": "",
+    "provider": "HubSpot"
+  },
+  {
+    "host": "exct.net",
+    "path": "/open.aspx",
+    "provider": "Salesforce Marketing Cloud"
+  },
+  {
+    "host": "rs6.net",
+    "path": "/on.jsp",
+    "provider": "Constant Contact"
+  },
+  {
+    "host": "createsend1.com",
+    "path": "/t/",
+    "provider": "Campaign Monitor"
+  },
+  {
+    "host": "cmail19.com",
+    "path": "/t/",
+    "provider": "Campaign Monitor"
+  },
+  {
+    "host": "cmail20.com",
+    "path": "/t/",
+    "provider": "Campaign Monitor"
+  },
+  {
+    "host": "mjt.lu",
+    "path": "/oo/",
+    "provider": "Mailjet"
+  },
+  {
+    "host": "sendibt3.com",
+    "path": "",
+    "provider": "Brevo"
+  },
+  {
+    "host": "sendibw.com",
+    "path": "",
+    "provider": "Brevo"
+  },
+  {
+    "host": "awstrack.me",
+    "path": "/I0/",
+    "provider": "Amazon SES"
+  },
+  {
+    "host": "pstmrk.it",
+    "path": "/open",
+    "provider": "Postmark"
+  },
+  {
+    "host": "customeriomail.com",
+    "path": "/e/o/",
+    "provider": "Customer.io"
+  },
+  {
+    "host": "klaviyomail.com",
+    "path": "",
+    "provider": "Klaviyo"
+  },
+  {
+    "host": "via.intercom.io",
+    "path": "/o/",
+    "provider": "Intercom"
+  },
+  {
+    "host": "emltrk.com",
+    "path": "",
+    "provider": "Litmus"
+  },
+  {
+    "host": "mailtrack.io",
+    "path": "",
+    "provider": "Mailtrack"
+  },
+  {
+    "host": "t.yesware.com",
+    "path": "",
+    "provider": "Yesware"
+  },
+  {
+    "host": "mailfoogae.appspot.com",
+    "path": "",
+    "provider": "Streak"
+  },
+  {
+    "host": "bananatag.com",
+    "path": "",
+    "provider": "Bananatag"
+  },
+  {
+    "host": "getnotify.com",
+    "path": "",
+    "provider": "GetNotify"
+  },
+  {
+    "host": "api.mixpanel.com",
+    "path": "/track",
+    "provider": "Mixpanel"
+  },
+  {
+    "host": "google-analytics.com",
+    "path": "/collect",
+    "provider": "Google Analytics"
+  },
+  {
+    "host": "facebook.com",
+    "path": "/tr",
+    "provider": "Meta"
+  }
+]

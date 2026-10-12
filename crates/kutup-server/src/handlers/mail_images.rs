@@ -1,56 +1,59 @@
 //! The mail image proxy (docs/plans/mail-parity.md, P5), as Proton's
 //! `core/v4/images`: when a reader loads a message's remote images, the
 //! Kutup server fetches each one and hands the bytes back. The sender then
-//! sees the server, not the reader's address, browser or the moment each
-//! reader looked again; nothing is stored, and the response is not cached.
+//! sees the server, not the reader's address or browser; it still learns that
+//! and when the message was read. Nothing is stored or cached.
 //!
-//! - `POST /api/mail/images/check`: which of a message's image addresses are
-//!   known tracking pixels (Proton's dry run). Nothing is fetched, so the
-//!   reader sees "N trackers blocked" before loading anything.
-//! - `GET /api/mail/images?url=`: one image. A known tracker answers 204 with
-//!   `X-Kutup-Tracker` and is never fetched.
+//! `POST /api/mail/images` with `{ url }`: one image. The address travels in
+//! the body, never in a URL that a proxy or access log would keep. A known
+//! tracker answers 204 with `X-Kutup-Tracker` and is never fetched, nor
+//! followed to by a redirect. The reader checks the same list
+//! (`mail-core/src/trackers.json`) before asking, so nothing is sent for an
+//! image that is not loaded.
 //!
 //! The fetch goes through `public_fetch` (public addresses only, pinned,
-//! redirects checked again, size and time limits), with http on port 80
-//! allowed too and no redirect followed to a tracker; a per-account rate
-//! limit; and only raster images, recognised by their bytes (never SVG,
-//! which could run script if opened on its own).
+//! redirects checked again), with http on port 80 allowed too, one deadline
+//! for the whole fetch, and only raster images, recognised by their bytes
+//! (never SVG, which could run script if opened on its own). An account may
+//! ask 120 images a minute, fetch 6 at once and 64 MiB a minute (each fetch
+//! reserves the most it may bring); the server fetches 32 at once.
 
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
-use axum::extract::{Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use url::Url;
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::public_fetch::{self, Checks, Options};
 use crate::ratelimit::RateLimiter;
-use crate::AppState;
 
 const IMAGE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
-/// Bytes fetched a minute per account, for all its images.
-const BYTES_PER_MINUTE: u64 = 64 * 1024 * 1024;
-const MAX_CHECK_URLS: usize = 500;
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bytes an account may fetch a minute, refilled evenly.
+const BYTES_PER_MINUTE: f64 = 64.0 * 1024.0 * 1024.0;
+/// Images an account fetches at once (the reader asks six at a time).
+const PER_ACCOUNT_AT_ONCE: usize = 6;
+/// Images fetched at once on this server, for all accounts.
+const SERVER_AT_ONCE: usize = 32;
+/// The whole fetch, redirects included.
+const DEADLINE: Duration = Duration::from_secs(10);
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
 /// The header that names a blocked tracker's provider (Proton's
 /// `x-pm-tracker-provider`).
 pub const TRACKER_HEADER: &str = "x-kutup-tracker";
 
-/// 300 images a minute per account: a newsletter carries a few dozen. Nothing
-/// is cached, so each one is a fetch.
-static MAIL_IMAGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(300, Duration::from_secs(60)));
-/// What each account fetched in its current minute ([`BYTES_PER_MINUTE`]).
+/// 120 images a minute per account, as Pass icons' fetches.
+pub(crate) static MAIL_IMAGES: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
 static BYTES: LazyLock<ByteBudget> = LazyLock::new(ByteBudget::default);
-/// Images fetched at once on this server, for all accounts.
+static AT_ONCE: LazyLock<AccountSlots> = LazyLock::new(AccountSlots::default);
 static FETCHING: LazyLock<tokio::sync::Semaphore> =
-    LazyLock::new(|| tokio::sync::Semaphore::new(32));
+    LazyLock::new(|| tokio::sync::Semaphore::new(SERVER_AT_ONCE));
 
 /// Known open-tracking addresses: a host (or its subdomains) and, when the
 /// host also serves real images, the path where its pixels live.
@@ -101,102 +104,47 @@ pub fn tracker_of(url: &Url) -> Option<&'static str> {
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ImageCheckRequest {
-    /// The message's remote image addresses (at most 500).
-    pub urls: Vec<String>,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageTracker {
-    pub url: String,
-    pub provider: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageCheckResponse {
-    /// The addresses that are known tracking pixels; they never load.
-    pub trackers: Vec<ImageTracker>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/mail/images/check",
-    tag = "mail",
-    operation_id = "checkMailImages",
-    request_body = ImageCheckRequest,
-    responses(
-        (status = 200, description = "Which addresses are known trackers", body = ImageCheckResponse),
-        (status = 400, description = "More than 500 addresses"),
-    ),
-    security(("BearerAuth" = []))
-)]
-pub async fn check(
-    _auth: AuthUser,
-    Json(request): Json<ImageCheckRequest>,
-) -> AppResult<Json<ImageCheckResponse>> {
-    if request.urls.len() > MAX_CHECK_URLS {
-        return Err(AppError::bad_request("at most 500 image addresses"));
-    }
-    let trackers = request
-        .urls
-        .into_iter()
-        .filter_map(|value| {
-            let url = Url::parse(value.trim()).ok()?;
-            let provider = tracker_of(&url)?;
-            Some(ImageTracker {
-                url: value,
-                provider: provider.to_owned(),
-            })
-        })
-        .collect();
-    Ok(Json(ImageCheckResponse { trackers }))
-}
-
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ImageQuery {
+pub struct ImageRequest {
     /// The image's address in the message: http or https.
     pub url: String,
 }
 
 #[utoipa::path(
-    get,
+    post,
     path = "/api/mail/images",
     tag = "mail",
     operation_id = "fetchMailImage",
-    params(ImageQuery),
+    request_body = ImageRequest,
     responses(
         (status = 200, description = "The image's bytes, with its type"),
         (status = 204, description = "A known tracking pixel, never fetched; X-Kutup-Tracker names it"),
         (status = 400, description = "Not a public http or https address"),
-        (status = 422, description = "The site did not answer with an image"),
-        (status = 429, description = "Too many images"),
+        (status = 422, description = "The site did not answer with an image in time"),
+        (status = 429, description = "Too many images, or bytes, for now"),
         (status = 503, description = "The proxy is busy"),
     ),
     security(("BearerAuth" = []))
 )]
-pub async fn fetch(
-    State(_state): State<AppState>,
-    auth: AuthUser,
-    Query(query): Query<ImageQuery>,
-) -> AppResult<Response> {
+pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResult<Response> {
     if !MAIL_IMAGES.allow(&auth.user_id) {
         return Err(AppError::too_many_requests(
             "too many images; try again shortly",
         ));
     }
-    let url = public_fetch::parse_public(query.url.trim(), true)?;
+    let url = public_fetch::parse_public(request.url.trim(), true)?;
     if let Some(provider) = tracker_of(&url) {
         return Ok(tracker_response(provider));
     }
-    if !BYTES.has_room(&auth.user_id) {
+    let _slot = AT_ONCE
+        .take(&auth.user_id)
+        .ok_or_else(|| AppError::too_many_requests("too many images at once; try again shortly"))?;
+    // The most this fetch may bring, held until it is known; never given back on failure.
+    if !BYTES.reserve(&auth.user_id, IMAGE_LIMIT_BYTES as f64) {
         return Err(AppError::too_many_requests(
             "too many image bytes this minute; try again shortly",
         ));
     }
-    // Busy for longer than one fetch may take: try again later.
-    let _permit = tokio::time::timeout(TOTAL_TIMEOUT, FETCHING.acquire())
+    let _permit = tokio::time::timeout(DEADLINE, FETCHING.acquire())
         .await
         .map_err(|_| {
             AppError::new(
@@ -205,8 +153,14 @@ pub async fn fetch(
             )
         })?
         .map_err(|_| AppError::internal("image fetches closed"))?;
-    let (mime, body) = fetch_image(url, &Checks::PUBLIC).await?;
-    BYTES.charge(&auth.user_id, body.len());
+    let fetched = tokio::time::timeout(DEADLINE, fetch_image(url, &Checks::PUBLIC))
+        .await
+        .map_err(|_| public_fetch::unusable("the site did not answer in time"))??;
+    let (mime, body) = match fetched {
+        Fetched::Image(mime, body) => (mime, body),
+        Fetched::Tracker(provider) => return Ok(tracker_response(provider)),
+    };
+    BYTES.give_back(&auth.user_id, (IMAGE_LIMIT_BYTES - body.len()) as f64);
     Ok((
         StatusCode::OK,
         [
@@ -230,29 +184,92 @@ pub async fn fetch(
         .into_response())
 }
 
-/// Bytes fetched per account in one-minute windows: a fetch starts only while
-/// the account is under its budget, and what it brought back is counted.
+/// Bytes per account as a bucket refilled evenly ([`BYTES_PER_MINUTE`]): a
+/// fetch takes the most it may bring before it starts, under one lock, and
+/// what it did not use comes back when it succeeds.
 #[derive(Default)]
 struct ByteBudget {
-    used: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u64)>>,
+    buckets: Mutex<HashMap<String, (Instant, f64)>>,
 }
 
 impl ByteBudget {
-    fn has_room(&self, account: &str) -> bool {
-        let now = std::time::Instant::now();
-        let mut used = self.used.lock().expect("byte budget lock");
-        used.retain(|_, (since, _)| now.duration_since(*since) < Duration::from_secs(60));
-        used.get(account)
-            .is_none_or(|(_, bytes)| *bytes < BYTES_PER_MINUTE)
+    fn reserve(&self, account: &str, bytes: f64) -> bool {
+        let now = Instant::now();
+        let mut buckets = self.buckets.lock().expect("byte budget lock");
+        let (at, left) = buckets
+            .entry(account.to_owned())
+            .or_insert((now, BYTES_PER_MINUTE));
+        *left = (*left + now.duration_since(*at).as_secs_f64() * BYTES_PER_MINUTE / 60.0)
+            .min(BYTES_PER_MINUTE);
+        *at = now;
+        if *left < bytes {
+            return false;
+        }
+        *left -= bytes;
+        true
     }
 
-    fn charge(&self, account: &str, bytes: usize) {
-        let mut used = self.used.lock().expect("byte budget lock");
-        let entry = used
-            .entry(account.to_owned())
-            .or_insert((std::time::Instant::now(), 0));
-        entry.1 = entry.1.saturating_add(bytes as u64);
+    fn give_back(&self, account: &str, bytes: f64) {
+        let mut buckets = self.buckets.lock().expect("byte budget lock");
+        if let Some((_, left)) = buckets.get_mut(account) {
+            *left = (*left + bytes).min(BYTES_PER_MINUTE);
+        }
     }
+
+    /// Forgets buckets that would be full again.
+    pub(crate) fn cleanup(&self) {
+        let now = Instant::now();
+        self.buckets
+            .lock()
+            .expect("byte budget lock")
+            .retain(|_, (at, left)| {
+                *left + now.duration_since(*at).as_secs_f64() * BYTES_PER_MINUTE / 60.0
+                    < BYTES_PER_MINUTE
+            });
+    }
+}
+
+/// Fetches under way per account ([`PER_ACCOUNT_AT_ONCE`]).
+#[derive(Default)]
+struct AccountSlots {
+    taken: Mutex<HashMap<String, usize>>,
+}
+
+struct Slot<'a> {
+    slots: &'a AccountSlots,
+    account: String,
+}
+
+impl AccountSlots {
+    fn take(&self, account: &str) -> Option<Slot<'_>> {
+        let mut taken = self.taken.lock().expect("image slots lock");
+        let count = taken.entry(account.to_owned()).or_insert(0);
+        if *count >= PER_ACCOUNT_AT_ONCE {
+            return None;
+        }
+        *count += 1;
+        Some(Slot {
+            slots: self,
+            account: account.to_owned(),
+        })
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        let mut taken = self.slots.taken.lock().expect("image slots lock");
+        if let Some(count) = taken.get_mut(&self.account) {
+            *count -= 1;
+            if *count == 0 {
+                taken.remove(&self.account);
+            }
+        }
+    }
+}
+
+/// Run by `ratelimit::spawn_cleanup`.
+pub(crate) fn cleanup() {
+    BYTES.cleanup();
 }
 
 fn tracker_response(provider: &str) -> Response {
@@ -266,14 +283,28 @@ fn tracker_response(provider: &str) -> Response {
     response
 }
 
+enum Fetched {
+    Image(&'static str, Vec<u8>),
+    /// A redirect led to a known tracker, which was not followed.
+    Tracker(&'static str),
+}
+
 /// Fetches one image; a redirect to a tracker is not followed.
-async fn fetch_image(url: Url, checks: &Checks) -> AppResult<(&'static str, Vec<u8>)> {
+async fn fetch_image(url: Url, checks: &Checks) -> AppResult<Fetched> {
+    let tracker: Mutex<Option<&'static str>> = Mutex::new(None);
+    let follow = |next: &Url| match tracker_of(next) {
+        Some(provider) => {
+            *tracker.lock().expect("tracker lock") = Some(provider);
+            false
+        }
+        None => true,
+    };
     let fetched = public_fetch::fetch(
         url,
         &public_fetch::Request {
             accept: "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9,image/*;q=0.8",
             user_agent: USER_AGENT,
-            timeout: TOTAL_TIMEOUT,
+            timeout: DEADLINE,
             limit: IMAGE_LIMIT_BYTES,
             truncate: false,
             // Sites often send images under another type; the bytes decide.
@@ -281,14 +312,18 @@ async fn fetch_image(url: Url, checks: &Checks) -> AppResult<(&'static str, Vec<
         },
         &Options {
             allow_http: true,
-            follow: &|next| tracker_of(next).is_none(),
+            follow: &follow,
         },
         checks,
     )
-    .await?;
+    .await;
+    if let Some(provider) = *tracker.lock().expect("tracker lock") {
+        return Ok(Fetched::Tracker(provider));
+    }
+    let fetched = fetched?;
     let mime = sniff_image(&fetched.body)
         .ok_or_else(|| public_fetch::unusable("the site did not return an image"))?;
-    Ok((mime, fetched.body))
+    Ok(Fetched::Image(mime, fetched.body))
 }
 
 /// The raster type the bytes start with; anything else (SVG, HTML, a type a
@@ -401,17 +436,6 @@ mod tests {
         assert_eq!(sniff_image(b""), None);
     }
 
-    #[test]
-    fn each_account_has_a_byte_budget() {
-        let budget = ByteBudget::default();
-        assert!(budget.has_room("a"));
-        budget.charge("a", BYTES_PER_MINUTE as usize - 1);
-        assert!(budget.has_room("a"));
-        budget.charge("a", 1);
-        assert!(!budget.has_room("a"));
-        assert!(budget.has_room("b"));
-    }
-
     /// Serves `responses` in turn on a local port, one per connection.
     async fn serve(responses: Vec<Vec<u8>>) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -447,7 +471,9 @@ mod tests {
         ])
         .await;
         let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
-        let (mime, body) = fetch_image(url, &LOCAL).await.unwrap();
+        let Fetched::Image(mime, body) = fetch_image(url, &LOCAL).await.unwrap() else {
+            panic!("an image");
+        };
         assert_eq!(mime, "image/png");
         assert_eq!(body, png);
     }
@@ -465,7 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_redirect_to_a_tracker_stops() {
+    async fn a_redirect_to_a_tracker_is_that_tracker() {
         let address = serve(vec![http(
             "302 Found",
             "Location: https://x.list-manage.com/track/open.php?u=1\r\n",
@@ -473,7 +499,10 @@ mod tests {
         )])
         .await;
         let url = Url::parse(&format!("http://{address}/x.png")).unwrap();
-        assert!(fetch_image(url, &LOCAL).await.is_err());
+        assert!(matches!(
+            fetch_image(url, &LOCAL).await,
+            Ok(Fetched::Tracker("Mailchimp"))
+        ));
     }
 
     #[tokio::test]
@@ -481,5 +510,53 @@ mod tests {
         let address = serve(vec![http("200 OK", "", b"GIF89a")]).await;
         let url = Url::parse(&format!("http://{address}/x.gif")).unwrap();
         assert!(fetch_image(url, &Checks::PUBLIC).await.is_err());
+    }
+
+    #[test]
+    fn the_byte_budget_is_reserved_first_and_refills() {
+        let budget = ByteBudget::default();
+        let image = IMAGE_LIMIT_BYTES as f64;
+        let mut taken = 0;
+        while budget.reserve("a", image) {
+            taken += 1;
+        }
+        // 64 MiB holds twelve 5 MiB reservations, not thirteen.
+        assert_eq!(taken, 12);
+        assert!(budget.reserve("b", image));
+        // A small image gives back what it did not use.
+        budget.give_back("a", image);
+        assert!(budget.reserve("a", image));
+        assert!(!budget.reserve("a", image));
+    }
+
+    #[test]
+    fn an_account_fetches_six_at_once() {
+        let slots = AccountSlots::default();
+        let held: Vec<_> = (0..PER_ACCOUNT_AT_ONCE)
+            .map(|_| slots.take("a").unwrap())
+            .collect();
+        assert!(slots.take("a").is_none());
+        assert!(slots.take("b").is_some());
+        drop(held);
+        assert!(slots.take("a").is_some());
+    }
+
+    /// The reader checks the same list before it asks (`trackers.json`).
+    #[test]
+    fn the_reader_has_the_same_tracker_list() {
+        #[derive(Deserialize)]
+        struct Row {
+            host: String,
+            path: String,
+            provider: String,
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../frontend/packages/mail-core/src/trackers.json");
+        let rows: Vec<Row> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let theirs: Vec<(&str, &str, &str)> = rows
+            .iter()
+            .map(|r| (r.host.as_str(), r.path.as_str(), r.provider.as_str()))
+            .collect();
+        assert_eq!(theirs, TRACKERS);
     }
 }

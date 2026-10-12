@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
 
@@ -90,10 +90,13 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   // Loading asks the proxy, never the tracker; the image it cannot get
   // loads directly only when Alice says so.
   const proxiedUrls: string[] = []
+  // The address goes in the body, never in the URL.
+  const asked = (r: Request) => (new URL(r.url()).pathname === '/api/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
   mail.on('request', (r) => {
-    if (new URL(r.url()).pathname === '/api/mail/images') proxiedUrls.push(new URL(r.url()).searchParams.get('url') ?? '')
+    const url = asked(r)
+    if (url !== null) proxiedUrls.push(url)
   })
-  const proxied = mail.waitForRequest((r) => new URL(r.url()).pathname === '/api/mail/images' && new URL(r.url()).searchParams.get('url') === image)
+  const proxied = mail.waitForRequest((r) => asked(r) === image)
   await mail.getByRole('button', { name: 'Load images' }).click()
   await mail.getByRole('dialog', { name: 'Load remote images?' }).getByRole('button', { name: 'Load images' }).click()
   await proxied
