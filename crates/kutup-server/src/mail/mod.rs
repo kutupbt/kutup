@@ -16,6 +16,7 @@ pub mod outside_keys;
 pub mod retention;
 pub mod safety;
 pub mod sender_rules;
+pub mod snooze;
 pub mod submit;
 pub mod unsubscribe;
 

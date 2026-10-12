@@ -382,6 +382,7 @@ async fn main() -> anyhow::Result<()> {
     // Auto-delete of old Trash and Spam, for accounts that turned it on.
     mail::retention::spawn(state.clone());
     mail::outbox::spawn(state.clone());
+    mail::snooze::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -654,6 +655,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/messages/delete",
             post(handlers::mail::delete_messages),
+        )
+        .route(
+            "/api/mail/messages/snooze",
+            post(handlers::mail::snooze_messages),
         )
         .route(
             "/api/mail/messages/batch",

@@ -16,10 +16,11 @@ use crate::handlers::{octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-pub(crate) const FOLDERS: [&str; 7] = [
+pub(crate) const FOLDERS: [&str; 8] = [
     "inbox",
     "drafts",
     "scheduled",
+    "snoozed",
     "sent",
     "archive",
     "spam",
@@ -91,6 +92,9 @@ pub struct MailMessage {
     #[serde(with = "time::serde::rfc3339::option")]
     pub scheduled_at: Option<OffsetDateTime>,
     pub outbox_id: Option<String>,
+    /// Snoozed (folder `snoozed`): when it comes back to the Inbox.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub snoozed_until: Option<OffsetDateTime>,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -258,6 +262,7 @@ pub(crate) struct Row {
     attachments: sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
     scheduled_at: Option<OffsetDateTime>,
     outbox_id: Option<Uuid>,
+    snoozed_until: Option<OffsetDateTime>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -273,6 +278,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
         AND o.state = 'pending') AS scheduled_at,
     (SELECT o.id FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
         AND o.state = 'pending') AS outbox_id,
+    snoozed_until,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -310,6 +316,7 @@ impl From<Row> for MailMessage {
             attachments: row.attachments.0,
             scheduled_at: row.scheduled_at,
             outbox_id: row.outbox_id.map(|id| id.to_string()),
+            snoozed_until: row.snoozed_until,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -1064,7 +1071,9 @@ async fn update_ids(
                  seen = CASE WHEN $5::text = 'trash' THEN true ELSE COALESCE($3, seen) END,
                  starred = COALESCE($4, starred),
                  folder = COALESCE($5, folder),
-                 custom_folder = CASE WHEN $5::text IS NULL THEN custom_folder ELSE $6 END
+                 custom_folder = CASE WHEN $5::text IS NULL THEN custom_folder ELSE $6 END,
+                 -- Moved out of Snoozed: no longer waiting to come back.
+                 snoozed_until = CASE WHEN $5::text IS NULL THEN snoozed_until ELSE NULL END
               WHERE owner = $1 AND id = ANY($2)
                 AND ($5::text IS NULL OR (
                       folder NOT IN ('drafts', 'scheduled') AND (
@@ -1117,6 +1126,75 @@ async fn update_ids(
     }
     tx.commit().await?;
     Ok(updated)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SnoozeMailMessages {
+    pub ids: Vec<String>,
+    /// When they come back to the Inbox (a minute to a year ahead); absent
+    /// or null: back now (Unsnooze).
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub until: Option<OffsetDateTime>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `POST /api/mail/messages/snooze` — Proton's Snooze: Inbox messages wait
+/// in Snoozed until `until`, then come back unread; without `until`,
+/// snoozed messages come back now.
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/snooze",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    request_body = SnoozeMailMessages,
+    responses(
+        (status = 200, description = "How many changed", body = UpdatedMailMessages),
+        (status = 400, description = "A time outside a minute to a year ahead, or bad ids"),
+    )
+)]
+pub async fn snooze_messages(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(request): Json<SnoozeMailMessages>,
+) -> AppResult<Json<UpdatedMailMessages>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
+    let ids = parse_ids(&request.ids)?;
+    let updated = match request.until {
+        Some(until) => {
+            let now = OffsetDateTime::now_utc();
+            if until < now + time::Duration::minutes(1) || until > now + time::Duration::days(366) {
+                return Err(AppError::bad_request(
+                    "snooze from a minute to a year ahead",
+                ));
+            }
+            sqlx::query(
+                "UPDATE mail_messages SET folder = 'snoozed', snoozed_until = $3
+                  WHERE owner = $1 AND id = ANY($2) AND folder IN ('inbox', 'snoozed')
+                    AND direction = 'inbound'",
+            )
+            .bind(owner)
+            .bind(&ids)
+            .bind(until)
+            .execute(&state.pool)
+            .await?
+            .rows_affected()
+        }
+        None => sqlx::query(
+            "UPDATE mail_messages SET folder = 'inbox', snoozed_until = NULL
+              WHERE owner = $1 AND id = ANY($2) AND folder = 'snoozed'",
+        )
+        .bind(owner)
+        .bind(&ids)
+        .execute(&state.pool)
+        .await?
+        .rows_affected(),
+    };
+    Ok(Json(UpdatedMailMessages { updated }))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
