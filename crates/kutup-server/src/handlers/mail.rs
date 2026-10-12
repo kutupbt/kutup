@@ -95,6 +95,9 @@ pub struct MailMessage {
     /// Snoozed (folder `snoozed`): when it comes back to the Inbox.
     #[serde(with = "time::serde::rfc3339::option")]
     pub snoozed_until: Option<OffsetDateTime>,
+    /// An expiring message: when every Kutup copy is deleted.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -263,6 +266,7 @@ pub(crate) struct Row {
     scheduled_at: Option<OffsetDateTime>,
     outbox_id: Option<Uuid>,
     snoozed_until: Option<OffsetDateTime>,
+    expires_at: Option<OffsetDateTime>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -278,7 +282,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
         AND o.state = 'pending') AS scheduled_at,
     (SELECT o.id FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
         AND o.state = 'pending') AS outbox_id,
-    snoozed_until,
+    snoozed_until, expires_at,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -317,6 +321,7 @@ impl From<Row> for MailMessage {
             scheduled_at: row.scheduled_at,
             outbox_id: row.outbox_id.map(|id| id.to_string()),
             snoozed_until: row.snoozed_until,
+            expires_at: row.expires_at,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
