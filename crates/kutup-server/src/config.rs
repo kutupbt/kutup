@@ -67,6 +67,9 @@ pub struct Config {
     /// off until the server's mail setup is checked, admins for the sending
     /// trial, then everyone.
     pub mail_outside_sending: OutsideSending,
+    /// Messages one statement of a select-all batch changes at most
+    /// (`MAIL_BATCH_CHUNK`, 5,000); each chunk is its own transaction.
+    pub mail_batch_chunk: usize,
     /// An account's first days, and the outside recipients a day it may
     /// send to in them (most abuse comes from new accounts).
     pub mail_new_account_days: i64,
@@ -335,6 +338,7 @@ impl Config {
             mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             mail_test_key_origin: get_env("MAIL_TEST_KEY_ORIGIN", ""),
             mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
+            mail_batch_chunk: get_env_i64("MAIL_BATCH_CHUNK", 5_000).max(1) as usize,
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),

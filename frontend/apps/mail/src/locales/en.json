@@ -61,7 +61,6 @@
     "selected_one": "{{count}} selected",
     "selected_other": "{{count}} selected",
     "hasAttachments": "Has attachments",
-    "more": "Show older mail",
     "searchResults": "Results for “{{q}}”",
     "noMatches": "No matches",
     "noMatchesHint": "Search looks at subjects, senders and recipients.",
@@ -76,7 +75,6 @@
     "inConversation_other": "{{count}} messages in this conversation"
   },
   "read": {
-    "pick": "Choose a message to read it.",
     "notFound": "This conversation no longer exists.",
     "back": "Back to the list",
     "opening": "Opening the message",
@@ -524,7 +522,9 @@
     "pgpSchemeHint": "How mail to outside PGP users is encrypted or signed. Inline PGP sends plain text only, each attachment on its own.",
     "inline": "Inline",
     "confirmLink": "Confirm link URLs",
-    "confirmLinkHint": "When you click a link in a message that leads outside Kutup, see where it really goes before it opens. Links in Spam always ask."
+    "confirmLinkHint": "When you click a link in a message that leads outside Kutup, see where it really goes before it opens. Links in Spam always ask.",
+    "pageSizeConversations": "Conversations per page",
+    "pageSizeMessages": "Messages per page"
   },
   "senders": {
     "title": "Block and allow",
@@ -679,6 +679,56 @@
     "done": "Mailing list unsubscribed.",
     "failed": "The unsubscribe request did not go through."
   },
+  "paging": {
+    "label": "Pages",
+    "previous": "Previous page",
+    "next": "Next page",
+    "pageOf": "Page {{page}} of {{pages}}",
+    "page": "Page {{page}}",
+    "goPrevious": "Go to previous page",
+    "goNext": "Go to next page",
+    "goTo": "Go to page {{page}}"
+  },
+  "selectionPane": {
+    "label": "Selection pane",
+    "clear": "Clear selection",
+    "results_one": "<strong>{{count}}</strong> result found in {{name}}",
+    "results_other": "<strong>{{count}}</strong> results found in {{name}}",
+    "selected": {
+      "folder": {
+        "conversations_one": "You selected <strong>{{count}} conversation</strong> from this folder",
+        "conversations_other": "You selected <strong>{{count}} conversations</strong> from this folder",
+        "messages_one": "You selected <strong>{{count}} message</strong> from this folder",
+        "messages_other": "You selected <strong>{{count}} messages</strong> from this folder"
+      },
+      "label": {
+        "conversations_one": "You selected <strong>{{count}} conversation</strong> with this label",
+        "conversations_other": "You selected <strong>{{count}} conversations</strong> with this label",
+        "messages_one": "You selected <strong>{{count}} message</strong> with this label",
+        "messages_other": "You selected <strong>{{count}} messages</strong> with this label"
+      }
+    },
+    "stored": {
+      "folder": {
+        "conversations_one": "You have <strong>{{count}} conversation</strong> stored in this folder",
+        "conversations_other": "You have <strong>{{count}} conversations</strong> stored in this folder",
+        "messages_one": "You have <strong>{{count}} message</strong> stored in this folder",
+        "messages_other": "You have <strong>{{count}} messages</strong> stored in this folder"
+      },
+      "label": {
+        "conversations_one": "You have <strong>{{count}} conversation</strong> tagged with this label",
+        "conversations_other": "You have <strong>{{count}} conversations</strong> tagged with this label",
+        "messages_one": "You have <strong>{{count}} message</strong> tagged with this label",
+        "messages_other": "You have <strong>{{count}} messages</strong> tagged with this label"
+      }
+    },
+    "selectedIn": {
+      "conversations_one": "You selected <strong>{{count}} conversation</strong> in {{name}}",
+      "conversations_other": "You selected <strong>{{count}} conversations</strong> in {{name}}",
+      "messages_one": "You selected <strong>{{count}} message</strong> in {{name}}",
+      "messages_other": "You selected <strong>{{count}} messages</strong> in {{name}}"
+    }
+  },
   "attachments": {
     "count_one": "{{count}} file attached",
     "count_other": "{{count}} files attached",
@@ -689,5 +739,80 @@
     "position": "{{index}} of {{count}}",
     "previous": "Previous file",
     "next": "Next file"
+  },
+  "selectAll": {
+    "selected": {
+      "conversations_one": "You selected <strong>{{count}} conversation</strong>.",
+      "conversations_other": "You selected <strong>{{count}} conversations</strong>.",
+      "messages_one": "You selected <strong>{{count}} message</strong>.",
+      "messages_other": "You selected <strong>{{count}} messages</strong>."
+    },
+    "clear": "Clear selection",
+    "selectAll_one": "Select all {{count}} in {{location}}",
+    "selectAll_other": "Select all {{count}} in {{location}}",
+    "applying": {
+      "conversations": "Applying actions to conversations",
+      "messages": "Applying actions to messages"
+    },
+    "move": {
+      "title": {
+        "conversations": "Move all conversations",
+        "messages": "Move all messages"
+      },
+      "body": {
+        "conversations_one": "{{count}} conversation will be moved to {{name}} folder.",
+        "conversations_other": "{{count}} conversations will be moved to {{name}} folder.",
+        "messages_one": "{{count}} message will be moved to {{name}} folder.",
+        "messages_other": "{{count}} messages will be moved to {{name}} folder."
+      },
+      "submit": "Move"
+    },
+    "mark": {
+      "title": {
+        "read": {
+          "conversations": "Mark conversations as read",
+          "messages": "Mark messages as read"
+        },
+        "unread": {
+          "conversations": "Mark conversations as unread",
+          "messages": "Mark messages as unread"
+        }
+      },
+      "body": {
+        "read": {
+          "conversations_one": "{{count}} conversation will be marked as read.",
+          "conversations_other": "{{count}} conversations will be marked as read.",
+          "messages_one": "{{count}} message will be marked as read.",
+          "messages_other": "{{count}} messages will be marked as read."
+        },
+        "unread": {
+          "conversations_one": "{{count}} conversation will be marked as unread.",
+          "conversations_other": "{{count}} conversations will be marked as unread.",
+          "messages_one": "{{count}} message will be marked as unread.",
+          "messages_other": "{{count}} messages will be marked as unread."
+        }
+      },
+      "read": "Mark as read",
+      "unread": "Mark as unread"
+    },
+    "label": {
+      "title": {
+        "conversations": "Action all conversations",
+        "messages": "Action all messages"
+      },
+      "added": {
+        "conversations_one": "{{count}} conversation will be labelled as:",
+        "conversations_other": "{{count}} conversations will be labelled as:",
+        "messages_one": "{{count}} message will be labelled as:",
+        "messages_other": "{{count}} messages will be labelled as:"
+      },
+      "removed": {
+        "conversations_one": "{{count}} conversation will be unlabelled from:",
+        "conversations_other": "{{count}} conversations will be unlabelled from:",
+        "messages_one": "{{count}} message will be unlabelled from:",
+        "messages_other": "{{count}} messages will be unlabelled from:"
+      },
+      "submit": "OK"
+    }
   }
 }

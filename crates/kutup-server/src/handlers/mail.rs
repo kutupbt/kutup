@@ -112,6 +112,9 @@ pub struct MailMessagePage {
     pub messages: Vec<MailMessage>,
     /// Pass as `before` for the next, older page; absent on the last.
     pub next: Option<String>,
+    /// With `page`: how many messages (or conversations) the place holds
+    /// with these filters, for Proton's "page N of M".
+    pub total: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -125,6 +128,9 @@ pub struct MailListQuery {
     pub q: Option<String>,
     /// The `next` of the previous page.
     pub before: Option<String>,
+    /// Page number from 0, `limit` to a page (Proton's paging), instead of
+    /// `before`; the answer then carries `total`.
+    pub page: Option<i64>,
     pub limit: Option<i64>,
     /// A shared mailbox (its group id) instead of your own.
     pub group: Option<String>,
@@ -398,6 +404,13 @@ pub async fn list_messages(
         .as_deref()
         .map(|value| parse_cursor(value, sort))
         .transpose()?;
+    let page = match (query.page, &before) {
+        (Some(_), Some(_)) => return Err(AppError::bad_request("page or before, not both")),
+        (Some(page), None) if !(0..=MAX_PAGE_NUMBER).contains(&page) => {
+            return Err(AppError::bad_request("page is out of range"))
+        }
+        (page, _) => page,
+    };
     let filters = Filters {
         unread: query.unread,
         attachments: query.attachments,
@@ -419,51 +432,28 @@ pub async fn list_messages(
                 .collect();
             format!("%{escaped}%")
         });
-    // The place and the search, shared by both listings.
-    const WHERE: &str = "owner = $1
-            AND CASE $2
-                  WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
-                  WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
-                  WHEN 'folder' THEN custom_folder = $7
-                  WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
-                      SELECT 1 FROM mail_message_labels l
-                       WHERE l.message_id = mail_messages.id AND l.label_id = $7)
-                  ELSE folder = $2
-                END
-            AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
-                 OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
+    let listing = Listing {
+        owner,
+        place,
+        place_id,
+        almost_all,
+        search,
+        before,
+        filters,
+        place_filter: PLACE_WHERE,
+    };
     if query.conversations {
-        return list_conversations(
-            &state, owner, place, place_id, almost_all, search, before, limit, WHERE, filters,
-        )
-        .await;
+        return list_conversations(&state, &listing, limit, page).await;
     }
-    let after = sort.after("received_at", "size_bytes", "id");
-    let order = sort.order("received_at", "size_bytes", "id");
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS}
-           FROM mail_messages
-          WHERE {WHERE}
-            AND ($10::bool IS NULL OR seen <> $10)
-            AND (NOT $11 OR attachment_count > 0)
-            AND {after}
-          ORDER BY {order}
-          LIMIT $5"
-    ))
-    .bind(owner)
-    .bind(place)
-    .bind(before.and_then(|c| c.time))
-    .bind(before.map(|c| c.id))
-    .bind(limit + 1)
-    .bind(search)
-    .bind(place_id)
-    .bind(almost_all)
-    .bind(before.and_then(|c| c.size))
-    .bind(filters.unread)
-    .bind(filters.attachments)
-    .fetch_all(&state.pool)
-    .await?;
+    let (mut rows, mut total) = message_rows(&state, &listing, limit, page.unwrap_or(0)).await?;
+    // Past the end (mail moved away since): the total still answers.
+    if rows.is_empty() && page.is_some_and(|p| p > 0) {
+        total = message_rows(&state, &listing, 1, 0).await?.1;
+    }
     let more = rows.len() as i64 > limit;
+    if page.is_some() {
+        rows.truncate(limit as usize);
+    }
     let messages: Vec<MailMessage> = rows
         .into_iter()
         .take(limit as usize)
@@ -477,8 +467,90 @@ pub async fn list_messages(
         };
         cursor(key, Uuid::parse_str(&last.id).expect("own id"))
     });
-    Ok(Json(MailMessagePage { messages, next }))
+    Ok(Json(MailMessagePage {
+        messages,
+        next,
+        total: page.map(|_| total),
+    }))
 }
+
+/// Pages past this are refused (`page × limit` stays small for `OFFSET`).
+const MAX_PAGE_NUMBER: i64 = 10_000;
+
+/// What a listing asks for, beyond its page.
+struct Listing<'a> {
+    owner: Uuid,
+    place: &'a str,
+    place_id: Option<Uuid>,
+    almost_all: bool,
+    search: Option<String>,
+    before: Option<Cursor>,
+    filters: Filters,
+    /// The place and the search, as SQL over `mail_messages`.
+    place_filter: &'a str,
+}
+
+#[derive(sqlx::FromRow)]
+struct CountedRow {
+    #[sqlx(flatten)]
+    row: Row,
+    full_count: i64,
+}
+
+/// One page of messages (one more than `limit`, to tell whether more
+/// follow), skipping `page` pages, and how many there are in all.
+async fn message_rows(
+    state: &AppState,
+    listing: &Listing<'_>,
+    limit: i64,
+    page: i64,
+) -> AppResult<(Vec<Row>, i64)> {
+    let sort = listing.filters.sort;
+    let after = sort.after("received_at", "size_bytes", "id");
+    let order = sort.order("received_at", "size_bytes", "id");
+    let place_filter = listing.place_filter;
+    let rows: Vec<CountedRow> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS}, count(*) OVER () AS full_count
+           FROM mail_messages
+          WHERE {place_filter}
+            AND ($10::bool IS NULL OR seen <> $10)
+            AND (NOT $11 OR attachment_count > 0)
+            AND {after}
+          ORDER BY {order}
+          LIMIT $5 OFFSET $12"
+    ))
+    .bind(listing.owner)
+    .bind(listing.place)
+    .bind(listing.before.and_then(|c| c.time))
+    .bind(listing.before.map(|c| c.id))
+    .bind(limit + 1)
+    .bind(listing.search.as_deref())
+    .bind(listing.place_id)
+    .bind(listing.almost_all)
+    .bind(listing.before.and_then(|c| c.size))
+    .bind(listing.filters.unread)
+    .bind(listing.filters.attachments)
+    .bind(page * limit)
+    .fetch_all(&state.pool)
+    .await?;
+    let total = rows.first().map_or(0, |r| r.full_count);
+    Ok((rows.into_iter().map(|r| r.row).collect(), total))
+}
+
+/// The place and the search, shared by the listings and batch changes: $1
+/// owner, $2 place, $6 search, $7 the folder or label, $8 almost all mail.
+const PLACE_WHERE: &str = "owner = $1
+        AND CASE $2
+              WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
+              WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
+              WHEN 'folder' THEN custom_folder = $7
+              WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
+                  SELECT 1 FROM mail_message_labels l
+                   WHERE l.message_id = mail_messages.id AND l.label_id = $7)
+              ELSE folder = $2
+            END
+        AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
+             OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
 
 /// The list's filters and order beyond the place and the search.
 #[derive(Clone, Copy, Debug)]
@@ -497,26 +569,80 @@ type ConversationRow = (
     sqlx::types::Json<Vec<MailMailbox>>,
     i64,
     i64,
+    i64,
 );
 
 /// [`list_messages`] by conversation: each thread's newest message in the
 /// place, in the sort's order (by its newest arrival, or by its messages'
 /// size together, as Proton sorts conversations), with what the row stands
 /// for.
-#[allow(clippy::too_many_arguments)]
 async fn list_conversations(
     state: &AppState,
-    owner: Uuid,
-    place: &str,
-    place_id: Option<Uuid>,
-    almost_all: bool,
-    search: Option<String>,
-    before: Option<Cursor>,
+    listing: &Listing<'_>,
     limit: i64,
-    place_filter: &str,
-    filters: Filters,
+    page: Option<i64>,
 ) -> AppResult<Json<MailMessagePage>> {
-    let sort = filters.sort;
+    let owner = listing.owner;
+    let sort = listing.filters.sort;
+    let (mut threads, mut total) =
+        conversation_rows(state, listing, limit, page.unwrap_or(0)).await?;
+    if threads.is_empty() && page.is_some_and(|p| p > 0) {
+        total = conversation_rows(state, listing, 1, 0).await?.1;
+    }
+    let more = threads.len() as i64 > limit;
+    threads.truncate(limit as usize);
+    let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
+    ))
+    .bind(owner)
+    .bind(&latest)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut by_id: std::collections::HashMap<Uuid, Row> =
+        rows.into_iter().map(|r| (r.id, r)).collect();
+    let next = more.then(|| threads.last()).flatten().map(|row| {
+        let key = if sort.by_size() {
+            i128::from(row.7)
+        } else {
+            row.1.unix_timestamp_nanos()
+        };
+        cursor(key, row.0)
+    });
+    let messages = threads
+        .into_iter()
+        .filter_map(
+            |(id, _, members, unread, starred, senders, attachments, _, _)| {
+                // Moved or deleted between the two reads: left for the next refresh.
+                let mut message = MailMessage::from(by_id.remove(&id)?);
+                message.conversation = Some(MailConversation {
+                    members: members.0,
+                    unread,
+                    starred,
+                    senders: senders.0,
+                    attachment_count: attachments,
+                });
+                Some(message)
+            },
+        )
+        .collect();
+    Ok(Json(MailMessagePage {
+        messages,
+        next,
+        total: page.map(|_| total),
+    }))
+}
+
+/// One page of conversations (one more than `limit`), skipping `page`
+/// pages, and how many there are in all.
+async fn conversation_rows(
+    state: &AppState,
+    listing: &Listing<'_>,
+    limit: i64,
+    page: i64,
+) -> AppResult<(Vec<ConversationRow>, i64)> {
+    let sort = listing.filters.sort;
+    let place_filter = listing.place_filter;
     let after = sort.after("t.last_at", "t.total_size", "t.latest");
     let order = sort.order("t.last_at", "t.total_size", "t.latest");
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
@@ -545,65 +671,30 @@ async fn list_conversations(
                                          min(received_at) AS first_at
                                     FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
                                    GROUP BY from_address) s), '[]'::jsonb),
-                t.attachments, t.total_size
+                t.attachments, t.total_size, count(*) OVER ()
            FROM threads t
           WHERE ($10::bool IS NULL OR (t.unread > 0) = $10)
             AND (NOT $11 OR t.attachments > 0)
             AND {after}
           ORDER BY {order}
-          LIMIT $5"
+          LIMIT $5 OFFSET $12"
     ))
-    .bind(owner)
-    .bind(place)
-    .bind(before.and_then(|c| c.time))
-    .bind(before.map(|c| c.id))
+    .bind(listing.owner)
+    .bind(listing.place)
+    .bind(listing.before.and_then(|c| c.time))
+    .bind(listing.before.map(|c| c.id))
     .bind(limit + 1)
-    .bind(search)
-    .bind(place_id)
-    .bind(almost_all)
-    .bind(before.and_then(|c| c.size))
-    .bind(filters.unread)
-    .bind(filters.attachments)
+    .bind(listing.search.as_deref())
+    .bind(listing.place_id)
+    .bind(listing.almost_all)
+    .bind(listing.before.and_then(|c| c.size))
+    .bind(listing.filters.unread)
+    .bind(listing.filters.attachments)
+    .bind(page * limit)
     .fetch_all(&state.pool)
     .await?;
-    let more = threads.len() as i64 > limit;
-    let threads: Vec<ConversationRow> = threads.into_iter().take(limit as usize).collect();
-    let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
-    ))
-    .bind(owner)
-    .bind(&latest)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut by_id: std::collections::HashMap<Uuid, Row> =
-        rows.into_iter().map(|r| (r.id, r)).collect();
-    let next = more.then(|| threads.last()).flatten().map(|row| {
-        let key = if sort.by_size() {
-            i128::from(row.7)
-        } else {
-            row.1.unix_timestamp_nanos()
-        };
-        cursor(key, row.0)
-    });
-    let messages = threads
-        .into_iter()
-        .filter_map(
-            |(id, _, members, unread, starred, senders, attachments, _)| {
-                // Moved or deleted between the two reads: left for the next refresh.
-                let mut message = MailMessage::from(by_id.remove(&id)?);
-                message.conversation = Some(MailConversation {
-                    members: members.0,
-                    unread,
-                    starred,
-                    senders: senders.0,
-                    attachment_count: attachments,
-                });
-                Some(message)
-            },
-        )
-        .collect();
-    Ok(Json(MailMessagePage { messages, next }))
+    let total = threads.first().map_or(0, |t| t.8);
+    Ok((threads, total))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -795,6 +886,19 @@ pub async fn update_messages(
         .await?
         .owner();
     let ids = parse_ids(&request.ids)?;
+    let updated = update_ids(&state, user_id, owner, &ids, &request).await?;
+    Ok(Json(UpdatedMailMessages { updated }))
+}
+
+/// [`update_messages`]' change, on `ids` of `owner`'s mailbox (any number:
+/// a batch over a whole place passes them all).
+async fn update_ids(
+    state: &AppState,
+    user_id: Uuid,
+    owner: Uuid,
+    ids: &[Uuid],
+    request: &UpdateMailMessages,
+) -> AppResult<u64> {
     let add: Vec<Uuid> = request
         .add_labels
         .iter()
@@ -872,7 +976,7 @@ pub async fn update_messages(
                      OR (direction = 'outbound' AND $5 IN ('sent', 'archive', 'trash')))))",
         )
         .bind(owner)
-        .bind(&ids)
+        .bind(ids)
         .bind(request.seen)
         .bind(request.starred)
         .bind(request.folder.as_deref())
@@ -886,7 +990,7 @@ pub async fn update_messages(
             "SELECT COUNT(*) FROM mail_messages WHERE owner = $1 AND id = ANY($2)",
         )
         .bind(owner)
-        .bind(&ids)
+        .bind(ids)
         .fetch_one(&mut *tx)
         .await? as u64
     };
@@ -898,7 +1002,7 @@ pub async fn update_messages(
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
-        .bind(&ids)
+        .bind(ids)
         .bind(&add)
         .execute(&mut *tx)
         .await?;
@@ -909,12 +1013,103 @@ pub async fn update_messages(
               WHERE l.message_id = m.id AND m.user_id = $1 AND m.id = ANY($2) AND l.label_id = ANY($3)",
         )
         .bind(user_id)
-        .bind(&ids)
+        .bind(ids)
         .bind(&remove)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
+    Ok(updated)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchMailMessages {
+    /// Every message here: one of inbox, drafts, sent, archive, spam, trash,
+    /// `starred`, `folder:<id>` or `label:<id>`, as the list's `folder`.
+    /// All mail is not one (Proton's select all leaves it out).
+    pub place: String,
+    pub seen: Option<bool>,
+    /// As in `PATCH /api/mail/messages`.
+    pub folder: Option<String>,
+    pub custom_folder: Option<String>,
+    #[serde(default)]
+    pub add_labels: Vec<String>,
+    #[serde(default)]
+    pub remove_labels: Vec<String>,
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `POST /api/mail/messages/batch` — Proton's select all: marks read or
+/// unread, files or labels every message in a place at once, past the
+/// loaded page; the same rules as `PATCH /api/mail/messages`.
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/batch",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    request_body = BatchMailMessages,
+    responses(
+        (status = 200, description = "How many changed", body = UpdatedMailMessages),
+        (status = 400, description = "No change asked, All mail, an unknown place or folder"),
+    )
+)]
+pub async fn batch_messages(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(request): Json<BatchMailMessages>,
+) -> AppResult<Json<UpdatedMailMessages>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
+    let (place, place_id) = match request.place.split_once(':') {
+        Some((kind @ ("folder" | "label"), id)) => (
+            kind,
+            Some(Uuid::parse_str(id).map_err(|_| AppError::bad_request("unknown place"))?),
+        ),
+        _ if FOLDERS.contains(&request.place.as_str()) || request.place == "starred" => {
+            (request.place.as_str(), None)
+        }
+        _ => return Err(AppError::bad_request("unknown place")),
+    };
+    // $6 search, $7 place id, $8 almost all, renumbered for this query.
+    let place_filter = PLACE_WHERE
+        .replace("$6", "$3")
+        .replace("$7", "$4")
+        .replace("$8", "$5");
+    let ids: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT id FROM mail_messages WHERE {place_filter}"
+    ))
+    .bind(owner)
+    .bind(place)
+    .bind(None::<String>)
+    .bind(place_id)
+    .bind(true)
+    .fetch_all(&state.pool)
+    .await?;
+    let change = UpdateMailMessages {
+        ids: Vec::new(),
+        seen: request.seen,
+        starred: None,
+        folder: request.folder,
+        custom_folder: request.custom_folder,
+        add_labels: request.add_labels,
+        remove_labels: request.remove_labels,
+        group: request.group,
+    };
+    // In chunks, each its own transaction: a large mailbox never holds one
+    // long row lock or one long statement. A failure part way leaves the
+    // chunks before it done, as Proton's background tasks do.
+    let mut updated = 0;
+    for chunk in ids.chunks(state.config.mail_batch_chunk) {
+        updated += update_ids(&state, user_id, owner, chunk, &change).await?;
+    }
+    if ids.is_empty() {
+        // Still checks the change (nothing to change, unknown folder or label).
+        update_ids(&state, user_id, owner, &[], &change).await?;
+    }
     Ok(Json(UpdatedMailMessages { updated }))
 }
 

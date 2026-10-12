@@ -15,6 +15,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { movesFor, useMailActions, type MoveTarget } from './mailActions'
 import { useMailboxScope } from './mailboxScope'
+import type { AllAction } from './selectAll'
 import { openPlacesDialog } from './placesState'
 
 export type PickerMode = 'move' | 'label'
@@ -47,9 +48,25 @@ function Row({ children, onClick, active }: { children: ReactNode; onClick: () =
  * Proton's "Move to" and "Label as" (`MoveDropdown`, `LabelDropdown`): a
  * searchable list of places, "Create folder "…"" from the search, and for
  * labels a checkbox per label (all, some or none of the messages have it),
- * "Also archive" and Apply.
+ * "Also archive" and Apply. With `onAll` (select all) the choice goes there
+ * for the whole place: labels start "some" and turn on or back (the label
+ * you are in can turn off), without "Also archive", "Always …" or creating.
  */
-function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: MailMessage[]; folder: FolderId; onDone: (archived?: boolean) => void }) {
+function PickerBody({
+  mode,
+  rows,
+  folder,
+  onDone,
+  onAll,
+  currentLabel,
+}: {
+  mode: PickerMode
+  rows: MailMessage[]
+  folder: FolderId
+  onDone: (archived?: boolean) => void
+  onAll?: (action: AllAction) => void
+  currentLabel?: string
+}) {
   const { t } = useTranslation()
   const places = usePlaces()
   const actions = useMailActions()
@@ -59,7 +76,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
   const [always, setAlways] = useState(false)
   const createFilter = useCreateFilter()
   const deleteFilter = useDeleteFilter()
-  const senders = [...new Set(rows.filter((m) => m.direction === 'inbound' && m.from).map((m) => m.from!.address.toLowerCase()))]
+  const senders = onAll ? [] : [...new Set(rows.filter((m) => m.direction === 'inbound' && m.from).map((m) => m.from!.address.toLowerCase()))]
 
   function rememberSenders(actions: FilterActions, place: string) {
     if (!always || senders.length === 0) return
@@ -108,6 +125,11 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
   function apply() {
     const add = [...changed].filter(([, on]) => on).map(([id]) => id)
     const remove = [...changed].filter(([, on]) => !on).map(([id]) => id)
+    if (onAll) {
+      if (add.length || remove.length) onAll({ kind: 'label', add, remove })
+      onDone()
+      return
+    }
     if (add.length || remove.length) actions.mark(rows, { addLabels: add, removeLabels: remove })
     if (add.length) {
       rememberSenders({ labels: add, ...(alsoArchive ? { folder: 'archive' } : {}) }, add.map((id) => places.data?.labelsById.get(id)?.name ?? '').join(', '))
@@ -119,6 +141,8 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
   const state = (id: string): boolean | 'indeterminate' => {
     const wanted = changed.get(id)
     if (wanted !== undefined) return wanted
+    // Select all: only the page is known (Proton's LabelDropdown).
+    if (onAll) return id === currentLabel ? true : 'indeterminate'
     const having = rows.filter((m) => m.labels.includes(id)).length
     return having === 0 ? false : having === rows.length ? true : 'indeterminate'
   }
@@ -148,6 +172,11 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
           <>
             {fixed.map((target) => (
               <Row key={target} onClick={() => {
+                  if (onAll) {
+                    onAll({ kind: 'move', destination: target })
+                    onDone(true)
+                    return
+                  }
                   actions.move(rows, target)
                   rememberSenders({ folder: target }, t(`folders.${target}`))
                   onDone(true)
@@ -158,6 +187,11 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
             ))}
             {shownFolders.map((f) => (
               <Row key={f.id} onClick={() => {
+                  if (onAll) {
+                    onAll({ kind: 'move', destination: { folder: f.id, name: f.name } })
+                    onDone(true)
+                    return
+                  }
                   actions.move(rows, { folder: f.id, name: f.name })
                   rememberSenders({ folder: `custom:${f.id}` }, f.name)
                   onDone(true)
@@ -172,7 +206,18 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
           shownLabels.map((l) => {
             const on = state(l.id)
             return (
-              <Row key={l.id} onClick={() => setChanged((now) => new Map(now).set(l.id, on !== true))}>
+              <Row
+                key={l.id}
+                onClick={() =>
+                  setChanged((now) => {
+                    const next = new Map(now)
+                    // Select all: on, or back to "some"; the label you are in, on or off.
+                    if (onAll && l.id !== currentLabel && on === true) next.delete(l.id)
+                    else next.set(l.id, on !== true)
+                    return next
+                  })
+                }
+              >
                 <span className={cn('flex size-4 items-center justify-center rounded border', on !== false ? 'border-primary bg-primary text-primary-foreground' : 'border-input')} aria-hidden>
                   {on === true ? <Check className="size-3" /> : on === 'indeterminate' ? <Minus className="size-3" /> : null}
                 </span>
@@ -182,7 +227,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
             )
           })
         )}
-        {q && !exact && !group ? (
+        {q && !exact && !group && !onAll ? (
           <Row onClick={create}>
             <Plus />
             <span className="truncate">{t(mode === 'move' ? 'places.createFolderNamed' : 'places.createLabelNamed', { name: query.trim() })}</span>
@@ -200,7 +245,7 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
       ) : null}
       {mode === 'label' ? (
         <div className="flex items-center gap-2 border-t border-border pt-2">
-          <label className="flex flex-1 items-center gap-2 text-sm">
+          <label className={cn('flex flex-1 items-center gap-2 text-sm', onAll && 'invisible')}>
             <Checkbox checked={alsoArchive} onCheckedChange={(on) => setAlsoArchive(on === true)} />
             {t('places.alsoArchive')}
           </label>
@@ -214,7 +259,21 @@ function PickerBody({ mode, rows, folder, onDone }: { mode: PickerMode; rows: Ma
 }
 
 /** The toolbar buttons: Move to and Label as, as popovers. */
-export function PickerButton({ mode, rows, folder, onMoved }: { mode: PickerMode; rows: MailMessage[]; folder: FolderId; onMoved?: () => void }) {
+export function PickerButton({
+  mode,
+  rows,
+  folder,
+  onMoved,
+  onAll,
+  currentLabel,
+}: {
+  mode: PickerMode
+  rows: MailMessage[]
+  folder: FolderId
+  onMoved?: () => void
+  onAll?: (action: AllAction) => void
+  currentLabel?: string
+}) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const { group } = useMailboxScope()
@@ -235,9 +294,11 @@ export function PickerButton({ mode, rows, folder, onMoved }: { mode: PickerMode
           mode={mode}
           rows={rows}
           folder={folder}
+          onAll={onAll}
+          currentLabel={currentLabel}
           onDone={(moved) => {
             setOpen(false)
-            if (moved) onMoved?.()
+            if (moved && !onAll) onMoved?.()
           }}
         />
       </PopoverContent>

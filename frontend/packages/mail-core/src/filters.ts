@@ -84,12 +84,16 @@ function useFilterMutation<T, R>(fn: (input: T, seal: (id: string, name: string)
   })
 }
 
-export type FilterDraft = Pick<MailFilter, 'name' | 'match' | 'conditions' | 'actions'> & { enabled?: boolean; source?: MailFilter['source'] }
+export type FilterDraft = Pick<MailFilter, 'name' | 'match' | 'conditions' | 'actions'> & {
+  enabled?: boolean
+  source?: MailFilter['source']
+  /** The new filter's id, made once by the caller: a second save of the same draft is refused (409), never a second filter. */
+  id?: string
+}
 
 export function useCreateFilter() {
   return useFilterMutation(async (draft: FilterDraft, seal) => {
-    const id = crypto.randomUUID()
-    const { name, ...rest } = draft
+    const { id = crypto.randomUUID(), name, ...rest } = draft
     await api.post('/mail/filters', { id, name: await seal(id, name.trim()), ...rest })
     return id
   })

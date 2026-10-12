@@ -57,6 +57,8 @@ test('auto-reply: turned on in Settings, answers once, marked automatic', async 
     await bobMail.getByRole('textbox', { name: 'Message' }).fill(`${subject} gövdesi`)
     await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
     await expect(bobMail.getByText('Message sent').first()).toBeVisible({ timeout: 60_000 })
+    // The toast may be the last send's: wait for this composer to close.
+    await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   }
   const first = `Soru ${tag}`
   await send(first)

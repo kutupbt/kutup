@@ -2445,7 +2445,20 @@ fn shared_mailboxes() {
         code(set_members(alice_only.clone(), json!({}))).1,
         "newKeyNeeded"
     );
-    let second = mail_key::generate_address_key(&hr, now + 1).unwrap();
+    // Newer than the first key, but never ahead of the clock: a key dated
+    // after its own self-signatures (made at the real time) is unusable to
+    // GnuPG ("public key is 1 second newer than the signature").
+    let later = loop {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        if secs > now {
+            break secs;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let second = mail_key::generate_address_key(&hr, later).unwrap();
     let r = set_members(
         alice_only,
         json!({ "newKey": {
@@ -2604,8 +2617,16 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50 })
     );
+    // Proton's page sizes only.
+    for (size, status) in [(100, 200), (75, 400)] {
+        let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+            .json(&json!({ "pageSize": size }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), status, "page size {size}");
+    }
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
         .json(&json!({ "autoDeleteDays": 7 }))
         .send()
@@ -2636,12 +2657,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200 }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200 })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3469,7 +3490,45 @@ fn list_filters_and_sorts() {
             .0,
             ["küçük"]
         );
+        // Numbered pages (Proton's paging) carry the total.
+        let numbered = |query: &str| -> (Vec<String>, Value) {
+            let page: Value = bearer(
+                c.get(format!(
+                    "{base}/api/mail/messages?folder=inbox&sort=largest&limit=2{query}{conversations}"
+                )),
+                &alice.token,
+            )
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+            let names = page["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["subject"].as_str().unwrap().to_string())
+                .collect();
+            (names, page["total"].clone())
+        };
+        assert_eq!(
+            numbered("&page=0"),
+            (vec!["büyük".into(), "orta".into()], json!(3))
+        );
+        assert_eq!(numbered("&page=1"), (vec!["küçük".into()], json!(3)));
+        assert_eq!(numbered("&page=5"), (vec![], json!(3)));
+        assert_eq!(numbered("&page=0&attachments=true").1, json!(1));
+        assert_eq!(numbered("").1, Value::Null);
     }
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/mail/messages?folder=inbox&page=0&before=1_{}",
+            uuid::Uuid::nil()
+        )),
+        &alice.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 400);
     // Read and unread.
     let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
         .json(&json!({ "ids": [middle_row["id"]], "seen": true }))
@@ -3554,4 +3613,111 @@ fn one_click_unsubscribe_goes_through_the_server() {
     assert_eq!(post["contentType"], "application/x-www-form-urlencoded");
     let row = wait_for(&c, &base, &alice, &message_id);
     assert_eq!(row["unsubscribed"], true);
+}
+
+#[test]
+fn select_all_changes_a_whole_place() {
+    use kutup_crypto::mail_names::MailNameKind::Label;
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let account = address.address.clone();
+    for subject in ["Bir", "İki", "Üç"] {
+        send_to_self(&c, &base, &user, &address, subject);
+    }
+    let inbox = |c: &Client| folder(c, &base, &user.token, "inbox");
+    for _ in 0..100 {
+        if inbox(&c).len() == 3 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(inbox(&c).len(), 3);
+    let batch = |body: Value| {
+        bearer(
+            c.post(format!("{base}/api/mail/messages/batch")),
+            &user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    let updated = |r: reqwest::blocking::Response| -> u64 {
+        assert!(r.status().is_success(), "batch: {}", r.status());
+        r.json::<Value>().unwrap()["updated"].as_u64().unwrap()
+    };
+
+    // Read, then unread: every message of the Inbox, past any page.
+    assert_eq!(updated(batch(json!({ "place": "inbox", "seen": true }))), 3);
+    assert!(inbox(&c).iter().all(|m| m["seen"] == true));
+    // Into the Archive; the copies in Sent stay.
+    assert_eq!(
+        updated(batch(json!({ "place": "inbox", "folder": "archive" }))),
+        3
+    );
+    assert!(inbox(&c).is_empty());
+    assert_eq!(folder(&c, &base, &user.token, "archive").len(), 3);
+    assert_eq!(folder(&c, &base, &user.token, "sent").len(), 3);
+    // A label on everything archived, then off.
+    let label = uuid::Uuid::new_v4().to_string();
+    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+        .json(&json!({ "id": label, "name": sealed_name(&user, &account, Label, &label, "Hepsi"), "color": "#22aa55" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201);
+    assert_eq!(
+        updated(batch(json!({ "place": "archive", "addLabels": [label] }))),
+        3
+    );
+    assert_eq!(
+        folder(&c, &base, &user.token, &format!("label:{label}")).len(),
+        3
+    );
+    assert_eq!(
+        updated(batch(
+            json!({ "place": format!("label:{label}"), "removeLabels": [label] })
+        )),
+        3
+    );
+    assert!(folder(&c, &base, &user.token, &format!("label:{label}")).is_empty());
+    // Someone else's mail is out of reach: Eve's batch changes her own
+    // (empty) Inbox, a mailbox she is not a member of is not found, and
+    // Alice's label is not hers to use.
+    let eve = register(&c, &base);
+    let as_eve = |body: Value| {
+        bearer(
+            c.post(format!("{base}/api/mail/messages/batch")),
+            &eve.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    assert_eq!(
+        updated(as_eve(json!({ "place": "archive", "seen": false }))),
+        0
+    );
+    assert!(folder(&c, &base, &user.token, "archive")
+        .iter()
+        .all(|m| m["seen"] == true));
+    let r = as_eve(
+        json!({ "place": "archive", "seen": false, "group": uuid::Uuid::new_v4().to_string() }),
+    );
+    assert_eq!(r.status(), 404);
+    let r = as_eve(json!({ "place": "archive", "addLabels": [label] }));
+    assert_eq!(r.status(), 400);
+    let r = as_eve(json!({ "place": format!("label:{label}"), "seen": false }));
+    assert_eq!(updated(r), 0);
+    // All mail, an unknown place and an empty change are refused.
+    for body in [
+        json!({ "place": "all", "seen": true }),
+        json!({ "place": "elsewhere", "seen": true }),
+        json!({ "place": "archive" }),
+    ] {
+        assert_eq!(batch(body.clone()).status(), 400, "{body}");
+    }
 }

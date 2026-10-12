@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { FOLDERS, membersOf, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -44,6 +44,11 @@ import { PickerButton, PickerDialog, type PickerMode } from './PlacePicker'
 import { openPlacesDialog } from './placesState'
 import { ShortcutsDialog } from './ShortcutsDialog'
 import { ThreadView } from './ThreadView'
+import { ListPagination, PagingControls } from './Paging'
+import { pageCount, pageFromParams } from './paging'
+import { SelectionPane } from './SelectionPane'
+import { SelectAllBanner, SelectAllConfirm } from './SelectAll'
+import { canSelectAll, type AllAction } from './selectAll'
 
 const KNOWN = new Set<string>([...FOLDERS, 'all'])
 const FILTERS: ListFilter[] = ['unread', 'read', 'attachments']
@@ -108,8 +113,18 @@ export function MailboxPage() {
   // Proton's filter and sort, kept in the address bar.
   const filter = FILTERS.find((f) => f === params.get('filter')) ?? null
   const sort = SORTS.find((s) => s === params.get('sort')) ?? 'newest'
+  // Proton's paging: the page (from 1) in the address bar, gone on page 1.
+  const page = pageFromParams(params)
+  const setPage = (to: number) => {
+    const next = new URLSearchParams(params)
+    if (to > 1) next.set('page', String(to))
+    else next.delete('page')
+    setParams(next)
+  }
+  // A new filter or sort starts from the first page, as Proton's.
   const setView = (change: { filter?: ListFilter | null; sort?: ListSort }) => {
     const next = new URLSearchParams(params)
+    next.delete('page')
     if ('filter' in change) {
       if (change.filter) next.set('filter', change.filter)
       else next.delete('filter')
@@ -148,7 +163,11 @@ export function MailboxPage() {
   const oneLine = layout === 'row'
   const [paneSize, setPaneSize] = usePaneSize(layout)
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
-  const list = useFolder(place, { q, group, conversations: (settings.data?.viewMode ?? 'conversation') === 'conversation', filter, sort }, !settings.isPending)
+  const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
+  const pageSize = settings.data?.pageSize ?? DEFAULT_PAGE_SIZE
+  const list = useFolder(place, { q, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending)
+  const total = list.data?.pages[0]?.total ?? null
+  const pages = pageCount(total ?? 0, pageSize)
   const own = account.data?.address.toLowerCase() ?? ''
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
@@ -158,6 +177,10 @@ export function MailboxPage() {
   const anchor = useRef<number | null>(null)
   const [cursor, setCursor] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<string[] | null>(null)
+  // Proton's select all: actions go to every message of the place, past this page.
+  const [allOfPlace, setAllOfPlace] = useState(false)
+  const [pendingAll, setPendingAll] = useState<AllAction | null>(null)
+  const batch = useBatchMessages()
   const [shortcuts, setShortcuts] = useState(false)
   // Move to / Label as opened from the keyboard, with the rows it acts on.
   const [picker, setPicker] = useState<{ mode: PickerMode; rows: MailMessage[] } | null>(null)
@@ -174,7 +197,19 @@ export function MailboxPage() {
     setSelected(new Set())
     anchor.current = null
     setCursor(null)
-  }, [place, q])
+  }, [place, q, page])
+  // Select all ends with the place, page, search, filter or sort, and once a row is unchecked.
+  useEffect(() => setAllOfPlace(false), [place, q, page, filter, sort])
+  const showSelectAll = allOfPlace || (total !== null && total > 0 && canSelectAll({ checked: chosen.length, pageSize, folder, own: placeKind !== null, q, filtered: filter !== null }))
+  useEffect(() => {
+    if (allOfPlace && (chosen.length < messages.length || messages.length === 0)) setAllOfPlace(false)
+  }, [allOfPlace, chosen.length, messages.length])
+  // Past the last page (mail moved away): the last one.
+  const pastEnd = total !== null && !list.isPlaceholderData && page > pages
+  useEffect(() => {
+    if (pastEnd) setPage(pages)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the list says so
+  }, [pastEnd, pages])
   // Opening a thread puts the keyboard on it.
   useEffect(() => {
     if (openIndex >= 0) setCursor(openIndex)
@@ -211,7 +246,55 @@ export function MailboxPage() {
     return here !== null && messages[here] ? [messages[here]] : []
   }
 
+  /** Select all's action on the whole place, once confirmed (Proton's select-all modals). */
+  function runAll(action: AllAction) {
+    const notice = toast.loading(t(conversations ? 'selectAll.applying.conversations' : 'selectAll.applying.messages'))
+    const scoped = { place, ...(group ? { group } : {}) }
+    const done = () => {
+      toast.dismiss(notice)
+      setPendingAll(null)
+      setAllOfPlace(false)
+      setSelected(new Set())
+    }
+    const requests =
+      action.kind === 'mark'
+        ? [{ ...scoped, seen: action.seen }]
+        : action.kind === 'label'
+          ? [{ ...scoped, addLabels: action.add, removeLabels: action.remove }]
+          : typeof action.destination === 'object'
+            ? [{ ...scoped, folder: 'custom' as const, customFolder: action.destination.folder }]
+            : // Home is the Inbox for received mail and Sent for your own.
+              action.destination === 'inbox'
+              ? [
+                  { ...scoped, folder: 'inbox' as const },
+                  { ...scoped, folder: 'sent' as const },
+                ]
+              : [{ ...scoped, folder: action.destination }]
+    requests
+      .reduce<Promise<unknown>>((before, change) => before.then(() => batch.mutateAsync(change)), Promise.resolve())
+      .then(
+        () => {
+          done()
+          if (action.kind === 'move' && threadId) void navigate(`${base}${search}`)
+        },
+        (error: unknown) => {
+          toast.dismiss(notice)
+          setPendingAll(null)
+          toast.error(apiErrorMessage(error, t('common.tryAgain')))
+        },
+      )
+  }
+
+  function markChosen(rows: MailMessage[], seen: boolean, after?: () => void) {
+    if (allOfPlace) setPendingAll({ kind: 'mark', seen })
+    else actions.mark(rows, { seen }, after)
+  }
+
   function move(rows: MailMessage[], target: MoveTarget) {
+    if (allOfPlace) {
+      setPendingAll({ kind: 'move', destination: target })
+      return
+    }
     actions.move(rows, target, () => {
       setSelected(new Set())
       // Moving the open conversation away closes it.
@@ -306,14 +389,14 @@ export function MailboxPage() {
         break
       }
       case 'u':
-        actions.mark(targets(), { seen: false }, () => {
+        markChosen(targets(), false, () => {
           if (threadId) void navigate(`${base}${search}`)
         })
         break
       case 'r':
         // With a conversation open (and nothing chosen), R replies, as Proton's message keys.
         if (threadId && chosen.length === 0) replyCommand('reply')
-        else actions.mark(targets(), { seen: true })
+        else markChosen(targets(), true)
         break
       case 'R':
         if (threadId) replyCommand('replyAll')
@@ -332,14 +415,16 @@ export function MailboxPage() {
       case 'm':
       case 'l': {
         const rows = targets()
-        if (rows.length && (key === 'l' ? !group : movesFor(folder).length)) {
+        if (rows.length && !allOfPlace && (key === 'l' ? !group : movesFor(folder).length)) {
           event.preventDefault()
           setPicker({ mode: key === 'm' ? 'move' : 'label', rows })
         }
         break
       }
       case 'Delete':
-        if (DELETES_FOREVER.has(folder)) deleteForever(targets())
+        if (allOfPlace && unwanted) setEmptying(true)
+        else if (allOfPlace && folder === 'drafts') break
+        else if (DELETES_FOREVER.has(folder)) deleteForever(targets())
         else move(targets(), 'trash')
         break
     }
@@ -554,21 +639,28 @@ export function MailboxPage() {
           <>
             <span className="px-1 text-sm">{t('list.selected', { count: chosen.length })}</span>
             <span className="flex-1" />
-            <ToolbarButton label={t('actions.markRead')} onClick={() => actions.mark(chosen, { seen: true }, () => setSelected(new Set()))}>
+            <ToolbarButton label={t('actions.markRead')} onClick={() => markChosen(chosen, true, () => setSelected(new Set()))}>
               <MailOpen />
             </ToolbarButton>
-            <ToolbarButton label={t('actions.markUnread')} onClick={() => actions.mark(chosen, { seen: false }, () => setSelected(new Set()))}>
+            <ToolbarButton label={t('actions.markUnread')} onClick={() => markChosen(chosen, false, () => setSelected(new Set()))}>
               <Mail />
             </ToolbarButton>
-            {moves.length ? <PickerButton mode="move" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} /> : null}
-            <PickerButton mode="label" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} />
+            {moves.length ? <PickerButton mode="move" rows={chosen} folder={folder} onMoved={() => afterPick(chosen)} onAll={allOfPlace ? setPendingAll : undefined} /> : null}
+            <PickerButton
+              mode="label"
+              rows={chosen}
+              folder={folder}
+              onMoved={() => afterPick(chosen)}
+              onAll={allOfPlace ? setPendingAll : undefined}
+              currentLabel={placeKind === 'label' ? placeId : undefined}
+            />
             {moves.map((target) => (
               <ToolbarButton key={target} label={moveLabel(target)} onClick={() => move(chosen, target)}>
                 {MOVE_ICON[target]}
               </ToolbarButton>
             ))}
-            {DELETES_FOREVER.has(folder) ? (
-              <ToolbarButton label={t('actions.deleteForever')} onClick={() => deleteForever(chosen)}>
+            {DELETES_FOREVER.has(folder) && !(allOfPlace && folder === 'drafts') ? (
+              <ToolbarButton label={t('actions.deleteForever')} onClick={() => (allOfPlace ? setEmptying(true) : deleteForever(chosen))}>
                 <Trash2 className="text-destructive" />
               </ToolbarButton>
             ) : null}
@@ -590,7 +682,22 @@ export function MailboxPage() {
           </>
         )}
       </div>
-      {chosen.length === 0 ? <ListFilters filter={filter} sort={sort} onChange={setView} /> : null}
+      {showSelectAll && total !== null ? (
+        <SelectAllBanner
+          on={allOfPlace}
+          conversations={conversations}
+          page={chosen.length}
+          total={total}
+          location={title}
+          onToggle={() => {
+            if (allOfPlace) setSelected(new Set())
+            setAllOfPlace(!allOfPlace)
+          }}
+        />
+      ) : null}
+      <ListFilters filter={filter} sort={sort} onChange={setView} filtersHidden={chosen.length > 0}>
+        <PagingControls page={page} pages={pages} onPage={setPage} disabled={total === null || list.isPlaceholderData} />
+      </ListFilters>
       {unwanted && !group && settings.data ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">{settings.data.autoDeleteDays ? t('emptyFolder.autoDeleteOn') : t('emptyFolder.autoDeleteOffer')}</span>
@@ -757,11 +864,9 @@ export function MailboxPage() {
                   </li>
                 )
               })}
-              {list.hasNextPage ? (
-                <li className="p-3 text-center">
-                  <Button variant="outline" size="sm" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
-                    {t('list.more')}
-                  </Button>
+              {pages > 1 ? (
+                <li>
+                  <ListPagination page={page} pages={pages} onPage={setPage} disabled={list.isPlaceholderData} />
                 </li>
               ) : null}
             </ul>
@@ -777,16 +882,37 @@ export function MailboxPage() {
       {listPane}
       <PaneSplitter layout={layout} size={paneSize} onResize={setPaneSize} />
       <div className={cn('min-h-0 min-w-0 flex-1 overflow-hidden', !threadId && 'hidden md:block')}>
-        {threadId && account.data ? (
+        {/* Proton: rows checked beside the list show the selection pane, over an open conversation too. */}
+        {threadId && account.data && !(layout === 'column' && chosen.length > 0) ? (
           <ThreadView account={account.data} folder={folder} base={base} threadId={threadId} onClose={() => void navigate(`${base}${search}`)} />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-            <Mail className="size-10" aria-hidden />
-            <p className="text-sm">{t('read.pick')}</p>
-            <p className="text-xs">{t('shortcuts.hint')}</p>
-          </div>
+          <SelectionPane
+            name={title}
+            label={placeKind === 'label'}
+            conversations={conversations}
+            checked={allOfPlace ? (total ?? chosen.length) : chosen.length}
+            allOfPlace={allOfPlace}
+            total={total}
+            q={q}
+            onClear={() => {
+              setAllOfPlace(false)
+              setSelected(new Set())
+            }}
+          />
         )}
       </div>
+      <SelectAllConfirm
+        action={pendingAll}
+        count={total ?? 0}
+        conversations={conversations}
+        destination={
+          pendingAll?.kind === 'move' ? (typeof pendingAll.destination === 'object' ? pendingAll.destination.name : t(`folders.${pendingAll.destination === 'inbox' && folder === 'sent' ? 'sent' : pendingAll.destination}`)) : ''
+        }
+        labelName={(id) => places.data?.labelsById.get(id)?.name ?? ''}
+        pending={batch.isPending}
+        onCancel={() => setPendingAll(null)}
+        onConfirm={() => pendingAll && runAll(pendingAll)}
+      />
       <ConfirmDestructive
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}

@@ -654,6 +654,10 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/messages/delete",
             post(handlers::mail::delete_messages),
         )
+        .route(
+            "/api/mail/messages/batch",
+            post(handlers::mail::batch_messages),
+        )
         .route("/api/mail/counts", get(handlers::mail::counts))
         .route("/api/mail/places", get(handlers::mail_folders::places))
         .route(
