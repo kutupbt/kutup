@@ -31,7 +31,7 @@ export function SiteIcon({ title, address, className }: { title: string; address
   return (
     <span ref={box} className={cn('grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-muted text-xs font-semibold uppercase', className)} aria-hidden>
       {showing ? (
-        <img src={showing} alt="" referrerPolicy="no-referrer" className="size-5 object-contain" onError={() => setBroken(showing)} />
+        <img src={showing} alt="" className="size-5 object-contain" onError={() => setBroken(showing)} />
       ) : (
         (title || '?').slice(0, 1)
       )}

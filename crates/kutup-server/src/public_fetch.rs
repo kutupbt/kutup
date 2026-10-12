@@ -55,6 +55,8 @@ pub async fn get(mut url: Url, request: &Request<'_>) -> AppResult<Fetched> {
         let host = url.host_str().expect("checked host").to_owned();
         let client = reqwest::Client::builder()
             .resolve(&host, address)
+            // A proxy from the environment would resolve the name again.
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(request.timeout)

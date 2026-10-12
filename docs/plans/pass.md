@@ -259,31 +259,38 @@ one database, plus a report of what happened.
 - **Site icons** (as Proton Pass's website favicons): an entry shows its
   website's icon in the list and its header, else the title's first letter.
   Only the host name of the entry's URL is used (none for IP addresses,
-  `localhost` or single labels). The account picks how icons come, on every
-  device (`pass_settings`, migration 160; `GET/PUT /api/pass/settings`; the
-  vault list's "Website icons"):
-  - **Through Kutup** (the default, as Proton's image proxy): `POST
-    /api/pass/icon` with the host name; the server reads the site's home
-    page for `<link rel="icon">` and Apple touch icons, picks the smallest
-    of at least 64 px, else the largest, and falls back to `/favicon.ico`.
-    It fetches through `public_fetch` (the narrow fetcher Chat link previews
-    use: https on 443, public addresses only, pinned connections, redirects
-    checked again, size and time limits) and returns only PNG, JPEG, GIF,
-    WebP or ICO recognised by their bytes, never SVG. The website never
-    sees the browser; the server sees the host name, in the body (so not in
+  `localhost` or single labels). As in Proton, the account chooses between
+  icons through Kutup (the default) and none, on every device
+  (`pass_settings`, migration 160; `GET/PUT /api/pass/settings`; the vault
+  list's "Website icons"). The browser never asks a website itself: that
+  would need the pass host to load outside images, the only way a script
+  injected into the vault app could send data out, and would show sites the
+  reader's address and cookies.
+  - **Through Kutup:** `POST /api/pass/icon` with the host name; the server
+    reads the site's home page for `<link rel="icon">` and Apple touch
+    icons, picks the smallest of at least 64 px, else the largest, and falls
+    back to `/favicon.ico`. It fetches through `public_fetch` (the narrow
+    fetcher Chat link previews use: https on 443, public addresses only,
+    pinned connections, redirects checked again, size and time limits) and
+    returns only PNG, JPEG, GIF, WebP or ICO recognised by their bytes,
+    never SVG, with `nosniff` and a sandboxing CSP. The website never sees
+    the browser; the server sees the host name, in the body (so not in
     access logs), and keeps icons in memory only (a day, an hour for none;
-    bounded), never on disk. It refuses (`403`) when the account chose
-    otherwise, so a tab still in that mode on another device stops.
-  - **Directly from the website:** the browser loads
-    `https://<host>/favicon.ico` itself, without a referrer, so the website
-    sees the reader's address and when they looked; the pass host's
-    `img-src` allows `https:` for this. Only `/favicon.ico` is tried, since
-    a browser cannot read another site's page.
+    bounded), never on disk, and per account, so how fast an answer comes
+    tells no account what another asked for. Fetches the cache cannot
+    answer are limited to 120 sites a minute per account and 16 at once on
+    the server, and a second ask for a site being fetched waits for that
+    fetch. It refuses (`403`) when the account chose otherwise, so a tab
+    still in that mode on another device stops. Being the default, every
+    account sends its entries' host names to its server from the release
+    that brings this, as Proton Pass's default does; the release note says
+    so.
   - **Off:** first letters only; nothing is asked.
 
   The tab asks only for rows on screen, six at a time, once per host per
-  visit, and keeps icons in memory. Sites whose TLS needs legacy ciphers or
-  that refuse non-browser clients give no icon through Kutup. Spec 152 and
+  visit (after a `429`, again 15 seconds later), keeps icons in memory and
+  drops them when the choice leaves Kutup. Sites whose TLS needs legacy
+  ciphers, or that refuse non-browser clients, give no icon. Spec 152 and
   `pass_live`.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it

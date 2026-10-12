@@ -7,7 +7,7 @@ const VAULT_PASSWORD = 'kasa-parolası-çğ-152'
 // A 1×1 PNG, so the run needs no outside website.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
 
-test('pass: entries show website icons through Kutup, from the website, or not at all, as the account chose', async ({ browser }) => {
+test('pass: entries show website icons through Kutup, or none, as the account chose', async ({ browser }) => {
   test.slow()
   const context = await browser.newContext()
   await registerAccount(context, newAccount('pass152', PASSWORD))
@@ -24,7 +24,6 @@ test('pass: entries show website icons through Kutup, from the website, or not a
   await addEntry(page, { title: 'GitHub', userName: 'ayse', url: 'https://github.com/login?return_to=/settings' })
   await addEntry(page, { title: 'Router', url: 'http://192.168.1.1/' })
   await expectSaved(page)
-  await expectSaved(page)
 
   // Through Kutup: only the host name is sent, and the icon is this tab's copy.
   const row = (title: string) => page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: title })
@@ -33,40 +32,23 @@ test('pass: entries show website icons through Kutup, from the website, or not a
   await expect(row('Router')).toContainText('R')
   expect([...new Set(asked)]).toEqual(['github.com'])
 
-  // From the website: the browser asks it for /favicon.ico. The choice is the account's.
+  // Off, chosen for the account: another tab (as another device would)
+  // shows first letters, asks nothing, and loads no outside image.
   await page.goto(appUrl('pass'))
   await page.getByRole('combobox', { name: 'Website icons' }).click()
-  await page.getByRole('option', { name: 'Directly from the website' }).click()
-  await expect(page.getByText('Your browser asks each website for its icon')).toBeVisible()
-  // Another tab, as another device would: the image it asks the website
-  // for is recorded (the run needs no outside website, and Playwright cannot
-  // stand in for a /favicon.ico address).
+  await expect(page.getByRole('option')).toHaveText(['Through Kutup (recommended)', 'Off'])
+  await page.getByRole('option', { name: 'Off' }).click()
+  await expect(page.getByText('Entries show their first letter')).toBeVisible()
   const other = await context.newPage()
-  await other.addInitScript(() => {
-    const asked: string[] = []
-    Object.assign(window, { askedImages: asked })
-    new MutationObserver((records) => {
-      for (const record of records) {
-        for (const node of record.addedNodes) {
-          if (node instanceof HTMLElement) for (const img of [node, ...node.querySelectorAll('img')]) if (img instanceof HTMLImageElement) asked.push(`${img.src} ${img.referrerPolicy}`)
-        }
-      }
-    }).observe(document, { childList: true, subtree: true })
+  const otherAsked: string[] = []
+  other.on('request', (request) => {
+    if (request.url().includes('/api/pass/icon') || !request.url().includes('.localhost')) otherAsked.push(request.url())
   })
   await other.goto(vaultUrl)
   await expect(other.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   const otherRow = other.getByRole('list', { name: 'Entries' }).getByRole('button', { name: 'GitHub' })
-  await expect(otherRow).toBeVisible()
-  await expect.poll(() => other.evaluate(() => (window as unknown as { askedImages: string[] }).askedImages)).toContain('https://github.com/favicon.ico no-referrer')
-
-  // Off: first letters, and nothing is asked.
-  await page.getByRole('combobox', { name: 'Website icons' }).click()
-  await page.getByRole('option', { name: 'Off' }).click()
-  await expect(page.getByText('Entries show their first letter')).toBeVisible()
-  await other.reload()
-  await expect(other.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await expect(otherRow).toContainText('G')
   await expect(otherRow.locator('img')).toHaveCount(0)
-  expect(await other.evaluate(() => (window as unknown as { askedImages: string[] }).askedImages)).toEqual([])
+  expect(otherAsked).toEqual([])
   await context.close()
 })

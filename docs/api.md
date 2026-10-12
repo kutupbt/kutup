@@ -1511,9 +1511,9 @@ Bearer JWT.
 
 ### GET /api/pass/settings
 
-`{siteIcons}`: how the account's entries get their website's icon, the same
-on every device: `"kutup"` (through this server; the default), `"direct"`
-(the browser asks the website) or `"off"`.
+`{siteIcons}`: whether the account's entries show their website's icon, the
+same on every device: `"kutup"` (through this server; the default) or
+`"off"`.
 
 ### PUT /api/pass/settings
 
@@ -1528,8 +1528,12 @@ addresses only. **Response:** `200` with the image (`image/png`,
 `image/jpeg`, `image/gif`, `image/webp` or `image/x-icon`, recognised by its
 bytes; never SVG; `Cache-Control: no-store`); `400` for a name that is not a
 public host name; `403` unless the account chose `"kutup"`; `404` when the
-site has no usable icon; `429` past 600 a minute. Icons are kept in the
-server's memory for a day (no icon: an hour), never written down.
+site has no usable icon; `429` past 600 a minute, or past 120 sites a
+minute that the cache could not answer. Icons are kept in the server's
+memory, per account, for a day (no icon: an hour), never written down; at
+most 16 sites are fetched at once, and a second ask for a site being
+fetched waits for it. The response carries `X-Content-Type-Options:
+nosniff` and a sandboxing CSP.
 
 ---
 

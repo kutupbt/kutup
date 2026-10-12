@@ -543,12 +543,18 @@ fn site_icons_follow_the_account_setting() {
         choose(json!({ "siteIcons": "sideways" })),
         StatusCode::BAD_REQUEST
     );
-    for mode in ["direct", "off"] {
-        assert_eq!(choose(json!({ "siteIcons": mode })), StatusCode::NO_CONTENT);
-        assert_eq!(settings()["siteIcons"], mode);
-        // The server fetches nothing for an account that chose otherwise.
-        assert_eq!(icon("example.org"), StatusCode::FORBIDDEN, "{mode}");
-    }
+    // As Proton Pass: through Kutup or not at all.
+    assert_eq!(
+        choose(json!({ "siteIcons": "direct" })),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        choose(json!({ "siteIcons": "off" })),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(settings()["siteIcons"], "off");
+    // The server fetches nothing for an account that chose otherwise.
+    assert_eq!(icon("example.org"), StatusCode::FORBIDDEN);
     assert_eq!(
         choose(json!({ "siteIcons": "kutup" })),
         StatusCode::NO_CONTENT

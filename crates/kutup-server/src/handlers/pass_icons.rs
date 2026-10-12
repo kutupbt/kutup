@@ -3,14 +3,20 @@
 //! an entry's website icon, so the browser never contacts the site. The
 //! server then sees the domain (not the entry or the rest of its address).
 //!
-//! Each account chooses how entries get their icon (`pass_settings`):
-//! through Kutup (the default), straight from the website (the browser asks
-//! it, which then sees the reader's address), or not at all.
+//! Each account chooses, as in Proton Pass, between icons through Kutup (the
+//! default) and none (`pass_settings`). The browser never asks a website
+//! itself, so the Pass page loads no outside images.
 //!
 //! - `GET/PUT /api/pass/settings`: that choice.
 //! - `POST /api/pass/icon`: one domain's icon, refused unless the account
 //!   chose Kutup. The domain travels in the body, so it stays out of access
-//!   logs; icons are kept in memory only, never written down.
+//!   logs; icons are kept in memory only, never written down, and per
+//!   account: a quick answer must not tell one account that another has
+//!   asked for a domain.
+//!
+//! Each fetch that the cache cannot answer is limited per account, at most
+//! a few run at once on the server, and asking again for a domain being
+//! fetched waits for that fetch.
 //!
 //! Fetching goes through `public_fetch` (https, public addresses only). The
 //! site's home page is read for its `<link rel="icon">` tags, then
@@ -18,7 +24,7 @@
 //! their bytes (never SVG, which could run script if opened on its own).
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::rejection::JsonRejection;
@@ -52,12 +58,22 @@ const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupPassIcons/1.0)";
 /// Found icons are kept a day, and a site without one an hour.
 const FOUND_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 const MISSING_FOR: Duration = Duration::from_secs(60 * 60);
-const CACHE_ENTRIES: usize = 4096;
+const CACHE_ENTRIES: usize = 16 * 1024;
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-/// 600 icons a minute per account: opening a large vault asks for many.
+/// 600 answers a minute per account: opening a large vault asks for many.
 static PASS_ICONS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+/// 120 domains fetched a minute per account (each a page and a few icons);
+/// what the cache answers does not count.
+static PASS_ICON_FETCHES: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
+/// Domains fetched at once on this server, for all accounts.
+static FETCHING: LazyLock<tokio::sync::Semaphore> =
+    LazyLock::new(|| tokio::sync::Semaphore::new(16));
+/// The fetch under way per account and domain, which a second ask waits for.
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// How an account's entries get their website's icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -65,9 +81,6 @@ static PASS_ICONS: LazyLock<RateLimiter> =
 pub enum SiteIcons {
     /// Fetched by the Kutup server, which sees the domain.
     Kutup,
-    /// Asked of the website by the browser, which shows it the reader's
-    /// address.
-    Direct,
     Off,
 }
 
@@ -75,14 +88,12 @@ impl SiteIcons {
     fn as_str(self) -> &'static str {
         match self {
             Self::Kutup => "kutup",
-            Self::Direct => "direct",
             Self::Off => "off",
         }
     }
 
     fn parse(value: &str) -> Self {
         match value {
-            "direct" => Self::Direct,
             "off" => Self::Off,
             _ => Self::Kutup,
         }
@@ -191,16 +202,10 @@ pub async fn icon(
     if site_icons(&state, &user).await? != SiteIcons::Kutup {
         return Err(AppError::forbidden("siteIconsNotKutup"));
     }
-    let found = match cached(&domain) {
+    let key = cache_key(&user.user_id, &domain);
+    let found = match cached(&key) {
         Some(found) => found,
-        None => {
-            let found = tokio::time::timeout(TOTAL_TIMEOUT, find_icon(&domain))
-                .await
-                .ok()
-                .flatten();
-            remember(&domain, found.clone());
-            found
-        }
+        None => fetch_once(&key, &user.user_id, &domain).await?,
     };
     let Some(icon) = found else {
         return Err(AppError::not_found("no icon"));
@@ -214,10 +219,59 @@ pub async fn icon(
                 header::CONTENT_SECURITY_POLICY,
                 HeaderValue::from_static("default-src 'none'; sandbox"),
             ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
         ],
         icon.bytes.as_ref().clone(),
     )
         .into_response())
+}
+
+/// Answers are kept per account, so how fast one comes says nothing about
+/// what other accounts asked for.
+fn cache_key(user_id: &str, domain: &str) -> String {
+    format!("{user_id}\n{domain}")
+}
+
+/// Fetches `domain` for the account behind `key`, unless a fetch of it is
+/// already under way, whose answer is then taken.
+async fn fetch_once(key: &str, user_id: &str, domain: &str) -> AppResult<Option<Icon>> {
+    let gate = IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(key.to_owned())
+        .or_default()
+        .clone();
+    let answer = async {
+        let _turn = gate.lock().await;
+        if let Some(found) = cached(key) {
+            return Ok(found);
+        }
+        if !PASS_ICON_FETCHES.allow(user_id) {
+            return Err(AppError::too_many_requests(
+                "too many icons; try again shortly",
+            ));
+        }
+        let _permit = FETCHING
+            .acquire()
+            .await
+            .map_err(|_| AppError::internal("icon fetches closed"))?;
+        let found = tokio::time::timeout(TOTAL_TIMEOUT, find_icon(domain))
+            .await
+            .ok()
+            .flatten();
+        remember(key, found.clone());
+        Ok(found)
+    }
+    .await;
+    let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    // The map's and this one: nobody else waits.
+    if Arc::strong_count(&gate) <= 2 {
+        in_flight.remove(key);
+    }
+    answer
 }
 
 /// A lowercase host name with at least one dot, as a URL's host after IDNA
@@ -374,7 +428,10 @@ fn icon_links(html: &str) -> Vec<IconLink> {
         .unwrap_or(lower.len());
     let mut links = Vec::new();
     let mut at = 0;
-    while let Some(found) = lower[at..head_end].find("<link") {
+    while at < head_end {
+        let Some(found) = lower[at..head_end].find("<link") else {
+            break;
+        };
         let start = at + found + "<link".len();
         let Some(length) = lower[start..].find('>') else {
             break;
@@ -492,15 +549,15 @@ struct CacheEntry {
 static CACHE: LazyLock<Mutex<HashMap<String, CacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn cached(domain: &str) -> Option<Option<Icon>> {
+fn cached(key: &str) -> Option<Option<Icon>> {
     let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache
-        .get(domain)
+        .get(key)
         .filter(|entry| entry.until > Instant::now())
         .map(|entry| entry.icon.clone())
 }
 
-fn remember(domain: &str, icon: Option<Icon>) {
+fn remember(key: &str, icon: Option<Icon>) {
     let now = Instant::now();
     let until = now
         + if icon.is_some() {
@@ -508,18 +565,15 @@ fn remember(domain: &str, icon: Option<Icon>) {
         } else {
             MISSING_FOR
         };
+    let bytes = |entry: &CacheEntry| entry.icon.as_ref().map_or(0, |icon| icon.bytes.len());
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|_, entry| entry.until > now);
-    let size = |cache: &HashMap<String, CacheEntry>| -> usize {
-        cache
-            .values()
-            .map(|entry| entry.icon.as_ref().map_or(0, |icon| icon.bytes.len()))
-            .sum()
-    };
+    if let Some(old) = cache.remove(key) {
+        drop(old);
+    }
+    let mut size: usize = cache.values().map(bytes).sum();
     let incoming = icon.as_ref().map_or(0, |icon| icon.bytes.len());
-    while !cache.is_empty()
-        && (cache.len() >= CACHE_ENTRIES || size(&cache) + incoming > CACHE_BYTES)
-    {
+    while !cache.is_empty() && (cache.len() >= CACHE_ENTRIES || size + incoming > CACHE_BYTES) {
         // The one that would expire first goes.
         let Some(oldest) = cache
             .iter()
@@ -528,9 +582,11 @@ fn remember(domain: &str, icon: Option<Icon>) {
         else {
             break;
         };
-        cache.remove(&oldest);
+        if let Some(gone) = cache.remove(&oldest) {
+            size -= bytes(&gone);
+        }
     }
-    cache.insert(domain.to_owned(), CacheEntry { until, icon });
+    cache.insert(key.to_owned(), CacheEntry { until, icon });
 }
 
 #[cfg(test)]
@@ -637,6 +693,27 @@ mod tests {
     }
 
     #[test]
+    fn a_tag_running_past_the_head_ends_the_search() {
+        for html in [
+            r#"<head><link rel="icon" href="a</head>"><link rel="icon" href="/b.png"></head>"#,
+            r#"<head><link rel=icon href=x<body>"#,
+            r#"<head><link rel="icon" href="/c.png"<body><link rel="icon" href="/d.png">"#,
+            "<head><link",
+            "<link rel=icon href=/e.png></head>",
+        ] {
+            let _ = icon_links(html);
+        }
+        assert_eq!(
+            icon_links(r#"<head><link rel="icon" href="a</head>"></head>"#),
+            vec![IconLink {
+                // The tag ends at its first `>`, quoted or not.
+                href: "a</head".into(),
+                pixels: None
+            }]
+        );
+    }
+
+    #[test]
     fn plain_http_icons_are_not_followed() {
         let html =
             r#"<head><link rel="icon" href="http://example.org/i.png" sizes="64x64"></head>"#;
@@ -660,5 +737,9 @@ mod tests {
         remember("cache-miss.example", None);
         assert!(matches!(cached("cache-miss.example"), Some(None)));
         assert!(cached("never-asked.example").is_none());
+        // Another account's answer is not this one's.
+        remember(&cache_key("ayse", "vpn.example"), None);
+        assert!(cached(&cache_key("ayse", "vpn.example")).is_some());
+        assert!(cached(&cache_key("mehmet", "vpn.example")).is_none());
     }
 }
