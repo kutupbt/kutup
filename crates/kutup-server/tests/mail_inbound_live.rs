@@ -4040,6 +4040,134 @@ fn new_mail_notifications_list_unread_inbox_mail() {
 }
 
 #[test]
+fn body_search_lists_what_to_index_and_checks_its_hits() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let send = |subject: &str| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let first = send("bir");
+    std::thread::sleep(Duration::from_millis(20));
+    let second = send("iki");
+    let first = wait_for(&c, &base, &alice, &first)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let second = wait_for(&c, &base, &alice, &second)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // What to index: everything but Drafts, newest first, in pages.
+    let page = |before: Option<&str>| -> Value {
+        let mut request = bearer(c.get(format!("{base}/api/mail/search-index")), &alice.token)
+            .query(&[("limit", "1")]);
+        if let Some(before) = before {
+            request = request.query(&[("before", before)]);
+        }
+        request.send().unwrap().json().unwrap()
+    };
+    let one = page(None);
+    assert_eq!(one["total"], 2);
+    assert_eq!(one["messages"][0]["id"], second.as_str());
+    let two = page(one["next"].as_str());
+    assert_eq!(two["messages"][0]["id"], first.as_str());
+    assert!(two["next"].is_null());
+
+    // Checking hits: those still in the place and matching, newest first.
+    let lookup = |body: Value| {
+        bearer(
+            c.post(format!("{base}/api/mail/messages/lookup")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    let ids = |r: reqwest::blocking::Response| -> Vec<String> {
+        let page: Value = r.json().unwrap();
+        page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let gone = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        ids(lookup(
+            json!({ "ids": [first, second, gone], "folder": "all" })
+        )),
+        [second.clone(), first.clone()]
+    );
+    assert_eq!(
+        ids(lookup(
+            json!({ "ids": [first, second], "folder": "archive" })
+        )),
+        Vec::<String>::new()
+    );
+    let bob_local = bob_address.address.split_once('@').unwrap().0;
+    assert_eq!(
+        ids(lookup(
+            json!({ "ids": [first], "folder": "all", "from": bob_local })
+        )),
+        [first.clone()]
+    );
+    // Another account's ids find nothing of theirs.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/lookup")),
+        &bob.token,
+    )
+    .json(&json!({ "ids": [first], "folder": "all" }))
+    .send()
+    .unwrap();
+    assert_eq!(ids(r), Vec::<String>::new());
+    assert_eq!(lookup(json!({ "ids": [], "folder": "all" })).status(), 400);
+    assert_eq!(
+        lookup(json!({ "ids": ["not-an-id"], "folder": "all" })).status(),
+        400
+    );
+    let many: Vec<String> = (0..201).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+    assert_eq!(
+        lookup(json!({ "ids": many, "folder": "all" })).status(),
+        400
+    );
+}
+
+#[test]
 fn senders_whose_images_always_load() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");

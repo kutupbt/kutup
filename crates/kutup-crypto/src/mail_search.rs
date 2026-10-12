@@ -65,7 +65,8 @@ impl MailSearchKeys {
     /// The name a record is stored under: HMAC-SHA256 of the account and its
     /// name, as lowercase hex.
     pub fn record_id(&self, name: &str) -> String {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.name.as_slice()).expect("any key length");
+        let mut mac =
+            <Hmac<Sha256> as Mac>::new_from_slice(self.name.as_slice()).expect("any key length");
         mac.update(&(self.account.len() as u16).to_be_bytes());
         mac.update(self.account.as_bytes());
         mac.update(name.as_bytes());

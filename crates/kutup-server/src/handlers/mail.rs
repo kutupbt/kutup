@@ -441,8 +441,177 @@ pub async fn list_messages(
     user: AuthUser,
     Query(query): Query<MailListQuery>,
 ) -> AppResult<Json<MailMessagePage>> {
+    list_page(&state, &user, query, None).await
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct SearchIndexQuery {
+    /// The `next` of the previous page.
+    pub before: Option<String>,
+    /// At most 200 (the default).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexPage {
+    pub messages: Vec<MailMessage>,
+    pub next: Option<String>,
+    /// How many messages body search indexes in all (for its progress).
+    pub total: i64,
+}
+
+/// `GET /api/mail/search-index` — every message of your own mailbox that
+/// body search indexes (all but Drafts), newest first, for the browser to
+/// open and index (docs/plans/mail-body-search.md).
+#[utoipa::path(
+    get,
+    path = "/api/mail/search-index",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(SearchIndexQuery),
+    responses(
+        (status = 200, description = "A page, newest first", body = SearchIndexPage),
+        (status = 400, description = "A cursor that is not one"),
+    )
+)]
+pub async fn search_index(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<SearchIndexQuery>,
+) -> AppResult<Json<SearchIndexPage>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let owner = mailbox(&state, user_id, query.group.as_deref())
+    let limit = query.limit.unwrap_or(200).clamp(1, 200);
+    let before = query
+        .before
+        .as_deref()
+        .map(|value| parse_cursor(value, Sort::Newest))
+        .transpose()?;
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS} FROM mail_messages
+          WHERE owner = $1 AND user_id = $1 AND folder <> 'drafts'
+            AND ($2::timestamptz IS NULL OR (received_at, id) < ($2, $3))
+          ORDER BY received_at DESC, id DESC
+          LIMIT $4"
+    ))
+    .bind(user_id)
+    .bind(before.and_then(|c| c.time))
+    .bind(before.map(|c| c.id))
+    .bind(limit + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mail_messages WHERE owner = $1 AND user_id = $1 AND folder <> 'drafts'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let more = rows.len() as i64 > limit;
+    let messages: Vec<MailMessage> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(MailMessage::from)
+        .collect();
+    let next = more.then(|| messages.last()).flatten().map(|last| {
+        cursor(
+            last.received_at.unix_timestamp_nanos(),
+            Uuid::parse_str(&last.id).expect("own id"),
+        )
+    });
+    Ok(Json(SearchIndexPage {
+        messages,
+        next,
+        total,
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MailLookup {
+    /// The messages to check (at most 200), as body search found them.
+    pub ids: Vec<String>,
+    /// The place and criteria, as the list's (`page` and `limit` are set here).
+    #[serde(flatten)]
+    #[schema(inline)]
+    pub query: MailListQueryBody,
+}
+
+/// [`MailListQuery`] as a JSON body.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MailListQueryBody {
+    pub folder: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub address: Option<String>,
+    pub group: Option<String>,
+    #[serde(default)]
+    pub conversations: bool,
+    pub unread: Option<bool>,
+    #[serde(default)]
+    pub attachments: bool,
+}
+
+/// `POST /api/mail/messages/lookup` — which of body search's hits are still
+/// in the place and match the other criteria, in the list's shape, newest
+/// first (docs/plans/mail-body-search.md). The hits come from the browser's
+/// own index; the server only checks them.
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/lookup",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    request_body = MailLookup,
+    responses(
+        (status = 200, description = "The hits still here", body = MailMessagePage),
+        (status = 400, description = "More than 200 ids, an id that is not one, or an unknown place"),
+    )
+)]
+pub async fn lookup_messages(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(request): Json<MailLookup>,
+) -> AppResult<Json<MailMessagePage>> {
+    if request.ids.is_empty() || request.ids.len() > 200 {
+        return Err(AppError::bad_request("1 to 200 messages at a time"));
+    }
+    let ids = request
+        .ids
+        .iter()
+        .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("not a message id")))
+        .collect::<AppResult<Vec<Uuid>>>()?;
+    let body = request.query;
+    let query = MailListQuery {
+        folder: body.folder,
+        q: None,
+        from: body.from,
+        to: body.to,
+        since: body.since,
+        until: body.until,
+        address: body.address,
+        before: None,
+        page: Some(0),
+        limit: Some(ids.len() as i64),
+        group: body.group,
+        conversations: body.conversations,
+        unread: body.unread,
+        attachments: body.attachments,
+        sort: None,
+    };
+    list_page(&state, &user, query, Some(ids)).await
+}
+
+/// A page of a place, optionally only `ids`.
+async fn list_page(
+    state: &AppState,
+    user: &AuthUser,
+    query: MailListQuery,
+    ids: Option<Vec<Uuid>>,
+) -> AppResult<Json<MailMessagePage>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(state, user_id, query.group.as_deref())
         .await?
         .owner();
     let folder = query.folder.as_str();
@@ -455,12 +624,13 @@ pub async fn list_messages(
         _ if FOLDERS.contains(&folder) || folder == "starred" || folder == "all" => (folder, None),
         _ => return Err(AppError::bad_request("unknown folder")),
     };
-    let criteria = Criteria::parse(&query)?;
+    let mut criteria = Criteria::parse(&query)?;
+    criteria.ids = ids;
     // All mail leaves out Spam and Trash only when the account asks
     // (Proton's "Exclude Spam/Trash from All mail"); a search always does.
     let almost_all = query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
         || criteria.any()
-        || crate::handlers::mail_settings::settings_of(&state, user_id)
+        || crate::handlers::mail_settings::settings_of(state, user_id)
             .await?
             .almost_all_mail;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
@@ -495,12 +665,12 @@ pub async fn list_messages(
         place_filter: PLACE_WHERE,
     };
     if query.conversations {
-        return list_conversations(&state, &listing, limit, page).await;
+        return list_conversations(state, &listing, limit, page).await;
     }
-    let (mut rows, mut total) = message_rows(&state, &listing, limit, page.unwrap_or(0)).await?;
+    let (mut rows, mut total) = message_rows(state, &listing, limit, page.unwrap_or(0)).await?;
     // Past the end (mail moved away since): the total still answers.
     if rows.is_empty() && page.is_some_and(|p| p > 0) {
-        total = message_rows(&state, &listing, 1, 0).await?.1;
+        total = message_rows(state, &listing, 1, 0).await?.1;
     }
     let more = rows.len() as i64 > limit;
     if page.is_some() {
@@ -548,6 +718,8 @@ struct Criteria {
     since: Option<OffsetDateTime>,
     until: Option<OffsetDateTime>,
     address: Option<String>,
+    /// Only these messages (body search's hits, checked against the rest).
+    ids: Option<Vec<Uuid>>,
 }
 
 impl Criteria {
@@ -572,6 +744,7 @@ impl Criteria {
                 .as_deref()
                 .map(|a| a.trim().to_lowercase())
                 .filter(|a| !a.is_empty()),
+            ids: None,
         };
         if let (Some(since), Some(until)) = (criteria.since, criteria.until) {
             if until <= since {
@@ -587,12 +760,14 @@ impl Criteria {
             || self.since.is_some()
             || self.until.is_some()
             || self.address.is_some()
+            || self.ids.is_some()
     }
 }
 
 /// The advanced search over `mail_messages`: $13 sender, $14 recipient,
 /// $15 since, $16 until, $17 the address it came to or went from (one of
-/// the mailbox's own, or a distribution list it came through).
+/// the mailbox's own, or a distribution list it came through), $18 only
+/// these messages.
 const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR from_name ILIKE $13)
         AND ($14::text IS NULL OR to_list::text ILIKE $14 OR cc_list::text ILIKE $14
              OR bcc_list::text ILIKE $14)
@@ -601,7 +776,8 @@ const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR fr
         AND ($17::text IS NULL OR EXISTS (
             SELECT 1 FROM mail_addresses a
              WHERE a.address = $17
-               AND (a.id = mail_messages.address_id OR a.group_id = mail_messages.group_id)))";
+               AND (a.id = mail_messages.address_id OR a.group_id = mail_messages.group_id)))
+        AND ($18::uuid[] IS NULL OR id = ANY($18))";
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchAddressesQuery {
@@ -709,6 +885,7 @@ async fn message_rows(
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
+    .bind(listing.criteria.ids.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = rows.first().map_or(0, |r| r.full_count);
@@ -882,6 +1059,7 @@ async fn conversation_rows(
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
+    .bind(listing.criteria.ids.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = threads.first().map_or(0, |t| t.8);
