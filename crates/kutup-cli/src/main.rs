@@ -330,7 +330,7 @@ fn main() {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
         Commands::Pass { command } => commands::pass::run(&cli.profile, cli.json, command),
-        Commands::SshAgent(args) => commands::ssh::agent(&cli.profile, args),
+        Commands::SshAgent(args) => commands::ssh::agent(&cli.profile, cli.json, args),
         Commands::SshAdd(args) => commands::ssh::add(&cli.profile, cli.json, args),
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),

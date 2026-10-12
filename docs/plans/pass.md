@@ -430,9 +430,43 @@ keeps, approval per use, keys listed while locked, memory only,
   `ssh-add -l`, a git signature through the agent verified by
   `ssh-keygen -Y verify`, a key added while running, denial without a
   terminal, and push mode into a system `ssh-agent`.
-- **Not yet:** `kutup ssh-agent install` (systemd / launchd units), desktop
-  notifications for approval, Windows (named pipe), and detecting another
-  agent (KeePassXC, Strongbox) already serving.
+- **Asking on the desktop** (`--approve desktop`; `auto`, the default, asks
+  on the terminal when there is one): the same question in a dialog that
+  gives up after a minute: an OpenSSH askpass program from
+  `KUTUP_SSH_ASKPASS` or `SSH_ASKPASS` (`SSH_ASKPASS_PROMPT=confirm`, as
+  `ssh-agent` asks for a confirm-constrained key; allows once), else
+  `zenity`, else `kdialog` on Linux, and `osascript` on macOS, with "Allow
+  once", "Allow for this host" and "Deny". The text goes in as an argument
+  (never through a shell or into the AppleScript), without markup or
+  control characters. No dialog program, no answer or an error: denied.
+- **`kutup ssh-agent install <folder> <collection>`** starts the agent at
+  every login with the user's own service manager: a systemd user unit
+  (`~/.config/systemd/user/kutup-ssh-agent.service`, enabled and started)
+  on Linux, a launchd agent (`~/Library/LaunchAgents/dev.kutup.ssh-agent.plist`,
+  bootstrapped into the GUI domain, logging to
+  `~/Library/Logs/kutup-ssh-agent.log`) on macOS. Nothing system-wide and no
+  secret in the file: it runs this `kutup` with `--approve desktop` on the
+  default socket, and carries only the askpass program (and
+  `KUTUP_INSECURE_TLS` for a test server, said when it does). As a service
+  has no prompt, install checks first that you are signed in and which
+  vaults open with the keys your account keeps (`kutup pass keep`), and
+  refuses with `KUTUP_DEVICE_KEY` set, with nothing to ask with (unless
+  `--no-confirm`), or with another agent on the socket. It prints the
+  `SSH_AUTH_SOCK` line for the shell profile and the `IdentityAgent` line
+  for `~/.ssh/config`, says when the shell uses another agent, and on
+  Linux when systemd has no display to show dialogs on
+  (`systemctl --user import-environment DISPLAY WAYLAND_DISPLAY
+  XAUTHORITY`). `--print` shows the file instead. A vault that did not
+  open (at login the network may not be up) is tried again, with a fresh
+  sign-in, at most every 30 seconds when a client asks.
+  `kutup ssh-agent status` says whether it is installed, running and
+  serving (and how many keys), and whether the shell uses another agent;
+  `uninstall` stops it and removes the file. Checked by
+  `scripts/verify-pass-ssh.sh` (askpass allow and deny; where a systemd
+  user manager runs, a real install, a signature through it, status and
+  uninstall) and unit tests. macOS's launchd agent and dialog are built
+  but have not been run on a Mac yet.
+- **Not yet:** Windows (named pipe).
 
 ## Slices
 

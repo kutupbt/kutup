@@ -49,6 +49,7 @@ keyring.workspace = true
 # Agent tests make their keys at run time.
 ssh-key = { version = "0.6", features = ["std", "ed25519", "rand_core", "getrandom"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+tempfile.workspace = true
 
 [features]
 # Test-only interruption hook: KUTUP_TEST_ABORT_AFTER_PATCHES=N makes an
