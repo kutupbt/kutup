@@ -512,6 +512,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::pass::VerifyPinRequest,
         crate::handlers::pass::PinRefusal,
         crate::handlers::pass::PutVaultSecretRequest,
+        crate::handlers::pass::RebindVaultSecret,
         crate::handlers::pass_icons::PassSettings,
         crate::handlers::pass_icons::SiteIcons,
         crate::handlers::pass_icons::IconRequest,

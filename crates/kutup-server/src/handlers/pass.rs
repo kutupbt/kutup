@@ -8,7 +8,7 @@
 //! (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+use std::collections::BTreeSet;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
@@ -38,6 +40,17 @@ pub struct VaultSecretRow {
     envelope: String,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
+    /// The vault is in the trash (listed only with `all`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    in_trash: bool,
+}
+
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub struct ListVaultSecretsQuery {
+    /// Also the secrets of vaults in the trash: every record the account
+    /// has, as re-sealing them all (`POST /api/user/rebind`) needs.
+    #[serde(default)]
+    pub all: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -48,18 +61,21 @@ pub struct PutVaultSecretRequest {
 }
 
 /// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
-/// they can still open.
+/// they can still open (with `?all=true`, also those in the trash).
 #[utoipa::path(
     get,
     path = "/api/pass/vault-secrets",
     tag = "pass",
     security(("BearerAuth" = [])),
+    params(ListVaultSecretsQuery),
     responses((status = 200, description = "The caller's sealed vault secrets", body = Vec<VaultSecretRow>))
 )]
 pub async fn list_vault_secrets(
     State(state): State<AppState>,
     user: AuthUser,
+    query: Option<Query<ListVaultSecretsQuery>>,
 ) -> AppResult<Response> {
+    let all = query.is_some_and(|Query(q)| q.all);
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, bool)> = sqlx::query_as(
         "SELECT s.file_id, s.envelope, s.updated_at, f.deleted_at IS NOT NULL
@@ -73,7 +89,7 @@ pub async fn list_vault_secrets(
     let mut out = Vec::with_capacity(rows.len());
     for (file_id, envelope, updated_at, trashed) in rows {
         // A vault in the trash keeps its secret for a restore, unlisted.
-        if trashed {
+        if trashed && !all {
             continue;
         }
         if !can_access_file(&state.pool, user_id, file_id).await {
@@ -89,6 +105,7 @@ pub async fn list_vault_secrets(
             file_id: file_id.to_string(),
             envelope: STANDARD.encode(envelope),
             updated_at,
+            in_trash: trashed,
         });
     }
     Ok(Json(out).into_response())
@@ -117,28 +134,11 @@ pub async fn put_vault_secret(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let envelope = STANDARD
-        .decode(&req.envelope)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == req.envelope)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    if envelope.len() > MAX_ENVELOPE_BYTES {
-        return Err(AppError::bad_request("envelope is too large"));
-    }
-    let header = account_envelope::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
     let login_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_one(&state.pool)
         .await?;
-    if header.purpose != AccountEnvelopePurpose::PassVaultSecret
-        || Some(header.canonical_login_email)
-            != account_envelope::canonical_login_email(&login_email).ok()
-    {
-        return Err(AppError::bad_request(
-            "envelope is not this account's vault secret",
-        ));
-    }
+    let envelope = checked_envelope(&req.envelope, &login_email)?;
     let live: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(file_id)
@@ -157,6 +157,107 @@ pub async fn put_vault_secret(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The envelope in `b64` if it is canonical base64 of at most
+/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, and bound to `binding`.
+fn checked_envelope(b64: &str, binding: &str) -> AppResult<Vec<u8>> {
+    let envelope = STANDARD
+        .decode(b64)
+        .ok()
+        .filter(|bytes| STANDARD.encode(bytes) == b64)
+        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
+    if envelope.len() > MAX_ENVELOPE_BYTES {
+        return Err(AppError::bad_request("envelope is too large"));
+    }
+    let header = account_envelope::inspect(&envelope)
+        .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
+    if header.purpose != AccountEnvelopePurpose::PassVaultSecret
+        || Some(header.canonical_login_email)
+            != account_envelope::canonical_login_email(binding).ok()
+    {
+        return Err(AppError::bad_request(
+            "envelope is not this account's vault secret",
+        ));
+    }
+    Ok(envelope)
+}
+
+/// One vault secret in a rebind (`POST /api/user/rebind`, docs/plans/
+/// account-identity.md): re-sealed for the account's new binding, or `None`
+/// for one that no longer opened with the old binding (useless already),
+/// which is dropped.
+// Called from the rebind transaction (account-identity core); remove the
+// allow once it is wired.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RebindVaultSecret {
+    pub file_id: String,
+    /// Base64 of the re-sealed envelope; `null` drops the record.
+    pub envelope: Option<String>,
+}
+
+/// The Pass part of a rebind, inside its transaction: `rows` must name every
+/// vault secret the account has (any one added or removed since the browser
+/// listed them refuses the whole rebind), each re-sealed envelope must be a
+/// vault secret bound to `binding`, and no vault may appear twice.
+#[allow(dead_code)]
+pub async fn rebind_vault_secrets(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    binding: &str,
+    rows: &[RebindVaultSecret],
+) -> AppResult<()> {
+    let mut wanted = Vec::with_capacity(rows.len());
+    let mut named = BTreeSet::new();
+    for row in rows {
+        let file_id = Uuid::parse_str(&row.file_id)
+            .map_err(|_| AppError::bad_request("a vault secret's file id is not a UUID"))?;
+        if !named.insert(file_id) {
+            return Err(AppError::bad_request("a vault secret is named twice"));
+        }
+        let envelope = match &row.envelope {
+            Some(b64) => Some(checked_envelope(b64, binding)?),
+            None => None,
+        };
+        wanted.push((file_id, envelope));
+    }
+    let held: BTreeSet<Uuid> =
+        sqlx::query_scalar("SELECT file_id FROM pass_vault_secrets WHERE user_id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .collect();
+    if held != named {
+        return Err(AppError::conflict(
+            "the kept vault keys changed meanwhile; sign in again to finish",
+        ));
+    }
+    for (file_id, envelope) in wanted {
+        match envelope {
+            Some(envelope) => {
+                sqlx::query(
+                    "UPDATE pass_vault_secrets SET envelope = $3, updated_at = NOW()
+                      WHERE user_id = $1 AND file_id = $2",
+                )
+                .bind(user_id)
+                .bind(file_id)
+                .bind(envelope)
+                .execute(&mut **tx)
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
+                    .bind(user_id)
+                    .bind(file_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `DELETE /api/pass/vault-secrets/{fileId}` — forget the caller's secret
@@ -420,4 +521,50 @@ pub async fn verify_pin(
         "wrongPin",
         Some(PIN_ATTEMPTS - failures),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_crypto::pass_vault::{seal_vault_secret, VaultSecretV1};
+
+    const ID: &str = "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90";
+
+    fn sealed(binding: &str) -> String {
+        let secret = VaultSecretV1 {
+            password: Some(zeroize::Zeroizing::new("kasa".to_owned())),
+            key_file: None,
+        };
+        STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], &secret).unwrap())
+    }
+
+    #[test]
+    fn a_vault_secret_must_name_the_binding_it_is_checked_against() {
+        assert!(checked_envelope(&sealed(ID), ID).is_ok());
+        assert!(checked_envelope(&sealed("Ayse@Example.org"), "ayse@example.org").is_ok());
+        assert!(checked_envelope(&sealed("ayse@example.org"), ID).is_err());
+        assert!(checked_envelope(&sealed(ID), "ayse@example.org").is_err());
+        let other_purpose = STANDARD.encode(
+            account_envelope::seal(b"x", &[7u8; 32], AccountEnvelopePurpose::ChatBackupRoot, ID)
+                .unwrap(),
+        );
+        assert!(checked_envelope(&other_purpose, ID).is_err());
+        let padded = format!("{}\n", sealed(ID));
+        assert!(checked_envelope(&padded, ID).is_err());
+        assert!(checked_envelope(&STANDARD.encode(vec![0u8; MAX_ENVELOPE_BYTES + 1]), ID).is_err());
+    }
+
+    #[test]
+    fn rebind_rows_read_the_websites_json() {
+        let rows: Vec<RebindVaultSecret> = serde_json::from_str(&format!(
+            r#"[{{"fileId":"{ID}","envelope":"AAAA"}},{{"fileId":"{ID}","envelope":null}}]"#
+        ))
+        .unwrap();
+        assert_eq!(rows[0].envelope.as_deref(), Some("AAAA"));
+        assert!(rows[1].envelope.is_none());
+        assert!(serde_json::from_str::<Vec<RebindVaultSecret>>(
+            r#"[{"fileId":"x","envelope":null,"extra":1}]"#
+        )
+        .is_err());
+    }
 }
