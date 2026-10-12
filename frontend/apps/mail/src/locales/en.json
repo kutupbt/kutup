@@ -234,7 +234,12 @@
     "publicKeyFailed": "Your public key could not be attached.",
     "receipt": "Read receipt",
     "receiptOn": "A read receipt is requested",
-    "receiptOff": "Request a read receipt"
+    "receiptOff": "Request a read receipt",
+    "undo": "Undo",
+    "sendUndone": "Sending undone.",
+    "alreadySent": "The message was already sent.",
+    "undoFailed": "Sending could not be undone.",
+    "sendFailedLater": "The message could not be sent and is still in Drafts. {{reason}}"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -534,7 +539,12 @@
     "spamActionHint": "When you move mail from a mailing list to Spam, also unsubscribe from the list.",
     "spamActionOn": "On",
     "spamActionOff": "Off",
-    "spamActionAsk": "Ask each time"
+    "spamActionAsk": "Ask each time",
+    "delaySend": "Undo send",
+    "delaySendHint": "How long you can take a message back after Send.",
+    "delaySendSeconds_one": "{{count}} second",
+    "delaySendSeconds_other": "{{count}} seconds",
+    "delaySendOff": "Off"
   },
   "senders": {
     "title": "Block and allow",

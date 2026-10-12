@@ -7,10 +7,13 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
   addDraftAttachment,
+  cancelSend,
   draftAttachmentPart,
   emptyDraft,
   removeDraftAttachment,
   saveDraft,
+  isHeld,
+  outboxStatus,
   sendDraft,
   UnknownRecipient,
   useMailAccount,
@@ -19,8 +22,10 @@ import {
   usePinnedKeys,
   useSendingStatus,
   type Draft,
+  type HeldSend,
   type MailAccount,
   type SendAs,
+  type SendRecipient,
 } from '@kutup/mail-core/api'
 import { GroupNotAllowed } from '@kutup/mail-core/keys'
 import { armorMailPublicKey } from '@kutup/crypto'
@@ -35,7 +40,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
-import { closeComposer, composerGeneration, useComposer, type ComposerTarget } from './composerState'
+import { closeComposer, composerGeneration, openComposer, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
 import { isAddress } from './recipients'
 
@@ -83,6 +88,63 @@ function without(list: Mailbox[], addresses: Set<string>): Mailbox[] {
   })
 }
 
+type Translate = (key: string, options?: Record<string, unknown>) => string
+
+/** What a send's recipients got: warnings for the ones it did not reach, else "Message sent" when `announce`. */
+function reportSent(results: SendRecipient[], t: Translate, announce: boolean) {
+  const full = results.filter((r) => r.status === 'full').map((r) => r.address)
+  const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
+  if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
+  if (failed.length) toast.warning(t('compose.notSentRefused', { addresses: failed.join(', ') }))
+  if (announce && !full.length && !failed.length) toast.success(t('compose.sent'))
+}
+
+/**
+ * Undo send (Proton's): "Message sent" with Undo while the server holds the
+ * send; Undo takes it back and opens the draft again. Meanwhile the outbox
+ * is followed until the send goes, for what its recipients got. Lives past
+ * the composer, which has closed.
+ */
+function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => void) {
+  const wait = Math.max(0, Date.parse(held.deliverAt) - Date.now())
+  let undone = false
+  toast.success(t('compose.sent'), {
+    duration: wait + 500,
+    action: {
+      label: t('compose.undo'),
+      onClick: () => {
+        undone = true
+        void cancelSend(held.outboxId).then(
+          (taken) => {
+            if (!taken) {
+              toast.info(t('compose.alreadySent'))
+              return
+            }
+            toast.success(t('compose.sendUndone'))
+            refresh()
+            openComposer({ kind: 'resume', draft })
+          },
+          () => toast.error(t('compose.undoFailed')),
+        )
+      },
+    },
+  })
+  void (async () => {
+    // A minute past the delay at most; the list shows the outcome anyway.
+    const until = Date.now() + wait + 60_000
+    while (!undone && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      if (undone) return
+      const status = await outboxStatus(held.outboxId).catch(() => null)
+      if (!status || status.state === 'pending' || status.state === 'sending') continue
+      if (status.state === 'sent') reportSent(status.result?.recipients ?? [], t, false)
+      else if (status.state === 'failed') toast.error(t('compose.sendFailedLater', { reason: status.result?.error ?? '' }))
+      refresh()
+      return
+    }
+  })()
+}
+
 interface Initial {
   draft: Draft
   html: string
@@ -100,6 +162,7 @@ function withSignature(account: MailAccount, rest = ''): string {
 
 /** The composer's starting fields for what it was opened for. */
 function initial(account: MailAccount, target: ComposerTarget, t: (key: string, options?: Record<string, unknown>) => string, locale: string): Initial {
+  if (target.kind === 'resume') return { draft: target.draft, html: target.draft.html, attachments: [] }
   if (target.kind === 'new') {
     return {
       draft: emptyDraft(account, { to: target.to ? [{ address: target.to.toLowerCase(), name: '' }] : [] }),
@@ -312,7 +375,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
 
   // A saved draft's attachments: the parts are fetched to show their names.
   useEffect(() => {
-    if (target.kind !== 'draft' || !draftId.current) return
+    if ((target.kind !== 'draft' && target.kind !== 'resume') || !draftId.current) return
     const id = draftId.current
     void api
       .get<{ id: string; size: number }[]>(`/mail/drafts/${id}/attachments`)
@@ -451,12 +514,10 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const results = await sendDraft(account, current(), parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
-      const full = results.filter((r) => r.status === 'full').map((r) => r.address)
-      const failed = results.filter((r) => r.status === 'failed').map((r) => r.address)
-      if (full.length) toast.warning(t('compose.notDeliveredFull', { addresses: full.join(', ') }))
-      if (failed.length) toast.warning(t('compose.notSentRefused', { addresses: failed.join(', ') }))
-      if (!full.length && !failed.length) toast.success(t('compose.sent'))
+      const draft = current()
+      const outcome = await sendDraft(account, draft, parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
+      if (isHeld(outcome)) followHeld(outcome, draft, t, refresh)
+      else reportSent(outcome, t, true)
       refresh()
       // A new composer may have opened while this one was sending.
       closeComposer(mine)

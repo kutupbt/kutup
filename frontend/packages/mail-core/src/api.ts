@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 import { useMemo } from 'react'
 import {
   encryptMailMessage,
@@ -759,6 +760,8 @@ export interface MailSettings {
   spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
+  /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
+  delaySendSeconds: number
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
@@ -897,6 +900,35 @@ export async function draftAttachmentPart(account: MailAccount, draftId: string,
   return (await openWithKeys(account, new Uint8Array(data))).data
 }
 
+/** A send held for undo send: it goes at `deliverAt` unless taken back. */
+export interface HeldSend {
+  outboxId: string
+  deliverAt: string
+}
+
+export const isHeld = (outcome: SendRecipient[] | HeldSend): outcome is HeldSend => !Array.isArray(outcome)
+
+/** How a held send went: its recipients once sent, the send's error body once failed. */
+export interface OutboxStatus {
+  state: 'pending' | 'sending' | 'sent' | 'cancelled' | 'failed'
+  result: { recipients?: SendRecipient[]; error?: string; code?: string } | null
+}
+
+export async function outboxStatus(id: string): Promise<OutboxStatus> {
+  return (await api.get<OutboxStatus>(`/mail/outbox/${id}`)).data
+}
+
+/** Undo: the send does not go (false once it already went). */
+export async function cancelSend(id: string): Promise<boolean> {
+  try {
+    await api.post(`/mail/outbox/${id}/cancel`)
+    return true
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 409) return false
+    throw error
+  }
+}
+
 export interface SendRecipient {
   address: string
   /** `failed`: refused by the mail server after mail to others had gone out. */
@@ -991,7 +1023,7 @@ export async function sendDraft(
   pinned: PinnedKeys,
   as?: SendAs,
   options: SendOptions = { encrypt: true, sign: true },
-): Promise<SendRecipient[]> {
+): Promise<SendRecipient[] | HeldSend> {
   // As a shared mailbox: its address, its key for the sent copy and Autocrypt,
   // and signed by it.
   const self = as ? { address: as.address, name: as.name, publicKey: as.publicKey } : { address: account.address, name: account.name, publicKey: account.publicKey }
@@ -1086,7 +1118,7 @@ export async function sendDraft(
     return readableMessage
   }
 
-  const attempt = async (): Promise<SendRecipient[]> => {
+  const attempt = async (): Promise<SendRecipient[] | HeldSend> => {
     // Each Kutup address, or each member of a group (once, and not you).
     const targets = new Map<string, string>()
     const readable: string[] = []
@@ -1133,7 +1165,10 @@ export async function sendDraft(
     form.append('data', blob(sealed.dataPacket))
     packages.forEach((p, i) => form.append(`pgp${i}`, blob(p.message, 'message/rfc822')))
     if (plain.length > 0 || readable.length > 0) form.append('mime', blob(await readableFor(), 'message/rfc822'))
-    return (await api.post<{ recipients: SendRecipient[] }>('/mail/send', form)).data.recipients
+    const { status, data } = await api.post<{ recipients: SendRecipient[] } | HeldSend>('/mail/send', form)
+    // 202: held for undo send; it goes when the delay is up.
+    if (status === 202) return data as HeldSend
+    return (data as { recipients: SendRecipient[] }).recipients
   }
 
   try {
