@@ -139,10 +139,15 @@ api.interceptors.response.use(
     }
 
     // A 401 from these means "wrong credentials / invalid fork", not an expired
-    // access token.
-    const skipRefresh = originalRequest.url?.match(
-      /\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/,
-    )
+    // access token. The signed-in password re-checks (Kutup Pass's lock) say
+    // so in the body; any other 401 there is an expired token, refreshed as
+    // usual. Retrying a wrong password would count it twice toward the
+    // sign-in lockout.
+    const wrongPassword =
+      Boolean(originalRequest.url?.match(/\/user\/reauth|\/pass\/pin/)) &&
+      (error.response?.data as { error?: unknown } | undefined)?.error === 'invalid credentials'
+    const skipRefresh =
+      wrongPassword || originalRequest.url?.match(/\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/)
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {

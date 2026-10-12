@@ -11,7 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { AUTO_LOCK_CHOICES, setAutoLockMinutes, setUnlockMode, useAutoLockMinutes, useUnlockMode, type AutoLockMinutes, type UnlockMode } from '../sync/autoLock'
 import { useVaultSession } from '../sync/openVaults'
+import { usePinStatus } from '../sync/pin'
 import { CreateVaultDialog } from './CreateVaultDialog'
+import { PinDialog, type PinAction } from './PinDialog'
 
 function VaultCard({ vault }: { vault: VaultFile }) {
   const { t, i18n } = useTranslation()
@@ -50,6 +52,8 @@ function AutoLockSetting() {
   const { t } = useTranslation()
   const minutes = useAutoLockMinutes()
   const mode = useUnlockMode()
+  const pinSet = usePinStatus().data === true
+  const [pinAction, setPinAction] = useState<PinAction | null>(null)
   return (
     <>
     <section className="mt-8 max-w-3xl space-y-1.5" aria-labelledby="auto-lock-label">
@@ -75,15 +79,43 @@ function AutoLockSetting() {
         {t('unlockMode.label')}
       </h2>
       <p className="text-xs text-muted-foreground">{t('unlockMode.description')}</p>
-      <Select value={mode} onValueChange={(value) => setUnlockMode(value as UnlockMode)}>
+      <Select
+        value={mode}
+        onValueChange={(value) => {
+          // The PIN mode needs a PIN: set one first.
+          if (value === 'pin' && !pinSet) setPinAction('set')
+          else setUnlockMode(value as UnlockMode)
+        }}
+      >
         <SelectTrigger className="w-56" aria-labelledby="unlock-mode-label">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="password">{t('unlockMode.password')}</SelectItem>
+          <SelectItem value="pin">{t('unlockMode.pin')}</SelectItem>
           <SelectItem value="click">{t('unlockMode.click')}</SelectItem>
         </SelectContent>
       </Select>
+      {pinSet ? (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-xs text-muted-foreground">{t('pin.isSet')}</span>
+          <Button size="sm" variant="outline" onClick={() => setPinAction('change')}>
+            {t('pin.change')}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setPinAction('remove')}>
+            {t('pin.remove')}
+          </Button>
+        </div>
+      ) : null}
+      <PinDialog
+        action={pinAction}
+        onOpenChange={(open) => !open && setPinAction(null)}
+        onDone={(action) => {
+          if (action === 'remove') {
+            if (mode === 'pin') setUnlockMode('password')
+          } else setUnlockMode('pin')
+        }}
+      />
     </section>
     </>
   )

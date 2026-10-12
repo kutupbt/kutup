@@ -70,7 +70,14 @@
     "withPassword": "Parolamla aç",
     "wrongAccountPassword": "Bu, Kutup parolanız değil.",
     "paused": "Çok fazla yanlış parola: hesabınız, oturum açmadaki gibi bir süre kilitlendi. Aşağıda kasanın kendi anahtarını kullanın.",
-    "checkUnreachable": "Parolanızı denetlemek için Kutup'a ulaşılamadı. Bunun yerine kasanın anahtarını girin."
+    "checkUnreachable": "Parolanızı denetlemek için Kutup'a ulaşılamadı. Bunun yerine kasanın anahtarını girin.",
+    "pin": "PIN",
+    "pinDescription": "Kutup hesabınızın altı haneli PIN'i.",
+    "withPin": "PIN ile aç",
+    "wrongPin_one": "Yanlış PIN. {{count}} deneme hakkı kaldı, sonra oturumunuz kapanır.",
+    "wrongPin_other": "Yanlış PIN. {{count}} deneme hakkı kaldı, sonra oturumunuz kapanır.",
+    "pinSignedOut": "Çok fazla yanlış PIN: oturumunuz kapatıldı. Parolanızla yeniden giriş yapın.",
+    "pinRemoved": "PIN kaldırılmış, belki başka bir cihazda. Hesap parolanızı kullanın; ayarlardan yeniden PIN belirleyebilirsiniz."
   },
   "sync": {
     "saved": "Kaydedildi",
@@ -265,7 +272,8 @@
     "label": "Kilitten sonra kasaları şununla aç",
     "description": "Bu cihazda kilitlenen (elle ya da boşta kalınca) bir kasa bununla yeniden açılır. Anahtarı tutulmayan kasalar her zaman kendi anahtarını sorar.",
     "password": "Kutup parolam",
-    "click": "Tek tıklama"
+    "click": "Tek tıklama",
+    "pin": "PIN'im"
   },
   "import": {
     "open": "Başka bir uygulamadan içe aktar…",
@@ -307,5 +315,31 @@
       "missingColumns": "Dosyada bu biçimin sütunları eksik: {{detail}}.",
       "tooMany": "Dosyada 50.000'den fazla kayıt var."
     }
+  },
+  "pin": {
+    "title": {
+      "set": "PIN belirle",
+      "change": "PIN'i değiştir",
+      "remove": "PIN'i kaldır"
+    },
+    "description": "Kasa kilitlendikten sonra kasalarınızı açan altı hane; PIN'i seçtiğiniz her cihazda geçerli. Kutup denetler; art arda üç yanlış PIN oturumunuzu kapatır.",
+    "removeDescription": "Bundan sonra PIN kullanılan yerlerde kasalar hesap parolanızla açılır.",
+    "passwordDescription": "Siz olduğunuzu doğrulamak için Kutup hesap parolanız.",
+    "new": "Yeni PIN (altı hane)",
+    "again": "PIN'i yeniden girin",
+    "mismatch": "İki PIN farklı.",
+    "submit": {
+      "set": "PIN belirle",
+      "change": "PIN'i değiştir",
+      "remove": "PIN'i kaldır"
+    },
+    "done": {
+      "set": "PIN belirlendi",
+      "change": "PIN değiştirildi",
+      "remove": "PIN kaldırıldı"
+    },
+    "isSet": "Hesabınızın bir PIN'i var.",
+    "change": "PIN'i değiştir",
+    "remove": "PIN'i kaldır"
   }
 }

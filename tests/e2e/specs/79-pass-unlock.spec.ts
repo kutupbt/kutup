@@ -61,7 +61,7 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   await expect(unlock).toBeVisible({ timeout: 60_000 })
   await page.reload()
   await expect(unlock).toBeVisible({ timeout: 60_000 })
-  // By default the account password opens it again, checked on the device.
+  // By default the account password opens it again, checked by Kutup.
   await page.getByLabel('Your Kutup password').fill('not-my-password')
   await page.getByRole('button', { name: 'Unlock with my password' }).click()
   await expect(page.getByText('That is not your Kutup password.')).toBeVisible({ timeout: 30_000 })

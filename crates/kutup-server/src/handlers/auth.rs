@@ -604,6 +604,19 @@ pub async fn reauth(
     body: Result<Json<ReauthRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    verify_account_login_key(&state, &user, &req.login_key).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+}
+
+/// Checks a signed-in account's password (as the login key the client
+/// derived from it) the way sign-in does: against `login_key_hash`, under
+/// the per-account sign-in lockout, misses here and at sign-in counting
+/// together. `Err` is 401 for a wrong password, 429 during the lockout.
+pub async fn verify_account_login_key(
+    state: &AppState,
+    user: &AuthUser,
+    login_key: &str,
+) -> AppResult<()> {
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
     let (email, login_key_hash): (String, String) =
         sqlx::query_as("SELECT email, login_key_hash FROM users WHERE id = $1 AND is_active")
@@ -611,14 +624,13 @@ pub async fn reauth(
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| AppError::unauthorized("invalid credentials"))?;
-    // The sign-in lockout: misses here and at sign-in count together.
     if ratelimit::LOGIN_LOCKOUT.is_locked(&email) {
         return Err(AppError::too_many_requests(
             "too many failed attempts, try again later",
         ));
     }
     let login_key = STANDARD
-        .decode(&req.login_key)
+        .decode(login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
     if !bcrypt::verify(&login_key, &login_key_hash).unwrap_or(false) {
         ratelimit::LOGIN_LOCKOUT.record(&email, false);
@@ -626,7 +638,7 @@ pub async fn reauth(
         return Err(AppError::unauthorized("invalid credentials"));
     }
     ratelimit::LOGIN_LOCKOUT.record(&email, true);
-    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+    Ok(())
 }
 
 /// `POST /api/auth/login` — mirrors `Login`.
