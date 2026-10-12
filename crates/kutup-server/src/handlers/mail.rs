@@ -73,6 +73,9 @@ pub struct MailMessage {
     /// From a list that offers a way out (List-Unsubscribe, noted on arrival):
     /// moving it to Spam may unsubscribe (Proton's SpamAction).
     pub unsubscribable: bool,
+    /// The reader sent the read receipt its sender asked for (Proton's
+    /// "Read receipt sent").
+    pub receipt_sent: bool,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -233,6 +236,7 @@ pub(crate) struct Row {
     attachment_count: i32,
     unsubscribed: bool,
     unsubscribable: bool,
+    receipt_sent: bool,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -243,7 +247,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     seen, starred, protection,
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
     reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
-    unsubscribable,
+    unsubscribable, receipt_sent,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -277,6 +281,7 @@ impl From<Row> for MailMessage {
             attachment_count: row.attachment_count,
             unsubscribed: row.unsubscribed,
             unsubscribable: row.unsubscribable,
+            receipt_sent: row.receipt_sent,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -704,6 +709,55 @@ async fn conversation_rows(
     .await?;
     let total = threads.first().map_or(0, |t| t.8);
     Ok((threads, total))
+}
+
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MailReceiptSent {
+    /// A shared mailbox (its group id) instead of your own.
+    pub group: Option<String>,
+}
+
+/// `POST /api/mail/messages/{id}/receipt` — notes that the reader sent the
+/// read receipt the message asked for (Proton's "Send read receipt"). The
+/// client sends the receipt itself, as mail (RFC 8098), so its contents
+/// stay end to end where the original was.
+#[utoipa::path(
+    post,
+    path = "/api/mail/messages/{id}/receipt",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Message id")),
+    request_body = MailReceiptSent,
+    responses(
+        (status = 204, description = "Noted"),
+        (status = 404, description = "Not a received message of yours"),
+    )
+)]
+pub async fn receipt_sent(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(request): Json<MailReceiptSent>,
+) -> AppResult<axum::http::StatusCode> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let owner = mailbox(&state, user_id, request.group.as_deref())
+        .await?
+        .owner();
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let marked = sqlx::query(
+        "UPDATE mail_messages SET receipt_sent = true
+          WHERE id = $1 AND owner = $2 AND direction = 'inbound'",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if marked == 0 {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

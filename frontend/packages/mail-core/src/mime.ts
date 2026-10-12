@@ -34,6 +34,8 @@ export interface ParsedMessage {
   attachments: ParsedAttachment[]
   /** Written automatically in answer to an earlier message (an auto-reply), as Proton's `isAutoReply`. */
   autoReply: boolean
+  /** Who asks for a read receipt (`Disposition-Notification-To`, RFC 8098), as Proton's `requireReadReceipt`. */
+  receiptTo?: string | null
 }
 
 const AUTO_REPLY_HEADERS = ['x-autoreply', 'x-autorespond', 'x-autoreply-from', 'x-mail-autoreply']
@@ -90,6 +92,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
             : new Uint8Array(a.content),
     })),
     autoReply: isAutoReply(email.headers),
+    receiptTo: email.headers.find((h) => h.key === 'disposition-notification-to')?.value.trim() || null,
   }
 }
 
@@ -184,6 +187,18 @@ export interface OutgoingMessage {
    * back encrypted and offer to trust it (docs/plans/mail.md, C3).
    */
   autocryptKey?: string
+  /** Ask for a read receipt to the sender (`Disposition-Notification-To`, Proton's composer option). */
+  requestReceipt?: boolean
+  /** This message is a read receipt (RFC 8098) for another: the body is a `multipart/report`. */
+  receipt?: Receipt
+}
+
+/** What a read receipt reports: who read which message. */
+export interface Receipt {
+  /** The reader's address. */
+  finalRecipient: string
+  /** The read message's Message-ID, without angle brackets. */
+  originalMessageId: string | null
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {
@@ -215,6 +230,7 @@ function headerFields(message: OutgoingMessage): string[] {
     ...(message.inReplyTo ? [`In-Reply-To: <${message.inReplyTo}>`] : []),
     ...(message.references?.length ? [`References: ${message.references.map((id) => `<${id}>`).join('\r\n ')}`] : []),
     ...(message.autocryptKey ? [autocryptHeader(message.from.address, message.autocryptKey)] : []),
+    ...(message.requestReceipt ? [`Disposition-Notification-To: ${formatMailbox(message.from)}`] : []),
     'MIME-Version: 1.0',
   ]
 }
@@ -224,7 +240,8 @@ function headerFields(message: OutgoingMessage): string[] {
  * multipart/alternative (text and HTML), inside multipart/mixed when there
  * are attachments. What PGP/MIME encrypts (RFC 3156).
  */
-export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'attachments'>): Uint8Array {
+export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'attachments' | 'receipt'>): Uint8Array {
+  if (message.receipt) return reportBody(message.text, message.receipt)
   const alternativeBoundary = boundary()
   const alternative = [
     `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
@@ -247,6 +264,36 @@ export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'atta
   }
   chunks.push(encoder.encode(`\r\n--${mixedBoundary}--\r\n`))
   return concat(chunks)
+}
+
+/**
+ * A read receipt's body (RFC 8098 §3): `multipart/report` with the
+ * reader's words and the machine-readable disposition, "displayed" by a
+ * manual action, as Proton sends them.
+ */
+function reportBody(text: string, receipt: Receipt): Uint8Array {
+  const report = boundary()
+  const disposition = [
+    'Reporting-UA: Kutup Mail',
+    `Final-Recipient: rfc822;${receipt.finalRecipient}`,
+    ...(receipt.originalMessageId ? [`Original-Message-ID: <${receipt.originalMessageId}>`] : []),
+    'Disposition: manual-action/MDN-sent-manually; displayed',
+    '',
+  ].join('\r\n')
+  return encoder.encode(
+    [
+      `Content-Type: multipart/report; report-type=disposition-notification; boundary="${report}"`,
+      '',
+      `--${report}`,
+      textPart('text/plain', text),
+      `--${report}`,
+      'Content-Type: message/disposition-notification',
+      '',
+      disposition,
+      `--${report}--`,
+      '',
+    ].join('\r\n'),
+  )
 }
 
 /**

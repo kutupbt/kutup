@@ -755,6 +755,10 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail::message_content),
         )
         .route(
+            "/api/mail/messages/:id/receipt",
+            post(handlers::mail::receipt_sent),
+        )
+        .route(
             "/api/mail/messages/:id/unsubscribe",
             post(handlers::mail::unsubscribe)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),

@@ -121,3 +121,25 @@ describe('Inline PGP', () => {
     expect(partContent(attachmentPart({ name: 'a.bin', type: 'application/octet-stream', bytes }))).toEqual(bytes)
   })
 })
+
+describe('read receipts (RFC 8098)', () => {
+  const base = { from: { address: 'ayse@kutup.dev', name: 'Ayşe' }, to: [{ address: 'ali@kutup.dev', name: '' }], cc: [], subject: 'Toplantı', messageId: 'm1@kutup.dev', html: '<p>x</p>', text: 'x' }
+
+  it('asks for one, and the request is read back', async () => {
+    const raw = buildMessage({ ...base, requestReceipt: true })
+    expect(new TextDecoder().decode(raw)).toContain('Disposition-Notification-To: =?UTF-8?')
+    expect((await parseMessage(raw)).receiptTo).toContain('ayse@kutup.dev')
+    expect((await parseMessage(buildMessage(base))).receiptTo).toBeNull()
+  })
+
+  it('sends one as a multipart/report with the disposition', async () => {
+    const raw = buildMessage({ ...base, subject: 'Read: Toplantı', text: 'Okundu.', receipt: { finalRecipient: 'ali@kutup.dev', originalMessageId: 'orig@kutup.dev' } })
+    const text = new TextDecoder().decode(raw)
+    expect(text).toContain('Content-Type: multipart/report; report-type=disposition-notification')
+    expect(text).toContain('Content-Type: message/disposition-notification')
+    expect(text).toContain('Final-Recipient: rfc822;ali@kutup.dev')
+    expect(text).toContain('Original-Message-ID: <orig@kutup.dev>')
+    expect(text).toContain('Disposition: manual-action/MDN-sent-manually; displayed')
+    expect((await parseMessage(raw)).text).toContain('Okundu.')
+  })
+})

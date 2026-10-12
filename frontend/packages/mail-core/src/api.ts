@@ -27,7 +27,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
-import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage } from './mime'
+import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
@@ -71,6 +71,8 @@ export interface MailMessage {
   unsubscribed?: boolean
   /** From a list that offers a way out (noted on arrival): moving it to Spam may unsubscribe (Proton's SpamAction). */
   unsubscribable?: boolean
+  /** The reader sent the read receipt the sender asked for. */
+  receiptSent?: boolean
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -592,6 +594,50 @@ export function useUnsubscribe(group?: string) {
   })
 }
 
+/** The mailbox `Name <address>` or `address` names, or null. */
+function receiptAddress(value: string): Mailbox | null {
+  const angle = /<([^<>\s]+@[^<>\s]+)>/.exec(value)
+  const address = (angle?.[1] ?? value).trim()
+  if (!/^[^\s@<>,]+@[^\s@<>,]+$/.test(address)) return null
+  const name = angle ? value.slice(0, angle.index).trim().replace(/^"|"$/g, '') : ''
+  return { address, name }
+}
+
+/**
+ * Sends the read receipt a message asks for (Proton's "Send read
+ * receipt"): an RFC 8098 report from the reader, written by the client and
+ * sent like any mail (end to end to a Kutup sender), then noted on the
+ * message so it says "Read receipt sent".
+ */
+export function useSendReceipt() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ account, message, parsed, pinned, subject, text }: { account: MailAccount; message: MailMessage; parsed: ParsedMessage; pinned: PinnedKeys; subject: string; text: string }) => {
+      const to = parsed.receiptTo ? receiptAddress(parsed.receiptTo) : null
+      if (!to) throw new Error('no receipt address')
+      const html = `<p>${text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)}</p>`
+      const original = parsed.messageId
+      await sendDraft(
+        account,
+        emptyDraft(account, {
+          to: [to],
+          subject,
+          text,
+          html,
+          inReplyTo: original,
+          references: original ? [...parsed.references, original] : parsed.references,
+          receipt: { finalRecipient: account.address, originalMessageId: original },
+        }),
+        [],
+        pinned,
+      )
+      await api.post(`/mail/messages/${message.id}/receipt`, {})
+      return message.id
+    },
+    onSuccess: (id) => patchCached(queryClient, [id], { receiptSent: true }),
+  })
+}
+
 /** Read, star, or file messages; the lists update at once and are fetched again after. */
 export function useUpdateMessages() {
   const queryClient = useQueryClient()
@@ -714,6 +760,10 @@ export interface Draft {
   threadId?: string | null
   /** Attachment parts already uploaded with the draft. */
   attachments: DraftAttachment[]
+  /** Ask the recipients for a read receipt (Proton's composer option). */
+  requestReceipt?: boolean
+  /** The message is a read receipt for another (RFC 8098). */
+  receipt?: Receipt
 }
 
 export interface DraftAttachment {
@@ -773,6 +823,8 @@ export async function saveDraft(account: MailAccount, draft: Draft): Promise<Mai
     references: draft.references,
     html: draft.html,
     text: draft.text,
+    // Kept in the draft itself, so it is still asked for when the draft opens again.
+    requestReceipt: draft.requestReceipt,
   })
   const form = new FormData()
   form.append('meta', new Blob([JSON.stringify(meta(account, draft))], { type: 'application/json' }))
@@ -921,8 +973,9 @@ export async function sendDraft(
     references: draft.references,
     date: new Date(),
     autocryptKey: self.publicKey,
+    requestReceipt: draft.requestReceipt,
   }
-  const content = { html: draft.html, text: draft.text, attachments: attachmentParts }
+  const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt }
   const message = buildMessage({ ...header, ...content })
   const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
   const local = everyone.filter((address) => address.endsWith(`@${account.domain}`))
