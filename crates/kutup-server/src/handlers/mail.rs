@@ -1099,9 +1099,22 @@ pub async fn batch_messages(
         remove_labels: request.remove_labels,
         group: request.group,
     };
-    let updated = update_ids(&state, user_id, owner, &ids, &change).await?;
+    // In chunks, each its own transaction: a large mailbox never holds one
+    // long row lock or one long statement. A failure part way leaves the
+    // chunks before it done, as Proton's background tasks do.
+    let mut updated = 0;
+    for chunk in ids.chunks(BATCH_CHUNK) {
+        updated += update_ids(&state, user_id, owner, chunk, &change).await?;
+    }
+    if ids.is_empty() {
+        // Still checks the change (nothing to change, unknown folder or label).
+        update_ids(&state, user_id, owner, &[], &change).await?;
+    }
     Ok(Json(UpdatedMailMessages { updated }))
 }
+
+/// Messages one statement of a batch changes at most.
+const BATCH_CHUNK: usize = 5_000;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
