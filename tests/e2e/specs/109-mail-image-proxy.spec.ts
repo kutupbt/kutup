@@ -29,7 +29,7 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   // What Alice's browser asks the outside world for.
   const tracked: string[] = []
   const direct: string[] = []
-  await aliceContext.route(/list-manage\.com/, (route) => {
+  await aliceContext.route(/^https:\/\/[^/]*list-manage\.com\//, (route) => {
     tracked.push(route.request().url())
     return route.abort()
   })
@@ -69,7 +69,8 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
     },
     `<p>Bülten</p><p><img src="${image}" alt="logo"><img src="${tracker}" alt=""></p><p><a href="https://shop.example.org/?id=${tag}&utm_source=news&fbclid=x">Mağaza</a></p>`,
   )
-  await expect(editor.locator('img')).toHaveCount(2)
+  await expect(editor.locator(`img[src="${image}"]`)).toHaveCount(1)
+  await expect(editor.locator(`img[src="${tracker}"]`)).toHaveCount(1)
   await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
   await expect(bobMail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
 
@@ -84,14 +85,20 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   const details = mail.getByRole('dialog', { name: 'Email tracker protection' })
   await expect(details.getByRole('list', { name: 'Blocked trackers' }).getByText('Mailchimp')).toBeVisible()
   await expect(details.getByText('Removed: utm_source, fbclid')).toBeVisible()
-  await details.getByRole('button', { name: 'Close' }).click()
+  await details.getByRole('button', { name: 'Close', exact: true }).last().click()
 
   // Loading asks the proxy, never the tracker; the image it cannot get
   // loads directly only when Alice says so.
+  const proxiedUrls: string[] = []
+  mail.on('request', (r) => {
+    if (new URL(r.url()).pathname === '/api/mail/images') proxiedUrls.push(new URL(r.url()).searchParams.get('url') ?? '')
+  })
   const proxied = mail.waitForRequest((r) => new URL(r.url()).pathname === '/api/mail/images' && new URL(r.url()).searchParams.get('url') === image)
   await mail.getByRole('button', { name: 'Load images' }).click()
   await mail.getByRole('dialog', { name: 'Load remote images?' }).getByRole('button', { name: 'Load images' }).click()
   await proxied
+  // The tracker is not even asked of the proxy.
+  expect(proxiedUrls.some((url) => url.includes('list-manage'))).toBe(false)
   await expect(mail.getByText('Tracker protection prevented some images from loading. Load them if you trust the sender.')).toBeVisible({ timeout: 60_000 })
   expect(direct).toEqual([])
   await mail.getByRole('button', { name: 'Load', exact: true }).click()

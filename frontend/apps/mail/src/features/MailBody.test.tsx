@@ -112,6 +112,7 @@ describe('tracker protection', () => {
     const doc = frameDoc()
     expect(doc).not.toContain('cdn.example.org')
     expect(doc).not.toContain('list-manage')
+    expect(fetchMailImage).not.toHaveBeenCalledWith(expect.stringContaining('list-manage'))
     // Only proxied images in the frame: its policy allows no remote loads.
     expect(doc).toContain("img-src data: blob:;")
     fireEvent.click(await screen.findByRole('button', { name: 'Load' }))
