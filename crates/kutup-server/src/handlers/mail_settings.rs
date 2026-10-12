@@ -51,13 +51,16 @@ pub struct MailSettings {
     /// Messages or conversations on a page of the list: 50, 100 or 200
     /// (Proton's `PageSize`).
     pub page_size: i32,
+    /// Moving list mail to Spam: `ask`, `just_spam`, or
+    /// `spam_and_unsubscribe` (Proton's `SpamAction`, "Auto-unsubscribe").
+    pub spam_action: String,
 }
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
         "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
-                view_layout, density, composer_mode, view_mode, confirm_link, page_size
+                view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -75,6 +78,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         view_mode: "conversation".into(),
         confirm_link: true,
         page_size: 50,
+        spam_action: "ask".into(),
     }))
 }
 
@@ -101,6 +105,7 @@ pub struct UpdateMailSettings {
     pub pgp_scheme: Option<String>,
     pub confirm_link: Option<bool>,
     pub page_size: Option<i32>,
+    pub spam_action: Option<String>,
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
@@ -137,6 +142,15 @@ pub async fn update(
     {
         return Err(AppError::bad_request("page size is 50, 100 or 200"));
     }
+    if request
+        .spam_action
+        .as_deref()
+        .is_some_and(|a| !["ask", "just_spam", "spam_and_unsubscribe"].contains(&a))
+    {
+        return Err(AppError::bad_request(
+            "spam action is ask, just_spam or spam_and_unsubscribe",
+        ));
+    }
     let one_of = |value: &Option<String>, allowed: [&str; 2]| {
         value.as_deref().is_none_or(|v| allowed.contains(&v))
     };
@@ -153,11 +167,11 @@ pub async fn update(
     sqlx::query(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
-              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size)
+              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
                  COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
-                 COALESCE($12, 50))
+                 COALESCE($12, 50), COALESCE($13, 'ask'))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -170,6 +184,7 @@ pub async fn update(
              pgp_scheme = COALESCE($10, mail_settings.pgp_scheme),
              confirm_link = COALESCE($11, mail_settings.confirm_link),
              page_size = COALESCE($12, mail_settings.page_size),
+             spam_action = COALESCE($13, mail_settings.spam_action),
              updated_at = now()",
     )
     .bind(user_id)
@@ -184,6 +199,7 @@ pub async fn update(
     .bind(request.pgp_scheme.as_deref())
     .bind(request.confirm_link)
     .bind(request.page_size)
+    .bind(request.spam_action.as_deref())
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

@@ -800,7 +800,8 @@ export function MailboxPage() {
                     onContextMenu={() => setMenuFor(isChosen ? chosen : [message])}
                     onDragStart={(e) => {
                       const rows = isChosen ? chosen : [message]
-                      const data: Movable[] = membersOf(rows)
+                      // Each member with its thread: a drop on Spam may unsubscribe from its list.
+                      const data: Movable[] = rows.flatMap((row) => membersOf([row]).map((member) => ({ ...member, threadId: row.threadId, unsubscribable: member.unsubscribable ?? row.unsubscribable })))
                       e.dataTransfer.setData(MAIL_DRAG_TYPE, JSON.stringify(data))
                       e.dataTransfer.setData('text/plain', t('list.dragging', { count: rows.length }))
                       e.dataTransfer.effectAllowed = 'move'

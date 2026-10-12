@@ -59,6 +59,24 @@ export function GeneralSettingsPage() {
             </SelectContent>
           </Select>
         </div>
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            <label htmlFor="spam-action" className="block text-sm font-medium">
+              {t('general.spamAction')}
+            </label>
+            <span className="block text-sm text-muted-foreground">{t('general.spamActionHint')}</span>
+          </span>
+          <Select value={settings.data.spamAction} onValueChange={(spamAction) => save({ spamAction: spamAction as MailSettings['spamAction'] })}>
+            <SelectTrigger id="spam-action" className="sm:w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="spam_and_unsubscribe">{t('general.spamActionOn')}</SelectItem>
+              <SelectItem value="just_spam">{t('general.spamActionOff')}</SelectItem>
+              <SelectItem value="ask">{t('general.spamActionAsk')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <Setting
           label={t('general.confirmLink')}
           hint={t('general.confirmLinkHint')}

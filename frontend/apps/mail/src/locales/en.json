@@ -524,7 +524,12 @@
     "confirmLink": "Confirm link URLs",
     "confirmLinkHint": "When you click a link in a message that leads outside Kutup, see where it really goes before it opens. Links in Spam always ask.",
     "pageSizeConversations": "Conversations per page",
-    "pageSizeMessages": "Messages per page"
+    "pageSizeMessages": "Messages per page",
+    "spamAction": "Auto-unsubscribe",
+    "spamActionHint": "When you move mail from a mailing list to Spam, also unsubscribe from the list.",
+    "spamActionOn": "On",
+    "spamActionOff": "Off",
+    "spamActionAsk": "Ask each time"
   },
   "senders": {
     "title": "Block and allow",
@@ -820,5 +825,21 @@
     "copyAndTrash": "Copy '{{code}}' to clipboard and move to Trash",
     "copied": "Copied '{{code}}' to clipboard",
     "copyFailed": "The code could not be copied."
+  },
+  "spamUnsubscribe": {
+    "title": "Move to spam",
+    "bodyMessages_one": "This message will be marked as spam. Would you also like to unsubscribe from future emails?",
+    "bodyMessages_other": "These messages will be marked as spam. Would you also like to unsubscribe from future emails?",
+    "bodyConversations_one": "This conversation will be marked as spam. Would you also like to unsubscribe from future emails?",
+    "bodyConversations_other": "These conversations will be marked as spam. Would you also like to unsubscribe from future emails?",
+    "remember": "Remember my choice",
+    "justSpam": "Move to spam",
+    "andUnsubscribe": "Move to spam and unsubscribe",
+    "done_one": "Unsubscribed from 1 mailing list.",
+    "done_other": "Unsubscribed from {{count}} mailing lists.",
+    "manual_one": "1 list can only be left on its web page: open one of its messages to unsubscribe.",
+    "manual_other": "{{count}} lists can only be left on their web pages: open one of their messages to unsubscribe.",
+    "failed_one": "Unsubscribing from 1 list did not work.",
+    "failed_other": "Unsubscribing from {{count}} lists did not work."
   }
 }
