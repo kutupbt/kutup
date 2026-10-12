@@ -346,7 +346,7 @@ export function MessageView({
                 {opened.data.parsed.html ?? opened.data.parsed.text ?? ''}
               </pre>
             ) : (
-              <MailBody parsed={opened.data.parsed} suspicious={message.folder === 'spam'} />
+              <MailBody parsed={opened.data.parsed} suspicious={message.folder === 'spam'} sender={message.direction === 'inbound' ? (from?.address ?? undefined) : undefined} />
             )}
             <AttachmentList list={opened.data.parsed.attachments} subject={opened.data.parsed.subject || message.subject} />
             <div className="flex flex-wrap gap-2 pt-1">

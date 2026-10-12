@@ -2,10 +2,14 @@ import { ImageOff } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
-import { useMailSettings } from '@kutup/mail-core/api'
+import { toast } from 'sonner'
+import { useAddImageSender, useImageSenders, useMailSettings } from '@kutup/mail-core/api'
 import type { ParsedMessage } from '@kutup/mail-core/mime'
 import { plainTextDocument, sanitizeMailHtml, type FrameLook } from '@kutup/mail-core/sanitize'
 import { Button } from '@kutup/ui/components/button'
+import { Checkbox } from '@kutup/ui/components/checkbox'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
+import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { openComposer } from './composerState'
 import { LinkConfirm } from './LinkConfirm'
@@ -29,7 +33,7 @@ function themeColors(): FrameLook['colors'] {
  * its content. Remote images stay blocked until the reader loads them for
  * this message, as Proton offers (it proxies them; Kutup has no proxy yet).
  */
-export function MailBody({ parsed, suspicious = false }: { parsed: ParsedMessage; suspicious?: boolean }) {
+export function MailBody({ parsed, suspicious = false, sender }: { parsed: ParsedMessage; suspicious?: boolean; sender?: string }) {
   const { t } = useTranslation()
   const settings = useMailSettings()
   // Proton's Confirm link URLs: on unless turned off; always for a message filed as spam.
@@ -62,7 +66,15 @@ export function MailBody({ parsed, suspicious = false }: { parsed: ParsedMessage
   }
   const { resolvedTheme } = useTheme()
   const darkTheme = resolvedTheme === 'dark'
-  const [allowRemote, setAllowRemote] = useState(false)
+  // Remote images load at once when the reader said so for every sender or
+  // for this one (never in Spam); otherwise after the reader's question.
+  const imageSenders = useImageSenders()
+  const addImageSender = useAddImageSender()
+  const trusted = !suspicious && (settings.data?.remoteImages === 'always' || (!!sender && (imageSenders.data?.some((s) => s.address === sender.toLowerCase()) ?? false)))
+  const [loaded, setLoaded] = useState(false)
+  const allowRemote = loaded || trusted
+  const [askingImages, setAskingImages] = useState(false)
+  const [always, setAlways] = useState(false)
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(120)
 
@@ -115,10 +127,45 @@ export function MailBody({ parsed, suspicious = false }: { parsed: ParsedMessage
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm">
           <ImageOff className="size-4 text-muted-foreground" aria-hidden />
           <span className="flex-1">{t('read.remoteBlocked')}</span>
-          <Button variant="outline" size="sm" onClick={() => setAllowRemote(true)}>
+          <Button variant="outline" size="sm" onClick={() => setAskingImages(true)}>
             {t('read.loadRemote')}
           </Button>
         </div>
+      ) : null}
+      {askingImages ? (
+        <Dialog open onOpenChange={(open) => !open && setAskingImages(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('remoteImages.title')}</DialogTitle>
+              <DialogDescription>{t('remoteImages.body')}</DialogDescription>
+            </DialogHeader>
+            {sender && !suspicious ? (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={always} onCheckedChange={(on) => setAlways(on === true)} />
+                <span className="min-w-0 break-all">{t('remoteImages.always', { address: sender })}</span>
+              </label>
+            ) : null}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAskingImages(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={() => {
+                  setLoaded(true)
+                  setAskingImages(false)
+                  if (always && sender && !suspicious) {
+                    addImageSender.mutate(sender, {
+                      onSuccess: () => toast.success(t('remoteImages.remembered', { address: sender })),
+                      onError: (error) => toast.error(apiErrorMessage(error, t('common.tryAgain'))),
+                    })
+                  }
+                }}
+              >
+                {t('remoteImages.load')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       ) : null}
       <iframe
         ref={frame}
