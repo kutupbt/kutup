@@ -55,7 +55,7 @@ reference only where Proton has nothing.
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ✅ Insert image, paste or drop: asked Inline or Attachment (Proton's); inline images travel as `cid:` parts in `multipart/related`, kept in the draft and shown again when it opens, and are not listed as files; emoji-mart's picker, as Proton's (spec 106) |
 | Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | 🔶 your address: Mail → Settings → Identity (rich signature, display name); shared mailboxes later |
 | From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ shared mailboxes; 🔶 aliases plan |
-| Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ❌ (suggestions only) |
+| Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ✅ contact groups among the suggestions ("Contact group · N members"), adding each member's addresses as recipients of their own (Proton keeps one group chip); recipients dragged between To, Cc and Bcc (spec 107) |
 | Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
 | Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ Contacts → Email settings: Encrypt, Sign, PGP scheme per address; "Sign outside mail" in General |
 | Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
@@ -65,7 +65,7 @@ reference only where Proton has nothing.
 | Expiring messages | `ComposerExpirationModal.tsx` | ❌ |
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
 | Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | 🔶 "Remove metadata" in the insert question, on by default: JPEG, PNG and WebP drawn again without EXIF; ❌ the account-wide toggle |
-| Mailto handler, "default mail app" | `useMailtoHash.ts` | ❌ |
+| Mailto handler, "default mail app" | `useMailtoHash.ts` | ✅ Settings → General: "Set as default" registers Kutup Mail for mailto links (`#mailto=`, as Proton's); a link opens the composer with its To, Cc, Bcc, subject and body (spec 107) |
 | Request a read receipt | `MoreActionsExtension.tsx` | ✅ "Read receipt" in the composer (`Disposition-Notification-To`), kept in the draft (spec 100) |
 | Writing assistant | `ComposerAssistant.tsx` | ➖ not planned |
 
