@@ -2667,7 +2667,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
