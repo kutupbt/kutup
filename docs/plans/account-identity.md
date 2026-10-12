@@ -60,8 +60,30 @@ one (a vault file, a mail key, a folder), under the account's own keys.
 - The binding is returned by sign-in's preflight and kept in the session
   (`session.envelopeBinding`, CLI `Session.envelope_binding`); every seal and
   open uses it, never `session.email`, `session.username` or an address.
-- Other at-rest formats that bound a name (found by the audit, below) move to
-  the key binding in the same re-seal.
+- Other at-rest formats that bound a name move to the key binding in the
+  same re-seal (audit of 2026-10-12, every seal, derivation and store name):
+
+| Bound to a name today | What | Re-sealed from |
+|---|---|---|
+| sign-in email | account envelopes 1–6 (password, recovery, Drive key, Chat backup root, mail address keys, Pass vault secrets) | password key / phrase / master key |
+| sign-in email | recovery check (HKDF info) | the phrase |
+| Kutup address | identity pins (`identity_pins.rs` AAD) | the master key |
+| Kutup address | contact cards and their summary signature (`contact_card.rs`) | the master key |
+| Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) | the master key |
+| Kutup address | Chat's own copy of the account profile (`kutup-chat-core` `profile.rs`) | the master key |
+| Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed) | renamed by account id |
+
+  Already bound to ids (no change): Chat's device store, sealed storage and
+  backup (a hash of server and user id), the media cache, the Pass outbox,
+  Drive's collection keyrings and public links, the account incarnation id.
+
+  **Cross-party statements keep the address**, because the address is what
+  they mean, and peers on other servers resolve people by it: the Drive key
+  binding ("this address owns these keys"), safety numbers, named shares and
+  profile key shares, the mail address key's own address, Chat profiles as
+  peers check them, MLS credentials. If usernames become changeable later,
+  renaming re-issues these (as a new OpenPGP user id would), a step of its
+  own.
 
 ### Re-sealing (next sign-in)
 
