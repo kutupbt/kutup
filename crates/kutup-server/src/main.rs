@@ -35,6 +35,7 @@ mod middleware;
 mod models;
 mod openapi;
 mod photos;
+mod public_fetch;
 mod ratelimit;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -636,6 +637,16 @@ fn build_router(state: AppState) -> Router {
             put(handlers::pass::put_vault_secret)
                 .delete(handlers::pass::delete_vault_secret)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/pass/settings",
+            get(handlers::pass_icons::get_settings)
+                .put(handlers::pass_icons::put_settings)
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/pass/icon",
+            post(handlers::pass_icons::icon).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route("/api/pass/pin", get(handlers::pass::pin_status))
         .route(

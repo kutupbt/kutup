@@ -492,3 +492,74 @@ fn pin_tries_are_counted_per_sign_in() {
     );
     assert_eq!(verify(&user.token, "975310"), json!("ok"));
 }
+
+#[test]
+fn site_icons_follow_the_account_setting() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let user = register(&c, &base);
+    let settings = || -> Value {
+        bearer(c.get(format!("{base}/api/pass/settings")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let choose = |body: Value| {
+        bearer(c.put(format!("{base}/api/pass/settings")), &user.token)
+            .json(&body)
+            .send()
+            .unwrap()
+            .status()
+    };
+    let icon = |domain: &str| {
+        bearer(c.post(format!("{base}/api/pass/icon")), &user.token)
+            .json(&json!({ "domain": domain }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    // Through Kutup unless chosen otherwise.
+    assert_eq!(settings()["siteIcons"], "kutup");
+    // Only public host names are fetched.
+    for bad in [
+        "localhost",
+        "127.0.0.1",
+        "intranet",
+        "example.org:8443",
+        "example.org/x",
+    ] {
+        assert_eq!(icon(bad), StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // A name that cannot resolve has no icon.
+    assert_eq!(icon("no-such-host.invalid"), StatusCode::NOT_FOUND);
+    assert_eq!(
+        choose(json!({ "siteIcons": "sideways" })),
+        StatusCode::BAD_REQUEST
+    );
+    for mode in ["direct", "off"] {
+        assert_eq!(choose(json!({ "siteIcons": mode })), StatusCode::NO_CONTENT);
+        assert_eq!(settings()["siteIcons"], mode);
+        // The server fetches nothing for an account that chose otherwise.
+        assert_eq!(icon("example.org"), StatusCode::FORBIDDEN, "{mode}");
+    }
+    assert_eq!(
+        choose(json!({ "siteIcons": "kutup" })),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(settings()["siteIcons"], "kutup");
+    // Without a sign-in, nothing.
+    assert_eq!(
+        c.get(format!("{base}/api/pass/settings"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}

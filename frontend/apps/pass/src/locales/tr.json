@@ -275,6 +275,19 @@
     "click": "Tek tıklama",
     "pin": "PIN'im"
   },
+  "siteIcons": {
+    "label": "Site simgeleri",
+    "description": "Kayıtların sitelerinin simgesini nasıl gösterdiği, tüm cihazlarda.",
+    "kutup": "Kutup üzerinden (önerilen)",
+    "direct": "Doğrudan siteden",
+    "off": "Kapalı",
+    "about": {
+      "kutup": "Her kaydın site simgesini Kutup sunucunuz getirir; siteler tarayıcınızı hiç görmez. Sunucu yalnızca sitenin adını görür. Tüm cihazlarda geçerlidir.",
+      "direct": "Tarayıcınız simgeyi her siteden kendisi ister; siteler adresinizi ve kasayı ne zaman açtığınızı görür. Tüm cihazlarda geçerlidir.",
+      "off": "Kayıtlar ilk harfleriyle gösterilir; hiçbir siteye ya da sunucuya sorulmaz. Tüm cihazlarda geçerlidir."
+    },
+    "saveFailed": "Ayar kaydedilemedi. Yeniden deneyin."
+  },
   "import": {
     "open": "Başka bir uygulamadan içe aktar…",
     "title": "Parolaları içe aktar",

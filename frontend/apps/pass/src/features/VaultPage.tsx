@@ -30,6 +30,7 @@ import { EntryEditor } from './EntryEditor'
 import { GroupDialog } from './GroupDialog'
 import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
+import { SiteIcon } from './SiteIcon'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
 import { UnlockVault } from './UnlockVault'
@@ -354,9 +355,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                     aria-current={e.id === entryId ? 'true' : undefined}
                     className={cn('flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left hover:bg-accent/50', e.id === entryId && 'bg-accent')}
                   >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-xs font-semibold uppercase">
-                      {(fieldValue(e, 'Title') || '?').slice(0, 1)}
-                    </span>
+                    <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{fieldValue(e, 'Title') || t('entry.untitled')}</span>
                       <span className="block truncate text-xs text-muted-foreground">{fieldValue(e, 'UserName') || fieldValue(e, 'URL')}</span>

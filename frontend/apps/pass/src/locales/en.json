@@ -275,6 +275,19 @@
     "click": "One click",
     "pin": "My PIN"
   },
+  "siteIcons": {
+    "label": "Website icons",
+    "description": "How entries show their website's icon, on every device.",
+    "kutup": "Through Kutup (recommended)",
+    "direct": "Directly from the website",
+    "off": "Off",
+    "about": {
+      "kutup": "Your Kutup server fetches each entry's website icon, so the websites never see your browser. The server sees only the website's name. Applies on every device.",
+      "direct": "Your browser asks each website for its icon, so the websites see your address and when you opened the vault. Applies on every device.",
+      "off": "Entries show their first letter, and no website or server is asked. Applies on every device."
+    },
+    "saveFailed": "Could not save the setting. Try again."
+  },
   "import": {
     "open": "Import from another app…",
     "title": "Import passwords",

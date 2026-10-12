@@ -64,9 +64,10 @@ NGINX
     frame_options=SAMEORIGIN
     # Pass holds open vaults: no inline or eval'd script (its page loads its
     # theme and reload guard as files; vite's strictCsp), WASM only through
-    # 'wasm-unsafe-eval', and nothing may frame it.
+    # 'wasm-unsafe-eval', and nothing may frame it. Website icons load from
+    # the websites themselves when the account chose that (https only).
     if [ "$app" = pass ]; then
-      app_csp="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"
+      app_csp="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"
       frame_options=DENY
     fi
     cat <<NGINX

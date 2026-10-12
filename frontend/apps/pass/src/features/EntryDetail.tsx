@@ -12,6 +12,7 @@ import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
 import { HistoryDialog } from './HistoryDialog'
+import { SiteIcon } from './SiteIcon'
 import { bytesToBase64 } from '../lib/bytes'
 
 /** A copied secret is cleared from the clipboard after this, if it is still there. */
@@ -140,6 +141,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
   return (
     <article className="flex h-full flex-col" aria-label={title}>
       <header className="flex items-start gap-3 border-b border-border p-4">
+        <SiteIcon title={title} address={url} className="size-10 text-sm" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-display text-lg font-semibold tracking-tight">{title}</h2>
           {entry.tags.length > 0 ? (

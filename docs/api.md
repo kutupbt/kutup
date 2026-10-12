@@ -1506,6 +1506,31 @@ The count is per sign-in (the root session and the app sessions forked from
 it), each try is reserved before the check so parallel tries get no more than
 three, and other sign-ins neither add to it nor clear it.
 
+Website icons for entries (docs/plans/pass.md, "Site icons"). **Auth:**
+Bearer JWT.
+
+### GET /api/pass/settings
+
+`{siteIcons}`: how the account's entries get their website's icon, the same
+on every device: `"kutup"` (through this server; the default), `"direct"`
+(the browser asks the website) or `"off"`.
+
+### PUT /api/pass/settings
+
+**Body:** `{siteIcons}`. **Response:** `204`, `400` for another value.
+
+### POST /api/pass/icon
+
+**Body:** `{domain}`: a host name only (`accounts.example.org`; no IP
+address, port, path or `localhost`). The server reads the site's home page
+for its icon links, then tries `/favicon.ico`, over https to public
+addresses only. **Response:** `200` with the image (`image/png`,
+`image/jpeg`, `image/gif`, `image/webp` or `image/x-icon`, recognised by its
+bytes; never SVG; `Cache-Control: no-store`); `400` for a name that is not a
+public host name; `403` unless the account chose `"kutup"`; `404` when the
+site has no usable icon; `429` past 600 a minute. Icons are kept in the
+server's memory for a day (no icon: an hour), never written down.
+
 ---
 
 ## Photos
