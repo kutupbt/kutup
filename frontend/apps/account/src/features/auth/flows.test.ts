@@ -1,6 +1,6 @@
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RegistrationKeys } from '@kutup/crypto'
+import type { AccountKeys } from './flows'
 
 const post = vi.hoisted(() => vi.fn())
 vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn(() => Promise.resolve({ data: { username: 'a', hasDriveKeyBinding: true } })) } }))
@@ -18,7 +18,7 @@ function limited(): AxiosError {
   return new AxiosError('failed', '429', undefined, undefined, response)
 }
 
-const keys = () => ({ loginKey: 'login', masterKey: new Uint8Array(32), privateKey: new Uint8Array(32), publicKey: new Uint8Array(32) }) as unknown as RegistrationKeys
+const keys = () => ({ loginKey: 'login', masterKey: new Uint8Array(32), privateKey: new Uint8Array(32), publicKey: new Uint8Array(32), keyBinding: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }) as unknown as AccountKeys
 
 describe('registerAndSignIn', () => {
   beforeEach(() => post.mockReset())
@@ -32,8 +32,8 @@ describe('registerAndSignIn', () => {
       return Promise.resolve({ data: { userId: 'u1', accessToken: 'a' } })
     })
     const k = keys()
-    await expect(registerAndSignIn('a@kutup.dev', 'a', k)).rejects.toBeInstanceOf(AxiosError)
-    await registerAndSignIn('a@kutup.dev', 'a', k)
+    await expect(registerAndSignIn('a', k)).rejects.toBeInstanceOf(AxiosError)
+    await registerAndSignIn('a', k)
     expect(paths).toEqual(['/auth/register', '/auth/login', '/auth/login'])
     // The account's Drive key binding goes with it (docs/plans/drive-identity-pins.md).
     expect(post.mock.calls[0][1]).toMatchObject({ username: 'a', driveKeyBinding: 'binding' })
@@ -42,8 +42,8 @@ describe('registerAndSignIn', () => {
   it('registers again after a failed registration', async () => {
     post.mockRejectedValueOnce(limited()).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
     const k = keys()
-    await expect(registerAndSignIn('a@kutup.dev', 'a', k)).rejects.toBeInstanceOf(AxiosError)
-    await registerAndSignIn('a@kutup.dev', 'a', k)
+    await expect(registerAndSignIn('a', k)).rejects.toBeInstanceOf(AxiosError)
+    await registerAndSignIn('a', k)
     expect(post.mock.calls.map(([path]) => path as string)).toEqual(['/auth/register', '/auth/register', '/auth/login'])
   })
 })

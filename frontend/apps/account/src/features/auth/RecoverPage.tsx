@@ -26,7 +26,7 @@ export function RecoverPage() {
 
   const schema = z
     .object({
-      email: z.string().trim().min(1, t('auth.validation.emailRequired')),
+      name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
       phrase: z
         .string()
         .refine((v) => validateMnemonic(normalizeMnemonic(v)), t('recover.phraseInvalid')),
@@ -45,11 +45,11 @@ export function RecoverPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', phrase: '', password: '', confirm: '' },
+    defaultValues: { name: '', phrase: '', password: '', confirm: '' },
   })
   const score = usePasswordStrength(watch('password'))
 
-  const onSubmit = handleSubmit(async ({ email, phrase, password }) => {
+  const onSubmit = handleSubmit(async ({ name, phrase, password }) => {
     if ((await passwordScore(password)) < MIN_PASSWORD_SCORE) {
       setFieldError('password', { message: t('auth.validation.passwordTooWeak') })
       return
@@ -57,7 +57,7 @@ export function RecoverPage() {
     setError(null)
     setPending(true)
     try {
-      await recoverAccount(email.trim(), phrase, password)
+      await recoverAccount(name.trim(), phrase, password)
       setDone(true)
     } catch (err) {
       setError(authErrorMessage(err, t, 'recover.failed'))
@@ -79,8 +79,8 @@ export function RecoverPage() {
   return (
     <AuthLayout title={t('recover.title')} description={t('recover.description')} width="md">
       <form className="space-y-4" onSubmit={(e) => void onSubmit(e)} noValidate>
-        <Field label={t('auth.fields.email')} error={errors.email?.message} required>
-          {(field) => <Input {...field} {...register('email')} type="email" autoComplete="username" autoFocus />}
+        <Field label={t('auth.fields.username')} error={errors.name?.message} required>
+          {(field) => <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />}
         </Field>
         <Field
           label={t('recover.phrase')}

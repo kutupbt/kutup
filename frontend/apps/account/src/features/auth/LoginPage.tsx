@@ -13,13 +13,15 @@ import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage } from './errors'
-import { completeTotp, signIn, type TotpChallenge } from './flows'
+import { completeTotp, signIn, type SignInResult, type TotpChallenge } from './flows'
+import { setPendingRebind } from './pendingRebind'
 import { setPendingSetup } from './pendingSetup'
 
 /**
- * Sign-in: email + password, then a TOTP code when the account has 2FA.
- * The server answers a missing account and a wrong password identically; the
- * form does not try to tell them apart.
+ * Sign-in: username (or Kutup address) + password, then a TOTP code when the
+ * account has 2FA. The server answers a missing account and a wrong password
+ * identically; the form does not try to tell them apart. An account whose
+ * keys are still bound to its old sign-in email goes on to re-seal them.
  */
 export function LoginPage() {
   const { t } = useTranslation()
@@ -33,7 +35,7 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
 
   const schema = z.object({
-    email: z.string().trim().min(1, t('auth.validation.emailRequired')),
+    name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
     password: z.string().min(1, t('auth.validation.passwordRequired')),
   })
   const {
@@ -42,23 +44,32 @@ export function LoginPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { name: '', password: '' },
   })
 
   if (session && !pending) return <Navigate to={next} replace />
 
-  const onCredentials = handleSubmit(async ({ email, password }) => {
+  const signedIn = (result: Extract<SignInResult, { kind: 'signedIn' }>) => {
+    if (result.rebind) {
+      setPendingRebind(result.rebind)
+      void navigate(`/account-update?next=${encodeURIComponent(next)}`, { replace: true })
+    } else {
+      void navigate(next, { replace: true })
+    }
+  }
+
+  const onCredentials = handleSubmit(async ({ name, password }) => {
     setError(null)
     setPending(true)
     try {
-      const result = await signIn(email.trim(), password)
+      const result = await signIn(name.trim(), password)
       if (result.kind === 'setup') {
         setPendingSetup(result.setup)
         void navigate(`/first-login?next=${encodeURIComponent(next)}`, { replace: true })
       } else if (result.kind === 'totp') {
         setChallenge(result.challenge)
       } else {
-        void navigate(next, { replace: true })
+        signedIn(result)
       }
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.signInFailed'))
@@ -73,8 +84,8 @@ export function LoginPage() {
     setError(null)
     setPending(true)
     try {
-      await completeTotp(challenge, code.trim())
-      void navigate(next, { replace: true })
+      const result = await completeTotp(challenge, code.trim())
+      if (result.kind === 'signedIn') signedIn(result)
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
     } finally {
@@ -125,9 +136,9 @@ export function LoginPage() {
   return (
     <AuthLayout title={t('login.title')} description={t('login.description')}>
       <form className="space-y-4" onSubmit={(e) => void onCredentials(e)} noValidate>
-        <Field label={t('auth.fields.email')} error={errors.email?.message} required>
+        <Field label={t('auth.fields.username')} error={errors.name?.message} description={t('login.nameHint')} required>
           {(field) => (
-            <Input {...field} {...register('email')} type="email" autoComplete="username" autoFocus />
+            <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />
           )}
         </Field>
         <Field label={t('auth.fields.password')} error={errors.password?.message} required>

@@ -47,7 +47,8 @@
       "passwordRequired": "Enter a password.",
       "passwordsDiffer": "The passwords do not match.",
       "passwordTooWeak": "Choose a stronger password — longer, and not a common word or pattern.",
-      "username": "3–32 characters: lowercase letters, numbers, _ and -."
+      "username": "3–32 characters: lowercase letters, numbers, _ and -.",
+      "usernameRequired": "Enter your username."
     },
     "errors": {
       "locked": "Too many attempts. Wait a few minutes, then try again.",
@@ -80,7 +81,8 @@
     "totpDescription": "Enter the 6-digit code from your authenticator app.",
     "totpCode": "Authentication code",
     "verify": "Verify",
-    "useAnotherAccount": "Use a different account"
+    "useAnotherAccount": "Use a different account",
+    "nameHint": "Your username, or your Kutup address."
   },
   "newKeys": {
     "continue": "Continue",
@@ -94,7 +96,7 @@
     "warningTitle": "Write it down now",
     "warning": "This phrase is shown once. Nobody — not even your server's administrator — can recover your files without it or your password.",
     "download": "Download as text",
-    "fileHeader": "Kutup recovery phrase for {{email}}. Keep this private and offline.",
+    "fileHeader": "Kutup recovery phrase for {{account}}. Keep this private and offline.",
     "saved": "I have saved my recovery phrase",
     "confirmTitle": "Confirm your recovery phrase",
     "confirmDescription": "Prove you saved it by entering three of its words.",
@@ -114,7 +116,7 @@
   },
   "firstLogin": {
     "title": "Finish setting up your account",
-    "description": "An administrator created {{email}} for you. Choose your own password to create your encryption keys."
+    "description": "An administrator created the account {{name}} for you. Choose your own password to create your encryption keys."
   },
   "recover": {
     "title": "Recover your account",
@@ -893,5 +895,20 @@
       "checkedPersonal": "I've removed personal details, and this can be public",
       "openIssue": "Open the issue on GitHub"
     }
+  },
+  "rebind": {
+    "title": "One more step for your account",
+    "description": "Kutup now signs you in with your username ({{name}}), not an email. Your encryption keys move with it once, here in your browser: confirm your recovery phrase so it keeps working.",
+    "phrase": "Recovery phrase",
+    "phraseHint": "The 24 words you saved when you made your account.",
+    "confirm": "Confirm and update",
+    "wrongPhrase": "These words are not this account’s recovery phrase.",
+    "noPhrase": "I don’t have my recovery phrase",
+    "noPhraseTitle": "Make a new recovery phrase",
+    "noPhraseDescription": "Your old phrase stops working. Write the new one down; it is the only way back into your account if you forget your password.",
+    "later": "Later",
+    "laterHint": "You will be asked again the next time you sign in.",
+    "done": "Your account is updated. You sign in with your username from now on.",
+    "failed": "The update did not go through. Nothing changed; try again."
   }
 }

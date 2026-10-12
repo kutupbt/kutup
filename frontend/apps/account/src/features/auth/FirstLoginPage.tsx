@@ -21,8 +21,8 @@ export function FirstLoginPage() {
   return (
     <NewKeysWizard
       title={t('firstLogin.title')}
-      description={t('firstLogin.description', { email: setup.email })}
-      email={() => setup.email}
+      description={t('firstLogin.description', { name: setup.name })}
+      account={() => setup.name}
       onKeysConfirmed={async (keys) => {
         await completeSetup(setup, keys)
         setPendingSetup(null)

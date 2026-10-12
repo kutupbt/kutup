@@ -30,9 +30,6 @@ export function RegisterPage() {
   })
 
   const schema = z.object({
-    email: z.string().trim().min(1, t('auth.validation.emailRequired')).includes('@', {
-      message: t('auth.validation.emailInvalid'),
-    }),
     username: z.string().trim().regex(USERNAME, t('auth.validation.username')),
   })
   const {
@@ -42,7 +39,7 @@ export function RegisterPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', username: '' },
+    defaultValues: { username: '' },
   })
 
   if (session) return <Navigate to={next} replace />
@@ -61,13 +58,10 @@ export function RegisterPage() {
     <NewKeysWizard
       title={t('register.title')}
       description={t('register.description')}
-      email={() => getValues('email').trim()}
+      account={() => getValues('username').trim()}
       validateLeading={() => trigger()}
       leadingFields={
         <>
-          <Field label={t('auth.fields.email')} error={errors.email?.message} required>
-            {(field) => <Input {...field} {...register('email')} type="email" autoComplete="email" autoFocus />}
-          </Field>
           <Field
             label={t('auth.fields.username')}
             error={errors.username?.message}
@@ -75,14 +69,14 @@ export function RegisterPage() {
             required
           >
             {(field) => (
-              <Input {...field} {...register('username')} autoComplete="username" autoCapitalize="off" spellCheck={false} />
+              <Input {...field} {...register('username')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />
             )}
           </Field>
           {settings.isError ? <Alert variant="warn">{t('register.settingsUnavailable')}</Alert> : null}
         </>
       }
       onKeysConfirmed={async (keys) => {
-        await registerAndSignIn(getValues('email').trim(), getValues('username').trim(), keys)
+        await registerAndSignIn(getValues('username').trim(), keys)
         void navigate(next, { replace: true })
       }}
     />

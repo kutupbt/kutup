@@ -3,7 +3,6 @@ import { useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
-import type { RegistrationKeys } from '@kutup/crypto'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Field } from '@kutup/ui/components/field'
@@ -11,7 +10,7 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Spinner } from '@kutup/ui/components/states'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage } from './errors'
-import { generateAccountKeys } from './flows'
+import { generateAccountKeys, type AccountKeys } from './flows'
 import { MIN_PASSWORD_SCORE, passwordScore, usePasswordStrength } from './passwordStrength'
 import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import { ConfirmRecoveryPhrase, ShowRecoveryPhrase } from './RecoveryPhrase'
@@ -28,24 +27,24 @@ type Step = 'password' | 'generating' | 'phrase' | 'confirm'
 export function NewKeysWizard({
   title,
   description,
-  email,
+  account,
   leadingFields,
   validateLeading,
   onKeysConfirmed,
 }: {
   title: string
   description: string
-  /** The account email the keys are bound to (read when the password is submitted). */
-  email: () => string
-  /** Fields above the password (registration: email and username). */
+  /** The account the keys are for (its username), named in the saved recovery phrase. */
+  account: () => string
+  /** Fields above the password (registration: the username). */
   leadingFields?: ReactNode
   /** Validate the leading fields; false keeps the user on the first step. */
   validateLeading?: () => Promise<boolean>
-  onKeysConfirmed: (keys: RegistrationKeys) => Promise<void>
+  onKeysConfirmed: (keys: AccountKeys) => Promise<void>
 }) {
   const { t } = useTranslation()
   const [step, setStep] = useState<Step>('password')
-  const [keys, setKeys] = useState<RegistrationKeys | null>(null)
+  const [keys, setKeys] = useState<AccountKeys | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -79,7 +78,7 @@ export function NewKeysWizard({
     setError(null)
     setStep('generating')
     try {
-      setKeys(await generateAccountKeys(password, email()))
+      setKeys(await generateAccountKeys(password))
       setStep('phrase')
     } catch {
       setError(t('auth.errors.keyGenerationFailed'))
@@ -101,7 +100,7 @@ export function NewKeysWizard({
   if (keys && step === 'phrase') {
     return (
       <AuthLayout title={t('recoveryPhrase.title')} description={t('recoveryPhrase.description')} width="md">
-        <ShowRecoveryPhrase mnemonic={keys.mnemonic} email={email()} onContinue={() => setStep('confirm')} />
+        <ShowRecoveryPhrase mnemonic={keys.mnemonic} account={account()} onContinue={() => setStep('confirm')} />
       </AuthLayout>
     )
   }

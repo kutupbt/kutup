@@ -47,7 +47,8 @@
       "passwordRequired": "Bir parola girin.",
       "passwordsDiffer": "Parolalar eşleşmiyor.",
       "passwordTooWeak": "Daha güçlü bir parola seçin — daha uzun ve yaygın bir sözcük ya da desen olmayan.",
-      "username": "3–32 karakter: küçük harf, rakam, _ ve -."
+      "username": "3–32 karakter: küçük harf, rakam, _ ve -.",
+      "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
@@ -80,7 +81,8 @@
     "totpDescription": "Doğrulayıcı uygulamanızdaki 6 haneli kodu girin.",
     "totpCode": "Doğrulama kodu",
     "verify": "Doğrula",
-    "useAnotherAccount": "Başka bir hesap kullan"
+    "useAnotherAccount": "Başka bir hesap kullan",
+    "nameHint": "Kullanıcı adınız veya Kutup adresiniz."
   },
   "newKeys": {
     "continue": "Devam",
@@ -94,7 +96,7 @@
     "warningTitle": "Şimdi not alın",
     "warning": "Bu ifade yalnızca bir kez gösterilir. Bu ifade ya da parolanız olmadan kimse — sunucunuzun yöneticisi bile — dosyalarınızı kurtaramaz.",
     "download": "Metin olarak indir",
-    "fileHeader": "{{email}} için Kutup kurtarma ifadesi. Gizli ve çevrimdışı saklayın.",
+    "fileHeader": "{{account}} için Kutup kurtarma ifadesi. Gizli ve çevrimdışı saklayın.",
     "saved": "Kurtarma ifademi kaydettim",
     "confirmTitle": "Kurtarma ifadenizi doğrulayın",
     "confirmDescription": "Kaydettiğinizi göstermek için üç sözcüğünü girin.",
@@ -114,7 +116,7 @@
   },
   "firstLogin": {
     "title": "Hesabınızın kurulumunu tamamlayın",
-    "description": "Bir yönetici sizin için {{email}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
+    "description": "Bir yönetici sizin için {{name}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
   },
   "recover": {
     "title": "Hesabınızı kurtarın",
@@ -893,5 +895,20 @@
       "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
       "openIssue": "Konuyu GitHub'da aç"
     }
+  },
+  "rebind": {
+    "title": "Hesabınız için bir adım daha",
+    "description": "Kutup artık sizi e-posta ile değil kullanıcı adınızla ({{name}}) oturum açtırıyor. Şifreleme anahtarlarınız bir kez, burada tarayıcınızda taşınır: çalışmaya devam etmesi için kurtarma ifadenizi onaylayın.",
+    "phrase": "Kurtarma ifadesi",
+    "phraseHint": "Hesabınızı oluştururken kaydettiğiniz 24 kelime.",
+    "confirm": "Onayla ve güncelle",
+    "wrongPhrase": "Bu kelimeler bu hesabın kurtarma ifadesi değil.",
+    "noPhrase": "Kurtarma ifadem yok",
+    "noPhraseTitle": "Yeni bir kurtarma ifadesi oluştur",
+    "noPhraseDescription": "Eski ifadeniz çalışmayı bırakır. Yenisini yazın; parolanızı unutursanız hesabınıza dönmenin tek yolu budur.",
+    "later": "Sonra",
+    "laterHint": "Bir sonraki oturum açışınızda yeniden sorulur.",
+    "done": "Hesabınız güncellendi. Artık kullanıcı adınızla oturum açıyorsunuz.",
+    "failed": "Güncelleme tamamlanamadı. Hiçbir şey değişmedi; yeniden deneyin."
   }
 }
