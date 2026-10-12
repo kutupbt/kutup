@@ -56,9 +56,10 @@ export function useAutoLockMinutes(): AutoLockMinutes {
 
 /**
  * What opens a vault locked in this tab with its key kept in the account:
- * the account password again (as Proton Pass's password lock), or a click.
+ * the account password again (as Proton Pass's password lock), the
+ * account's PIN (its PIN lock, `sync/pin.ts`), or a click.
  */
-export type UnlockMode = 'password' | 'click'
+export type UnlockMode = 'password' | 'pin' | 'click'
 export const DEFAULT_UNLOCK_MODE: UnlockMode = 'password'
 const MODE_KEY = 'kutup-pass-unlock-mode'
 let currentMode: UnlockMode = DEFAULT_UNLOCK_MODE
@@ -66,7 +67,7 @@ let currentMode: UnlockMode = DEFAULT_UNLOCK_MODE
 export function unlockMode(): UnlockMode {
   try {
     const stored = localStorage.getItem(MODE_KEY)
-    if (stored === 'password' || stored === 'click') return stored
+    if (stored === 'password' || stored === 'pin' || stored === 'click') return stored
   } catch {
     // Storage blocked: the default.
   }

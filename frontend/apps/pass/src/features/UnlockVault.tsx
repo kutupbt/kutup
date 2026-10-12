@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ReauthLockedError, verifyAccountPassword } from '@kutup/session/reauth'
+import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -13,7 +14,8 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { keptKey, useKeepVaultKey, useVaultSecrets } from '../drive/secrets'
 import { vaultTitle, type VaultFile } from '../drive/vaults'
-import { unlockMode } from '../sync/autoLock'
+import { setUnlockMode, unlockMode, type UnlockMode } from '../sync/autoLock'
+import { isPin, PIN_LENGTH, verifyPin } from '../sync/pin'
 import { clearLocked, freshKeys, openVault, wasLocked } from '../sync/openVaults'
 import { VaultError } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
@@ -21,19 +23,20 @@ import { KeyFileInput } from './KeyFileInput'
 
 type Attempt = 'trying' | 'form'
 
-/** A vault locked in this tab, its key kept: the account password again, or a click. */
+/** A vault locked in this tab, its key kept: the account password again, the PIN, or a click. */
 function KeptUnlock({
   mode,
   pending,
-  accountPassword,
-  setAccountPassword,
+  secret,
+  setSecret,
   onUnlock,
 }: {
-  mode: 'password' | 'click'
+  mode: UnlockMode
   pending: boolean
-  accountPassword: string
-  setAccountPassword: (value: string) => void
-  onUnlock: () => void
+  /** The account password or the PIN, as typed. */
+  secret: string
+  setSecret: (value: string) => void
+  onUnlock: (secret: string) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -43,20 +46,50 @@ function KeptUnlock({
           className="space-y-2"
           onSubmit={(e) => {
             e.preventDefault()
-            if (accountPassword) onUnlock()
+            if (secret) onUnlock(secret)
           }}
         >
           <Field label={t('unlock.accountPassword')} description={t('unlock.accountPasswordDescription')}>
-            {(field) => (
-              <PasswordInput {...field} value={accountPassword} onChange={(e) => setAccountPassword(e.target.value)} autoComplete="current-password" autoFocus />
-            )}
+            {(field) => <PasswordInput {...field} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="current-password" autoFocus />}
           </Field>
-          <Button type="submit" className="w-full" loading={pending} disabled={!accountPassword}>
+          <Button type="submit" className="w-full" loading={pending} disabled={!secret}>
             {t('unlock.withPassword')}
           </Button>
         </form>
+      ) : mode === 'pin' ? (
+        <form
+          className="space-y-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (isPin(secret)) onUnlock(secret)
+          }}
+        >
+          <Field label={t('unlock.pin')} description={t('unlock.pinDescription')}>
+            {(field) => (
+              <PasswordInput
+                {...field}
+                value={secret}
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={PIN_LENGTH}
+                className="text-center font-mono tracking-[0.5em]"
+                disabled={pending}
+                autoFocus
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '').slice(0, PIN_LENGTH)
+                  setSecret(digits)
+                  // As Proton Pass: the sixth digit sends it.
+                  if (isPin(digits) && !pending) onUnlock(digits)
+                }}
+              />
+            )}
+          </Field>
+          <Button type="submit" className="w-full" loading={pending} disabled={!isPin(secret)}>
+            {t('unlock.withPin')}
+          </Button>
+        </form>
       ) : (
-        <Button className="w-full" loading={pending} onClick={onUnlock}>
+        <Button className="w-full" loading={pending} onClick={() => onUnlock('')}>
           {t('unlock.withSignIn')}
         </Button>
       )}
@@ -82,7 +115,8 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [kept, setKept] = useState<VaultKeyInput | null>(null)
-  const [accountPassword, setAccountPassword] = useState('')
+  const [keptSecret, setKeptSecret] = useState('')
+  const [mode, setMode] = useState<UnlockMode>(unlockMode)
   const tried = useRef<string | null>(null)
 
   const fileId = vault.file.id
@@ -149,36 +183,53 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
       {notice ? <Alert variant="warn">{notice}</Alert> : null}
       {kept ? (
         <KeptUnlock
-          mode={unlockMode()}
+          mode={mode}
           pending={pending}
-          accountPassword={accountPassword}
-          setAccountPassword={setAccountPassword}
-          onUnlock={() => {
+          secret={keptSecret}
+          setSecret={setKeptSecret}
+          onUnlock={(secret) => {
             setPending(true)
             setError(null)
-            const check = unlockMode() === 'password' ? verifyAccountPassword(accountPassword) : Promise.resolve(true)
-            check
-              .then(async (ok) => {
-                if (!ok) {
+            void (async () => {
+              try {
+                if (mode === 'password' && !(await verifyAccountPassword(secret))) {
                   setError(t('unlock.wrongAccountPassword'))
                   return
                 }
+                if (mode === 'pin') {
+                  const check = await verifyPin(secret)
+                  if (check.result === 'wrong') {
+                    setError(t('unlock.wrongPin', { count: check.attemptsLeft }))
+                    return
+                  }
+                  if (check.result === 'signedOut') {
+                    toast.error(t('unlock.pinSignedOut'))
+                    await signOut()
+                    return
+                  }
+                  if (check.result === 'noPin') {
+                    // Removed, perhaps on another device: the password again.
+                    setUnlockMode('password')
+                    setMode('password')
+                    setError(t('unlock.pinRemoved'))
+                    return
+                  }
+                }
                 await openVault(vault, kept, session.userId)
                 clearLocked(fileId)
-              })
-              .catch((failure) =>
+              } catch (failure) {
                 setError(
                   failure instanceof ReauthLockedError
                     ? t('unlock.paused')
                     : failure instanceof VaultError
                       ? t('unlock.keptStale')
                       : t('unlock.checkUnreachable'),
-                ),
-              )
-              .finally(() => {
-                setAccountPassword('')
+                )
+              } finally {
+                setKeptSecret('')
                 setPending(false)
-              })
+              }
+            })()
           }}
         />
       ) : null}

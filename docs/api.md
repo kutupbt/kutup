@@ -1476,6 +1476,36 @@ that does not exist, is in the trash, or the caller cannot open.
 Forgets the caller's secret for the vault (the vault is untouched).
 **Response:** `204`.
 
+The PIN lock (docs/plans/pass.md, "The PIN"): six digits per account, kept
+as a bcrypt hash and checked only here. It releases no key; the server's part
+is the limit of three tries per sign-in. **Auth:** Bearer JWT for all four.
+
+### GET /api/pass/pin
+
+`{set}`: whether the account has a PIN.
+
+### PUT /api/pass/pin
+
+**Body:** `{loginKey, pin}`. Sets or changes the PIN; `loginKey` is checked
+as for `POST /api/user/reauth` (same lockout and rate limit). Resets the
+wrong-PIN count of every sign-in. **Response:** `204`, `400` unless `pin` is six digits, `401`
+for another password, `429` during the lockout.
+
+### DELETE /api/pass/pin
+
+**Body:** `{loginKey}`, checked as above. **Response:** `204` (also when
+there was none), `401`, `429`.
+
+### POST /api/pass/pin/verify
+
+**Body:** `{pin}`. **Response:** `204` when right (this sign-in's wrong-PIN
+count starts again); `403 {error: "wrongPin", attemptsLeft}`; `403 {error:
+"signedOut", attemptsLeft: 0}` on the third wrong PIN in a row, which ends the
+caller's whole sign-in (as `POST /api/auth/logout`); `404 {error: "noPin"}`.
+The count is per sign-in (the root session and the app sessions forked from
+it), each try is reserved before the check so parallel tries get no more than
+three, and other sign-ins neither add to it nor clear it.
+
 ---
 
 ## Photos
