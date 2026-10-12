@@ -136,6 +136,8 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
 ./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
 KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
+KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against OpenSSH (Kutup Pass K3b)
+pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves, merges (after build:wasm)
 ```
 
 The backup integration script owns a disposable Compose project and covers the
@@ -285,8 +287,9 @@ kutup/
 │   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
 │   ├── kutup-federation-proto/ # Shared authenticated federation types
-│   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults and their three-way merge
+│   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults, their edits and three-way merge
 │   │   └── vendor/keepass/  # Patched copy of the `keepass` crate (see its KUTUP.md)
+│   ├── kutup-pass-wasm/     # Browser bindings for Kutup Pass (frontend/wasm/pass-wasm)
 │   ├── kutup-chat-core/     # Standalone libsignal/OpenMLS engine; native + WASM
 │   └── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
 ├── frontend/

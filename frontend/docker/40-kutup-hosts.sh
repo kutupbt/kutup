@@ -1,7 +1,7 @@
 #!/bin/sh
 # Writes the nginx site for the Kutup web apps and the editor sandbox, one
 # server block per hostname, from the same settings kutup-server reads:
-# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS}_URL, or KUTUP_BASE_DOMAIN for
+# KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS,MAIL,PASS}_URL, or KUTUP_BASE_DOMAIN for
 # https://<app>.<domain>. The reverse proxy in front terminates TLS and must
 # pass the Host header through.
 set -eu
@@ -33,6 +33,7 @@ maps=$(origin_of maps KUTUP_MAPS_URL)
 photos=$(origin_of photos KUTUP_PHOTOS_URL)
 contacts=$(origin_of contacts KUTUP_CONTACTS_URL)
 mail=$(origin_of mail KUTUP_MAIL_URL)
+pass=$(origin_of pass KUTUP_PASS_URL)
 
 conf=/etc/nginx/conf.d/kutup.conf
 {
@@ -45,7 +46,7 @@ server {
 }
 NGINX
   editor_origin=$(printf '%s' "$editor" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
-  for app in account drive chat maps photos office contacts mail; do
+  for app in account drive chat maps photos office contacts mail pass; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
@@ -60,6 +61,14 @@ NGINX
     images="'self' data: blob:"
     if [ "$app" = mail ]; then images="$images https:"; fi
     app_csp="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src $images; media-src 'self' blob:; frame-src $frames; frame-ancestors 'self'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:"
+    frame_options=SAMEORIGIN
+    # Pass holds open vaults: no inline or eval'd script (its page loads its
+    # theme and reload guard as files; vite's strictCsp), WASM only through
+    # 'wasm-unsafe-eval', and nothing may frame it.
+    if [ "$app" = pass ]; then
+      app_csp="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'; connect-src 'self' wss: blob:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"
+      frame_options=DENY
+    fi
     cat <<NGINX
 server {
     listen 80;
@@ -68,27 +77,27 @@ server {
     index index.html;
     add_header X-Content-Type-Options nosniff always;
     add_header Content-Security-Policy "$app_csp" always;
-    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Frame-Options $frame_options always;
     add_header Referrer-Policy same-origin always;
 
     # The Rust runtimes live in directories named for their content hash
     # (frontend/packages/config/vite.ts), which the bundle names: a new
     # build is a new URL, so they are cached for good, like /assets/.
-    location ~ "^/(crypto|chat)-wasm/[0-9a-f]{16}/" {
+    location ~ "^/(crypto|chat|pass)-wasm/[0-9a-f]{16}/" {
         try_files \$uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     # Anything else there (none is expected) is revalidated.
-    location ~ ^/(crypto|chat)-wasm/ {
+    location ~ ^/(crypto|chat|pass)-wasm/ {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     # Vite's content-hashed bundles.
@@ -97,7 +106,7 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
     }
 
     location / {
@@ -105,7 +114,7 @@ server {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "$app_csp" always;
-        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Frame-Options $frame_options always;
         add_header Referrer-Policy same-origin always;
     }
 }
@@ -146,4 +155,4 @@ server {
 }
 NGINX
 } > "$conf"
-echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts mail=$mail editor=$editor"
+echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts mail=$mail pass=$pass editor=$editor"

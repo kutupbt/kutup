@@ -10,9 +10,12 @@
 //! Vaults are `keepass::Database` values from the patched copy of the
 //! `keepass` crate in `crates/kutup-pass/vendor/keepass`, re-exported here as [`keepass`].
 
+pub mod edit;
 pub mod kdbx;
 pub mod merge;
 mod refs;
+pub mod ssh;
+pub mod view;
 
 pub use kdbx::{key_file_secret, open, save, KdbxError, VaultKey};
 pub use keepass;

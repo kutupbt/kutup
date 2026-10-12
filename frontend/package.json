@@ -8,8 +8,10 @@
   "scripts": {
     "build:crypto-wasm": "bash ../scripts/build-crypto-wasm.sh",
     "build:chat-wasm": "bash ../scripts/build-chat-wasm.sh",
-    "build:wasm": "pnpm run build:crypto-wasm && pnpm run build:chat-wasm",
+    "build:pass-wasm": "bash ../scripts/build-pass-wasm.sh",
+    "build:wasm": "pnpm run build:crypto-wasm && pnpm run build:chat-wasm && pnpm run build:pass-wasm",
     "test:crypto-wasm": "node ../scripts/test-crypto-wasm.mjs",
+    "test:pass-wasm": "node ../scripts/test-pass-wasm.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "lint": "eslint .",

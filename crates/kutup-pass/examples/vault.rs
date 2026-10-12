@@ -8,9 +8,15 @@
 //! VAULT_PASSWORD=… cargo run -p kutup-pass --example vault -- get FILE TITLE FIELD
 //! VAULT_PASSWORD=… cargo run -p kutup-pass --example vault -- history FILE TITLE FIELD
 //! VAULT_PASSWORD=… cargo run -p kutup-pass --example vault -- review FILE TITLE
+//! VAULT_PASSWORD=… cargo run -p kutup-pass --example vault -- ssh-key FILE TITLE KEY_FILE PASSPHRASE
 //! ```
+//!
+//! `ssh-key` adds an entry in KeePassXC's KeeAgent form: the OpenSSH private
+//! key file attached, its passphrase as the entry's password.
 
 use std::process::ExitCode;
+
+use base64::Engine as _;
 
 use kutup_pass::keepass::db::{CustomDataValue, Entry, EntryId, Value};
 use kutup_pass::keepass::Database;
@@ -116,7 +122,57 @@ fn run(args: &[String]) -> Result<String, String> {
                 },
             )
         }
-        _ => Err("usage: vault new|set|get|history|review FILE …".into()),
+        [cmd, file, title, key_file, passphrase] if cmd == "ssh-key" => {
+            let mut db = load(file)?;
+            let key = std::fs::read(key_file).map_err(|e| format!("{key_file}: {e}"))?;
+            let settings = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<EntrySettings><AllowUseOfSshKey>true</AllowUseOfSshKey><AddAtDatabaseOpen>true</AddAtDatabaseOpen><RemoveAtDatabaseClose>true</RemoveAtDatabaseClose><UseConfirmConstraintWhenAdding>false</UseConfirmConstraintWhenAdding><UseLifetimeConstraintWhenAdding>false</UseLifetimeConstraintWhenAdding><LifetimeConstraintDuration>600</LifetimeConstraintDuration><Location><SelectedType>attachment</SelectedType><AttachmentName>id_key</AttachmentName><SaveAttachmentToTempFile>false</SaveAttachmentToTempFile><FileName/></Location></EntrySettings>";
+            let root = kutup_pass::view::view(&db).root_group_id;
+            let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+            let fields = vec![
+                kutup_pass::view::FieldView {
+                    key: "Title".into(),
+                    value: title.clone(),
+                    protected: false,
+                },
+                kutup_pass::view::FieldView {
+                    key: "Password".into(),
+                    value: passphrase.clone(),
+                    protected: true,
+                },
+            ];
+            let id = kutup_pass::edit::apply(
+                &mut db,
+                &kutup_pass::edit::Op::CreateEntry {
+                    group_id: root,
+                    entry: kutup_pass::edit::EntryInput {
+                        fields,
+                        ..Default::default()
+                    },
+                },
+                now,
+            )
+            .map_err(|e| e.to_string())?
+            .id
+            .ok_or("no id")?;
+            for (name, data) in [
+                ("id_key", key.as_slice()),
+                ("KeeAgent.settings", settings.as_bytes()),
+            ] {
+                kutup_pass::edit::apply(
+                    &mut db,
+                    &kutup_pass::edit::Op::AddAttachment {
+                        entry_id: id.clone(),
+                        name: name.into(),
+                        data: b64(data),
+                    },
+                    now,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            store(file, &db)?;
+            Ok(String::new())
+        }
+        _ => Err("usage: vault new|set|get|history|review|ssh-key FILE …".into()),
     }
 }
 

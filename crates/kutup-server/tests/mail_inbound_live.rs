@@ -2445,7 +2445,20 @@ fn shared_mailboxes() {
         code(set_members(alice_only.clone(), json!({}))).1,
         "newKeyNeeded"
     );
-    let second = mail_key::generate_address_key(&hr, now + 1).unwrap();
+    // Newer than the first key, but never ahead of the clock: a key dated
+    // after its own self-signatures (made at the real time) is unusable to
+    // GnuPG ("public key is 1 second newer than the signature").
+    let later = loop {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        if secs > now {
+            break secs;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let second = mail_key::generate_address_key(&hr, later).unwrap();
     let r = set_members(
         alice_only,
         json!({ "newKey": {

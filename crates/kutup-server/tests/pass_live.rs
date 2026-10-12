@@ -226,3 +226,68 @@ fn vault_secrets() {
     .unwrap();
     assert_eq!(list(&c, &base, &owner).len(), 0);
 }
+
+#[test]
+fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let user = register(&c, &base);
+    // The login key from the public preflight, as the app derives it.
+    let preflight: Value = c
+        .get(format!("{base}/api/auth/login/preflight"))
+        .query(&[("email", &user.email)])
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let salt = account_envelope::decode_canonical_b64(
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+    )
+    .unwrap();
+    let derive = |password: &str| {
+        let keys = kutup_crypto::kdf::derive_account_protection_keys(
+            password,
+            &salt,
+            kutup_crypto::kdf::AccountProtectionParameters::V1,
+        )
+        .unwrap();
+        b64(keys.login_key.as_slice())
+    };
+    let reauth = |login_key: &str| {
+        bearer(c.post(format!("{base}/api/user/reauth")), &user.token)
+            .json(&json!({ "loginKey": login_key }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    let right = derive("integrity-pw-123456");
+    let wrong = derive("not-the-password");
+    assert_eq!(reauth(&right), StatusCode::NO_CONTENT);
+    assert_eq!(reauth(&wrong), StatusCode::UNAUTHORIZED);
+    // Signed out: refused.
+    assert_eq!(
+        c.post(format!("{base}/api/user/reauth"))
+            .json(&json!({ "loginKey": right }))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): misses
+    // here count, and then even the right password waits.
+    let mut locked = false;
+    for _ in 0..10 {
+        if reauth(&wrong) == StatusCode::TOO_MANY_REQUESTS {
+            locked = true;
+            break;
+        }
+    }
+    assert!(locked, "the lockout never came");
+    assert_eq!(reauth(&right), StatusCode::TOO_MANY_REQUESTS);
+}

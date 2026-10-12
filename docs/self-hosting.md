@@ -284,13 +284,13 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
-| `frontend` | The web apps — account, Drive, Chat, Photos, Maps and Office — and the OnlyOffice editor sandbox, each on its own hostname (Nginx) |
+| `frontend` | The web apps — account, Drive, Chat, Photos, Maps, Office, Contacts, Mail and Pass — and the OnlyOffice editor sandbox, each on its own hostname (Nginx) |
 | `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
 
 **The web apps and their hostnames.** Each app has its own origin:
-`account.`, `drive.`, `chat.`, `photos.`, `maps.`, `office.` and `contacts.`
-under `KUTUP_BASE_DOMAIN` (or the explicit
-`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE,CONTACTS}_URL`). An eighth name,
+`account.`, `drive.`, `chat.`, `photos.`, `maps.`, `office.`, `contacts.`,
+`mail.` and `pass.` under `KUTUP_BASE_DOMAIN` (or the explicit
+`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE,CONTACTS,MAIL,PASS}_URL`). One more name,
 `editor.` (`KUTUP_EDITOR_URL`), is not an app: it is the sandbox the
 OnlyOffice editor runs in, which holds no session and no keys. The backend and the
 `frontend` container read the same settings: the backend publishes the map to
@@ -899,6 +899,15 @@ storage. An existing deployment that names its apps one by one must add
 `KUTUP_CONTACTS_URL` (or set `KUTUP_BASE_DOMAIN`), point `contacts.` at the
 server and add it to the certificate; with `docker-compose.acme.yml` the name
 is requested automatically.
+
+Kutup Pass (`KUTUP_PASS_URL`, e.g. `pass.example.org`, the same frontend
+image) is the password manager (`docs/plans/pass.md`). Its vaults are KeePass
+files (`.kdbx`) in Drive, so they share the Drive storage quota, open in
+KeePassXC through `kutup sync`, and need nothing more on the server than the
+vault secrets it keeps sealed. An existing deployment that names its apps one
+by one must add `KUTUP_PASS_URL` (or set `KUTUP_BASE_DOMAIN`), point `pass.`
+at the server and add it to the certificate; with `docker-compose.acme.yml`
+the name is requested automatically.
 
 The Photos app (`KUTUP_PHOTOS_URL`, e.g. `photos.example.org`, the same
 frontend image) shows people's photos and videos by when and where they were
