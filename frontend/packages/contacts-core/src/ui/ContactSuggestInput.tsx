@@ -122,7 +122,7 @@ export const ContactSuggestInput = forwardRef<HTMLInputElement, Props>(function 
               className={cn('cursor-pointer rounded-sm px-2 py-1.5 text-sm', i === active && 'bg-accent text-accent-foreground')}
             >
               <span className="block truncate font-medium">{match.name}</span>
-              <span className="block truncate text-xs text-muted-foreground">{match.address}</span>
+              <span className="block truncate text-xs text-muted-foreground">{match.hint ?? match.address}</span>
             </li>
           ))}
         </ul>

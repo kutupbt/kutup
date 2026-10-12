@@ -245,7 +245,9 @@
     "moreOptions": "Diğer seçenekler",
     "plainText": "Düz metin",
     "rightToLeft": "Sağdan sola",
-    "emoji": "Emoji ekle"
+    "emoji": "Emoji ekle",
+    "contactGroup_one": "Kişi grubu · {{count}} üye",
+    "contactGroup_other": "Kişi grubu · {{count}} üye"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -550,7 +552,12 @@
     "delaySendHint": "Gönder'den sonra iletiyi ne kadar süre geri alabileceğiniz.",
     "delaySendSeconds_one": "{{count}} saniye",
     "delaySendSeconds_other": "{{count}} saniye",
-    "delaySendOff": "Kapalı"
+    "delaySendOff": "Kapalı",
+    "mailtoTitle": "Varsayılan e-posta uygulaması",
+    "mailtoHint": "E-posta bağlantılarını (mailto:) Kutup Posta'da açın. Tarayıcınız onay ister.",
+    "mailtoAction": "Varsayılan yap",
+    "mailtoAsked": "Tarayıcınız e-posta bağlantılarını Kutup Posta'da açmak için onay isteyecek.",
+    "mailtoUnsupported": "Bu tarayıcı e-posta bağlantılarını bir web uygulamasında açamıyor."
   },
   "senders": {
     "title": "Engelle ve izin ver",
