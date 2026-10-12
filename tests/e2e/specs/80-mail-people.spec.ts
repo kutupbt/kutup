@@ -107,7 +107,7 @@ test('saving senders to contacts, person cards, a dark body and folded quotes', 
   const second = `İkinci adres ${tag}`
   await write(carolMail, `${alice.username}@${domain}`, second, 'Bu da Bob’un iş adresi.')
   await aliceMail.goto(appUrl('mail', '/inbox'))
-  await aliceMail.getByRole('link', { name: new RegExp(second) }).click()
+  await openWhenArrived(aliceMail, new RegExp(second))
   await aliceMail.getByRole('button', { name: 'Save to contacts' }).click()
   const existing = aliceMail.getByRole('dialog', { name: 'Save to contacts' })
   await existing.getByRole('radio', { name: /Add to a contact/ }).click()
