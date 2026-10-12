@@ -1103,7 +1103,7 @@ pub async fn batch_messages(
     // long row lock or one long statement. A failure part way leaves the
     // chunks before it done, as Proton's background tasks do.
     let mut updated = 0;
-    for chunk in ids.chunks(BATCH_CHUNK) {
+    for chunk in ids.chunks(state.config.mail_batch_chunk) {
         updated += update_ids(&state, user_id, owner, chunk, &change).await?;
     }
     if ids.is_empty() {
@@ -1112,9 +1112,6 @@ pub async fn batch_messages(
     }
     Ok(Json(UpdatedMailMessages { updated }))
 }
-
-/// Messages one statement of a batch changes at most.
-const BATCH_CHUNK: usize = 5_000;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

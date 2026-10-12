@@ -1100,8 +1100,10 @@ first, at most 200 per page (default 50).
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
 `protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
 Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
-`next` as `before` for the next page; it is absent on the last. `400` for an
-unknown folder or cursor.
+`next` as `before` for the next page; it is absent on the last. Instead,
+`page` (from 0) pages by number, `limit` to a page (Proton's paging), and the
+answer carries `total`, how many the place holds with the filters; `page` with
+`before` is `400`. `400` for an unknown folder or cursor.
 
 ### GET /api/mail/messages/:id/content
 
@@ -1116,6 +1118,15 @@ the address key. `404` unless it is the caller's.
 can go to `inbox`, `archive`, `spam` or `trash`; sent mail to `sent`,
 `archive` or `trash`; drafts stay in Drafts. Moving to Trash marks read.
 **Response:** `{ "updated": 3 }`, counting only the messages that changed.
+
+### POST /api/mail/messages/batch
+
+`{ "place", "seen"?, "folder"?, "customFolder"?, "addLabels"?, "removeLabels"?, "group"? }`:
+the same change as `PATCH /api/mail/messages`, on every message of a place
+(Proton's select all): a folder, `starred`, `folder:<id>` or `label:<id>`; All
+mail is `400`. Only the caller's mailbox, or a shared one they are a member of.
+Runs in chunks (`MAIL_BATCH_CHUNK`, 5,000 messages), each its own transaction.
+**Response:** `{ "updated": 1234 }`.
 
 ### POST /api/mail/messages/delete
 
