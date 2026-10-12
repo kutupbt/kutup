@@ -12,7 +12,7 @@ export type Destination = MoveTarget | { folder: string; name: string }
 
 /** The moves a folder offers: home, archive, spam, trash, never where the mail already is; drafts are deleted, not filed. */
 export function movesFor(folder: FolderId): MoveTarget[] {
-  if (folder === 'drafts') return []
+  if (folder === 'drafts' || folder === 'scheduled') return []
   const all: MoveTarget[] = ['inbox', 'archive', 'spam', 'trash']
   return all.filter((target) => target !== folder && !(folder === 'sent' && target === 'spam'))
 }

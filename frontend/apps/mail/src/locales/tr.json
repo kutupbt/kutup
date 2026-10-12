@@ -25,7 +25,8 @@
     "archive": "Arşiv",
     "spam": "İstenmeyen",
     "trash": "Çöp",
-    "all": "Tüm postalar"
+    "all": "Tüm postalar",
+    "scheduled": "Planlanan"
   },
   "empty": {
     "inbox": "Gelen kutunuz boş",
@@ -884,5 +885,22 @@
     "remove": "{{address}} adresini kaldır",
     "removeShort": "Kaldır",
     "removed": "{{address}} adresinden gelen görseller yine sorulacak."
+  },
+  "schedule": {
+    "menu": "Gönderimi planla",
+    "tomorrow": "Yarın sabah",
+    "monday": "Pazartesi sabah",
+    "custom": "Özel…",
+    "customTitle": "Gönderimi planla",
+    "customHint": "İletinin ne zaman gideceğini seçin: bir dakika ile 90 gün sonrası arası.",
+    "date": "Tarih",
+    "time": "Saat",
+    "outOfRange": "Bir dakika ile 90 gün sonrası arasında bir zaman seçin.",
+    "schedule": "Planla",
+    "scheduledFor": "İleti {{date}} için planlandı.",
+    "undone": "Planlama geri alındı.",
+    "rowAt": "{{date}} gidecek",
+    "willSend": "Bu ileti {{date}} tarihinde gönderilecek.",
+    "edit": "Düzenle"
   }
 }

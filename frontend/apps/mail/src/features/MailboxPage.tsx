@@ -1,4 +1,4 @@
-import { Archive, Ban, Check, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
+import { Archive, Ban, Check, Clock, Copy, Folder as FolderIcon, FolderInput, FolderPlus, Inbox as InboxIcon, Plus, Tag, Keyboard, Mail, MailOpen, OctagonAlert, Paperclip, Search, Star, StarOff, Trash2, UserPlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -765,9 +765,17 @@ export function MailboxPage() {
                 const meta = (
                   <>
                     {attachments > 0 ? <Paperclip className="size-3.5 text-muted-foreground" aria-label={t('list.hasAttachments')} /> : null}
-                    <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
-                      {formatFileDate(message.receivedAt, i18n.language)}
-                    </span>
+                    {message.scheduledAt ? (
+                      // Scheduled: when it goes, not when it was written.
+                      <span className="flex shrink-0 items-center gap-1 text-xs text-primary" title={formatInstant(message.scheduledAt, i18n.language) ?? undefined}>
+                        <Clock className="size-3.5" aria-hidden />
+                        {t('schedule.rowAt', { date: formatFileDate(message.scheduledAt, i18n.language) })}
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-xs text-muted-foreground" title={formatInstant(message.receivedAt, i18n.language) ?? undefined}>
+                        {formatFileDate(message.receivedAt, i18n.language)}
+                      </span>
+                    )}
                   </>
                 )
                 const subjectLine = (

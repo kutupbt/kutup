@@ -16,7 +16,15 @@ use crate::handlers::{octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-pub(crate) const FOLDERS: [&str; 6] = ["inbox", "drafts", "sent", "archive", "spam", "trash"];
+pub(crate) const FOLDERS: [&str; 7] = [
+    "inbox",
+    "drafts",
+    "scheduled",
+    "sent",
+    "archive",
+    "spam",
+    "trash",
+];
 /// Messages one request may file or delete.
 const MAX_BATCH: usize = 500;
 const DEFAULT_PAGE: i64 = 50;
@@ -78,6 +86,11 @@ pub struct MailMessage {
     pub receipt_sent: bool,
     /// Its attached files (Proton's AttachmentsMetadata), for the list.
     pub attachments: Vec<crate::mail::headers::AttachmentMeta>,
+    /// A scheduled message (folder `scheduled`): when it is sent, and its
+    /// held send, to take it back with `POST /api/mail/outbox/{id}/cancel`.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub scheduled_at: Option<OffsetDateTime>,
+    pub outbox_id: Option<String>,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -243,6 +256,8 @@ pub(crate) struct Row {
     unsubscribable: bool,
     receipt_sent: bool,
     attachments: sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
+    scheduled_at: Option<OffsetDateTime>,
+    outbox_id: Option<Uuid>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -254,6 +269,10 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
     reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
     unsubscribable, receipt_sent, attachments,
+    (SELECT o.deliver_at FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
+        AND o.state = 'pending') AS scheduled_at,
+    (SELECT o.id FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
+        AND o.state = 'pending') AS outbox_id,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -289,6 +308,8 @@ impl From<Row> for MailMessage {
             unsubscribable: row.unsubscribable,
             receipt_sent: row.receipt_sent,
             attachments: row.attachments.0,
+            scheduled_at: row.scheduled_at,
+            outbox_id: row.outbox_id.map(|id| id.to_string()),
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -1046,7 +1067,7 @@ async fn update_ids(
                  custom_folder = CASE WHEN $5::text IS NULL THEN custom_folder ELSE $6 END
               WHERE owner = $1 AND id = ANY($2)
                 AND ($5::text IS NULL OR (
-                      folder <> 'drafts' AND (
+                      folder NOT IN ('drafts', 'scheduled') AND (
                         $5 = 'custom'
                      OR (direction = 'inbound' AND $5 IN ('inbox', 'archive', 'spam', 'trash'))
                      OR (direction = 'outbound' AND $5 IN ('sent', 'archive', 'trash')))))",

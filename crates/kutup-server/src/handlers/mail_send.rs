@@ -18,6 +18,7 @@ use base64::Engine as _;
 use kutup_crypto::mail_key;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -100,6 +101,10 @@ pub struct SendMeta {
     pub mail: MailMeta,
     /// The draft this message was written in; deleted once sent.
     pub draft_id: Option<String>,
+    /// Scheduled send (Proton's): sent then, not now, from 1 minute to 90
+    /// days ahead; the draft waits in Scheduled.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub schedule_at: Option<OffsetDateTime>,
     /// Base64 key packets: `self` for the sender's copy, and one per Kutup
     /// recipient address.
     pub key_packets: BTreeMap<String, String>,
@@ -893,18 +898,45 @@ pub async fn send(
     let delay = crate::handlers::mail_settings::settings_of(&state, user_id)
         .await?
         .delay_send_seconds;
-    if delay > 0 && meta.from_group.is_none() {
-        if let Some(draft) = meta
-            .draft_id
-            .as_deref()
-            .and_then(|d| Uuid::parse_str(d).ok())
-        {
-            deliver(&state, user_id, user.is_admin, &parts, true).await?;
-            let held =
-                crate::mail::outbox::hold(&state, user_id, user.is_admin, draft, &parts, delay)
-                    .await?;
-            return Ok((StatusCode::ACCEPTED, Json(held)).into_response());
+    let draft = meta
+        .draft_id
+        .as_deref()
+        .and_then(|d| Uuid::parse_str(d).ok());
+    let until = match meta.schedule_at {
+        Some(at) => {
+            let now = OffsetDateTime::now_utc();
+            if at < now + time::Duration::minutes(1) || at > now + time::Duration::days(90) {
+                return Err(AppError::bad_request(
+                    "schedule from 1 minute to 90 days ahead",
+                ));
+            }
+            if draft.is_none() || meta.from_group.is_some() {
+                return Err(AppError::bad_request(
+                    "a saved draft of your own address is scheduled",
+                ));
+            }
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM mail_outbox WHERE user_id = $1 AND scheduled AND state = 'pending'",
+            )
+            .bind(user_id)
+            .fetch_one(&state.pool)
+            .await?;
+            if waiting >= crate::mail::outbox::MAX_SCHEDULED {
+                return Err(AppError::bad_request("100 scheduled messages at most")
+                    .with_details(json!({ "code": "scheduledLimit" })));
+            }
+            Some(crate::mail::outbox::Until::At(at))
         }
+        None if delay > 0 && meta.from_group.is_none() && draft.is_some() => {
+            Some(crate::mail::outbox::Until::Delay(delay))
+        }
+        None => None,
+    };
+    if let (Some(until), Some(draft)) = (until, draft) {
+        deliver(&state, user_id, user.is_admin, &parts, true).await?;
+        let held =
+            crate::mail::outbox::hold(&state, user_id, user.is_admin, draft, &parts, until).await?;
+        return Ok((StatusCode::ACCEPTED, Json(held)).into_response());
     }
     let result = deliver(&state, user_id, user.is_admin, &parts, false)
         .await?
@@ -1523,7 +1555,7 @@ pub(crate) async fn deliver(
             &state,
             crate::handlers::mail::Mailbox::Own(user_id),
             &[draft],
-            &["drafts"],
+            &["drafts", "scheduled"],
         )
         .await?;
     }
