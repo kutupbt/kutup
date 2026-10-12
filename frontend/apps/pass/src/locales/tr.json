@@ -1,12 +1,12 @@
 {
   "boot": {
-    "opening": "Parolalar açılıyor…",
-    "failedTitle": "Parolalar açılamadı",
+    "opening": "Kasa açılıyor…",
+    "failedTitle": "Kasa açılamadı",
     "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
-    "description": "Bu sayfa Parolalar'da yok."
+    "description": "Bu sayfa Kasa'da yok."
   },
   "nav": {
     "vaults": "Tüm kasalar",
@@ -27,7 +27,7 @@
     "myFiles": "Dosyalarım",
     "unnamedFolder": "Klasör",
     "password": "Kasa parolası",
-    "passwordDescription": "KeePass uygulamalarının sorduğu parola. “Kutup oturumumla aç” seçiliyse Parolalar ve kutup sync bunu sormaz.",
+    "passwordDescription": "KeePass uygulamalarının sorduğu parola. “Kutup oturumumla aç” seçiliyse Kasa ve kutup sync bunu sormaz.",
     "confirmPassword": "Kasa parolasını yineleyin",
     "mismatch": "Parolalar aynı değil.",
     "needsKey": "Bir kasanın parolası, anahtar dosyası ya da ikisi birden olmalı.",
@@ -57,7 +57,7 @@
     "description": "Kasanın parolasını ya da anahtar dosyasını girin.",
     "opening": "Kasa açılıyor…",
     "remember": "Kutup oturumumla aç",
-    "rememberDescription": "Kasanın anahtarını hesap anahtarınızla mühürleyip hesabınızda tutar: Parolalar ve kutup sync kasayı sormadan açar. KeePass uygulamaları yine sorar.",
+    "rememberDescription": "Kasanın anahtarını hesap anahtarınızla mühürleyip hesabınızda tutar: Kasa ve kutup sync kasayı sormadan açar. KeePass uygulamaları yine sorar.",
     "submit": "Aç",
     "wrongKey": "Bu parola ya da anahtar dosyası bu kasayı açmıyor.",
     "unreachable": "Kutup'a ulaşılamadı ve bu cihazda kasanın kopyası yok. Bağlantınızı denetleyin.",
