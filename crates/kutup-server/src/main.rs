@@ -381,6 +381,7 @@ async fn main() -> anyhow::Result<()> {
     mail::spawn_receiver(state.clone()).await?;
     // Auto-delete of old Trash and Spam, for accounts that turned it on.
     mail::retention::spawn(state.clone());
+    mail::outbox::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -684,6 +685,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/messages/empty",
             post(handlers::mail_settings::empty),
+        )
+        .route("/api/mail/outbox/:id", get(handlers::mail_outbox::status))
+        .route(
+            "/api/mail/outbox/:id/cancel",
+            post(handlers::mail_outbox::cancel),
         )
         .route(
             "/api/mail/image-senders",

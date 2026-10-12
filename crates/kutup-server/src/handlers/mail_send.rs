@@ -503,6 +503,12 @@ pub async fn update_draft(
 ) -> AppResult<Json<MailMessage>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    if crate::handlers::mail_outbox::draft_held(&state, id).await? {
+        return Err(
+            AppError::conflict("this draft is being sent; undo the send to change it")
+                .with_details(json!({ "code": "sending" })),
+        );
+    }
     let parts = read_parts(
         &mut multipart,
         &[("meta", 256 * 1024), ("body", MAX_DRAFT_BODY_BYTES)],
@@ -629,6 +635,12 @@ pub async fn add_draft_attachment(
 ) -> AppResult<Json<DraftAttachment>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
+    if crate::handlers::mail_outbox::draft_held(&state, draft).await? {
+        return Err(
+            AppError::conflict("this draft is being sent; undo the send to change it")
+                .with_details(json!({ "code": "sending" })),
+        );
+    }
     let parts = read_parts(&mut multipart, &[("part", MAX_ENCRYPTED_BYTES)]).await?;
     let part = parts
         .get("part")
@@ -772,6 +784,12 @@ pub async fn delete_draft_attachment(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
+    if crate::handlers::mail_outbox::draft_held(&state, draft).await? {
+        return Err(
+            AppError::conflict("this draft is being sent; undo the send to change it")
+                .with_details(json!({ "code": "sending" })),
+        );
+    }
     let attachment = Uuid::parse_str(&attachment).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
@@ -832,6 +850,7 @@ struct LocalCopy {
 /// shared data packet), `pgp0`, `pgp1`, … (PGP/MIME messages for outside
 /// recipients with keys, as `pgp` lists them) and, when other outside
 /// recipients remain, `mime` (the message in plaintext, for Stalwart).
+/// With undo send on, a saved draft's send is checked, then held (202).
 #[utoipa::path(
     post,
     path = "/api/mail/send",
@@ -840,6 +859,7 @@ struct LocalCopy {
     request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "meta, data, pgp0… and mime"),
     responses(
         (status = 200, description = "Sent", body = SendResult),
+        (status = 202, description = "Held for undo send (DelaySendSeconds): sent when the delay is up, unless taken back", body = crate::mail::outbox::HeldSend),
         (status = 409, description = "A recipient's key changed (code keyChanged, address)"),
         (status = 403, description = "Outside sending is off on this server (code outsideSendingOff), or paused for you (code sendingPaused)"),
         (status = 413, description = "Too large, or your storage quota exceeded"),
@@ -851,7 +871,8 @@ pub async fn send(
     State(state): State<AppState>,
     user: AuthUser,
     mut multipart: Multipart,
-) -> AppResult<Json<SendResult>> {
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
     let user_id = trusted_uuid(&user.user_id)?;
     let pgp_parts: Vec<String> = (0..MAX_RECIPIENTS).map(|i| format!("pgp{i}")).collect();
     let mut limits = vec![
@@ -865,7 +886,44 @@ pub async fn send(
             .map(|name| (name.as_str(), MAX_PGP_MESSAGE_BYTES)),
     );
     let parts = read_parts(&mut multipart, &limits).await?;
+    // Undo send (Proton's DelaySendSeconds): a saved draft from your own
+    // address is checked now and held; the outbox sends it when the delay
+    // is up, unless it is taken back.
     let meta: SendMeta = meta_part(&parts)?;
+    let delay = crate::handlers::mail_settings::settings_of(&state, user_id)
+        .await?
+        .delay_send_seconds;
+    if delay > 0 && meta.from_group.is_none() {
+        if let Some(draft) = meta
+            .draft_id
+            .as_deref()
+            .and_then(|d| Uuid::parse_str(d).ok())
+        {
+            deliver(&state, user_id, user.is_admin, &parts, true).await?;
+            let held =
+                crate::mail::outbox::hold(&state, user_id, user.is_admin, draft, &parts, delay)
+                    .await?;
+            return Ok((StatusCode::ACCEPTED, Json(held)).into_response());
+        }
+    }
+    let result = deliver(&state, user_id, user.is_admin, &parts, false)
+        .await?
+        .expect("a delivery, not a check");
+    Ok(Json(result).into_response())
+}
+
+/// Sends what `POST /api/mail/send` received (`parts`), now or from the
+/// outbox; with `check_only`, stops before anything is written or sent,
+/// having refused what the send would refuse.
+pub(crate) async fn deliver(
+    state: &AppState,
+    user_id: Uuid,
+    is_admin: bool,
+    parts: &BTreeMap<String, Vec<u8>>,
+    check_only: bool,
+) -> AppResult<Option<SendResult>> {
+    let state = state.clone();
+    let meta: SendMeta = meta_part(parts)?;
     let data = parts
         .get("data")
         .ok_or_else(|| AppError::bad_request("missing data"))?;
@@ -1044,14 +1102,7 @@ pub async fn send(
     // Outside recipients: PGP messages for those with keys, the plaintext
     // for the rest, each checked; then the sending limits.
     let bcc: Vec<&str> = checked.bcc.iter().map(|m| m.address.as_str()).collect();
-    let packages = pgp_packages(
-        &meta.pgp,
-        &parts,
-        &external,
-        &bcc,
-        &sender.address,
-        readable,
-    )?;
+    let packages = pgp_packages(&meta.pgp, parts, &external, &bcc, &sender.address, readable)?;
     let plain: Vec<String> = external
         .iter()
         .filter(|address| !packages.iter().any(|(to, _)| to.contains(address)))
@@ -1085,7 +1136,7 @@ pub async fn send(
             state.config.mail_outside_sending,
         )
         .await?
-        .allows(user.is_admin)
+        .allows(is_admin)
         {
             return Err(AppError::forbidden(
                 "this server does not send mail to outside addresses yet",
@@ -1093,6 +1144,10 @@ pub async fn send(
             .with_details(json!({ "code": "outsideSendingOff" })));
         }
         crate::mail::safety::check_send(&state, user_id, external.len() as i64).await?;
+    }
+
+    if check_only {
+        return Ok(None);
     }
 
     // Store every copy, then record them under the pool locks.
@@ -1473,7 +1528,7 @@ pub async fn send(
         .await?;
     }
     statuses.extend(results);
-    Ok(Json(SendResult {
+    Ok(Some(SendResult {
         message: row(&state, owner, id).await?,
         recipients: statuses,
     }))

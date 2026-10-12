@@ -57,7 +57,11 @@ test('Encrypt off (readable, signed, verified) and Sign off (end to end, unsigne
   await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
 
   // Bob: zero-access, signed by a verified sender, body readable.
-  await bobMail.reload()
+  // Held for undo send first: Bob's list shows it once it went.
+  await expect(async () => {
+    await bobMail.reload()
+    await expect(bobMail.getByRole('link', { name: new RegExp(readable) })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
   await bobMail.getByRole('link', { name: new RegExp(readable) }).click()
   await expect(bobMail.frameLocator('iframe[title="Message"]').last().getByText(`${readable} gövdesi`)).toBeVisible({ timeout: 60_000 })
   await expect(bobMail.getByRole('article').getByRole('img', { name: 'Signed by a verified sender; not end-to-end encrypted' })).toBeVisible({ timeout: 30_000 })
@@ -73,6 +77,10 @@ test('Encrypt off (readable, signed, verified) and Sign off (end to end, unsigne
   // The toast may be the last send's: wait for this composer to close.
   await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   await bobMail.goto(appUrl('mail', '/inbox'))
+  await expect(async () => {
+    await bobMail.reload()
+    await expect(bobMail.getByRole('link', { name: new RegExp(unsigned) })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
   await bobMail.getByRole('link', { name: new RegExp(unsigned) }).click()
   await expect(bobMail.frameLocator('iframe[title="Message"]').last().getByText(`${unsigned} gövdesi`)).toBeVisible({ timeout: 60_000 })
   await expect(bobMail.getByRole('article').getByRole('img', { name: 'End-to-end encrypted' })).toBeVisible()

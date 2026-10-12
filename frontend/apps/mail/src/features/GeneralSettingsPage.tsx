@@ -80,6 +80,26 @@ export function GeneralSettingsPage() {
             </SelectContent>
           </Select>
         </div>
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            <label htmlFor="delay-send" className="block text-sm font-medium">
+              {t('general.delaySend')}
+            </label>
+            <span className="block text-sm text-muted-foreground">{t('general.delaySendHint')}</span>
+          </span>
+          <Select value={String(settings.data.delaySendSeconds)} onValueChange={(value) => save({ delaySendSeconds: Number(value) })}>
+            <SelectTrigger id="delay-send" className="sm:w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[0, 5, 10, 20].map((seconds) => (
+                <SelectItem key={seconds} value={String(seconds)}>
+                  {seconds === 0 ? t('general.delaySendOff') : t('general.delaySendSeconds', { count: seconds })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Setting
           label={t('general.confirmLink')}
           hint={t('general.confirmLinkHint')}

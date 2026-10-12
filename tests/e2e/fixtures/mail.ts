@@ -33,3 +33,16 @@ export async function seedDrafts(mail: Page, subject: string, count: number): Pr
   }
   return authorization
 }
+
+/**
+ * Opens the message `name` once it has arrived: sends are held for undo
+ * send (10 seconds by default) before they go, so the list is reloaded
+ * until it shows it.
+ */
+export async function openWhenArrived(page: Page, name: RegExp): Promise<void> {
+  await expect(async () => {
+    await page.reload()
+    await expect(page.getByRole('link', { name }).first()).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
+  await page.getByRole('link', { name }).first().click()
+}

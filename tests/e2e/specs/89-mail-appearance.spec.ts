@@ -107,7 +107,11 @@ test('conversation grouping: a reply joins its conversation in one row; off list
   // The toast may be the last send's: wait for this composer to close.
   await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   const reply = async (page: Page, text: string) => {
-    await page.reload()
+    // Held for undo send first: wait until it went.
+    await expect(async () => {
+      await page.reload()
+      await expect(page.getByRole('link', { name: new RegExp(subject) }).first()).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 60_000 })
     await page.getByRole('link', { name: new RegExp(subject) }).first().click()
     await page.getByRole('button', { name: 'Reply', exact: true }).last().click()
     await page.getByRole('textbox', { name: 'Message' }).press('Control+Home')

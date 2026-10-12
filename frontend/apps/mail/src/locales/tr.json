@@ -234,7 +234,12 @@
     "publicKeyFailed": "Açık anahtarınız eklenemedi.",
     "receipt": "Okundu bilgisi",
     "receiptOn": "Okundu bilgisi isteniyor",
-    "receiptOff": "Okundu bilgisi iste"
+    "receiptOff": "Okundu bilgisi iste",
+    "undo": "Geri al",
+    "sendUndone": "Gönderme geri alındı.",
+    "alreadySent": "İleti zaten gönderildi.",
+    "undoFailed": "Gönderme geri alınamadı.",
+    "sendFailedLater": "İleti gönderilemedi, Taslaklar'da duruyor. {{reason}}"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -534,7 +539,12 @@
     "spamActionHint": "Bir e-posta listesinden gelen postayı Spam'e taşıdığınızda listeden de çıkın.",
     "spamActionOn": "Açık",
     "spamActionOff": "Kapalı",
-    "spamActionAsk": "Her seferinde sor"
+    "spamActionAsk": "Her seferinde sor",
+    "delaySend": "Göndermeyi geri al",
+    "delaySendHint": "Gönder'den sonra iletiyi ne kadar süre geri alabileceğiniz.",
+    "delaySendSeconds_one": "{{count}} saniye",
+    "delaySendSeconds_other": "{{count}} saniye",
+    "delaySendOff": "Kapalı"
   },
   "senders": {
     "title": "Engelle ve izin ver",

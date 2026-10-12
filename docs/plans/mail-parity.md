@@ -37,7 +37,7 @@ reference only where Proton has nothing.
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
 | Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | 🔶 remote images blocked until loaded; loading asks first and can remember the sender ("Always load images from …", Kutup's own: Proton asks each time), never automatic in Spam (spec 101); ❌ image proxy, tracker stripping |
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
-| Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ |
+| Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ deferred (2026-10-12). Option when taken up: reports go to `security@<domain>` (with `abuse@` and `postmaster@`, RFC 2142, reserved names), to the group that owns the address, else to the admins' Inboxes; the original attached as `message/rfc822`, then moved to Spam, sender optionally blocked |
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; on moving list mail to Spam, "Move to spam and unsubscribe" (asked, or always/never in Settings → General as Proton's Auto-unsubscribe): arrival notes only that a message is from a list, the ways out are read on the device |
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ✅ a message asking for one offers "Send read receipt" (never sent on its own); the client sends an RFC 8098 report, end to end to a Kutup sender, and the message then says "Read receipt sent" (spec 100) |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
@@ -61,7 +61,7 @@ reference only where Proton has nothing.
 | Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ❌ |
-| Undo send (delay) | `DelaySendSecondsSelect.tsx` | ❌ |
+| Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
 | Expiring messages | `ComposerExpirationModal.tsx` | ❌ |
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
 | Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | ❌ |

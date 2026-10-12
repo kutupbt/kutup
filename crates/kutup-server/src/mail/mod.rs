@@ -11,6 +11,7 @@ pub mod group_keys;
 pub mod groups;
 pub mod headers;
 pub mod lmtp;
+pub mod outbox;
 pub mod outside_keys;
 pub mod retention;
 pub mod safety;

@@ -22,8 +22,12 @@ async function addContact(page: Page, first: string, email: string) {
   await editor.getByLabel('First name').fill(first)
   await editor.getByLabel('Email address').fill(email)
   await editor.getByRole('button', { name: 'Save' }).click()
-  await expect(page.getByText('Contact added')).toBeVisible({ timeout: 30_000 })
-  return page.getByRole('article', { name: first })
+  // The newest toast: an earlier add's may still be showing.
+  await expect(page.getByText('Contact added').last()).toBeVisible({ timeout: 30_000 })
+  await expect(editor).toHaveCount(0)
+  const card = page.getByRole('article', { name: first })
+  await expect(card).toBeVisible({ timeout: 30_000 })
+  return card
 }
 
 test('a Kutup contact carries the shield, verified in person', async ({ browser, request }) => {
