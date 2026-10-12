@@ -2617,7 +2617,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2667,7 +2667,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3887,6 +3887,59 @@ fn senders_whose_images_always_load() {
         204
     );
     assert!(list(&alice.token).is_empty());
+}
+
+#[test]
+fn the_image_proxy_blocks_trackers_and_private_addresses() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    // On by default, and saved when turned off.
+    let settings: Value = bearer(c.get(format!("{base}/api/mail/settings")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(settings["imageProxy"], true);
+    let saved: Value = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "imageProxy": false }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(saved["imageProxy"], false);
+    let tracker = "https://x.us1.list-manage.com/track/open.php?u=1";
+    // The address goes in the body, never in a URL a log would keep.
+    let image = |url: &str| {
+        bearer(c.post(format!("{base}/api/mail/images")), &user.token)
+            .json(&json!({ "url": url }))
+            .send()
+            .unwrap()
+    };
+    let r = image(tracker);
+    assert_eq!(r.status(), 204);
+    assert_eq!(r.headers()["x-kutup-tracker"], "Mailchimp");
+    // Never the server's own network, other ports or schemes.
+    for url in [
+        "http://127.0.0.1/a.png",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/a.png",
+        "https://[::1]/a.png",
+        "https://example.org:8443/a.png",
+        "file:///etc/passwd",
+    ] {
+        assert_eq!(image(url).status(), 400, "{url}");
+    }
+    // Signed in only.
+    let r = c
+        .post(format!("{base}/api/mail/images"))
+        .json(&json!({ "url": "https://example.org/a.png" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 401);
 }
 
 #[test]

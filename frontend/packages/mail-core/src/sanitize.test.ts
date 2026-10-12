@@ -42,6 +42,39 @@ describe('sanitizeMailHtml', () => {
     expect(result.document).toContain('img-src data: blob: https: http:')
   })
 
+  it('swaps remote addresses for proxied images, and lists every one', () => {
+    const proxied = new Map([
+      ['https://t.example/pixel.gif', 'blob:https://mail.kutup.dev/p'],
+      ['https://t.example/b.png', 'blob:https://mail.kutup.dev/b'],
+      ['https://cdn.example/r.png', 'blob:https://mail.kutup.dev/r'],
+    ])
+    const result = sanitizeMailHtml(`${hostile}<img src="//cdn.example/r.png">`, {
+      allowRemote: true,
+      inlineImages: images,
+      resolveRemote: (url) => proxied.get(url) ?? null,
+    })
+    const html = body(result.document)
+    expect(html).toContain('src="blob:https://mail.kutup.dev/p"')
+    expect(html).toContain("url('blob:https://mail.kutup.dev/b')")
+    expect(html).toContain('src="blob:https://mail.kutup.dev/r"')
+    // Not proxied: left out, not loaded directly.
+    expect(html).not.toContain('t.example')
+    expect(result.document).toContain("img-src data: blob:;")
+    expect(result.remoteUrls).toEqual(
+      expect.arrayContaining(['https://t.example/pixel.gif', 'https://t.example/bg.png', 'https://t.example/b.png', 'https://cdn.example/r.png']),
+    )
+  })
+
+  it('takes tracking parameters out of links, in HTML and plain text', () => {
+    const html = sanitizeMailHtml('<a href="https://shop.example/?id=1&amp;utm_source=x">s</a>', { allowRemote: false, cleanLinks: true })
+    expect(body(html.document)).toContain('href="https://shop.example/?id=1"')
+    expect(html.cleanedLinks).toHaveLength(1)
+    const cleaned: Parameters<typeof plainTextDocument>[2] = []
+    const text = plainTextDocument('see https://shop.example/?id=1&utm_source=x now', undefined, cleaned)
+    expect(text).toContain('<a href="https://shop.example/?id=1" target="_blank" rel="noopener noreferrer nofollow">https://shop.example/?id=1&amp;utm_source=x</a>')
+    expect(cleaned).toHaveLength(1)
+  })
+
   it('shows plain text escaped, with links', () => {
     const document = plainTextDocument('a <b> & https://example.org/x.\nnext')
     expect(document).toContain('a &lt;b&gt; &amp; <a href="https://example.org/x" target="_blank"')

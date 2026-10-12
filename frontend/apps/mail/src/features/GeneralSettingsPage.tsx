@@ -136,6 +136,12 @@ export function GeneralSettingsPage() {
         <h2 id="images-heading" className="text-sm font-medium">
           {t('remoteImages.settingsTitle')}
         </h2>
+        <Setting
+          label={t('remoteImages.proxyTitle')}
+          hint={t('remoteImages.proxyHint')}
+          checked={settings.data.imageProxy}
+          onChange={(on) => save({ imageProxy: on })}
+        />
         <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           <span>
             <label htmlFor="remote-images" className="block text-sm font-medium">

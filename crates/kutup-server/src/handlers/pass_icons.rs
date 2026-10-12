@@ -62,11 +62,11 @@ const CACHE_ENTRIES: usize = 16 * 1024;
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 /// 600 answers a minute per account: opening a large vault asks for many.
-static PASS_ICONS: LazyLock<RateLimiter> =
+pub(crate) static PASS_ICONS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
 /// 120 domains fetched a minute per account (each a page and a few icons);
 /// what the cache answers does not count.
-static PASS_ICON_FETCHES: LazyLock<RateLimiter> =
+pub(crate) static PASS_ICON_FETCHES: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
 /// Domains fetched at once on this server, for all accounts.
 static FETCHING: LazyLock<tokio::sync::Semaphore> =

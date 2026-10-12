@@ -688,6 +688,25 @@ export function useBatchMessages() {
   })
 }
 
+/** One remote image through the Kutup image proxy (Proton's `core/v4/images`). */
+export type ProxiedImage = { kind: 'image'; blob: Blob } | { kind: 'tracker' } | { kind: 'failed' } | { kind: 'busy' }
+
+export async function fetchMailImage(url: string): Promise<ProxiedImage> {
+  try {
+    // The address goes in the body, never in a URL a log would keep.
+    const response = await api.post<ArrayBuffer>('/mail/images', { url }, { responseType: 'arraybuffer' })
+    // 204: a known tracking pixel the server would not fetch.
+    if (response.status === 204) return { kind: 'tracker' }
+    const type = String(response.headers['content-type'] ?? '')
+    if (!type.startsWith('image/')) return { kind: 'failed' }
+    return { kind: 'image', blob: new Blob([response.data], { type }) }
+  } catch (error) {
+    // Limits a sender could force: never a reason to load the image directly.
+    const status = isAxiosError(error) ? error.response?.status : undefined
+    return status === 429 || status === 503 ? { kind: 'busy' } : { kind: 'failed' }
+  }
+}
+
 const imageSendersKey = ['mail', 'image-senders'] as const
 
 /** Senders whose remote images always load (chosen when loading them). */
@@ -777,6 +796,8 @@ export interface MailSettings {
   spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
+  /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
+  imageProxy: boolean
   /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
   delaySendSeconds: number
   /** Composer defaults (Proton's Composer mode, text direction, default font/size). */
