@@ -58,7 +58,7 @@ impl RateLimiter {
     }
 
     /// Drops empty/expired entries — mirrors the Go `cleanup` goroutine body.
-    fn cleanup(&self) {
+    pub(crate) fn cleanup(&self) {
         let now = Instant::now();
         let mut map = self.requests.lock().unwrap();
         map.retain(|_, times| {
@@ -376,6 +376,12 @@ pub fn spawn_cleanup() {
             CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
             cleanup_totp_tracker();
+            // Per-feature limiters kept beside their handlers.
+            crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();
+            crate::handlers::pass_icons::PASS_ICONS.cleanup();
+            crate::handlers::pass_icons::PASS_ICON_FETCHES.cleanup();
+            crate::handlers::mail_images::MAIL_IMAGES.cleanup();
+            crate::handlers::mail_images::cleanup();
         }
     });
 }
