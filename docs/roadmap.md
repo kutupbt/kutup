@@ -670,8 +670,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 - **K2c** ✅: the website at `pass.<domain>`: vaults from Drive, unlock with
   the sign-in, entries with TOTP, attachments and history, the offline
   outbox, merges with review marks (specs 76–79).
-- **Pass next** (with K3): the security report (weak, reused), custom
-  icons, CSV import from other password managers.
+- **Pass next:** custom icons, CSV import from other password managers,
+  a PIN or the account password to unlock after idling (Proton Pass's lock
+  modes). The security report (weak, reused, expired) is built.
 - **K3** ✅: divergence is prevented by serialized conditional saves; the
   website works at phone width. **K3b** ✅: `kutup ssh-agent` and
   `kutup ssh-add` (`scripts/verify-pass-ssh.sh`).

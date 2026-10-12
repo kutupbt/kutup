@@ -236,5 +236,22 @@
     "minutes_other": "{{count}} dakika",
     "hours_one": "{{count}} saat",
     "hours_other": "{{count}} saat"
+  },
+  "report": {
+    "open": "Güvenlik",
+    "title": "Güvenlik raporu",
+    "summary_one": "Bu cihazda {{count}} parola denetlendi.",
+    "summary_other": "Bu cihazda {{count}} parola denetlendi.",
+    "allGood_one": "{{count}} parola denetlendi: düzeltilecek bir şey yok.",
+    "allGood_other": "{{count}} parola denetlendi: düzeltilecek bir şey yok.",
+    "private": "Açık kasadan burada hesaplanır; hiçbir parola, özeti ya da parçası bir yere gönderilmez.",
+    "weak": "Zayıf parolalar",
+    "weakDescription": "Tahmin edilebilecek kadar kısa ya da basit. Üretilmiş parolalarla değiştirin.",
+    "reused": "Yinelenen parolalar",
+    "reusedDescription": "Birden çok kayıtta aynı parola: biri sızarsa hepsi açılır.",
+    "sharedBy_one": "{{count}} kayıtta ortak",
+    "sharedBy_other": "{{count}} kayıtta ortak",
+    "expired": "Süresi dolan kayıtlar",
+    "expiredDescription": "Üzerlerinde ayarlı bitiş tarihi geçmiş."
   }
 }

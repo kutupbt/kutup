@@ -236,5 +236,22 @@
     "minutes_other": "{{count}} minutes",
     "hours_one": "{{count}} hour",
     "hours_other": "{{count}} hours"
+  },
+  "report": {
+    "open": "Security",
+    "title": "Security report",
+    "summary_one": "{{count}} password checked on this device.",
+    "summary_other": "{{count}} passwords checked on this device.",
+    "allGood_one": "{{count}} password checked: nothing to fix.",
+    "allGood_other": "{{count}} passwords checked: nothing to fix.",
+    "private": "Worked out here from the open vault; no password, hash or part of one is sent anywhere.",
+    "weak": "Weak passwords",
+    "weakDescription": "Short or simple enough to guess. Replace them with generated ones.",
+    "reused": "Reused passwords",
+    "reusedDescription": "The same password in more than one entry: one leak opens them all.",
+    "sharedBy_one": "Shared by {{count}} entry",
+    "sharedBy_other": "Shared by {{count}} entries",
+    "expired": "Expired entries",
+    "expiredDescription": "Past the expiry date set on them."
   }
 }

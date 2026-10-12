@@ -239,9 +239,13 @@ one database, plus a report of what happened.
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
   wrong key, kept and forgotten keys, lock).
-- **Not yet:** the security report (weak and reused passwords), custom
-  icons, importing CSV from other managers, sharing single entries; on the
-  roadmap.
+- **Security report** (the vault's Security button): weak passwords,
+  passwords shared by several entries, and expired entries, worked out on
+  the device from the open vault; nothing is sent anywhere, so there is no
+  breach lookup (a k-anonymity check against an outside service would send
+  hash prefixes away).
+- **Not yet:** custom icons, importing CSV from other managers, sharing
+  single entries; on the roadmap.
 
 **The plan as written:**
 
