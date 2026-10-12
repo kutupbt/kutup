@@ -814,5 +814,11 @@
       },
       "submit": "OK"
     }
+  },
+  "oneTimeCode": {
+    "found": "One-time code:",
+    "copyAndTrash": "Copy '{{code}}' to clipboard and move to Trash",
+    "copied": "Copied '{{code}}' to clipboard",
+    "copyFailed": "The code could not be copied."
   }
 }

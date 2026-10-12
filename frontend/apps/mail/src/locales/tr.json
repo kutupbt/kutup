@@ -814,5 +814,11 @@
       },
       "submit": "Tamam"
     }
+  },
+  "oneTimeCode": {
+    "found": "Tek kullanımlık kod:",
+    "copyAndTrash": "'{{code}}' kodunu kopyala ve Çöp'e taşı",
+    "copied": "'{{code}}' panoya kopyalandı",
+    "copyFailed": "Kod kopyalanamadı."
   }
 }

@@ -41,7 +41,7 @@ reference only where Proton has nothing.
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; ❌ auto-unsubscribe on moving to Spam |
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ❌ |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
-| One-time code detection with Copy | `ItemOneTimeCode.tsx` | ❌ |
+| One-time code detection with Copy | `ItemOneTimeCode.tsx` | ✅ on the device, mail under 20 minutes old with a code-like subject (English, Turkish, German, French, Spanish): the code beside the list row (from the subject) and in the opened message (subject and body); Copy puts it on the clipboard and moves the mail to Trash with Undo (spec 99) |
 | Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ (initials and contact photos) |
 | Expiring message banner | `ExtraExpiration.tsx` | ❌ (with expiring messages) |
 
