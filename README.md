@@ -178,6 +178,11 @@ KUTUP_INSECURE_TLS=1 kutup login --server https://localhost:38443 --email you@ex
 kutup ssh-agent ./local-folder <folder-id>   # in its own terminal; approvals are asked there
 export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/kutup/ssh-agent.sock   # the line it prints, in your shell
 kutup ssh-add ./local-folder <folder-id> "Server key" --lifetime 3600
+# Or start it at every login (systemd user unit / launchd agent), asking in a
+# desktop dialog; vaults open with the keys your account keeps.
+kutup ssh-agent install ./local-folder <folder-id>
+kutup ssh-agent status
+kutup ssh-agent uninstall
 
 # List your folders + files at the Drive root.
 kutup ls

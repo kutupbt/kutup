@@ -677,8 +677,10 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 - **K3** ✅: divergence is prevented by serialized conditional saves; the
   website works at phone width. **K3b** ✅: `kutup ssh-agent` and
   `kutup ssh-add` (`scripts/verify-pass-ssh.sh`).
-- **SSH agent next:** `kutup ssh-agent install` (systemd / launchd), desktop
-  notifications for approval, Windows (named pipe), noticing another agent.
+- **SSH agent next:** Windows (named pipe), a native macOS approval
+  prompt checked on a Mac (the osascript dialog is built but not yet run on
+  macOS). `kutup ssh-agent install` (systemd / launchd), desktop approval
+  and `status` (noticing another agent in the shell) are built.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 

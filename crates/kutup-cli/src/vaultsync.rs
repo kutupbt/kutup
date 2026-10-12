@@ -97,6 +97,12 @@ impl VaultKeys {
         ))
     }
 
+    /// Only the vault secrets kept in the account (after [`Self::sign_in`]):
+    /// what a service started at login has.
+    pub fn account_only() -> Self {
+        Self::new(None, None, false)
+    }
+
     fn new(password: Option<&str>, key_file: Option<&[u8]>, interactive: bool) -> Self {
         let mut configured = Vec::new();
         match (password, key_file) {
