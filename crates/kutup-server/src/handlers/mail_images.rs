@@ -32,7 +32,9 @@ use crate::public_fetch::{self, Checks, Options};
 use crate::ratelimit::RateLimiter;
 use crate::AppState;
 
-const IMAGE_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+const IMAGE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
+/// Bytes fetched a minute per account, for all its images.
+const BYTES_PER_MINUTE: u64 = 64 * 1024 * 1024;
 const MAX_CHECK_URLS: usize = 500;
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
@@ -40,10 +42,12 @@ const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
 /// `x-pm-tracker-provider`).
 pub const TRACKER_HEADER: &str = "x-kutup-tracker";
 
-/// 600 images a minute per account: a newsletter can carry a hundred. Nothing
+/// 300 images a minute per account: a newsletter carries a few dozen. Nothing
 /// is cached, so each one is a fetch.
 static MAIL_IMAGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::new(300, Duration::from_secs(60)));
+/// What each account fetched in its current minute ([`BYTES_PER_MINUTE`]).
+static BYTES: LazyLock<ByteBudget> = LazyLock::new(ByteBudget::default);
 /// Images fetched at once on this server, for all accounts.
 static FETCHING: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(32));
@@ -186,6 +190,11 @@ pub async fn fetch(
     if let Some(provider) = tracker_of(&url) {
         return Ok(tracker_response(provider));
     }
+    if !BYTES.has_room(&auth.user_id) {
+        return Err(AppError::too_many_requests(
+            "too many image bytes this minute; try again shortly",
+        ));
+    }
     // Busy for longer than one fetch may take: try again later.
     let _permit = tokio::time::timeout(TOTAL_TIMEOUT, FETCHING.acquire())
         .await
@@ -197,6 +206,7 @@ pub async fn fetch(
         })?
         .map_err(|_| AppError::internal("image fetches closed"))?;
     let (mime, body) = fetch_image(url, &Checks::PUBLIC).await?;
+    BYTES.charge(&auth.user_id, body.len());
     Ok((
         StatusCode::OK,
         [
@@ -218,6 +228,31 @@ pub async fn fetch(
         body,
     )
         .into_response())
+}
+
+/// Bytes fetched per account in one-minute windows: a fetch starts only while
+/// the account is under its budget, and what it brought back is counted.
+#[derive(Default)]
+struct ByteBudget {
+    used: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u64)>>,
+}
+
+impl ByteBudget {
+    fn has_room(&self, account: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut used = self.used.lock().expect("byte budget lock");
+        used.retain(|_, (since, _)| now.duration_since(*since) < Duration::from_secs(60));
+        used.get(account)
+            .is_none_or(|(_, bytes)| *bytes < BYTES_PER_MINUTE)
+    }
+
+    fn charge(&self, account: &str, bytes: usize) {
+        let mut used = self.used.lock().expect("byte budget lock");
+        let entry = used
+            .entry(account.to_owned())
+            .or_insert((std::time::Instant::now(), 0));
+        entry.1 = entry.1.saturating_add(bytes as u64);
+    }
 }
 
 fn tracker_response(provider: &str) -> Response {
@@ -364,6 +399,17 @@ mod tests {
         );
         assert_eq!(sniff_image(b"<!doctype html><script>"), None);
         assert_eq!(sniff_image(b""), None);
+    }
+
+    #[test]
+    fn each_account_has_a_byte_budget() {
+        let budget = ByteBudget::default();
+        assert!(budget.has_room("a"));
+        budget.charge("a", BYTES_PER_MINUTE as usize - 1);
+        assert!(budget.has_room("a"));
+        budget.charge("a", 1);
+        assert!(!budget.has_room("a"));
+        assert!(budget.has_room("b"));
     }
 
     /// Serves `responses` in turn on a local port, one per connection.
