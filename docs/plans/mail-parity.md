@@ -60,7 +60,7 @@ reference only where Proton has nothing.
 | Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ Contacts → Email settings: Encrypt, Sign, PGP scheme per address; "Sign outside mail" in General |
 | Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
-| Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ❌ |
+| Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ✅ Send's menu: tomorrow morning, Monday morning, or a day and time (a minute to 90 days ahead, 100 at most); the server holds it in the outbox, the draft waits in Scheduled (shown only when something is), the row shows when it goes, the message says so with Edit back to Drafts and the composer (spec 103) |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
 | Expiring messages | `ComposerExpirationModal.tsx` | ❌ |
 | Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
