@@ -13,6 +13,8 @@ import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
 import { HistoryDialog } from './HistoryDialog'
 import { SiteIcon } from './SiteIcon'
+import { IconDialog } from './IconDialog'
+import { iconSources } from '../lib/icons'
 import { bytesToBase64 } from '../lib/bytes'
 
 /** A copied secret is cleared from the clipboard after this, if it is still there. */
@@ -122,6 +124,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
   const { t, i18n } = useTranslation()
   const [history, setHistory] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [changingIcon, setChangingIcon] = useState(false)
   const attachInput = useRef<HTMLInputElement>(null)
   const canEdit = session.canEdit
   const title = fieldValue(entry, 'Title') || t('entry.untitled')
@@ -132,6 +135,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
   const custom = entry.fields.filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const safeUrl = /^https?:\/\//i.test(url) ? url : null
+  const picture = entry.customIcon ? (iconSources(view).get(entry.customIcon) ?? null) : null
   const run = (op: Parameters<VaultSession['apply']>[0], done?: string) =>
     session.apply(op).then(
       () => done && toast.success(done),
@@ -141,7 +145,13 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
   return (
     <article className="flex h-full flex-col" aria-label={title}>
       <header className="flex items-start gap-3 border-b border-border p-4">
-        <SiteIcon title={title} address={url} className="size-10 text-sm" />
+        {canEdit && !entry.inRecycleBin ? (
+          <button type="button" className="rounded-md focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setChangingIcon(true)} aria-label={t('icons.change')} title={t('icons.change')}>
+            <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+          </button>
+        ) : (
+          <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+        )}
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-display text-lg font-semibold tracking-tight">{title}</h2>
           {entry.tags.length > 0 ? (
@@ -329,6 +339,17 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         </footer>
       </div>
       <HistoryDialog session={session} entry={entry} open={history} onOpenChange={setHistory} />
+      <IconDialog
+        open={changingIcon}
+        onOpenChange={setChangingIcon}
+        name={title}
+        view={view}
+        current={entry.customIcon}
+        address={url}
+        onChoose={async (data) => {
+          await session.apply({ op: 'setEntryIcon', id: entry.id, data })
+        }}
+      />
       <ConfirmDestructive
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

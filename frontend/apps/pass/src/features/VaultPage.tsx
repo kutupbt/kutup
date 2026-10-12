@@ -1,4 +1,4 @@
-import { ArrowLeft, FileUp, Folder, FolderPlus, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, FileUp, Folder, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -31,6 +31,8 @@ import { GroupDialog } from './GroupDialog'
 import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
 import { SiteIcon } from './SiteIcon'
+import { IconDialog } from './IconDialog'
+import { iconSources } from '../lib/icons'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
 import { UnlockVault } from './UnlockVault'
@@ -92,6 +94,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [editing, setEditing] = useState<EntryView | 'new' | null>(null)
   const [groupDialog, setGroupDialog] = useState<{ kind: 'new'; parent: string } | { kind: 'rename'; group: GroupView } | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<GroupView | null>(null)
+  const [iconGroup, setIconGroup] = useState<GroupView | null>(null)
   const [emptyingBin, setEmptyingBin] = useState(false)
   const [renamingVault, setRenamingVault] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -129,6 +132,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const kept = secrets.data?.some((s) => s.fileId === fileId) ?? false
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const toReview = view.entries.filter((e) => e.review.length > 0 && !e.inRecycleBin).length
+  const pictures = useMemo(() => iconSources(view), [view])
 
   const selectGroup = (id: string | null) => {
     const next = new URLSearchParams(params)
@@ -260,7 +264,11 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                   className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', groupId === g.id && 'bg-accent font-medium')}
                   style={{ paddingInlineStart: `${0.5 + g.depth * 0.75}rem` }}
                 >
-                  <Folder className="size-4 shrink-0" aria-hidden />
+                  {g.customIcon && pictures.get(g.customIcon) ? (
+                    <img src={pictures.get(g.customIcon)} alt="" className="size-4 shrink-0 object-contain" />
+                  ) : (
+                    <Folder className="size-4 shrink-0" aria-hidden />
+                  )}
                   <span className="truncate">{g.name}</span>
                 </button>
                 {session.canEdit ? (
@@ -274,6 +282,10 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                       <DropdownMenuItem onSelect={() => setGroupDialog({ kind: 'new', parent: g.id })}>
                         <FolderPlus />
                         {t('groups.newInside')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setIconGroup(g)}>
+                        <ImageIcon />
+                        {t('icons.change')}
                       </DropdownMenuItem>
                       {g.id !== view.rootGroupId ? (
                         <>
@@ -355,7 +367,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                     aria-current={e.id === entryId ? 'true' : undefined}
                     className={cn('flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left hover:bg-accent/50', e.id === entryId && 'bg-accent')}
                   >
-                    <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} />
+                    <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{fieldValue(e, 'Title') || t('entry.untitled')}</span>
                       <span className="block truncate text-xs text-muted-foreground">{fieldValue(e, 'UserName') || fieldValue(e, 'URL')}</span>
@@ -409,6 +421,16 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
             const applied = await session.apply({ op: 'createGroup', parentId: groupDialog.parent, name })
             if (applied.id) selectGroup(applied.id)
           }
+        }}
+      />
+      <IconDialog
+        open={iconGroup !== null}
+        onOpenChange={(open) => !open && setIconGroup(null)}
+        name={iconGroup?.name ?? ''}
+        view={view}
+        current={iconGroup?.customIcon ?? null}
+        onChoose={async (data) => {
+          if (iconGroup) await session.apply({ op: 'setGroupIcon', id: iconGroup.id, data })
         }}
       />
       <GroupDialog

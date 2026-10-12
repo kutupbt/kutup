@@ -27,6 +27,8 @@ export interface EntryView {
   tags: string[]
   icon: number | null
   hasCustomIcon: boolean
+  /** Its picture in `VaultView.customIcons`, when a browser can show it. */
+  customIcon: string | null
   foregroundColor: string | null
   backgroundColor: string | null
   overrideUrl: string
@@ -52,6 +54,8 @@ export interface GroupView {
   notes: string
   icon: number | null
   hasCustomIcon: boolean
+  /** Its picture in `VaultView.customIcons`, when a browser can show it. */
+  customIcon: string | null
   tags: string[]
   expires: boolean
   expiry: string | null
@@ -70,6 +74,16 @@ export interface VaultView {
   historyMaxSize: number | null
   groups: GroupView[]
   entries: EntryView[]
+  /** The vault's own pictures (KeePass custom icons) a browser can show. */
+  customIcons: CustomIconView[]
+}
+
+export interface CustomIconView {
+  id: string
+  /** From the bytes: PNG, JPEG, GIF, WebP, ICO or BMP. */
+  mime: string
+  /** Base64. */
+  data: string
 }
 
 export interface EntryInput {
@@ -93,6 +107,9 @@ export type Op =
   | { op: 'clearReview'; id: string }
   | { op: 'addAttachment'; entryId: string; name: string; data: string }
   | { op: 'removeAttachment'; entryId: string; name: string }
+  /** A PNG (base64) as the entry's own picture, or null for the default icon. */
+  | { op: 'setEntryIcon'; id: string; data: string | null }
+  | { op: 'setGroupIcon'; id: string; data: string | null }
   | { op: 'createGroup'; parentId: string; name: string }
   | { op: 'updateGroup'; id: string; name: string; notes?: string; icon?: number | null }
   | { op: 'deleteGroup'; id: string }

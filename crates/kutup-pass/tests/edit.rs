@@ -495,3 +495,225 @@ fn one_time_codes_follow_rfc_6238() {
     let plain = add(&mut db, "none", 2);
     assert!(view::otp(&db.entries[&eid(&plain)], 59).is_none());
 }
+
+/// A 1×1 PNG, base64, with byte `n` after its end, so different `n` give
+/// different pictures.
+fn png(n: u8) -> String {
+    let mut bytes = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+        .unwrap();
+    bytes.push(n);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[test]
+fn entries_and_groups_take_their_own_pictures() {
+    let mut db = vault();
+    let id = add(&mut db, "Banka", 1);
+    let root = view::view(&db).root_group_id;
+    assert!(
+        run(
+            &mut db,
+            Op::SetEntryIcon {
+                id: id.clone(),
+                data: Some(png(1))
+            },
+            2
+        )
+        .changed
+    );
+    let v = view::view(&db);
+    let icon = entry(&v, &id).custom_icon.clone().unwrap();
+    assert!(entry(&v, &id).has_custom_icon);
+    assert_eq!(v.custom_icons.len(), 1);
+    assert_eq!(v.custom_icons[0].id, icon);
+    assert_eq!(v.custom_icons[0].mime, "image/png");
+    assert_eq!(v.custom_icons[0].data, png(1));
+    // The previous state is in the history.
+    assert_eq!(entry(&v, &id).history_count, 1);
+    assert_eq!(
+        view::history(&db, &db.entries[&eid(&id)])[0].custom_icon,
+        None
+    );
+    // The same picture again changes nothing; a group with it shares it.
+    assert!(
+        !run(
+            &mut db,
+            Op::SetEntryIcon {
+                id: id.clone(),
+                data: Some(png(1))
+            },
+            3
+        )
+        .changed
+    );
+    assert!(
+        run(
+            &mut db,
+            Op::SetGroupIcon {
+                id: root.clone(),
+                data: Some(png(1))
+            },
+            4
+        )
+        .changed
+    );
+    let v = view::view(&db);
+    assert_eq!(v.custom_icons.len(), 1);
+    assert_eq!(v.groups[0].custom_icon.as_deref(), Some(icon.as_str()));
+    // A field edit keeps the picture.
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p1")]),
+        },
+        5,
+    );
+    assert_eq!(
+        entry(&view::view(&db), &id).custom_icon.as_deref(),
+        Some(icon.as_str())
+    );
+    // None: the default icons again; the picture stays in the vault (as
+    // KeePass apps keep it), still named by the history.
+    assert!(
+        run(
+            &mut db,
+            Op::SetEntryIcon {
+                id: id.clone(),
+                data: None
+            },
+            6
+        )
+        .changed
+    );
+    assert!(
+        run(
+            &mut db,
+            Op::SetGroupIcon {
+                id: root.clone(),
+                data: None
+            },
+            7
+        )
+        .changed
+    );
+    let v = view::view(&db);
+    assert_eq!(entry(&v, &id).custom_icon, None);
+    assert_eq!(entry(&v, &id).icon, Some(0));
+    assert_eq!(v.groups[0].icon, Some(48));
+    assert_eq!(v.custom_icons.len(), 1);
+
+    // KeePass apps read them back, and two copies merge.
+    let key = VaultKey::new().with_password("parola");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    assert_eq!(view::view(&reopened).custom_icons, v.custom_icons);
+    let mut ours = reopened.clone();
+    let mut theirs = reopened.clone();
+    run(
+        &mut ours,
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: Some(png(2)),
+        },
+        8,
+    );
+    let other = add(&mut theirs, "Okul", 9);
+    run(
+        &mut theirs,
+        Op::SetEntryIcon {
+            id: other.clone(),
+            data: Some(png(3)),
+        },
+        10,
+    );
+    let (merged, report) = merge(Some(&reopened), &ours, &theirs);
+    assert!(report.is_clean(), "{report:?}");
+    let m = view::view(&merged);
+    let data = |entry_id: &str| {
+        let icon = entry(&m, entry_id).custom_icon.clone().unwrap();
+        m.custom_icons
+            .iter()
+            .find(|i| i.id == icon)
+            .unwrap()
+            .data
+            .clone()
+    };
+    assert_eq!(data(&id), png(2));
+    assert_eq!(data(&other), png(3));
+}
+
+#[test]
+fn pictures_are_pngs_of_bounded_size() {
+    let mut db = vault();
+    let id = add(&mut db, "Banka", 1);
+    let refused = |db: &mut Database, data: String| {
+        apply(
+            db,
+            &Op::SetEntryIcon {
+                id: id.clone(),
+                data: Some(data),
+            },
+            at(2),
+        )
+        .unwrap_err()
+    };
+    let before = db.clone();
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    assert!(matches!(
+        refused(&mut db, "not base64!".into()),
+        EditError::Invalid(_)
+    ));
+    assert!(matches!(
+        refused(&mut db, b64(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")),
+        EditError::Invalid(_)
+    ));
+    assert!(matches!(
+        refused(&mut db, b64(&[0xff, 0xd8, 0xff, 0xe0, 0, 0])),
+        EditError::Invalid(_)
+    ));
+    let mut big = base64::engine::general_purpose::STANDARD
+        .decode(png(0))
+        .unwrap();
+    big.resize(256 * 1024 + 1, 0);
+    assert!(matches!(refused(&mut db, b64(&big)), EditError::Invalid(_)));
+    assert_eq!(
+        apply(
+            &mut db,
+            &Op::SetEntryIcon {
+                id: "nope".into(),
+                data: None
+            },
+            at(2)
+        )
+        .unwrap_err(),
+        EditError::NotFound("entry")
+    );
+    assert_eq!(
+        apply(
+            &mut db,
+            &Op::SetGroupIcon {
+                id: "nope".into(),
+                data: None
+            },
+            at(2)
+        )
+        .unwrap_err(),
+        EditError::NotFound("group")
+    );
+    assert_eq!(view::view(&db), view::view(&before));
+    let op: Op = serde_json::from_str(&format!(
+        r#"{{"op":"setEntryIcon","id":"{id}","data":"{}"}}"#,
+        png(1)
+    ))
+    .unwrap();
+    assert!(matches!(op, Op::SetEntryIcon { data: Some(_), .. }));
+    let op: Op = serde_json::from_str(r#"{"op":"setGroupIcon","id":"g"}"#).unwrap();
+    assert_eq!(
+        op,
+        Op::SetGroupIcon {
+            id: "g".into(),
+            data: None
+        }
+    );
+}
