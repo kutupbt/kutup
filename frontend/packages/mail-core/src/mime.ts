@@ -153,13 +153,14 @@ function textPart(mimeType: 'text/plain' | 'text/html', text: string): string {
 }
 
 /** A file as a MIME part, ready to be put inside a message as it is. */
-export function attachmentPart(file: { name: string; type: string; bytes: Uint8Array }): Uint8Array {
+export function attachmentPart(file: { name: string; type: string; bytes: Uint8Array }, contentId?: string): Uint8Array {
   const name = encodeHeaderText(file.name).replace(/"/g, '')
   const type = /^[\w.+-]+\/[\w.+-]+$/.test(file.type) ? file.type : 'application/octet-stream'
   return encoder.encode(
     [
       `Content-Type: ${type}; name="${name}"`,
-      `Content-Disposition: attachment; filename="${name}"`,
+      // An image in the text (`cid:`), shown inline rather than attached.
+      ...(contentId ? [`Content-Disposition: inline; filename="${name}"`, `Content-ID: <${contentId}>`] : [`Content-Disposition: attachment; filename="${name}"`]),
       'Content-Transfer-Encoding: base64',
       '',
       base64Lines(file.bytes),
@@ -255,12 +256,21 @@ export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'atta
     `--${alternativeBoundary}--`,
     '',
   ].join('\r\n')
-  const attachments = message.attachments ?? []
-  if (attachments.length === 0) return encoder.encode(alternative)
+  const all = message.attachments ?? []
+  // Images in the text go with it in multipart/related (RFC 2387); files after, in multipart/mixed.
+  const inline = all.filter(inlineContentId)
+  const attachments = all.filter((part) => !inlineContentId(part))
+  let body: Uint8Array = encoder.encode(alternative)
+  if (inline.length) {
+    const related = boundary()
+    const chunks: Uint8Array[] = [encoder.encode(`Content-Type: multipart/related; boundary="${related}"\r\n\r\n--${related}\r\n`), body]
+    for (const part of inline) chunks.push(encoder.encode(`\r\n--${related}\r\n`), part)
+    chunks.push(encoder.encode(`\r\n--${related}--\r\n`))
+    body = concat(chunks)
+  }
+  if (attachments.length === 0) return body
   const mixedBoundary = boundary()
-  const chunks: Uint8Array[] = [
-    encoder.encode(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"\r\n\r\n--${mixedBoundary}\r\n${alternative}`),
-  ]
+  const chunks: Uint8Array[] = [encoder.encode(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"\r\n\r\n--${mixedBoundary}\r\n`), body]
   for (const part of attachments) {
     chunks.push(encoder.encode(`\r\n--${mixedBoundary}\r\n`), part)
   }
@@ -296,6 +306,13 @@ function reportBody(text: string, receipt: Receipt): Uint8Array {
       '',
     ].join('\r\n'),
   )
+}
+
+/** A part's Content-ID when it is an inline image (made by `attachmentPart` with one), else null. */
+export function inlineContentId(part: Uint8Array): string | null {
+  const head = new TextDecoder().decode(part.subarray(0, 2048)).split('\r\n\r\n')[0]
+  if (!/^Content-Disposition:\s*inline/im.test(head)) return null
+  return /^Content-ID:\s*<([^>]+)>/im.exec(head)?.[1] ?? null
 }
 
 /**

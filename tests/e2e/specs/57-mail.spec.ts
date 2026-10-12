@@ -38,7 +38,7 @@ test('two Kutup users exchange end-to-end encrypted mail, with replies, filing a
   await expect(composer.getByLabel('End-to-end encrypted: a Kutup address')).toBeVisible()
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await aliceMail.getByRole('textbox', { name: 'Message' }).fill('Çarşamba saat üçte görüşelim.')
-  await aliceMail.locator('input[type="file"]').setInputFiles({ name: 'gündem.txt', mimeType: 'text/plain', buffer: Buffer.from('1. Bütçe\n') })
+  await aliceMail.locator('input[type="file"]:not([accept])').setInputFiles({ name: 'gündem.txt', mimeType: 'text/plain', buffer: Buffer.from('1. Bütçe\n') })
   const sending = aliceMail.getByRole('dialog', { name: subject })
   await expect(sending.getByText('gündem.txt')).toBeVisible()
   await expect(sending.getByLabel('Uploading')).toHaveCount(0, { timeout: 60_000 })

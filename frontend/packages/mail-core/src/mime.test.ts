@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentPart, buildInlineMessage, buildMessage, describePart, encodeHeaderText, formatMailbox, isAutoReply, parseMessage, partContent } from './mime'
+import { attachmentPart, buildInlineMessage, inlineContentId, buildMessage, describePart, encodeHeaderText, formatMailbox, isAutoReply, parseMessage, partContent } from './mime'
 
 const decoder = new TextDecoder()
 
@@ -141,5 +141,23 @@ describe('read receipts (RFC 8098)', () => {
     expect(text).toContain('Original-Message-ID: <orig@kutup.dev>')
     expect(text).toContain('Disposition: manual-action/MDN-sent-manually; displayed')
     expect((await parseMessage(raw)).text).toContain('Okundu.')
+  })
+})
+
+describe('inline images', () => {
+  it('go with the text in multipart/related, files after in multipart/mixed', async () => {
+    const png = new Uint8Array([137, 80, 78, 71])
+    const image = attachmentPart({ name: 'logo.png', type: 'image/png', bytes: png }, 'logo@kutup')
+    const file = attachmentPart({ name: 'rapor.pdf', type: 'application/pdf', bytes: new Uint8Array([1, 2]) })
+    expect(inlineContentId(image)).toBe('logo@kutup')
+    expect(inlineContentId(file)).toBeNull()
+    const raw = buildMessage({ from: { address: 'a@kutup.dev', name: '' }, to: [], cc: [], subject: 'Resim', messageId: 'r@kutup.dev', html: '<p><img src="cid:logo@kutup"></p>', text: '', attachments: [image, file] })
+    const text = new TextDecoder().decode(raw)
+    expect(text.indexOf('multipart/mixed')).toBeLessThan(text.indexOf('multipart/related'))
+    const parsed = await parseMessage(raw)
+    const logo = parsed.attachments.find((a) => a.filename === 'logo.png')!
+    expect(logo.inline).toBe(true)
+    expect(logo.contentId).toBe('logo@kutup')
+    expect(parsed.attachments.find((a) => a.filename === 'rapor.pdf')!.inline).toBe(false)
   })
 })

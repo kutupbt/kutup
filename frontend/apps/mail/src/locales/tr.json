@@ -244,7 +244,8 @@
     "sendFailedLater": "İleti gönderilemedi, Taslaklar'da duruyor. {{reason}}",
     "moreOptions": "Diğer seçenekler",
     "plainText": "Düz metin",
-    "rightToLeft": "Sağdan sola"
+    "rightToLeft": "Sağdan sola",
+    "emoji": "Emoji ekle"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -935,5 +936,15 @@
     "undone_one": "Erteleme kaldırıldı.",
     "undone_other": "{{count}} konuşmanın ertelemesi kaldırıldı.",
     "rowUntil": "{{date}} dönecek"
+  },
+  "images": {
+    "insert": "Görsel ekle",
+    "title_one": "Görsel ekle",
+    "title_other": "Görselleri ekle",
+    "body": "Ek olarak ekleyebilir ya da iletinin içinde gösterebilirsiniz.",
+    "removeMetadata": "Üst verileri kaldır",
+    "removeMetadataHint": "Böylece kimse fotoğrafın nerede, ne zaman ve hangi cihazla çekildiğini göremez.",
+    "attachment": "Ek",
+    "inline": "Metin içinde"
   }
 }

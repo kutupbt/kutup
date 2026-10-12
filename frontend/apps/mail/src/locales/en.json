@@ -244,7 +244,8 @@
     "sendFailedLater": "The message could not be sent and is still in Drafts. {{reason}}",
     "moreOptions": "More options",
     "plainText": "Plain text",
-    "rightToLeft": "Right to left"
+    "rightToLeft": "Right to left",
+    "emoji": "Insert emoji"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -935,5 +936,15 @@
     "undone_one": "Conversation unsnoozed.",
     "undone_other": "{{count}} conversations unsnoozed.",
     "rowUntil": "Back {{date}}"
+  },
+  "images": {
+    "insert": "Insert image",
+    "title_one": "Insert image",
+    "title_other": "Insert images",
+    "body": "You can add it as an attachment or display it inline in your mail body.",
+    "removeMetadata": "Remove metadata",
+    "removeMetadataHint": "No one can then see where, when or on which device the picture was taken.",
+    "attachment": "Attachment",
+    "inline": "Inline"
   }
 }

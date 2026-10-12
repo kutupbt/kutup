@@ -28,7 +28,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
-import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
+import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
@@ -1176,8 +1176,8 @@ export async function sendDraft(
             ...meta(account, draft),
             ...(draft.scheduleAt ? { scheduleAt: draft.scheduleAt } : {}),
             // Every part sent, forwarded ones and an attached key too.
-            attachmentCount: attachmentParts.length,
-            attachments: attachmentParts.map(describePart),
+            attachmentCount: attachmentParts.filter((part) => !inlineContentId(part)).length,
+            attachments: attachmentParts.filter((part) => !inlineContentId(part)).map(describePart),
             ...(as ? { fromName: as.name, fromGroup: as.groupId } : {}),
             keyPackets,
             pgp,

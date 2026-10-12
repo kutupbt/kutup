@@ -349,7 +349,7 @@ export function MessageView({
             ) : (
               <MailBody parsed={opened.data.parsed} suspicious={message.folder === 'spam'} sender={message.direction === 'inbound' ? (from?.address ?? undefined) : undefined} />
             )}
-            <AttachmentList list={opened.data.parsed.attachments} subject={opened.data.parsed.subject || message.subject} />
+            <AttachmentList list={opened.data.parsed.attachments.filter((a) => !a.inline)} subject={opened.data.parsed.subject || message.subject} />
             <div className="flex flex-wrap gap-2 pt-1">
               {message.folder === 'scheduled' && message.outboxId ? (
                 <ScheduledBanner message={message} opened={opened.data} />
