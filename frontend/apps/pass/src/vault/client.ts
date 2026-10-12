@@ -2,7 +2,7 @@
 // promise per call, and a handle per open vault.
 
 import type { Call, Request, Response } from './protocol'
-import type { Applied, EntryView, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
+import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
 /** The worker refused or failed a call; `message` is the vault library's. */
 export class VaultError extends Error {
@@ -111,4 +111,14 @@ export class VaultHandle {
 /** A key file as a vault secret keeps it (large files as their SHA-256). */
 export function keyFileSecret(contents: Uint8Array): Promise<Uint8Array> {
   return call({ call: 'keyFileSecret', contents })
+}
+
+/** Reads another password manager's export, changing nothing. */
+export function importPreview(contents: Uint8Array, provider: string | null): Promise<ImportPreview | ImportFailure> {
+  return call({ call: 'importPreview', contents, provider })
+}
+
+/** The formats an import can be read as. */
+export function importFormats(): Promise<ImportFormat[]> {
+  return call({ call: 'importFormats' })
 }

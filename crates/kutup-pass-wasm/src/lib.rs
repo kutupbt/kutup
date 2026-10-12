@@ -190,3 +190,111 @@ impl Vault {
 pub fn key_file_secret(contents: &[u8]) -> Vec<u8> {
     kutup_pass::key_file_secret(contents)
 }
+
+/// An import read but not applied: what it would make.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportPreview {
+    provider: &'static str,
+    provider_name: &'static str,
+    count: usize,
+    /// The group paths it would make, `a/b`.
+    groups: Vec<String>,
+    /// The first entries, to show.
+    sample: Vec<ImportSample>,
+    skipped: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportSample {
+    title: String,
+    username: String,
+    url: String,
+    group: String,
+}
+
+/// Why a file cannot be imported, as a code the page translates.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportFailure {
+    error: &'static str,
+    detail: String,
+}
+
+/// The formats an import can be read as: `[{ id, name }]`.
+#[wasm_bindgen(js_name = importFormats)]
+pub fn import_formats() -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    struct Format {
+        id: &'static str,
+        name: &'static str,
+    }
+    let formats: Vec<Format> = kutup_pass::import::Provider::ALL
+        .iter()
+        .map(|p| Format {
+            id: p.id(),
+            name: p.name(),
+        })
+        .collect();
+    to_js(&formats)
+}
+
+/// Reads another password manager's export without changing any vault:
+/// `ImportPreview`, or `{ error, detail }` (`empty`, `tooLarge`, `unreadable`,
+/// `unknownFormat`, `missingColumns`, `tooMany`). `provider`: a format id, or
+/// null to detect it.
+#[wasm_bindgen(js_name = importPreview)]
+pub fn import_preview(data: &[u8], provider: Option<String>) -> Result<JsValue, JsValue> {
+    use kutup_pass::import::{parse, ImportError, Provider};
+    let provider = match provider {
+        Some(id) => Some(Provider::from_id(&id).ok_or_else(|| js_error("no such import format"))?),
+        None => None,
+    };
+    match parse(data, provider) {
+        Ok(parsed) => {
+            let mut groups: Vec<String> = parsed
+                .entries
+                .iter()
+                .filter(|e| !e.group.is_empty())
+                .map(|e| e.group.join("/"))
+                .collect();
+            groups.sort();
+            groups.dedup();
+            to_js(&ImportPreview {
+                provider: parsed.provider.id(),
+                provider_name: parsed.provider.name(),
+                count: parsed.entries.len(),
+                groups,
+                sample: parsed
+                    .entries
+                    .iter()
+                    .take(50)
+                    .map(|e| ImportSample {
+                        title: e.title.clone(),
+                        username: e.username.clone(),
+                        url: e.urls.first().cloned().unwrap_or_default(),
+                        group: e.group.join("/"),
+                    })
+                    .collect(),
+                skipped: parsed.skipped,
+                warnings: parsed.warnings,
+            })
+        }
+        Err(error) => {
+            let (code, detail) = match &error {
+                ImportError::Empty => ("empty", String::new()),
+                ImportError::TooLarge => ("tooLarge", String::new()),
+                ImportError::Unreadable(why) => ("unreadable", why.clone()),
+                ImportError::UnknownFormat => ("unknownFormat", String::new()),
+                ImportError::MissingColumns(_, columns) => ("missingColumns", columns.clone()),
+                ImportError::TooMany => ("tooMany", String::new()),
+            };
+            to_js(&ImportFailure {
+                error: code,
+                detail,
+            })
+        }
+    }
+}
