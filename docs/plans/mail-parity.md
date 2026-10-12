@@ -42,7 +42,7 @@ reference only where Proton has nothing.
 | Read receipts (ask, show) | `ExtraReadReceipt.tsx` | ✅ a message asking for one offers "Send read receipt" (never sent on its own); the client sends an RFC 8098 report, end to end to a Kutup sender, and the message then says "Read receipt sent" (spec 100) |
 | Snooze, Snoozed folder | `SnoozeDropdown.tsx` | ❌ |
 | One-time code detection with Copy | `ItemOneTimeCode.tsx` | ✅ on the device, mail under 20 minutes old with a code-like subject (English, Turkish, German, French, Spanish): the code beside the list row (from the subject) and in the opened message (subject and body); Copy puts it on the clipboard and moves the mail to Trash with Undo (spec 99) |
-| Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ (initials and contact photos) |
+| Sender images (BIMI, logos) | `SenderImagesToggle.tsx` | ❌ deferred (2026-10-12): initials and contact photos for now. Proton loads them from its own API (`core/v4/images/logo`), never from the sender, and only where its server set `DisplaySenderImage`/`BimiSelector` on the message. Kutup's option when taken up: BIMI only, for DMARC-passed mail, fetched and sanitized once per domain by the server and served from it |
 | Expiring message banner | `ExtraExpiration.tsx` | ❌ (with expiring messages) |
 
 ## Writing
