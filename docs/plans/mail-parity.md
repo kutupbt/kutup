@@ -50,7 +50,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Rich text editor, attachments, drafts autosave | RoosterJS, `useAutoSave.tsx` | ✅ (Tiptap) |
-| Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ❌ |
+| Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ✅ Settings → Appearance → Composer: mode (Normal, Plain text), text direction, Proton's ten fonts and 10–26 px; the composer's More options switches a message to plain text (text/plain alone, kept in its draft) or right to left; the sent HTML carries the font, size and direction (spec 105) |
 | Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised) |
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ❌ |
 | Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | 🔶 your address: Mail → Settings → Identity (rich signature, display name); shared mailboxes later |

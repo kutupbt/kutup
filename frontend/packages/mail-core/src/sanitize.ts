@@ -171,7 +171,16 @@ export function paintsNothing(html: string): boolean {
 function foldQuote(body: string, label: string | undefined): string {
   if (!label) return body
   const doc = new DOMParser().parseFromString(`<!doctype html><body>${body}`, 'text/html')
-  const root = doc.body
+  // A message wrapped whole in one <div> (its font and direction, as Kutup's
+  // and Proton's composers write it) is folded inside that wrapper.
+  let root: HTMLElement = doc.body
+  while (
+    root.children.length === 1 &&
+    root.firstElementChild?.tagName === 'DIV' &&
+    ![...root.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())
+  ) {
+    root = root.firstElementChild as HTMLElement
+  }
   const marked = root.querySelector('.gmail_quote, .protonmail_quote, blockquote[type="cite"], #divRplyFwdMsg, .moz-cite-prefix')
   let start: Element | null = marked
   if (!start) {

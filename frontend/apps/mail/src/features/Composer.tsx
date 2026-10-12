@@ -1,7 +1,7 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bell, Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
+import { Bell, Bold, Italic, List, ListOrdered, Loader2, LockKeyhole, LockKeyholeOpen, Maximize2, Minimize2, MoreHorizontal, Paperclip, Quote, Send, Signature, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,6 +35,7 @@ import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-co
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Input } from '@kutup/ui/components/input'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -42,6 +43,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import { closeComposer, composerGeneration, openComposer, useComposer, type ComposerTarget } from './composerState'
 import { RecipientField } from './RecipientField'
+import { fontFamily, plainToHtml, wrapHtml, type ComposerLook } from './composerLook'
 import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
 
@@ -192,6 +194,8 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
         threadId: message.threadId,
         attachments: [],
         requestReceipt: !!parsed.receiptTo,
+        // Saved as plain text: opens as plain text again.
+        plain: parsed.html === null && parsed.text !== null,
       },
       html: parsed.html ?? (parsed.text ? quoted({ ...parsed, html: null }) : ''),
       attachments: [],
@@ -306,6 +310,11 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [encrypt, setEncrypt] = useState(true)
   // Proton's "Request read receipt".
   const [requestReceipt, setRequestReceipt] = useState(start.draft.requestReceipt ?? false)
+  // Proton's composer mode and text direction: the settings' defaults, then this message's own.
+  const [plain, setPlain] = useState(start.draft.plain ?? (target.kind === 'new' && mailSettings.data?.draftType === 'plain'))
+  const [plainText, setPlainText] = useState(() => (start.draft.plain ? start.draft.text : ''))
+  const [rtl, setRtl] = useState(mailSettings.data?.textDirection === 'rtl')
+  const look: ComposerLook = { fontFace: mailSettings.data?.fontFace ?? 'arial', fontSize: mailSettings.data?.fontSize ?? 14, rtl }
   // Sign starts on for Kutup recipients; for an outside one from its
   // contact's Sign choice, else "Sign outside mail", as Proton's "Sign
   // external messages" (docs/plans/contact-keys.md). Pressing the button
@@ -339,12 +348,14 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       cc,
       bcc,
       subject,
-      html: editor?.getHTML() ?? '',
-      text: editor?.getText({ blockSeparator: '\n' }) ?? '',
+      ...(plain
+        ? { html: '', text: plainText, plain: true }
+        : { html: wrapHtml(editor?.getHTML() ?? '', look), text: editor?.getText({ blockSeparator: '\n' }) ?? '', plain: false }),
       attachments: attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
       requestReceipt,
     }),
-    [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- look is rebuilt from these every render
+    [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt, plain, plainText, rtl, look.fontFace, look.fontSize],
   )
 
   /** Saves the draft now, after any save still running; resolves to its id. */
@@ -675,6 +686,22 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               className="h-10 rounded-none border-0 border-b border-border px-3 shadow-none focus-visible:ring-0"
             />
           </div>
+          {plain ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <textarea
+                value={plainText}
+                dir={rtl ? 'rtl' : 'ltr'}
+                aria-label={t('compose.body')}
+                placeholder={t('compose.bodyPlaceholder')}
+                className="h-full min-h-48 w-full resize-none bg-transparent px-3 py-2 font-mono text-sm focus:outline-none"
+                onChange={(e) => {
+                  setPlainText(e.target.value)
+                  setRevision((r) => r + 1)
+                }}
+              />
+            </div>
+          ) : (
+          <>
           <div className="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1">
             <ToolbarToggle editor={editor} label={t('compose.bold')} active={!!editor?.isActive('bold')} onClick={() => editor?.chain().focus().toggleBold().run()}>
               <Bold />
@@ -692,9 +719,11 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               <Quote />
             </ToolbarToggle>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto" dir={rtl ? 'rtl' : 'ltr'} style={{ fontFamily: fontFamily(look.fontFace), fontSize: `${look.fontSize}px` }}>
             <EditorContent editor={editor} />
           </div>
+          </>
+          )}
           {attachments.length ? (
             <ul aria-label={t('compose.attachments')} className="flex max-h-28 shrink-0 flex-wrap gap-2 overflow-y-auto border-t border-border p-2">
               {attachments.map((attachment) => (
@@ -746,6 +775,32 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
                 {t('compose.receipt')}
               </Button>
             </Tooltip>
+            <DropdownMenu>
+              <Tooltip label={t('compose.moreOptions')}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label={t('compose.moreOptions')}>
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+              </Tooltip>
+              <DropdownMenuContent align="start">
+                <DropdownMenuCheckboxItem
+                  checked={plain}
+                  onCheckedChange={(on) => {
+                    // Proton's plain text: the text kept, the formatting dropped.
+                    if (on) setPlainText(editor?.getText({ blockSeparator: '\n' }) ?? '')
+                    else editor?.commands.setContent(plainToHtml(plainText))
+                    setPlain(on)
+                    setRevision((r) => r + 1)
+                  }}
+                >
+                  {t('compose.plainText')}
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem checked={rtl} onCheckedChange={(on) => setRtl(on)}>
+                  {t('compose.rightToLeft')}
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <span className="flex-1" />
             <Tooltip label={t('compose.discard')}>
               <Button variant="ghost" size="icon" aria-label={t('compose.discard')} onClick={() => void discard()}>

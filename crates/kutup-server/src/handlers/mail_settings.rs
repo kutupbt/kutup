@@ -60,13 +60,36 @@ pub struct MailSettings {
     /// Undo send: 0, 5, 10 or 20 seconds a send waits before it goes
     /// (Proton's `DelaySendSeconds`, 10 by default).
     pub delay_send_seconds: i32,
+    /// New messages start as `html` or `plain` text (Proton's Composer mode).
+    pub draft_type: String,
+    /// `ltr` or `rtl` (Proton's Composer text direction).
+    pub text_direction: String,
+    /// The composer's default font and size in pixels (Proton's default
+    /// font/size: Arial, 14).
+    pub font_face: String,
+    pub font_size: i32,
 }
+
+/// The composer fonts (Proton's FONT_FACES).
+const FONT_FACES: [&str; 10] = [
+    "sans-serif",
+    "serif",
+    "georgia",
+    "arial",
+    "helvetica",
+    "monospace",
+    "tahoma",
+    "verdana",
+    "times",
+    "trebuchet",
+];
 
 /// The account's settings, the defaults when it has none saved.
 pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<MailSettings> {
     let row: Option<MailSettings> = sqlx::query_as(
         "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
-                view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds
+                view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
+                draft_type, text_direction, font_face, font_size
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -87,6 +110,10 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         spam_action: "ask".into(),
         remote_images: "ask".into(),
         delay_send_seconds: state.config.mail_default_delay_send_seconds,
+        draft_type: "html".into(),
+        text_direction: "ltr".into(),
+        font_face: "arial".into(),
+        font_size: 14,
     }))
 }
 
@@ -116,6 +143,10 @@ pub struct UpdateMailSettings {
     pub spam_action: Option<String>,
     pub remote_images: Option<String>,
     pub delay_send_seconds: Option<i32>,
+    pub draft_type: Option<String>,
+    pub text_direction: Option<String>,
+    pub font_face: Option<String>,
+    pub font_size: Option<i32>,
     pub view_layout: Option<String>,
     pub density: Option<String>,
     pub composer_mode: Option<String>,
@@ -159,6 +190,26 @@ pub async fn update(
         return Err(AppError::bad_request("undo send is 0, 5, 10 or 20 seconds"));
     }
     if request
+        .draft_type
+        .as_deref()
+        .is_some_and(|v| !["html", "plain"].contains(&v))
+        || request
+            .text_direction
+            .as_deref()
+            .is_some_and(|v| !["ltr", "rtl"].contains(&v))
+        || request
+            .font_face
+            .as_deref()
+            .is_some_and(|v| !FONT_FACES.contains(&v))
+        || request
+            .font_size
+            .is_some_and(|v| !(10..=26).contains(&v) || v % 2 != 0)
+    {
+        return Err(AppError::bad_request(
+            "composer: html or plain, ltr or rtl, a known font, 10 to 26 pixels",
+        ));
+    }
+    if request
         .spam_action
         .as_deref()
         .is_some_and(|a| !["ask", "just_spam", "spam_and_unsubscribe"].contains(&a))
@@ -184,12 +235,14 @@ pub async fn update(
     sqlx::query(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
-              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds)
+              view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
+              draft_type, text_direction, font_face, font_size)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
                  COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
                  COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
-                 COALESCE($15, $16))
+                 COALESCE($15, $16), COALESCE($17, 'html'), COALESCE($18, 'ltr'),
+                 COALESCE($19, 'arial'), COALESCE($20, 14))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -205,6 +258,10 @@ pub async fn update(
              spam_action = COALESCE($13, mail_settings.spam_action),
              remote_images = COALESCE($14, mail_settings.remote_images),
              delay_send_seconds = COALESCE($15, mail_settings.delay_send_seconds),
+             draft_type = COALESCE($17, mail_settings.draft_type),
+             text_direction = COALESCE($18, mail_settings.text_direction),
+             font_face = COALESCE($19, mail_settings.font_face),
+             font_size = COALESCE($20, mail_settings.font_size),
              updated_at = now()",
     )
     .bind(user_id)
@@ -223,6 +280,10 @@ pub async fn update(
     .bind(request.remote_images.as_deref())
     .bind(request.delay_send_seconds)
     .bind(state.config.mail_default_delay_send_seconds)
+    .bind(request.draft_type.as_deref())
+    .bind(request.text_direction.as_deref())
+    .bind(request.font_face.as_deref())
+    .bind(request.font_size)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

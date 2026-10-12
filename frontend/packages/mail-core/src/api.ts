@@ -777,6 +777,11 @@ export interface MailSettings {
   remoteImages: 'ask' | 'always'
   /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
   delaySendSeconds: number
+  /** Composer defaults (Proton's Composer mode, text direction, default font/size). */
+  draftType: 'html' | 'plain'
+  textDirection: 'ltr' | 'rtl'
+  fontFace: string
+  fontSize: number
   /** New mail to people outside Kutup starts with Sign on (Proton's "Sign external messages"). */
   signOutside: boolean
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
@@ -830,6 +835,8 @@ export interface Draft {
   receipt?: Receipt
   /** Scheduled send: when it goes (ISO 8601); it waits in Scheduled. */
   scheduleAt?: string
+  /** Plain text: sent as text/plain alone (Proton's plain text mode). */
+  plain?: boolean
 }
 
 export interface DraftAttachment {
@@ -892,6 +899,7 @@ export async function saveDraft(account: MailAccount, draft: Draft): Promise<Mai
     text: draft.text,
     // Kept in the draft itself, so it is still asked for when the draft opens again.
     requestReceipt: draft.requestReceipt,
+    plain: draft.plain,
   })
   const form = new FormData()
   form.append('meta', new Blob([JSON.stringify(meta(account, draft))], { type: 'application/json' }))
@@ -1071,7 +1079,7 @@ export async function sendDraft(
     autocryptKey: self.publicKey,
     requestReceipt: draft.requestReceipt,
   }
-  const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt }
+  const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt, plain: draft.plain }
   const message = buildMessage({ ...header, ...content })
   const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
   const local = everyone.filter((address) => address.endsWith(`@${account.domain}`))

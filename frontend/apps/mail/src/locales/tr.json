@@ -241,7 +241,10 @@
     "sendUndone": "Gönderme geri alındı.",
     "alreadySent": "İleti zaten gönderildi.",
     "undoFailed": "Gönderme geri alınamadı.",
-    "sendFailedLater": "İleti gönderilemedi, Taslaklar'da duruyor. {{reason}}"
+    "sendFailedLater": "İleti gönderilemedi, Taslaklar'da duruyor. {{reason}}",
+    "moreOptions": "Diğer seçenekler",
+    "plainText": "Düz metin",
+    "rightToLeft": "Sağdan sola"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -654,7 +657,18 @@
     "density": "Yoğunluk",
     "densityHint": "Listenin ne kadarının ekrana sığacağı.",
     "comfortable": "Rahat",
-    "compact": "Sıkışık"
+    "compact": "Sıkışık",
+    "composerDefaults": "Oluşturucu",
+    "draftType": "Oluşturucu modu",
+    "draftHtml": "Normal",
+    "draftPlain": "Düz metin",
+    "textDirection": "Oluşturucu yazı yönü",
+    "ltr": "Soldan sağa",
+    "rtl": "Sağdan sola",
+    "fontFace": "Varsayılan yazı tipi",
+    "fontSize": "Varsayılan yazı boyutu",
+    "pixels_one": "{{count}} px",
+    "pixels_other": "{{count}} px"
   },
   "listFilter": {
     "unread": "Okunmamış",

@@ -191,6 +191,8 @@ export interface OutgoingMessage {
   requestReceipt?: boolean
   /** This message is a read receipt (RFC 8098) for another: the body is a `multipart/report`. */
   receipt?: Receipt
+  /** Plain text: the body is `text/plain` alone, no HTML (Proton's plain text mode). */
+  plain?: boolean
 }
 
 /** What a read receipt reports: who read which message. */
@@ -240,10 +242,10 @@ function headerFields(message: OutgoingMessage): string[] {
  * multipart/alternative (text and HTML), inside multipart/mixed when there
  * are attachments. What PGP/MIME encrypts (RFC 3156).
  */
-export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'attachments' | 'receipt'>): Uint8Array {
+export function buildBody(message: Pick<OutgoingMessage, 'html' | 'text' | 'attachments' | 'receipt' | 'plain'>): Uint8Array {
   if (message.receipt) return reportBody(message.text, message.receipt)
   const alternativeBoundary = boundary()
-  const alternative = [
+  const alternative = message.plain ? `${textPart('text/plain', message.text)}\r\n` : [
     `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
     '',
     `--${alternativeBoundary}`,

@@ -52,6 +52,9 @@ describe('sanitizeMailHtml', () => {
     const look = { dark: false, quoteLabel: 'Show quoted text' }
     const html = body(sanitizeMailHtml('<p>Thanks!</p><p>On Monday, Ayşe wrote:</p><blockquote><p>Hi</p></blockquote>', { allowRemote: false, look }).document)
     expect(html).toMatch(/^<p>Thanks!<\/p><details class="kutup-quote"><summary[^>]*>…<\/summary><p>On Monday, Ayşe wrote:<\/p><blockquote>/)
+    // Wrapped whole in one <div> (font and direction, as Kutup's and Proton's composers write): still folded.
+    const wrapped = body(sanitizeMailHtml('<div style="font-family: Georgia, serif;"><p>Thanks!</p><p>On Monday, Ayşe wrote:</p><blockquote><p>Hi</p></blockquote></div>', { allowRemote: false, look }).document)
+    expect(wrapped).toContain('<p>Thanks!</p><details class="kutup-quote">')
     // A message that is all quote stays open.
     expect(body(sanitizeMailHtml('<blockquote><p>Hi</p></blockquote>', { allowRemote: false, look }).document)).not.toContain('<details')
     const text = plainTextDocument('Thanks!\n\nOn Monday, Ayşe wrote:\n> Hi\n>\n> there\n', look)
