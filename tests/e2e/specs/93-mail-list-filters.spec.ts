@@ -38,7 +38,7 @@ test('unread, attachments and oldest first; kept across opening a message', asyn
     await bobMail.getByRole('textbox', { name: 'Message' }).fill(`${subject} gövdesi`)
     const named = bobMail.getByRole('dialog', { name: subject })
     if (file) {
-      await bobMail.locator('input[type="file"]').setInputFiles({ name: 'rapor.txt', mimeType: 'text/plain', buffer: Buffer.from('rapor\n') })
+      await bobMail.locator('input[type="file"]:not([accept])').setInputFiles({ name: 'rapor.txt', mimeType: 'text/plain', buffer: Buffer.from('rapor\n') })
       await expect(named.getByText('rapor.txt')).toBeVisible({ timeout: 30_000 })
       await expect(named.getByLabel('Uploading')).toHaveCount(0, { timeout: 60_000 })
     }

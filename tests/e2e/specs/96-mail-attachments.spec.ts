@@ -38,7 +38,7 @@ test('files attached: preview, previous and next, Download all', async ({ browse
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await bobMail.getByRole('textbox', { name: 'Message' }).fill('iki dosya')
   const named = bobMail.getByRole('dialog', { name: subject })
-  await bobMail.locator('input[type="file"]').setInputFiles([
+  await bobMail.locator('input[type="file"]:not([accept])').setInputFiles([
     { name: 'notlar.txt', mimeType: 'text/plain', buffer: Buffer.from(`Notlar ${tag}\n`) },
     { name: 'nokta.png', mimeType: 'image/png', buffer: PNG },
   ])
