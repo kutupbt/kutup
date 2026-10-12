@@ -3413,6 +3413,9 @@ fn list_filters_and_sorts() {
             "subject": subject,
             "messageId": message_id,
             "attachmentCount": attachments,
+            "attachments": (0..attachments)
+                .map(|i| json!({ "name": format!("ek{i}.pdf"), "type": "application/pdf", "size": 100 + i }))
+                .collect::<Vec<_>>(),
             "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
         });
         let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
@@ -3521,6 +3524,46 @@ fn list_filters_and_sorts() {
     .send()
     .unwrap();
     assert_eq!(r.status(), 400);
+    // The files, readable for the list (Proton's AttachmentsMetadata); a
+    // conversation row names each one's message.
+    let rows = |query: &str| -> Vec<Value> {
+        let page: Value = bearer(
+            c.get(format!("{base}/api/mail/messages?folder=inbox{query}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        page["messages"].as_array().unwrap().clone()
+    };
+    let large_row = rows("")
+        .into_iter()
+        .find(|m| m["subject"] == "büyük")
+        .unwrap();
+    assert_eq!(
+        large_row["attachments"],
+        json!([
+            { "name": "ek0.pdf", "type": "application/pdf", "size": 100 },
+            { "name": "ek1.pdf", "type": "application/pdf", "size": 101 }
+        ])
+    );
+    let conversation = rows("&conversations=true")
+        .into_iter()
+        .find(|m| m["subject"] == "büyük")
+        .unwrap();
+    let files = conversation["conversation"]["attachments"]
+        .as_array()
+        .unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().all(|f| f["message"] == large_row["id"]));
+    assert_eq!(
+        rows("")
+            .into_iter()
+            .find(|m| m["subject"] == "küçük")
+            .unwrap()["attachments"],
+        json!([])
+    );
     // Read and unread.
     let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
         .json(&json!({ "ids": [middle_row["id"]], "seen": true }))
@@ -3560,7 +3603,12 @@ fn one_click_unsubscribe_goes_through_the_server() {
     let message = format!(
         "From: News <news@lists.outside.test>\r\nTo: {}\r\nSubject: Bülten\r\nMessage-ID: <{message_id}>\r\n\
          List-Unsubscribe: <https://lists.outside.test/u?id={tag}>, <mailto:leave@lists.outside.test>\r\n\
-         List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nHaberler.\r\n",
+         List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\nMIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=b\r\n\r\n\
+         --b\r\nContent-Type: text/html\r\n\r\n<p>Haberler.</p><img src=cid:logo>\r\n\
+         --b\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=logo.png\r\nContent-ID: <logo>\r\n\r\nPNG\r\n\
+         --b\r\nContent-Type: application/pdf; name=bulten.pdf\r\nContent-Disposition: attachment; filename=bulten.pdf\r\n\r\nPDF-1\r\n\
+         --b--\r\n",
         alice_address.address
     );
     let (rcpt, data) = smtp_send(&smtp_address, &alice_address.address, &message);
@@ -3569,6 +3617,11 @@ fn one_click_unsubscribe_goes_through_the_server() {
     assert_eq!(row["unsubscribed"], false);
     // Noted on arrival: list mail (Proton's SpamAction asks on Spam).
     assert_eq!(row["unsubscribable"], true);
+    // Its files, not the inline image, for the list.
+    assert_eq!(
+        row["attachments"],
+        json!([{ "name": "bulten.pdf", "type": "application/pdf", "size": 5 }])
+    );
     let id = row["id"].as_str().unwrap().to_string();
 
     // Someone else's message: not found.

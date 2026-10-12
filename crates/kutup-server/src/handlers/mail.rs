@@ -76,6 +76,8 @@ pub struct MailMessage {
     /// The reader sent the read receipt its sender asked for (Proton's
     /// "Read receipt sent").
     pub receipt_sent: bool,
+    /// Its attached files (Proton's AttachmentsMetadata), for the list.
+    pub attachments: Vec<crate::mail::headers::AttachmentMeta>,
     /// The distribution list or shared mailbox it came through.
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
@@ -100,6 +102,9 @@ pub struct MailConversation {
     pub senders: Vec<MailMailbox>,
     /// Attachments across them.
     pub attachment_count: i64,
+    /// Their attached files, oldest message first (Proton's
+    /// AttachmentsMetadata for a conversation).
+    pub attachments: Vec<crate::mail::headers::AttachmentMeta>,
 }
 
 /// What moving or marking one message of a conversation needs.
@@ -237,6 +242,7 @@ pub(crate) struct Row {
     unsubscribed: bool,
     unsubscribable: bool,
     receipt_sent: bool,
+    attachments: sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
 }
@@ -247,7 +253,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
     seen, starred, protection,
     size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
     reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
-    unsubscribable, receipt_sent,
+    unsubscribable, receipt_sent, attachments,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
     (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
@@ -282,6 +288,7 @@ impl From<Row> for MailMessage {
             unsubscribed: row.unsubscribed,
             unsubscribable: row.unsubscribable,
             receipt_sent: row.receipt_sent,
+            attachments: row.attachments.0,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
             conversation: None,
@@ -583,6 +590,7 @@ type ConversationRow = (
     i64,
     i64,
     i64,
+    sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
 );
 
 /// [`list_messages`] by conversation: each thread's newest message in the
@@ -625,7 +633,7 @@ async fn list_conversations(
     let messages = threads
         .into_iter()
         .filter_map(
-            |(id, _, members, unread, starred, senders, attachments, _, _)| {
+            |(id, _, members, unread, starred, senders, attachments, _, _, files)| {
                 // Moved or deleted between the two reads: left for the next refresh.
                 let mut message = MailMessage::from(by_id.remove(&id)?);
                 message.conversation = Some(MailConversation {
@@ -634,6 +642,7 @@ async fn list_conversations(
                     starred,
                     senders: senders.0,
                     attachment_count: attachments,
+                    attachments: files.0,
                 });
                 Some(message)
             },
@@ -661,7 +670,8 @@ async fn conversation_rows(
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
         "WITH here AS (
              SELECT id, thread_id, folder, direction, custom_folder, received_at, seen, starred,
-                    from_address, from_name, attachment_count, size_bytes, unsubscribable
+                    from_address, from_name, attachment_count, size_bytes, unsubscribable,
+                    attachments
                FROM mail_messages
               WHERE {place_filter}
          ), threads AS (
@@ -685,7 +695,10 @@ async fn conversation_rows(
                                          min(received_at) AS first_at
                                     FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
                                    GROUP BY from_address) s), '[]'::jsonb),
-                t.attachments, t.total_size, count(*) OVER ()
+                t.attachments, t.total_size, count(*) OVER (),
+                COALESCE((SELECT jsonb_agg(e.a || jsonb_build_object('message', h.id) ORDER BY h.received_at, h.id, e.n)
+                            FROM here h, jsonb_array_elements(h.attachments) WITH ORDINALITY AS e(a, n)
+                           WHERE h.thread_id = t.thread_id), '[]'::jsonb)
            FROM threads t
           WHERE ($10::bool IS NULL OR (t.unread > 0) = $10)
             AND (NOT $11 OR t.attachments > 0)

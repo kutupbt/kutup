@@ -274,7 +274,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       subject,
       html: editor?.getHTML() ?? '',
       text: editor?.getText({ blockSeparator: '\n' }) ?? '',
-      attachments: attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name, type: '', size: a.size })),
+      attachments: attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name, type: a.part ? describePart(a.part).type : '', size: a.size })),
       requestReceipt,
     }),
     [start.draft, to, cc, bcc, subject, editor, attachments, requestReceipt],

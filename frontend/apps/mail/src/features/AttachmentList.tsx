@@ -73,7 +73,7 @@ export function AttachmentList({ list, subject }: { list: ParsedAttachment[]; su
 }
 
 /** One file shown in place, with the others a step away (Proton's preview has previous and next). */
-function Preview({ files, index, onIndex, onClose, name }: { files: ParsedAttachment[]; index: number; onIndex: (i: number) => void; onClose: () => void; name: (file: ParsedAttachment) => string }) {
+export function Preview({ files, index, onIndex, onClose, name }: { files: ParsedAttachment[]; index: number; onIndex: (i: number) => void; onClose: () => void; name: (file: ParsedAttachment) => string }) {
   const { t, i18n } = useTranslation()
   const file = files[index]
   const kind = previewKind(file)

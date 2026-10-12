@@ -748,7 +748,9 @@
     "preview": "Önizle",
     "position": "{{index}} / {{count}}",
     "previous": "Önceki dosya",
-    "next": "Sonraki dosya"
+    "next": "Sonraki dosya",
+    "previewNamed": "{{name}} önizle",
+    "openFailed": "Dosya açılamadı."
   },
   "selectAll": {
     "selected": {

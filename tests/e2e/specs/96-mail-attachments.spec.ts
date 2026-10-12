@@ -53,6 +53,16 @@ test('files attached: preview, previous and next, Download all', async ({ browse
     await mail.reload()
     await expect(mail.getByRole('link', { name: new RegExp(subject) })).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 60_000 })
+  // In the list: the files as chips under the row (Proton's thumbnails); one
+  // opens the preview from the list, decrypted on the device.
+  const row = mail.locator('li').filter({ has: mail.getByRole('link', { name: new RegExp(subject) }) })
+  await expect(row.getByRole('button', { name: 'Preview notlar.txt' })).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Preview nokta.png' })).toBeVisible()
+  await row.getByRole('button', { name: 'Preview notlar.txt' }).click()
+  const fromList = mail.getByRole('dialog', { name: 'notlar.txt' })
+  await expect(fromList.getByLabel('notlar.txt')).toHaveText(`Notlar ${tag}\n`, { timeout: 60_000 })
+  await mail.keyboard.press('Escape')
+  await expect(fromList).toHaveCount(0)
   await mail.getByRole('link', { name: new RegExp(subject) }).click()
   const files = mail.getByRole('region', { name: '2 attachments' })
   await expect(files.getByText('2 files attached')).toBeVisible({ timeout: 60_000 })

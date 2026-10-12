@@ -1,6 +1,6 @@
 import { unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
-import { previewKind, zipAttachments } from './attachments'
+import { listedAttachments, previewKind, zipAttachments } from './attachments'
 
 describe('attachments', () => {
   it('preview images, PDFs, media and text, never HTML', () => {
@@ -26,5 +26,18 @@ describe('attachments', () => {
     const files = unzipSync(zip)
     expect(Object.keys(files).sort()).toEqual(['.._kaçak_yol.txt', 'adsız', 'rapor (1).txt', 'rapor.txt'])
     expect(new TextDecoder().decode(files['rapor (1).txt'])).toBe('2')
+  })
+})
+
+describe('files in the list', () => {
+  it('leaves out invites and keys, as Proton', () => {
+    const files = [
+      { name: 'rapor.pdf', type: 'application/pdf' },
+      { name: 'davet.ics', type: 'text/calendar' },
+      { name: 'anahtar.asc', type: 'application/pgp-keys' },
+      { name: 'publickey.asc', type: 'application/octet-stream' },
+      { name: 'foto.jpg', type: 'image/jpeg' },
+    ]
+    expect(listedAttachments(files).map((f) => f.name)).toEqual(['rapor.pdf', 'foto.jpg'])
   })
 })

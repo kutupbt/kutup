@@ -73,6 +73,8 @@ export interface MailMessage {
   unsubscribable?: boolean
   /** The reader sent the read receipt the sender asked for. */
   receiptSent?: boolean
+  /** Its attached files, for the list. */
+  attachments?: AttachmentMeta[]
   /** The distribution list or shared mailbox it came through. */
   groupAddress: string | null
   /** A shared mailbox's sent mail: the member who sent it. */
@@ -90,6 +92,15 @@ export interface ConversationMember {
   unsubscribable?: boolean
 }
 
+/** An attached file as the list knows it (Proton's AttachmentsMetadata): readable, as the subject is. */
+export interface AttachmentMeta {
+  name: string
+  type: string
+  size: number
+  /** In a conversation row: the message it is attached to. */
+  message?: string
+}
+
 /** A conversation in one place, as Proton's ContextNumMessages and ContextNumUnread. */
 export interface MailConversation {
   /** Its messages here, oldest first. */
@@ -99,6 +110,8 @@ export interface MailConversation {
   /** Who wrote them, each once, in the order they first wrote. */
   senders: Mailbox[]
   attachmentCount: number
+  /** Their attached files, oldest message first. */
+  attachments?: AttachmentMeta[]
 }
 
 /** The messages a row stands for: a conversation's members here, else the message itself. */
@@ -785,6 +798,7 @@ function meta(account: MailAccount, draft: Draft) {
     ...(draft.inReplyTo ? { inReplyTo: draft.inReplyTo } : {}),
     references: draft.references ?? [],
     attachmentCount: draft.attachments.length,
+    attachments: draft.attachments.map(({ name, type, size }) => ({ name, type, size })),
     ...(draft.threadId ? { threadId: draft.threadId } : {}),
   }
 }
@@ -1070,6 +1084,9 @@ export async function sendDraft(
         [
           JSON.stringify({
             ...meta(account, draft),
+            // Every part sent, forwarded ones and an attached key too.
+            attachmentCount: attachmentParts.length,
+            attachments: attachmentParts.map(describePart),
             ...(as ? { fromName: as.name, fromGroup: as.groupId } : {}),
             keyPackets,
             pgp,

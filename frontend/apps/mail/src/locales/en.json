@@ -748,7 +748,9 @@
     "preview": "Preview",
     "position": "{{index}} of {{count}}",
     "previous": "Previous file",
-    "next": "Next file"
+    "next": "Next file",
+    "previewNamed": "Preview {{name}}",
+    "openFailed": "The file could not be opened."
   },
   "selectAll": {
     "selected": {

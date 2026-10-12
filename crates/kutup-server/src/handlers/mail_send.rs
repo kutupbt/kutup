@@ -85,6 +85,10 @@ pub struct MailMeta {
     pub references: Vec<String>,
     #[serde(default)]
     pub attachment_count: i32,
+    /// Each attached file's name, type and size: readable, for the list,
+    /// as the subject is (Proton's AttachmentsMetadata).
+    #[serde(default)]
+    pub attachments: Vec<headers::AttachmentMeta>,
     /// The thread a reply belongs to, when the browser knows it.
     pub thread_id: Option<String>,
 }
@@ -264,6 +268,9 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
     if !(0..=100).contains(&meta.attachment_count) {
         return Err(AppError::bad_request("attachmentCount out of range"));
     }
+    if meta.attachments.len() > headers::MAX_ATTACHMENTS {
+        return Err(AppError::bad_request("100 attachments at most"));
+    }
     Ok(Checked {
         readable: Readable {
             subject: headers::clip(headers::single_line(&meta.subject).trim(), 1000),
@@ -285,6 +292,11 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
             // From is the sending account's own address, checked here.
             from_authenticated: true,
             list_unsubscribe: false,
+            attachments: meta
+                .attachments
+                .iter()
+                .map(|a| headers::AttachmentMeta::clipped(&a.name, &a.mime_type, a.size))
+                .collect(),
         },
         bcc,
     })
@@ -532,7 +544,7 @@ pub async fn update_draft(
             "UPDATE mail_messages SET object_key = $3, object_version = $4, size_bytes = $5,
                     subject = $6, from_address = $7, from_name = $8, to_list = $9, cc_list = $10,
                     bcc_list = $11, message_id = $12, in_reply_to = $13, references_list = $14,
-                    attachment_count = $15, sent_at = now(), received_at = now()
+                    attachment_count = $15, attachments = $16, sent_at = now(), received_at = now()
               WHERE id = $1 AND user_id = $2",
         )
         .bind(id)
@@ -550,6 +562,7 @@ pub async fn update_draft(
         .bind(&readable.in_reply_to)
         .bind(&readable.references)
         .bind(readable.attachment_count)
+        .bind(sqlx::types::Json(&readable.attachments))
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -1619,6 +1632,7 @@ mod tests {
             in_reply_to: Some("<parent@example.org>".into()),
             references: vec!["root@example.org".into()],
             attachment_count: 1,
+            attachments: Vec::new(),
             thread_id: None,
         }
     }
