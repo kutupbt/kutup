@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { openWhenArrived } from '../fixtures/mail'
 
 // Mail between two Kutup users (docs/plans/mail.md, C2): written in the
 // browser, encrypted once for the recipient and the sender's copy, opened
@@ -70,8 +71,7 @@ test('two Kutup users exchange end-to-end encrypted mail, with replies, filing a
   // The toast may be the last send's: wait for this composer to close.
   await expect(bobMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
   await aliceMail.getByRole('link', { name: /^Inbox( \d+)?$/ }).click()
-  await aliceMail.reload()
-  await aliceMail.getByRole('link', { name: new RegExp(`Re: ${subject}`) }).click()
+  await openWhenArrived(aliceMail, new RegExp(`Re: ${subject}`))
   // The thread: her own message folded to a line, Bob's reply open.
   await expect(aliceMail.getByRole('article')).toHaveCount(1, { timeout: 30_000 })
   await expect(aliceMail.getByRole('button', { name: new RegExp(`${alice.username}.*End-to-end encrypted`) })).toBeVisible()

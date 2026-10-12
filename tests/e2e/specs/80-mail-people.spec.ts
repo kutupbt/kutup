@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { openWhenArrived } from '../fixtures/mail'
 
 // People in Mail: a sender who is not in Contacts gets a banner on their
 // message with Save to contacts, as a new contact or another address of
@@ -56,8 +57,7 @@ test('saving senders to contacts, person cards, a dark body and folded quotes', 
   // Bob writes to Alice, who has nobody in her contacts.
   const subject = `Tanışma ${tag}`
   await write(bobMail, `${alice.username}@${domain}`, subject, 'Merhaba Alice, ben Bob.')
-  await aliceMail.reload()
-  await aliceMail.getByRole('link', { name: new RegExp(subject) }).click()
+  await openWhenArrived(aliceMail, new RegExp(subject))
   const body = aliceMail.frameLocator('iframe[title="Message"]').last()
   await expect(body.getByText('Merhaba Alice, ben Bob.')).toBeVisible({ timeout: 60_000 })
 
@@ -129,8 +129,7 @@ test('saving senders to contacts, person cards, a dark body and folded quotes', 
   await expect(aliceMail.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
   // The toast may be the last send's: wait for this composer to close.
   await expect(aliceMail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
-  await bobMail.reload()
-  await bobMail.getByRole('link', { name: new RegExp(`Re: ${subject}`) }).click()
+  await openWhenArrived(bobMail, new RegExp(`Re: ${subject}`))
   const answer = bobMail.frameLocator('iframe[title="Message"]').last()
   await expect(answer.getByText('Memnun oldum Bob.')).toBeVisible({ timeout: 60_000 })
   await expect(answer.getByText('Merhaba Alice, ben Bob.')).toBeHidden()

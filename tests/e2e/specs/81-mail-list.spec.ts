@@ -49,6 +49,11 @@ test('choosing, right-click actions, undo, drag to a folder, shortcuts and the m
   const list = aliceMail.getByRole('list', { name: 'Messages' })
   const row = (subject: string) => list.getByRole('listitem').filter({ hasText: subject })
   await expect(row(subjects[0])).toBeVisible({ timeout: 60_000 })
+  // Each send is held for undo send: the last one arrives last.
+  await expect(async () => {
+    if (!(await row(subjects[4]).isVisible())) await aliceMail.reload()
+    await expect(row(subjects[4])).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
   // Newest first: 5, 4, 3, 2, 1.
 
   // Ctrl-click chooses without opening; Shift-click chooses the range.

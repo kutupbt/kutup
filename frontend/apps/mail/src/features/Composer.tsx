@@ -510,6 +510,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     setSending(true)
     try {
       await saving.current
+      // Saved first, always: undo send holds a saved draft (one sent before
+      // its first autosave would otherwise go at once).
+      if (!draftId.current) await save()
       closed.current = true
       const parts = await Promise.all(
         attachments.map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),

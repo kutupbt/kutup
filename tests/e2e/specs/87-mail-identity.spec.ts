@@ -57,7 +57,10 @@ test('display name and signature: set in Settings, used when writing', async ({ 
   await expect(mail.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0, { timeout: 60_000 })
 
   // Bob sees the name and the signature.
-  await bobMail.reload()
+  await expect(async () => {
+    await bobMail.reload()
+    await expect(bobMail.getByRole('link', { name: new RegExp(subject) })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
   await bobMail.getByRole('link', { name: new RegExp(subject) }).click()
   await expect(bobMail.getByRole('article').getByText('Alice Yılmaz').first()).toBeVisible({ timeout: 60_000 })
   const body = bobMail.frameLocator('iframe[title="Message"]').last()
