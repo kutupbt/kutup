@@ -18,6 +18,8 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   const alice = newAccount('isalice', PASSWORD)
   await registerAccount(context, alice)
   const mail = await context.newPage()
+  await mail.goto(appUrl('mail'))
+  await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   await mail.goto(appUrl('mail', '/settings/general'))
 
   // Both on by default; turned off and kept.
