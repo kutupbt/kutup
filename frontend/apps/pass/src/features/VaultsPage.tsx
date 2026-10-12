@@ -1,5 +1,6 @@
 import { LockKeyhole, LockKeyholeOpen, Plus, Vault } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Alert } from '@kutup/ui/components/alert'
@@ -12,6 +13,7 @@ import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { AUTO_LOCK_CHOICES, setAutoLockMinutes, setUnlockMode, useAutoLockMinutes, useUnlockMode, type AutoLockMinutes, type UnlockMode } from '../sync/autoLock'
 import { useVaultSession } from '../sync/openVaults'
 import { usePinStatus } from '../sync/pin'
+import { SITE_ICON_MODES, useSaveSiteIconsMode, useSiteIconsMode, type SiteIconsMode } from '../sync/siteIcons'
 import { CreateVaultDialog } from './CreateVaultDialog'
 import { PinDialog, type PinAction } from './PinDialog'
 
@@ -121,6 +123,37 @@ function AutoLockSetting() {
   )
 }
 
+/** How entries get their website's icon, for the whole account. */
+function SiteIconsSetting() {
+  const { t } = useTranslation()
+  const mode = useSiteIconsMode()
+  const save = useSaveSiteIconsMode()
+  return (
+    <section className="mt-6 max-w-3xl space-y-1.5" aria-labelledby="site-icons-label">
+      <h2 id="site-icons-label" className="text-sm font-medium">
+        {t('siteIcons.label')}
+      </h2>
+      <p className="text-xs text-muted-foreground">{mode ? t(`siteIcons.about.${mode}`) : t('siteIcons.description')}</p>
+      <Select
+        value={mode}
+        disabled={!mode}
+        onValueChange={(value) => void save(value as SiteIconsMode).catch(() => toast.error(t('siteIcons.saveFailed')))}
+      >
+        <SelectTrigger className="w-72" aria-labelledby="site-icons-label">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {SITE_ICON_MODES.map((choice) => (
+            <SelectItem key={choice} value={choice}>
+              {t(`siteIcons.${choice}`)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </section>
+  )
+}
+
 /** Every vault the account can open, and a way to make one. */
 export function VaultsPage({ creating: startCreating = false }: { creating?: boolean }) {
   const { t } = useTranslation()
@@ -162,6 +195,7 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
         </ul>
       )}
       <AutoLockSetting />
+      <SiteIconsSetting />
       <p className="mt-8 max-w-3xl text-xs text-muted-foreground">{t('vaults.keepassNote')}</p>
       <CreateVaultDialog
         open={creating}

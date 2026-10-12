@@ -36,6 +36,7 @@ pub mod mail_sending;
 pub mod mail_settings;
 pub mod name_hashes;
 pub mod pass;
+pub mod pass_icons;
 pub mod sessions;
 pub mod shares;
 pub mod storage;

@@ -52,7 +52,8 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
 
 /// Globally routable unicast: not loopback, private, link-local, shared
 /// (CGNAT), multicast, broadcast, documentation, benchmarking, reserved,
-/// unique-local, or an IPv4 address wrapped in IPv6.
+/// unique-local, discard-only, or IPv6 that carries or reaches IPv4 space
+/// (mapped, compatible, NAT64, 6to4, Teredo).
 pub fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_v4(ip),
@@ -69,9 +70,15 @@ pub fn is_public(ip: IpAddr) -> bool {
                 || (segments[0] & 0xffc0) == 0xfe80
                 // 2001:db8::/32 documentation
                 || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                // 64:ff9b::/96 NAT64 and ::/96 IPv4-compatible can reach IPv4 space
+                // Prefixes that carry or reach IPv4 space: 64:ff9b::/96 NAT64,
+                // 64:ff9b:1::/48 local-use NAT64, 2002::/16 6to4, 2001::/32
+                // Teredo, and ::/96 IPv4-compatible
                 || (segments[0] == 0x0064 && segments[1] == 0xff9b)
-                || segments[..6] == [0, 0, 0, 0, 0, 0])
+                || segments[0] == 0x2002
+                || (segments[0] == 0x2001 && segments[1] == 0)
+                || segments[..6] == [0, 0, 0, 0, 0, 0]
+                // 100::/64 discard-only
+                || segments[..4] == [0x0100, 0, 0, 0])
         }
     }
 }
@@ -116,6 +123,35 @@ mod tests {
             "fe80::1",
         ] {
             assert!(is_private_ip(ip.parse().unwrap()), "{ip} should be private");
+        }
+    }
+
+    #[test]
+    fn ipv6_that_reaches_ipv4_space_is_not_public() {
+        for ip in [
+            "::ffff:127.0.0.1",
+            "::7f00:1",
+            "64:ff9b::a00:1",
+            "64:ff9b::808:808",
+            "64:ff9b:1::a00:1",
+            "64:ff9b:1:ffff::1",
+            "2002:7f00:1::",
+            "2002:a00:1::1",
+            "2002:808:808::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "100::1",
+        ] {
+            assert!(!is_public(ip.parse().unwrap()), "{ip} should not be public");
+        }
+        for ip in [
+            "2606:4700:4700::1111",
+            "2001:4860:4860::8888",
+            "2a00:1450:4001::1",
+            "64:ff9c::1",
+            "2003::1",
+            "101::1",
+        ] {
+            assert!(is_public(ip.parse().unwrap()), "{ip} should be public");
         }
     }
 
