@@ -14,8 +14,10 @@ test('remote images: the setting, and senders whose images always load', async (
   await registerAccount(context, newAccount('rimages', PASSWORD))
   const mail = await context.newPage()
   const signedIn = mail.waitForRequest((r) => new URL(r.url()).pathname.startsWith('/api/mail/') && !!r.headers().authorization)
-  await mail.goto(appUrl('mail', '/settings/general'))
+  await mail.goto(appUrl('mail'))
+  await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   const authorization = (await signedIn).headers().authorization
+  await mail.goto(appUrl('mail', '/settings/general'))
 
   // Every sender: saved, and kept.
   const setting = mail.getByRole('combobox', { name: 'Load remote images' })
