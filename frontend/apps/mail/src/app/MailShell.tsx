@@ -278,8 +278,8 @@ export function MailShell() {
           </Button>
         </Tooltip>
         <UserMenu
-          name={session.username ?? session.email}
-          email={session.email}
+          name={session.username ?? session.address}
+          email={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => window.location.assign(appUrl('account', '/login')))

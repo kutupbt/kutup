@@ -22,7 +22,9 @@ export function AccountSettingsPage() {
       <Section title={t('settings.account.details')}>
         <Card>
           <CardContent className="grid gap-5 p-5 sm:grid-cols-2">
-            <Fact label={t('auth.fields.email')}>{session.email}</Fact>
+            <Fact label={t('settings.account.address')}>
+              <Mono>{session.address}</Mono>
+            </Fact>
             <Fact label={t('auth.fields.username')}>
               {session.username ? <Mono>{session.username}</Mono> : t('settings.account.noUsername')}
             </Fact>

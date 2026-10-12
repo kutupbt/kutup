@@ -383,18 +383,28 @@ pub async fn add_key(
     let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let binding = crate::handlers::auth::envelope_binding(&state.pool, user_id).await?;
     let header = account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
-    if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey
-        || header.canonical_login_email != binding
-    {
+    if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey {
         return Err(AppError::bad_request(
             "privateKeyEnvelope is not this account's mail key",
         ));
     }
 
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
+    // Read in the write's own transaction (FOR SHARE): a re-seal of the
+    // account (which takes the row FOR UPDATE) is waited for, and a key
+    // sealed for the binding it replaced is refused.
+    let binding: String =
+        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1 FOR SHARE")
+            .bind(user_id)
+            .fetch_one(&mut *change.tx)
+            .await?;
+    if header.canonical_login_email != binding {
+        return Err(AppError::bad_request(
+            "privateKeyEnvelope is not this account's mail key",
+        ));
+    }
     let new_entry = (
         hex::encode(info.fingerprint),
         hex::encode(info.sha256_fingerprint),

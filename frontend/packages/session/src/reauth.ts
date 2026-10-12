@@ -34,7 +34,7 @@ export class ReauthLockedError extends Error {
 export async function accountLoginKey(password: string): Promise<string> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  const { data } = await api.get<Preflight>('/auth/login/preflight', { params: { email: session.email } })
+  const { data } = await api.get<Preflight>('/auth/login/preflight', { params: { name: session.username ?? session.address } })
   const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(password, {
     suite: data.accountProtectionSuite,
     salt: data.accountProtectionSalt,

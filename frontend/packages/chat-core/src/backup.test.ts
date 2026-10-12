@@ -256,7 +256,7 @@ async function open(
 ) {
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
-    email: 'user@kutup.dev',
+    envelopeBinding: 'user@kutup.dev',
     username: 'user',
     serverName: 'kutup.dev',
     masterKey: new Uint8Array(32).fill(3),
@@ -879,7 +879,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       const base = runtime(transport)
       const coordinator = await ChatBackupCoordinator.open({
         databaseName: database,
-        email: 'user@kutup.dev',
+        envelopeBinding: 'user@kutup.dev',
         username: 'user',
         serverName: 'kutup.dev',
         masterKey: new Uint8Array(32).fill(3),

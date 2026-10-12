@@ -150,7 +150,8 @@ export interface SegmentPage {
 
 export interface ChatBackupOptions {
   databaseName: string
-  email: string
+  /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
+  envelopeBinding: string
   username: string
   serverName: string
   masterKey: Uint8Array
@@ -453,7 +454,7 @@ export class ChatBackupCoordinator {
         status.rootEnvelope,
         options.masterKey,
         ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot,
-        options.email,
+        options.envelopeBinding,
       )
       backupIncarnationId = status.signerAuthorization.backupIncarnationId
     } else {
@@ -469,7 +470,7 @@ export class ChatBackupCoordinator {
         root,
         options.masterKey,
         ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot,
-        options.email,
+        options.envelopeBinding,
       )
       status = await runtime.transport.provision({
         operationId: runtime.ids.randomUuid(),

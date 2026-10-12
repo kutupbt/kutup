@@ -137,7 +137,8 @@ export class ChatServiceError extends Error {
 
 export interface ChatServiceOptions {
   userId: string
-  email: string
+  /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
+  envelopeBinding: string
   username: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
@@ -371,7 +372,7 @@ export class ChatService {
       if (capabilities.backup?.alwaysEnabled) {
         service.backup = await ChatBackupCoordinator.open({
           databaseName,
-          email: options.email,
+          envelopeBinding: options.envelopeBinding,
           username: options.username,
           serverName: capabilities.serverName!,
           masterKey: options.masterKey,

@@ -257,7 +257,7 @@ export function openChat(session: Session): void {
     try {
       service = await ChatService.open({
         userId: session.userId,
-        email: session.email,
+        envelopeBinding: session.envelopeBinding,
         username: session.username,
         masterKey: session.masterKey,
         capabilities,

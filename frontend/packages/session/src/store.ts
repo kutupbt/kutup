@@ -12,7 +12,14 @@ export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
   userId: string
-  email: string
+  /** The account's Kutup address (`username@<domain>`): its identity, shown in menus. */
+  address: string
+  /**
+   * What the account's sealed keys are bound to (docs/plans/account-identity.md):
+   * its key binding, or its old sign-in email until they are re-sealed. Every
+   * seal and open uses it; it names no one.
+   */
+  envelopeBinding: string
   username: string | null
   isAdmin: boolean
   storageQuotaBytes: number

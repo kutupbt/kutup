@@ -291,19 +291,6 @@ fn validate_account_protection(
     .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
 }
 
-/// The string an account's envelopes carry now: its key binding once they
-/// are re-sealed, its sign-in email (canonical) before
-/// (docs/plans/account-identity.md). Every envelope header is checked
-/// against it, never against a name.
-pub(crate) async fn envelope_binding(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<String> {
-    Ok(
-        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?,
-    )
-}
-
 /// A key binding as drawn: a UUID v4, lowercase and hyphenated.
 pub(crate) fn is_key_binding(value: &str) -> bool {
     Uuid::parse_str(value)

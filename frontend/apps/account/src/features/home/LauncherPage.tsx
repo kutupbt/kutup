@@ -22,7 +22,7 @@ export function LauncherPage() {
   return (
     <PageBody>
       <PageHeader
-        title={t('launcher.title', { name: session.username ?? session.email })}
+        title={t('launcher.title', { name: session.username ?? session.address })}
         description={t('launcher.description')}
       />
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

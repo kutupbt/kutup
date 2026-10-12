@@ -6,7 +6,9 @@ import { setAccessToken, setSession } from './store'
 
 export interface MeResponse {
   id: string
-  email: string
+  /** The Kutup address. */
+  address: string
+  envelopeBinding: string
   username: string
   publicKey: string
   totpEnabled: boolean
@@ -41,7 +43,8 @@ export async function activateSession(
     {
       sessionId,
       userId: me.id,
-      email: me.email,
+      address: me.address,
+      envelopeBinding: me.envelopeBinding,
       username: me.username || null,
       isAdmin: me.isAdmin,
       storageQuotaBytes: me.storageQuotaBytes,

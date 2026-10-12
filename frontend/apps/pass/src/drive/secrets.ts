@@ -30,7 +30,7 @@ export async function keptKey(session: Session, rows: SecretRow[] | undefined, f
   const row = rows?.find((r) => r.fileId === fileId)
   if (!row) return null
   try {
-    const secret = await openPassVaultSecret(row.envelope, toBase64(session.masterKey), session.email, fileId)
+    const secret = await openPassVaultSecret(row.envelope, toBase64(session.masterKey), session.envelopeBinding, fileId)
     return { password: secret.password, keyFile: secret.keyFile ? fromBase64(secret.keyFile) : null }
   } catch {
     // Sealed for another account or vault: as if there were none.
@@ -42,7 +42,7 @@ export function useKeepVaultKey() {
   const queryClient = useQueryClient()
   return async (session: Session, fileId: string, key: VaultKeyInput): Promise<void> => {
     const keyFile = key.keyFile ? await keyFileSecret(key.keyFile) : null
-    const envelope = await sealPassVaultSecret(toBase64(session.masterKey), session.email, fileId, {
+    const envelope = await sealPassVaultSecret(toBase64(session.masterKey), session.envelopeBinding, fileId, {
       password: key.password,
       keyFile: keyFile ? toBase64(keyFile) : null,
     })

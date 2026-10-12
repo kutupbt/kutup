@@ -60,7 +60,7 @@ const seedAuth = (token: string | null) => {
   setSession({
     sessionId: 's',
     userId: 'u',
-    email: 'a@b.c',
+    address: 'a@b.c', envelopeBinding: 'a@b.c',
     username: null,
     masterKey: new Uint8Array(0),
     privateKey: new Uint8Array(0),

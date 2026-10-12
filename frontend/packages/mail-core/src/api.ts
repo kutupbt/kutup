@@ -232,7 +232,7 @@ export function useMailAccount() {
         .catch(() => null)
       const sealed = (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
         masterKeyBase64: toBase64(session.masterKey),
-        loginEmail: session.email,
+        loginEmail: session.envelopeBinding,
         address: address.address,
         envelope: key.privateKeyEnvelope,
         fingerprint: key.fingerprint,

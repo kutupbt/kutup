@@ -10,7 +10,7 @@ import type { Session } from '@kutup/session/store'
  */
 export async function addFirstAddressKey(session: Session, address: { id: string; address: string }) {
   const masterKey = toBase64(session.masterKey)
-  const key = await generateMailAddressKey(masterKey, session.email, address.address)
+  const key = await generateMailAddressKey(masterKey, session.envelopeBinding, address.address)
   const list = await signMailKeyList(masterKey, {
     account: address.address,
     address: address.address,

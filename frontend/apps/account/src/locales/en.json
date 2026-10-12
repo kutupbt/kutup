@@ -162,7 +162,8 @@
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
       "colourAuto": "Automatic",
       "colourFailed": "The colour could not be saved.",
-      "details": "Account details"
+      "details": "Account details",
+      "address": "Kutup address"
     },
     "security": {
       "title": "Security",

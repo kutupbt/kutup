@@ -162,7 +162,8 @@
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
       "colourAuto": "Otomatik",
       "colourFailed": "Renk kaydedilemedi.",
-      "details": "Hesap bilgileri"
+      "details": "Hesap bilgileri",
+      "address": "Kutup adresi"
     },
     "security": {
       "title": "Güvenlik",
