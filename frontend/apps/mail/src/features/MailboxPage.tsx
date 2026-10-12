@@ -5,6 +5,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
 import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { oneTimeCode } from '@kutup/mail-core/oneTimeCode'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
@@ -47,6 +48,7 @@ import { ThreadView } from './ThreadView'
 import { ListPagination, PagingControls } from './Paging'
 import { pageCount, pageFromParams } from './paging'
 import { SelectionPane } from './SelectionPane'
+import { OneTimeCodeButton } from './OneTimeCode'
 import { SelectAllBanner, SelectAllConfirm } from './SelectAll'
 import { canSelectAll, type AllAction } from './selectAll'
 
@@ -753,6 +755,8 @@ export function MailboxPage() {
                 const starred = rowStarred(message)
                 const attachments = message.conversation?.attachmentCount ?? message.attachmentCount
                 const count = message.conversation?.members.length ?? 1
+                // Proton's one-time code in the list, from the subject alone (rows carry no body).
+                const code = message.direction === 'inbound' && !['spam', 'trash'].includes(message.folder) ? oneTimeCode({ subject: message.subject, at: Date.parse(message.receivedAt) }) : null
                 const sender = (size: string) => (
                   <span className={cn(size, 'truncate text-sm', !seen ? 'font-semibold' : 'text-muted-foreground')}>{correspondent(message, t, contacts, own)}</span>
                 )
@@ -851,6 +855,7 @@ export function MailboxPage() {
                           </>
                         )}
                       </Link>
+                      {code ? <OneTimeCodeButton code={code} className="my-1 ml-1 shrink-0" onCopied={() => move([message], 'trash')} /> : null}
                       <button
                         type="button"
                         className={cn('m-1 rounded p-1 hover:bg-muted', !starred && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}

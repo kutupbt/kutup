@@ -345,8 +345,6 @@
     "nameTooLong": "A name is 100 characters at most.",
     "folderNameTaken": "A folder with this name is already there.",
     "labelNameTaken": "A label with this name already exists.",
-    "created": "{{name}} created.",
-    "updated": "{{name}} saved.",
     "removed": "{{name}} removed.",
     "deleteFolderTitle": "Delete folder?",
     "deleteLabelTitle": "Delete label?",
@@ -376,7 +374,11 @@
     "unreadable_other": "{{count}} names could not be opened with your account key.",
     "customColor": "Custom colour",
     "colorCode": "Colour code",
-    "colorCodeInvalid": "Use a colour code like #4d85e0."
+    "colorCodeInvalid": "Use a colour code like #4d85e0.",
+    "folderCreated": "Folder {{name}} created.",
+    "labelCreated": "Label {{name}} created.",
+    "folderSaved": "Folder {{name}} saved.",
+    "labelSaved": "Label {{name}} saved."
   },
   "filters": {
     "title": "Filters",
@@ -439,8 +441,8 @@
     "applyExisting": "Apply filter to existing mail",
     "applyExistingShort": "Apply to existing mail",
     "next": "Next",
-    "created": "{{name}} created.",
-    "updated": "{{name}} saved.",
+    "created": "Filter {{name}} created.",
+    "updated": "Filter {{name}} saved.",
     "removed": "{{name}} deleted.",
     "deleteTitle": "Delete filter?",
     "deleteDescription": "{{name}} no longer files new mail. Mail it filed stays where it is.",
@@ -814,5 +816,11 @@
       },
       "submit": "OK"
     }
+  },
+  "oneTimeCode": {
+    "found": "One-time code:",
+    "copyAndTrash": "Copy '{{code}}' to clipboard and move to Trash",
+    "copied": "Copied '{{code}}' to clipboard",
+    "copyFailed": "The code could not be copied."
   }
 }

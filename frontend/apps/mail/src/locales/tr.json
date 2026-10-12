@@ -345,8 +345,6 @@
     "nameTooLong": "Ad en fazla 100 karakter olabilir.",
     "folderNameTaken": "Bu adda bir klasör zaten var.",
     "labelNameTaken": "Bu adda bir etiket zaten var.",
-    "created": "{{name}} oluşturuldu.",
-    "updated": "{{name}} kaydedildi.",
     "removed": "{{name}} kaldırıldı.",
     "deleteFolderTitle": "Klasör silinsin mi?",
     "deleteLabelTitle": "Etiket silinsin mi?",
@@ -376,7 +374,11 @@
     "unreadable_other": "{{count}} ad hesap anahtarınızla açılamadı.",
     "customColor": "Özel renk",
     "colorCode": "Renk kodu",
-    "colorCodeInvalid": "#4d85e0 gibi bir renk kodu girin."
+    "colorCodeInvalid": "#4d85e0 gibi bir renk kodu girin.",
+    "folderCreated": "{{name}} klasörü oluşturuldu.",
+    "labelCreated": "{{name}} etiketi oluşturuldu.",
+    "folderSaved": "{{name}} klasörü kaydedildi.",
+    "labelSaved": "{{name}} etiketi kaydedildi."
   },
   "filters": {
     "title": "Filtreler",
@@ -439,8 +441,8 @@
     "applyExisting": "Filtreyi mevcut postalara uygula",
     "applyExistingShort": "Mevcut postalara uygula",
     "next": "İleri",
-    "created": "{{name}} oluşturuldu.",
-    "updated": "{{name}} kaydedildi.",
+    "created": "{{name}} filtresi oluşturuldu.",
+    "updated": "{{name}} filtresi kaydedildi.",
     "removed": "{{name}} silindi.",
     "deleteTitle": "Filtre silinsin mi?",
     "deleteDescription": "{{name}} artık yeni postaları dosyalamaz. Dosyaladığı postalar olduğu yerde kalır.",
@@ -814,5 +816,11 @@
       },
       "submit": "Tamam"
     }
+  },
+  "oneTimeCode": {
+    "found": "Tek kullanımlık kod:",
+    "copyAndTrash": "'{{code}}' kodunu kopyala ve Çöp'e taşı",
+    "copied": "'{{code}}' panoya kopyalandı",
+    "copyFailed": "Kod kopyalanamadı."
   }
 }

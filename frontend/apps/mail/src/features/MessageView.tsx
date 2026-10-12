@@ -1,11 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Code, Download, Forward, MoreHorizontal, Printer, Reply, ReplyAll, ScrollText, UserPlus, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useContactLookup, usePinKey } from '@kutup/contacts-core/api'
 import { formatFingerprint } from '@kutup/contacts-core/model'
 import { useOpenedMessage, usePinnedKeys, type MailAccount, type MailMessage, type OpenedMessage } from '@kutup/mail-core/api'
+import { oneTimeCode } from '@kutup/mail-core/oneTimeCode'
 import type { Mailbox } from '@kutup/mail-core/mime'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -24,6 +25,7 @@ import { MailBody } from './MailBody'
 import { useGroupScope, useMailboxScope } from './mailboxScope'
 import { Padlock } from './Padlock'
 import { Person, PersonAvatar } from './Person'
+import { OneTimeCodeButton } from './OneTimeCode'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
 import { UnsubscribeBanner } from './Unsubscribe'
@@ -168,6 +170,7 @@ export function MessageView({
   expanded,
   onToggle,
   latest = false,
+  onCodeCopied,
 }: {
   account: MailAccount
   message: MailMessage
@@ -175,6 +178,8 @@ export function MessageView({
   onToggle: () => void
   /** The open conversation's newest message: R, Shift+R and Shift+F answer it. */
   latest?: boolean
+  /** Its one-time code was copied (Proton moves the message to Trash). */
+  onCodeCopied?: () => void
 }) {
   const { t, i18n } = useTranslation()
   const contacts = useContactLookup()
@@ -190,6 +195,13 @@ export function MessageView({
   const [source, setSource] = useState(false)
   const [headersOpen, setHeadersOpen] = useState(false)
   const openedData = opened.data
+  // Proton's one-time code in an opened message: from the subject and the body's text.
+  const code = useMemo(() => {
+    if (!openedData || draft || message.direction !== 'inbound' || message.folder === 'spam') return null
+    const { parsed } = openedData
+    const text = parsed.text ?? (parsed.html ? (new DOMParser().parseFromString(parsed.html, 'text/html').body.textContent ?? '') : '')
+    return oneTimeCode({ subject: parsed.subject || message.subject, text, at: Date.parse(message.receivedAt) })
+  }, [openedData, draft, message])
 
   useEffect(() => {
     if (!latest || draft || !openedData) return
@@ -312,6 +324,12 @@ export function MessageView({
             ) : null}
             {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}
             {draft ? null : <UnsubscribeBanner account={account} message={message} raw={opened.data.raw} group={group} />}
+            {code ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                {t('oneTimeCode.found')}
+                <OneTimeCodeButton code={code} size="default" onCopied={() => onCodeCopied?.()} />
+              </div>
+            ) : null}
             {draft ? null : (
               <NotInContacts
                 people={(message.direction === 'inbound' ? (from ? [from] : []) : [...(parsed?.to ?? message.to), ...(parsed?.cc ?? message.cc)]).filter(

@@ -179,6 +179,8 @@ export function ThreadView({
             account={account}
             message={message}
             latest={index === shown.length - 1}
+            // A copied one-time code: the message goes to Trash (Proton), the view with it when it was alone.
+            onCodeCopied={() => actions.move([message], 'trash', shown.length === 1 ? onClose : undefined)}
             expanded={expanded.has(message.id)}
             onToggle={() =>
               setExpanded((now) => {

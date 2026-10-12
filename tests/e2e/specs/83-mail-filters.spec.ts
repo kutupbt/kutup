@@ -77,7 +77,7 @@ test('filters: built in four steps, applied to existing mail, filing new mail; a
   await wizard.getByRole('checkbox', { name: 'Apply filter to existing mail' }).click()
   if (SHOTS) await mail.screenshot({ path: `${SHOTS}/filter-preview.png` })
   await wizard.getByRole('button', { name: 'Save' }).click()
-  await expect(mail.getByText('Faturalar created.')).toBeVisible({ timeout: 30_000 })
+  await expect(mail.getByText('Filter Faturalar created.')).toBeVisible({ timeout: 30_000 })
   await expect(mail.getByRole('listitem').filter({ hasText: 'If the subject contains' })).toBeVisible()
   if (SHOTS) await mail.screenshot({ path: `${SHOTS}/filters-settings.png` })
 
