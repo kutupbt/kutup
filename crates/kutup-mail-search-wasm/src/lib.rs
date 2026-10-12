@@ -122,6 +122,28 @@ impl MailSearch {
         Ok(!self.index.is_empty())
     }
 
+    /// Seals a value of the page's own (its build progress) under `name`:
+    /// `{ id, sealed }`.
+    #[wasm_bindgen(js_name = sealRecord)]
+    pub fn seal_record(&self, name: &str, value: &[u8]) -> Result<JsValue, JsValue> {
+        to_js(&Store {
+            id: self.keys.record_id(name),
+            sealed: self.keys.seal(name, value).map_err(js_error)?,
+        })
+    }
+
+    /// Opens a value [`MailSearch::seal_record`] sealed; none when it does not open.
+    #[wasm_bindgen(js_name = openRecord)]
+    pub fn open_record(&self, name: &str, sealed: &[u8]) -> Option<Vec<u8>> {
+        self.keys.open(name, sealed).ok()
+    }
+
+    /// The record id `name` is stored under.
+    #[wasm_bindgen(js_name = recordId)]
+    pub fn record_id(&self, name: &str) -> String {
+        self.keys.record_id(name)
+    }
+
     /// How many messages it holds.
     pub fn size(&self) -> f64 {
         self.index.len() as f64

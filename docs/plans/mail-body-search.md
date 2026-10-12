@@ -1,6 +1,6 @@
 # Mail body search in the browser
 
-**Status:** plan (2026-10-12), docs/plans/mail-parity.md P6.
+**Status:** built (2026-10-12), docs/plans/mail-parity.md P6.
 **Model:** Proton Mail's "Search message content" (`applications/mail/src/app/helpers/encryptedSearch/`,
 v1; `contentSearch/`, v2) and Kutup Chat's search index
 ([research 16](../research/16-browser-storage-architecture.md), Phase 3).
@@ -74,8 +74,9 @@ Delete local search data removes it.
 
 There is no event stream: on Mail's poll the index adds messages that
 arrived after the newest it holds. Moves and labels need no update (the
-server checks the place). Deleted messages are dropped when a search finds
-them gone. An edited draft is not indexed (Drafts are left out).
+server checks the place). A deleted message stays in the index, never shown:
+the server's check leaves it out. An edited draft is not indexed (Drafts are
+left out).
 
 ## Searching
 

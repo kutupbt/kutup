@@ -8,6 +8,7 @@ import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, 
 import { oneTimeCode } from '@kutup/mail-core/oneTimeCode'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { isSearching, listCriteria, searchFromParams } from '@kutup/mail-core/search'
+import { useContentSearch, useContentSearchList, useContentSearchState } from '@kutup/mail-core/contentSearch'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -176,7 +177,13 @@ export function MailboxPage() {
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
   const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
   const pageSize = settings.data?.pageSize ?? DEFAULT_PAGE_SIZE
-  const list = useFolder(place, { q, criteria, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending)
+  // Body search, when on: a keyword is answered from this browser's index.
+  const contentSearch = useContentSearch()
+  const contentState = useContentSearchState(contentSearch)
+  const byContent = !!q.trim() && !!contentSearch?.active && contentState.status !== 'off'
+  const serverList = useFolder(place, { q, criteria, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending && !byContent)
+  const contentList = useContentSearchList(contentSearch, place, { q, criteria, group, conversations, filter, page: page - 1, pageSize }, byContent)
+  const list = byContent ? contentList : serverList
   const total = list.data?.pages[0]?.total ?? null
   const pages = pageCount(total ?? 0, pageSize)
   const own = account.data?.address.toLowerCase() ?? ''
@@ -711,6 +718,7 @@ export function MailboxPage() {
       <ListFilters filter={filter} sort={sort} onChange={setView} filtersHidden={chosen.length > 0}>
         <PagingControls page={page} pages={pages} onPage={setPage} disabled={total === null || list.isPlaceholderData} />
       </ListFilters>
+      {byContent ? <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">{t('contentSearch.results')}</p> : null}
       {unwanted && !group && settings.data ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">{settings.data.autoDeleteDays ? t('emptyFolder.autoDeleteOn') : t('emptyFolder.autoDeleteOffer')}</span>

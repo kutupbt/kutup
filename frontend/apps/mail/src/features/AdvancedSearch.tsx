@@ -2,10 +2,12 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { FOLDERS, useSearchAddresses } from '@kutup/mail-core/api'
+import { useContentSearch, useContentSearchState, type ContentSearch } from '@kutup/mail-core/contentSearch'
 import { usePlaces } from '@kutup/mail-core/places'
 import { EMPTY_SEARCH, searchFromParams, searchToParams, type AdvancedSearch as Search } from '@kutup/mail-core/search'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
@@ -131,6 +133,7 @@ export function AdvancedSearch({ onDone }: { onDone: () => void }) {
         <Checkbox checked={model.attachments} onCheckedChange={(on) => set({ attachments: on === true })} />
         {t('search.hasAttachments')}
       </label>
+      <ContentSearchField />
       <div className="flex justify-end gap-2 pt-1">
         <Button type="reset" variant="ghost">
           {t('search.reset')}
@@ -138,5 +141,85 @@ export function AdvancedSearch({ onDone }: { onDone: () => void }) {
         <Button type="submit">{t('search.submit')}</Button>
       </div>
     </form>
+  )
+}
+
+/** Proton's "Search message content": enable, progress, pause, and the switch. */
+export function ContentSearchField() {
+  const { t, i18n } = useTranslation()
+  const search = useContentSearch()
+  const state = useContentSearchState(search)
+  const [asking, setAsking] = useState(false)
+  if (!search) return null
+  const run = (action: (s: ContentSearch) => Promise<void>) => void action(search)
+  return (
+    <div className="space-y-2 rounded-md border border-border p-3 text-sm">
+      <div className="flex items-start gap-3">
+        <span className="flex-1">
+          <span className="block font-medium">{t('contentSearch.title')}</span>
+          <span className="block text-muted-foreground">
+            {state.status === 'limited' && state.limitedFrom !== null
+              ? t('contentSearch.limited', { date: new Date(state.limitedFrom).toLocaleDateString(i18n.language) })
+              : t('contentSearch.hint')}
+          </span>
+        </span>
+        {state.status === 'off' ? (
+          search.active ? (
+            <Checkbox aria-label={t('contentSearch.title')} checked={false} onCheckedChange={() => run((s) => s.enable())} />
+          ) : (
+            <Button type="button" size="sm" variant="outline" onClick={() => setAsking(true)}>
+              {t('contentSearch.enable')}
+            </Button>
+          )
+        ) : state.status === 'ready' || state.status === 'limited' ? (
+          <Checkbox aria-label={t('contentSearch.title')} checked onCheckedChange={() => run((s) => s.disable())} />
+        ) : null}
+      </div>
+      {state.status === 'building' || state.status === 'paused' ? (
+        <div className="space-y-1.5">
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t('contentSearch.progressLabel')} aria-valuemin={0} aria-valuemax={state.total || 1} aria-valuenow={state.indexed}>
+            <div className="h-full bg-primary transition-[width]" style={{ width: `${state.total ? Math.min(100, (100 * state.indexed) / state.total) : 0}%` }} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="flex-1 text-muted-foreground">
+              {state.status === 'paused' ? t('contentSearch.paused') : t('contentSearch.progress', { indexed: state.indexed, total: state.total })}
+            </span>
+            {state.status === 'paused' ? (
+              <Button type="button" size="sm" variant="ghost" onClick={() => run((s) => s.resume())}>
+                {t('contentSearch.resume')}
+              </Button>
+            ) : (
+              <Button type="button" size="sm" variant="ghost" onClick={() => run((s) => s.pause())}>
+                {t('contentSearch.pause')}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {asking ? (
+        <Dialog open onOpenChange={(open) => !open && setAsking(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('contentSearch.enableTitle')}</DialogTitle>
+              <DialogDescription>{t('contentSearch.enableBody')}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setAsking(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  setAsking(false)
+                  run((s) => s.enable())
+                }}
+              >
+                {t('contentSearch.enable')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </div>
   )
 }
