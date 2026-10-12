@@ -34,10 +34,21 @@ url.workspace = true
 uuid.workspace = true
 hex.workspace = true
 kutup-pass = { path = "../kutup-pass" }
+ssh-key = { version = "0.6", features = ["std", "ed25519", "rsa", "p256", "p384", "encryption"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[target.'cfg(unix)'.dependencies]
+# The SSH agent asks the system who connected (docs/plans/pass.md, K3b).
+libc = "0.2"
 
 # OS keychain only where it needs no C deps (Linux uses the file fallback).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring.workspace = true
+
+[dev-dependencies]
+# Agent tests make their keys at run time.
+ssh-key = { version = "0.6", features = ["std", "ed25519", "rand_core", "getrandom"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [features]
 # Test-only interruption hook: KUTUP_TEST_ABORT_AFTER_PATCHES=N makes an

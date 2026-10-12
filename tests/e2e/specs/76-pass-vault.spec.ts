@@ -79,6 +79,33 @@ test('pass: a vault in Drive, entries with history, one-time codes and attachmen
   await page.getByRole('button', { name: 'Recycle bin' }).click()
   await expect(page.getByRole('list', { name: 'Entries' }).getByText('Sunucu')).toBeVisible()
 
+  // The security report: Banka's password reused by a new entry, and a weak one.
+  await page.getByRole('button', { name: 'All entries' }).click()
+  await addEntry(page, { title: 'Yedek', password: 'yeni-parola-2' })
+  await addEntry(page, { title: 'Forum', password: 'abc123' })
+  await expectSaved(page)
+  await page.getByRole('button', { name: 'Security' }).click()
+  const report = page.getByRole('region', { name: 'Security report' })
+  await expect(report.getByRole('region', { name: 'Reused passwords' }).getByText('Banka')).toBeVisible()
+  await expect(report.getByRole('region', { name: 'Reused passwords' }).getByText('Yedek')).toBeVisible()
+  await expect(report.getByRole('region', { name: 'Weak passwords' }).getByText('Forum')).toBeVisible()
+  await report.getByRole('region', { name: 'Weak passwords' }).getByRole('button', { name: /Forum/ }).click()
+  await expect(page.getByRole('article', { name: 'Forum' })).toBeVisible()
+
+  // On a phone: the open entry on its own, back to the list, another entry.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('article', { name: 'Forum' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Entries' })).toBeHidden()
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page.getByRole('list', { name: 'Entries' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Groups' }).click()
+  await page.getByRole('option', { name: 'All entries' }).click()
+  await page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: /Banka/ }).click()
+  await expect(page.getByRole('article', { name: 'Banka' })).toBeVisible()
+  const width = await page.evaluate(() => document.documentElement.scrollWidth)
+  expect(width).toBeLessThanOrEqual(390)
+  await page.setViewportSize({ width: 1280, height: 800 })
+
   // The vault is a KeePass file in Drive.
   const drive = await openDrive(context)
   await expect(drive.getByText('Kişisel.kdbx')).toBeVisible({ timeout: 60_000 })

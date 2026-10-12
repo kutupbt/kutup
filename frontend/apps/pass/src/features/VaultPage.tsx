@@ -1,4 +1,4 @@
-import { ArrowLeft, Folder, FolderPlus, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, Folder, FolderPlus, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -26,6 +26,7 @@ import { fieldValue, type EntryInput, type EntryView, type GroupView, type Merge
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { GroupDialog } from './GroupDialog'
+import { SecurityPanel } from './SecurityPanel'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
 import { UnlockVault } from './UnlockVault'
@@ -103,6 +104,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   }, [session])
 
   const groupId = params.get('g') ?? null
+  const showingReport = params.get('view') === 'security'
   const bin = view.recycleBinId
   const viewingBin = Boolean(bin && groupId === bin)
   const selectedGroup = groupId ? view.groups.find((g) => g.id === groupId) : undefined
@@ -128,7 +130,17 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
     else next.delete('g')
     void navigate({ pathname: `/v/${fileId}`, search: next.toString() })
   }
-  const openEntry = (id: string) => void navigate({ pathname: `/v/${fileId}/e/${id}`, search: params.toString() })
+  const openEntry = (id: string) => {
+    const next = new URLSearchParams(params)
+    next.delete('view')
+    void navigate({ pathname: `/v/${fileId}/e/${id}`, search: next.toString() })
+  }
+  const toggleReport = () => {
+    const next = new URLSearchParams(params)
+    if (showingReport) next.delete('view')
+    else next.set('view', 'security')
+    void navigate({ pathname: `/v/${fileId}`, search: next.toString() })
+  }
 
   const saveEntry = async (input: EntryInput) => {
     if (editing === 'new') {
@@ -152,6 +164,10 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         {!session.canEdit ? <Badge variant="neutral">{t('vaults.readOnly')}</Badge> : null}
         {state.fromOutbox ? <Badge variant="warn">{t('sync.fromOutbox')}</Badge> : null}
         <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant={showingReport ? 'secondary' : 'outline'} onClick={toggleReport} aria-pressed={showingReport}>
+            <ShieldCheck />
+            {t('report.open')}
+          </Button>
           {session.canEdit ? (
             <Button size="sm" onClick={() => setEditing('new')} disabled={viewingBin}>
               <Plus />
@@ -276,7 +292,12 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
             ) : null}
           </ul>
         </nav>
-        <section aria-label={t('entries.label')} className={cn('flex w-full min-w-0 flex-col border-r border-border md:w-80 md:shrink-0', entry && 'hidden md:flex')}>
+        {showingReport ? (
+          <section className="min-w-0 flex-1" aria-label={t('report.title')}>
+            <SecurityPanel view={view} onOpen={openEntry} />
+          </section>
+        ) : null}
+        <section aria-label={t('entries.label')} className={cn('flex w-full min-w-0 flex-col border-r border-border md:w-80 md:shrink-0', (entry || showingReport) && 'hidden', entry && !showingReport && 'md:flex')}>
           <div className="space-y-2 border-b border-border p-2">
             <label className="relative block">
               <span className="sr-only">{t('entries.search')}</span>
@@ -334,7 +355,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
             </ul>
           )}
         </section>
-        <section className={cn('min-w-0 flex-1', !entry && 'hidden md:block')}>
+        <section className={cn('min-w-0 flex-1', showingReport ? 'hidden' : !entry && 'hidden md:block')}>
           {entry ? (
             <div className="flex h-full flex-col">
               <Button variant="ghost" size="sm" className="m-2 self-start md:hidden" onClick={() => void navigate({ pathname: `/v/${fileId}`, search: params.toString() })}>

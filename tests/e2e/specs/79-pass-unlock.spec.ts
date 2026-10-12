@@ -61,13 +61,20 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   await expect(unlock).toBeVisible({ timeout: 60_000 })
   await page.reload()
   await expect(unlock).toBeVisible({ timeout: 60_000 })
-  await page.getByRole('button', { name: 'Unlock with my sign-in' }).click()
+  // By default the account password opens it again, checked on the device.
+  await page.getByLabel('Your Kutup password').fill('not-my-password')
+  await page.getByRole('button', { name: 'Unlock with my password' }).click()
+  await expect(page.getByText('That is not your Kutup password.')).toBeVisible({ timeout: 30_000 })
+  await page.getByLabel('Your Kutup password').fill(PASSWORD)
+  await page.getByRole('button', { name: 'Unlock with my password' }).click()
   await expect(page.getByRole('heading', { name: 'Gizli', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
 
-  // Idle: locks after the chosen time.
+  // Idle: locks after the chosen time; set to open with one click.
   await page.goto(appUrl('pass'))
   await page.getByRole('combobox', { name: 'Lock vaults after' }).click()
   await page.getByRole('option', { name: '1 minute', exact: true }).click()
+  await page.getByRole('combobox', { name: 'After a lock, open vaults with' }).click()
+  await page.getByRole('option', { name: 'One click' }).click()
   const idle = await context.newPage()
   await idle.clock.install()
   await idle.goto(vaultUrl)

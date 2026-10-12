@@ -9,7 +9,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { formatRelative } from '@kutup/ui/lib/format'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
-import { AUTO_LOCK_CHOICES, setAutoLockMinutes, useAutoLockMinutes, type AutoLockMinutes } from '../sync/autoLock'
+import { AUTO_LOCK_CHOICES, setAutoLockMinutes, setUnlockMode, useAutoLockMinutes, useUnlockMode, type AutoLockMinutes, type UnlockMode } from '../sync/autoLock'
 import { useVaultSession } from '../sync/openVaults'
 import { CreateVaultDialog } from './CreateVaultDialog'
 
@@ -49,7 +49,9 @@ function VaultCard({ vault }: { vault: VaultFile }) {
 function AutoLockSetting() {
   const { t } = useTranslation()
   const minutes = useAutoLockMinutes()
+  const mode = useUnlockMode()
   return (
+    <>
     <section className="mt-8 max-w-3xl space-y-1.5" aria-labelledby="auto-lock-label">
       <h2 id="auto-lock-label" className="text-sm font-medium">
         {t('autoLock.label')}
@@ -68,6 +70,22 @@ function AutoLockSetting() {
         </SelectContent>
       </Select>
     </section>
+    <section className="mt-6 max-w-3xl space-y-1.5" aria-labelledby="unlock-mode-label">
+      <h2 id="unlock-mode-label" className="text-sm font-medium">
+        {t('unlockMode.label')}
+      </h2>
+      <p className="text-xs text-muted-foreground">{t('unlockMode.description')}</p>
+      <Select value={mode} onValueChange={(value) => setUnlockMode(value as UnlockMode)}>
+        <SelectTrigger className="w-56" aria-labelledby="unlock-mode-label">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="password">{t('unlockMode.password')}</SelectItem>
+          <SelectItem value="click">{t('unlockMode.click')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </section>
+    </>
   )
 }
 

@@ -2,6 +2,7 @@ import { LockKeyhole } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { ReauthLockedError, verifyAccountPassword } from '@kutup/session/reauth'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -12,12 +13,57 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { keptKey, useKeepVaultKey, useVaultSecrets } from '../drive/secrets'
 import { vaultTitle, type VaultFile } from '../drive/vaults'
+import { unlockMode } from '../sync/autoLock'
 import { clearLocked, freshKeys, openVault, wasLocked } from '../sync/openVaults'
 import { VaultError } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 import { KeyFileInput } from './KeyFileInput'
 
 type Attempt = 'trying' | 'form'
+
+/** A vault locked in this tab, its key kept: the account password again, or a click. */
+function KeptUnlock({
+  mode,
+  pending,
+  accountPassword,
+  setAccountPassword,
+  onUnlock,
+}: {
+  mode: 'password' | 'click'
+  pending: boolean
+  accountPassword: string
+  setAccountPassword: (value: string) => void
+  onUnlock: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-2">
+      {mode === 'password' ? (
+        <form
+          className="space-y-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (accountPassword) onUnlock()
+          }}
+        >
+          <Field label={t('unlock.accountPassword')} description={t('unlock.accountPasswordDescription')}>
+            {(field) => (
+              <PasswordInput {...field} value={accountPassword} onChange={(e) => setAccountPassword(e.target.value)} autoComplete="current-password" autoFocus />
+            )}
+          </Field>
+          <Button type="submit" className="w-full" loading={pending} disabled={!accountPassword}>
+            {t('unlock.withPassword')}
+          </Button>
+        </form>
+      ) : (
+        <Button className="w-full" loading={pending} onClick={onUnlock}>
+          {t('unlock.withSignIn')}
+        </Button>
+      )}
+      <p className="text-center text-xs text-muted-foreground">{t('unlock.orKey')}</p>
+    </div>
+  )
+}
 
 /**
  * Opens a vault: with the key the account keeps for it (the Kutup sign-in),
@@ -36,6 +82,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [kept, setKept] = useState<VaultKeyInput | null>(null)
+  const [accountPassword, setAccountPassword] = useState('')
   const tried = useRef<string | null>(null)
 
   const fileId = vault.file.id
@@ -101,23 +148,39 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
       </div>
       {notice ? <Alert variant="warn">{notice}</Alert> : null}
       {kept ? (
-        <div className="space-y-2">
-          <Button
-            className="w-full"
-            loading={pending}
-            onClick={() => {
-              setPending(true)
-              setError(null)
-              openVault(vault, kept, session.userId)
-                .then(() => clearLocked(fileId))
-                .catch((failure) => setError(failure instanceof VaultError ? t('unlock.keptStale') : t('unlock.unreachable')))
-                .finally(() => setPending(false))
-            }}
-          >
-            {t('unlock.withSignIn')}
-          </Button>
-          <p className="text-center text-xs text-muted-foreground">{t('unlock.orKey')}</p>
-        </div>
+        <KeptUnlock
+          mode={unlockMode()}
+          pending={pending}
+          accountPassword={accountPassword}
+          setAccountPassword={setAccountPassword}
+          onUnlock={() => {
+            setPending(true)
+            setError(null)
+            const check = unlockMode() === 'password' ? verifyAccountPassword(accountPassword) : Promise.resolve(true)
+            check
+              .then(async (ok) => {
+                if (!ok) {
+                  setError(t('unlock.wrongAccountPassword'))
+                  return
+                }
+                await openVault(vault, kept, session.userId)
+                clearLocked(fileId)
+              })
+              .catch((failure) =>
+                setError(
+                  failure instanceof ReauthLockedError
+                    ? t('unlock.paused')
+                    : failure instanceof VaultError
+                      ? t('unlock.keptStale')
+                      : t('unlock.checkUnreachable'),
+                ),
+              )
+              .finally(() => {
+                setAccountPassword('')
+                setPending(false)
+              })
+          }}
+        />
       ) : null}
       <form
         className="space-y-4"
