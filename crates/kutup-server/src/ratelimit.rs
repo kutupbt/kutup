@@ -41,6 +41,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
     ("LOGIN_ACCOUNT_DAILY_CEILING", 200),
+    ("LOGIN_SOURCE_DAILY_CEILING", 20),
 ];
 
 /// What a rate limit's default becomes on a test stack (`RATE_LIMITS_RELAXED`):
@@ -369,12 +370,83 @@ pub static LOGIN_CEILING: LazyLock<RateLimiter> = LazyLock::new(|| {
     )
 });
 
-pub static LOGIN_DAILY_CEILING: LazyLock<RateLimiter> = LazyLock::new(|| {
-    RateLimiter::new(
-        env_limit("LOGIN_ACCOUNT_DAILY_CEILING", 200) as usize,
+pub static LOGIN_DAILY_CEILING: LazyLock<WindowCounter> = LazyLock::new(|| {
+    WindowCounter::new(
+        env_limit("LOGIN_ACCOUNT_DAILY_CEILING", 200) as u32,
         Duration::from_secs(24 * 3600),
     )
 });
+
+/// One source's share of an account's daily ceiling
+/// (`LOGIN_SOURCE_DAILY_CEILING`, 20 a day per account and client): a
+/// single address (or IPv6 /64) cannot use up the whole day alone.
+pub static LOGIN_SOURCE_DAILY: LazyLock<WindowCounter> = LazyLock::new(|| {
+    WindowCounter::new(
+        env_limit("LOGIN_SOURCE_DAILY_CEILING", 20) as u32,
+        Duration::from_secs(24 * 3600),
+    )
+});
+
+/// Counts per key over fixed windows, in a fixed-size table addressed by the
+/// key's hash: memory stays the same however many keys are sprayed, and
+/// nothing needs pruning. Two keys sharing a slot only make each other
+/// stricter.
+pub struct WindowCounter {
+    slots: Mutex<Vec<(u64, u32)>>,
+    limit: u32,
+    window_secs: u64,
+}
+
+const WINDOW_COUNTER_SLOTS: usize = 1 << 16;
+
+impl WindowCounter {
+    pub(crate) fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            slots: Mutex::new(vec![(0, 0); WINDOW_COUNTER_SLOTS]),
+            limit,
+            window_secs: window.as_secs().max(1),
+        }
+    }
+
+    fn slot(key: &str) -> usize {
+        let digest = Sha256::digest(key.as_bytes());
+        (u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize)
+            % WINDOW_COUNTER_SLOTS
+    }
+
+    fn window_now(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            / self.window_secs
+    }
+
+    /// Takes one from `key`'s allowance in this window; `false` when none is left.
+    pub fn allow(&self, key: &str) -> bool {
+        let window = self.window_now();
+        let mut slots = self.slots.lock().unwrap();
+        let slot = &mut slots[Self::slot(key)];
+        if slot.0 != window {
+            *slot = (window, 0);
+        }
+        if slot.1 >= self.limit {
+            return false;
+        }
+        slot.1 += 1;
+        true
+    }
+
+    /// Gives one back (an attempt that turned out right).
+    pub fn pop(&self, key: &str) {
+        let window = self.window_now();
+        let mut slots = self.slots.lock().unwrap();
+        let slot = &mut slots[Self::slot(key)];
+        if slot.0 == window {
+            slot.1 = slot.1.saturating_sub(1);
+        }
+    }
+}
 
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
@@ -465,7 +537,6 @@ pub fn spawn_cleanup() {
             CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
             LOGIN_CEILING.cleanup();
-            LOGIN_DAILY_CEILING.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();
@@ -531,6 +602,22 @@ mod tests {
         lo.reserve(subject);
         lo.reserve(subject);
         assert!(!lo.is_locked(subject));
+    }
+
+    #[test]
+    fn window_counters_stay_fixed_size_and_give_back() {
+        let counter = WindowCounter::new(3, Duration::from_secs(3600));
+        assert!(counter.allow("a"));
+        assert!(counter.allow("a"));
+        assert!(counter.allow("a"));
+        assert!(!counter.allow("a"));
+        counter.pop("a");
+        assert!(counter.allow("a"));
+        // Spraying keys never grows it.
+        for i in 0..200_000 {
+            counter.allow(&format!("spray-{i}"));
+        }
+        assert_eq!(counter.slots.lock().unwrap().len(), WINDOW_COUNTER_SLOTS);
     }
 
     #[test]

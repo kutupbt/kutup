@@ -126,7 +126,38 @@ pub(crate) fn credential_epoch(login_key_hash: &str) -> [u8; 16] {
 /// The checks one attempt runs under, from [`guard`]; its slots are taken.
 pub(crate) struct Guard {
     lockout: String,
-    ceiling: Option<String>,
+    ceiling: Option<Ceiling>,
+}
+
+/// An unknown client's slots: the account's window and daily ceilings, and
+/// this source's share of the day.
+struct Ceiling {
+    account: String,
+    source: String,
+}
+
+impl Ceiling {
+    fn take(&self) -> bool {
+        if !ratelimit::LOGIN_SOURCE_DAILY.allow(&self.source) {
+            return false;
+        }
+        if !ratelimit::LOGIN_CEILING.allow(&self.account) {
+            ratelimit::LOGIN_SOURCE_DAILY.pop(&self.source);
+            return false;
+        }
+        if !ratelimit::LOGIN_DAILY_CEILING.allow(&self.account) {
+            ratelimit::LOGIN_CEILING.pop(&self.account);
+            ratelimit::LOGIN_SOURCE_DAILY.pop(&self.source);
+            return false;
+        }
+        true
+    }
+
+    fn give_back(&self) {
+        ratelimit::LOGIN_SOURCE_DAILY.pop(&self.source);
+        ratelimit::LOGIN_CEILING.pop(&self.account);
+        ratelimit::LOGIN_DAILY_CEILING.pop(&self.account);
+    }
 }
 
 /// Refuses the attempt (429) while its account (or the canonical name, when
@@ -149,22 +180,27 @@ pub(crate) fn guard(
         (Some(id), Some(epoch)) => client.knows(id, epoch),
         _ => false,
     };
-    let ceiling = (!known).then(|| ratelimit::hash_token(&subject));
+    let ceiling = (!known).then(|| Ceiling {
+        account: ratelimit::hash_token(&subject),
+        source: ratelimit::hash_token(&lockout),
+    });
     let too_many = || {
         AppError::too_many_requests("too many failed attempts, try again later")
             .with_details(serde_json::json!({ "code": "accountLocked" }))
     };
-    if !ratelimit::LOGIN_LOCKOUT.reserve(&lockout) {
-        return Err(too_many());
+    // The ceilings first: refused there, the attempt takes nothing from this
+    // client's own lockout (a person retrying while an attack holds the
+    // ceiling does not lock their own address too).
+    if let Some(ceiling) = &ceiling {
+        if !ceiling.take() {
+            return Err(too_many());
+        }
     }
-    if let Some(key) = &ceiling {
-        if !ratelimit::LOGIN_CEILING.allow(key) {
-            return Err(too_many());
+    if !ratelimit::LOGIN_LOCKOUT.reserve(&lockout) {
+        if let Some(ceiling) = &ceiling {
+            ceiling.give_back();
         }
-        if !ratelimit::LOGIN_DAILY_CEILING.allow(key) {
-            ratelimit::LOGIN_CEILING.pop(key);
-            return Err(too_many());
-        }
+        return Err(too_many());
     }
     Ok(Guard { lockout, ceiling })
 }
@@ -182,9 +218,8 @@ impl Guard {
         };
         if ok {
             ratelimit::LOGIN_LOCKOUT.succeeded(&self.lockout);
-            if let Some(key) = &self.ceiling {
-                ratelimit::LOGIN_CEILING.pop(key);
-                ratelimit::LOGIN_DAILY_CEILING.pop(key);
+            if let Some(ceiling) = &self.ceiling {
+                ceiling.give_back();
             }
         }
         ok
@@ -410,6 +445,32 @@ mod tests {
             epoch
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_ceiling_refusal_takes_nothing_from_the_clients_lockout() {
+        let id = Uuid::new_v4();
+        let account = Some(id);
+        let epoch = Some(&EPOCH[..]);
+        // Spread misses fill the ceiling.
+        for i in 0..25u32 {
+            let ip = format!("10.33.{i}.1");
+            let _ = guard(&client(&ip, None), account, "cyd", epoch).map(|g| g.verify(None, None));
+        }
+        // The person retries from home, refused by the ceiling each time...
+        let home = client("203.0.113.50", None);
+        for _ in 0..10 {
+            assert!(guard(&home, account, "cyd", epoch).is_err());
+        }
+        // ...and their own address is not locked for it: from a known
+        // device there, the attempt goes through to the check.
+        assert!(guard(
+            &client("203.0.113.50", Some((id, EPOCH))),
+            account,
+            "cyd",
+            epoch
+        )
+        .is_ok());
     }
 
     #[test]

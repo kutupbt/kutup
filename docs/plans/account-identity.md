@@ -136,6 +136,14 @@ PIN's set and remove) and recovery:
   account's current password hash, so a new password or a recovery retires
   every mark; signing out clears it on that origin. The CLI has no cookie:
   while an attack fills the ceiling, its sign-ins wait (documented risk).
+- A source (an address or IPv6 /64) gets at most `LOGIN_SOURCE_DAILY_CEILING`
+  (20) of an account's daily ceiling, so one source cannot use the day up
+  alone. The daily counters live in a fixed-size table (memory does not grow
+  with sprayed names). A refusal by a ceiling takes nothing from the
+  client's own lockout.
+- Accepted: a stolen session (signed in, so known) can guess the password
+  past the ceiling at 5 per 15 minutes per /64. It could already fetch the
+  account's key material, so the password adds little.
 - Names that are no account meet the same lockout and ceiling on their
   canonical name, so a 429 says nothing about existence.
 - The Pass PIN keeps its own limit (three per sign-in) and is checked at
