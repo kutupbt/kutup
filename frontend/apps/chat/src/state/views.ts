@@ -33,7 +33,7 @@ import type {
 // the rules are tested once instead of living inside components.
 
 /** Who wrote an entry: this account for outgoing ones, else its sender. */
-export function messageActor(message: ChatHistoryEntry, selfAddress: string): string | null {
+export function messageActor(message: ChatHistoryEntry, selfAddress: string): string {
   return message.direction === 'outgoing' ? selfAddress : message.sender
 }
 
@@ -463,7 +463,7 @@ export function threadView(
     return {
       entry,
       id,
-      author: messageActor(entry, selfAddress) ?? entry.sender,
+      author: messageActor(entry, selfAddress),
       outgoing: entry.direction === 'outgoing',
       mutation: mutations.get(id) ?? null,
       replyTo,

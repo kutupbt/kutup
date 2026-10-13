@@ -14,13 +14,17 @@ function entry(
   direction: 'incoming' | 'outgoing',
   at: number,
   content: Partial<ChatContentView>,
-  peer = conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
+  // Outgoing is written by this account; incoming by the other one (a
+  // direct chat's address) or a group member.
+  sender = direction === 'outgoing'
+    ? SELF
+    : conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
 ): ChatHistoryEntry {
   seq += 1
   return {
     id: `e${seq}`,
     conversation,
-    sender: peer,
+    sender,
     direction,
     senderDeviceId: 1,
     timestampMs: at,

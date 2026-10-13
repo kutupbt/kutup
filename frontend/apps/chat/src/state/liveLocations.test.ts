@@ -9,11 +9,11 @@ function live(generation: number, streamId: string, untilMs = 10_000): ChatLiveL
   return { shareId: SHARE, generation, server: 'a.test', streamId, key: 'k', readCapability: 'r', untilMs }
 }
 
-function entry(id: string, peer: string, content: Record<string, unknown>, timestampMs = 1): ChatHistoryEntry {
+function entry(id: string, sender: string, content: Record<string, unknown>, timestampMs = 1): ChatHistoryEntry {
   return {
     id,
     conversation,
-    sender: peer,
+    sender,
     direction: 'incoming',
     timestampMs,
     delivered: true,
