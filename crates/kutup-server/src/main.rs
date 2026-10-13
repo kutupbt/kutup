@@ -127,11 +127,18 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     let _telemetry = telemetry::init()?;
 
+    let args: Vec<String> = std::env::args().collect();
     let config = Config::load();
+    // `check-config`: read and check every setting, touch nothing (no
+    // database, no migrations). Exit 0, or 2 with every problem listed (from
+    // `Config::load`); deploys run it against the new image first.
+    if args.get(1..).is_some_and(|rest| rest == ["check-config"]) {
+        println!("kutup-server: the configuration is valid");
+        return Ok(());
+    }
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
-    let args: Vec<String> = std::env::args().collect();
     if args
         .get(1)
         .is_some_and(|value| value == "federation-identity")

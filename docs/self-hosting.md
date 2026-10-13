@@ -161,6 +161,9 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # The server checks every variable at start: a value it cannot read (a number
 # that is not one, an unknown choice, an unknown RATE_LIMIT_* name) stops it
 # with exit code 2 and the full list of problems, instead of a silent default.
+# `kutup-server check-config` runs that check alone (no database, no
+# migrations): exit 0, or 2 with the list. Run it against a new image and
+# your .env before switching over.
 
 # Rate limits (defaults shown). Most are per client IP; chat key fetches use a
 # primary per-account budget plus a coarse IP outer wall. The backend resolves the
