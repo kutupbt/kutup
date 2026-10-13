@@ -1,8 +1,10 @@
 # One identity per account
 
-**Status:** plan (2026-10-12). Decided by the user: an account's identity is
-its Kutup address; the email it signed up with becomes an optional recovery
-email; keys are bound to the account's permanent id and re-sealed properly; no seal binds a name.
+**Status:** slice 1 built (PR #167, 2026-10-13). Decided by the user: an
+account's identity is its Kutup address; the email it signed up with becomes
+an optional recovery email; keys are bound to a permanent random key binding;
+no seal binds a name. Accounts from before are not carried over: the private
+beta starts again from an empty server (user, 2026-10-13).
 
 ## Why
 
@@ -27,13 +29,19 @@ username) is a name, and names change.
    (`users.key_binding`: a random 128-bit value in UUID form, drawn by the
    browser at sign-up, never changed, never a name, not the database id, and
    carried with the account if it ever moves to another server). No seal
-   binds a name. The envelope format stays as it is (its header's context
-   string becomes the key binding; no format or suite change).
+   binds a name. Account envelopes move to suite 2 (a key per envelope; see
+   the encryption review below).
 3. **The signup email becomes an optional recovery email** (Proton/Gmail):
    confirmed by a code, used for security notices and later password reset
    (encrypted data still needs the 24-word phrase). Emails on the server's own
    domain are dropped: such an address only ever names a mailbox.
-4. **Existing accounts are re-sealed at their next sign-in** in the browser.
+4. **No migration.** At first the plan re-sealed existing accounts at their
+   next sign-in; that path carried most of the review's findings (a retry
+   sealing under a wiped key, signup emails readable by username, a way to
+   replace the recovery phrase with only the password). Since this is a
+   private beta, the user chose a clean slate instead: kutup.dev starts from
+   an empty database and bucket, and migration 162 refuses a server that
+   still has accounts.
 
 ## Design
 
@@ -48,30 +56,29 @@ simply change. Kutup follows Proton: a seal binds the account's **key
 binding**, the **purpose**, and the object's own **permanent id** where it has
 one (a vault file, a mail key, a folder), under the account's own keys.
 
-- `users.key_binding TEXT`: the random value the account's seals carry, and
-  `users.envelope_binding TEXT NOT NULL`: the string its envelopes carry
-  *now*, backfilled with `lower(email)` (what they carry today) and set to
-  `key_binding` by the re-seal. Every server check that compares an envelope
-  header with `users.email` (`validate_account_envelope`, Chat backup, mail
-  keys, Pass vault secrets) compares with `envelope_binding` instead.
-- **Registration** binds to the key binding from the start: the browser draws
-  it (UUID v4 form) before it seals and sends it; the server stores it (a
-  value already taken is refused and the browser draws again).
-- The binding is returned by sign-in's preflight and kept in the session
+- `users.key_binding TEXT UNIQUE` (UUID v4 form): the value the account's
+  seals carry. Every server check that compares an envelope header with the
+  account (`validate_account_envelope`, Chat backup, mail keys, Pass vault
+  secrets) compares with it.
+- **Registration** and an administrator-made account's **first sign-in**
+  bind to the key binding from the start: the browser draws it (UUID v4 form)
+  before it seals and sends it; the server stores it (a value already taken
+  is refused and the browser draws again).
+- The binding comes only with a session (the login and 2FA responses, and
+  `/user/me`), never from preflight, and is kept in the session
   (`session.envelopeBinding`, CLI `Session.envelope_binding`); every seal and
-  open uses it, never `session.email`, `session.username` or an address.
-- Other at-rest formats that bound a name move to the key binding in the
-  same re-seal (audit of 2026-10-12, every seal, derivation and store name):
+  open uses it, never an email, a username or an address.
+- Other at-rest formats that bind a name (audit of 2026-10-12, every seal,
+  derivation and store name) move to the key binding in the next PR (L2
+  below), as new format versions only, there being nothing old to read:
 
-| Bound to a name today | What | Re-sealed from |
-|---|---|---|
-| sign-in email | account envelopes 1–6 (password, recovery, Drive key, Chat backup root, mail address keys, Pass vault secrets) | password key / phrase / master key |
-| sign-in email | recovery check (HKDF info) | the phrase |
-| Kutup address | identity pins (`identity_pins.rs` AAD) | the master key |
-| Kutup address | contact cards and their summary signature (`contact_card.rs`) | the master key |
-| Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) | the master key |
-| Kutup address | Chat's own copy of the account profile (`kutup-chat-core` `profile.rs`) | the master key |
-| Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed) | renamed by account id |
+| Bound to a name | What |
+|---|---|
+| Kutup address | identity pins (`identity_pins.rs` AAD) |
+| Kutup address | contact cards and their summary signature (`contact_card.rs`) |
+| Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) |
+| Kutup address | Chat's own copy of the account profile (`kutup-chat-core` `profile.rs`) |
+| Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed; renamed by account id) |
 
   Already bound to ids (no change): Chat's device store, sealed storage and
   backup (a hash of server and user id), the media cache, the Pass outbox,
@@ -85,43 +92,16 @@ one (a vault file, a mail key, a folder), under the account's own keys.
   renaming re-issues these (as a new OpenPGP user id would), a step of its
   own.
 
-### Re-sealing (next sign-in)
-
-When the envelopes do not carry the key binding yet, the account app, right after unlocking,
-re-seals everything bound to the old string and sends it in **one request**
-(`POST /api/user/rebind`), which the server applies in one transaction and only
-whole: every envelope's header must name the key binding, every row of the account must
-be covered (counts checked), then `envelope_binding = key_binding`.
-
-| What | How the browser re-seals it |
-|---|---|
-| Password wrapping of the master key | from the master key and the password key it just derived |
-| Recovery wrapping + recovery check | needs the 24 words: **asked once** ("Confirm your recovery phrase"); or **make a new phrase** (shown to write down), which replaces the old one |
-| Drive private key | from the master key |
-| Chat backup root | opened with the old binding, sealed with the key binding |
-| Mail address keys (each) | opened with the old binding, sealed with the key binding |
-| Pass vault secrets (each) | the same (Pass part by the third session, on this branch) |
-
-Until it is done the account works as before (the server keeps the old
-binding); the step can be put off ("Later") and comes back at the next sign-in.
-The CLI never re-seals: it reads the binding from preflight and works with
-either; if the binding changes while it is signed in, opening fails cleanly and
-`kutup login` again fixes it.
-
-Accounts that never sign in again keep their old binding indefinitely and
-keep working. A **recovery** with the 24 words re-seals at once (the phrase is
-known there).
-
 ### Sign-in
 
 - `GET /api/auth/login/preflight?name=` takes the username or the address (the
-  address must be on this server's domain); it answers the salt, the Argon2id
-  parameters and the binding. For a name that is not an account it answers a
-  deterministic fake salt **and a fake binding** (an id derived from the name
-  under a server secret), so preflight does not tell which names exist.
-- Login, recovery and reauth take `name` the same way. **Transition:** an
-  account not yet re-sealed may still sign in once with its old email; after
-  the re-seal the old email no longer signs in.
+  address must be on this server's domain); it answers the salt and the
+  Argon2id parameters, never the binding. For a name that is not an account
+  it answers a fake salt (an HMAC of the name, its address form reduced to
+  the username, under the server's own stored key), so preflight does not
+  tell which names exist.
+- Login, recovery and reauth take `name` the same way; an email never signs
+  in.
 - The sign-in lockout (`LOGIN_LOCKOUT`) is keyed by the account id once the
   name resolves (by the name otherwise), so sign-in, reauth and the Pass PIN
   keep sharing one counter.
@@ -135,9 +115,6 @@ known there).
 - The server needs a system sender for that mail (none exists today): mail
   from `no-reply@<domain>` through the outside-sending path, signed (DKIM) as
   the domain's own mail.
-- Existing accounts: an outside signup email becomes an **unconfirmed**
-  recovery email ("Confirm your recovery email" in Settings); one on the
-  server's own domain is dropped.
 - Uses now: security notices (a new sign-in, the recovery phrase replaced).
   Password reset by recovery email comes later (its own plan: Proton resets
   the password and keeps old data locked until the phrase is given).
@@ -157,18 +134,12 @@ known there).
 
 ## Security review
 
-- **Re-binding:** the server accepts a rebind only whole (every row of the
-  account, headers naming the key binding), in one transaction, from a fresh session;
-  a partial or replayed request changes nothing. The old binding is not kept
-  after the switch.
-- **Recovery check:** the new check is derived only from the phrase the user
-  typed or the new one shown; the server never sees the phrase.
-- **Accounts that never sign in:** keep working with the old binding; nothing
-  is re-sealed server-side (the server cannot).
+- **No old accounts:** nothing reads an email-bound seal or a suite-1
+  envelope; migration 162 refuses a server with accounts.
 - **Name enumeration:** sign-in preflight answers a salt and parameters only,
   for every account (one awaiting its first sign-in too) and, for a name that
-  is no account, a fake one: the same each time, an HMAC under a key derived
-  from the server's secret, so no one without it tells it from a real one.
+  is no account, a fake one: the same each time, an HMAC under the server's
+  own stored key, so no one without it tells it from a real one.
   The keys' binding comes only with a session. Recovery preflight has to
   answer a binding and an envelope (the phrase opens it offline); for unknown
   names both are faked the same way. Sign-in failures are the same message;
@@ -178,9 +149,7 @@ known there).
   V1): the server stores the login key's hash with that salt and never sees
   the password, for creating, rotating and wiping alike; the break-glass
   administrator from `ADMIN_ACCOUNT` is derived the same way once, at first
-  start. Accounts still waiting under a password the server was once sent
-  can no longer sign in (migration 162): an administrator gives them a new
-  one.
+  start.
 - **Recovery email:** codes hashed, short-lived, few attempts, rate limits per
   account and per target address; an unconfirmed address receives nothing but
   its code; changing it notifies the old one.
@@ -190,17 +159,16 @@ known there).
 
 ## Encryption review (2026-10-12)
 
-Since every account re-seals once, the whole design was reviewed; what
-changes rides along with the re-seal.
+The whole encryption design was reviewed while the identity changed.
 
 | Item | What | State |
 |---|---|---|
 | H1 | No password sent to the server ever (temporary passwords derived in the administrator's browser) | done |
-| H2 | Account envelopes suite 2: an AEAD key per purpose, binding and object (HKDF-SHA256), never the master key or recovery entropy used raw; the object id in the header (Pass vault secrets name their vault). New envelopes are suite 2; suite 1 still opens; the re-seal takes suite 2 only | done |
-| M4 | Fake preflight answers as HMACs under the server's secret | done |
+| H2 | Account envelopes suite 2: an AEAD key per purpose, binding and object (HKDF-SHA256), never the master key or recovery entropy used raw; the object id in the header (Pass vault secrets name their vault). Suite 1 is retired: neither read nor written | done |
+| M4 | Fake preflight answers as HMACs under the server's own stored key | done |
 | M5 | No binding before the password is proved (it comes with the session) | done |
-| M6 | The browser opens every re-sealed envelope with the new binding, to what it held, before `POST /api/user/rebind` | done |
-| L2 | Identity pins, contact cards and mail folder and label names bound to the key binding instead of the address (each a new format version, read both, re-sealed after the rebind); signed statements about an address keep naming it | next PR |
+| M6 | Re-sealed envelopes checked before sending | not needed: no re-seal |
+| L2 | Identity pins, contact cards, mail folder and label names and Chat's own profile copy bound to the key binding instead of the address (new format versions only); signed statements about an address keep naming it | next PR |
 
 Before v1, each separate: password change, raisable Argon2id parameters,
 OPAQUE/SRP, key transparency. Master key rotation (authority succession, old
@@ -208,35 +176,26 @@ keys kept to decrypt only) has a plan of its own.
 
 ### Security review of PR #167 (2026-10-13)
 
-Fixed in the PR: a retried re-seal kept the password's key (it had been
-wiped after a failed attempt, so a retry sealed under zeros) and refuses an
-all-zero key; recovery preflight shows an account not yet re-sealed only to
-someone naming it by its old email; fake answers and the sign-in lockout
+Its findings about the re-seal (a retry sealing under a wiped key, signup
+emails readable through recovery preflight, a password holder replacing the
+recovery phrase, the backfill's lowercasing, Pass keys dropped silently)
+went with the re-seal. Fixed in the PR: fake answers and the sign-in lockout
 take `ada` and `ada@<this server>` as one name, under the server's own
 stored key (not `JWT_SECRET`); the timing dummy is a real bcrypt hash and an
-empty hash costs as much; a recovery checks the proof before anything else;
-migration 162 reads each binding from the password envelope's header;
-unreadable kept vault keys are forgotten only when the person agrees;
-`ADMIN_ACCOUNT` is read in one place (a password may hold colons, a bad
-username is refused); the Chat backup root is replaced only if unchanged.
+empty hash costs as much; a recovery checks the proof before anything else,
+one 401 for every refusal; `ADMIN_ACCOUNT` is read in one place (a password
+may hold colons, a bad username is refused); more suite-2 vectors.
 
-**Rollback:** once any account has re-sealed, rolling back to older code is
-not supported (it reads envelopes by the sign-in email, cannot decode an
-account without one, and cannot restore a voided temporary password).
-
-Open: H2 (a password holder may replace the recovery phrase through the
-re-seal; the user decides how). Follow-ups: the sign-in lockout per account
-lets anyone lock a known username out (key it per account and address, or
-slow down instead); suite 1 is still accepted on writes other than the
-re-seal (refuse it, and require the object id where one is due); a
-sign-in by an old email that differs only in case resolves to one of them;
-the login key stays in the page's memory while a re-seal waits.
+Follow-ups: the sign-in lockout per account lets anyone lock a known
+username out (key it per account and address, or slow down instead); the
+server could also require the object id where a purpose has one.
 
 ## Slices
 
-1. **Identity:** binding by id, sign-in by name, preflight with binding,
-   rebind endpoint and the browser step (recovery phrase asked or replaced),
-   session/CLI/tests by name, `/user/me` and the menus. Pass vault secrets'
-   part by the third session on this branch.
-2. **Recovery email:** the system sender, the table, Settings → Recovery,
-   codes, notices, the backfill from sign-in emails.
+1. **Identity:** the key binding, sign-in by name, the binding only with a
+   session, account envelopes suite 2, derived temporary passwords,
+   session/CLI/tests by name, `/user/me` and the menus (PR #167).
+2. **Formats off the address** (L2): identity pins, contact cards, mail
+   names, Chat's own profile copy.
+3. **Recovery email:** the system sender, the table, Settings → Recovery,
+   codes, notices.

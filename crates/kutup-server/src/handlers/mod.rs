@@ -1,6 +1,5 @@
 //! HTTP handlers — each module mirrors the matching `backend/handlers/*.go` file.
 
-pub mod account_rebind;
 pub mod admin;
 pub mod auth;
 pub mod chat;

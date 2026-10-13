@@ -77,8 +77,6 @@ struct Account {
     master_key: Zeroizing<Vec<u8>>,
     /// What the account's envelopes are bound to (docs/plans/account-identity.md).
     binding: String,
-    /// Whether the binding was read again from the server in this run.
-    refreshed: bool,
 }
 
 impl VaultKeys {
@@ -134,7 +132,6 @@ impl VaultKeys {
         self.account = Some(Account {
             master_key: Zeroizing::new(session.master_key_bytes()?),
             binding: session.binding().to_string(),
-            refreshed: false,
         });
         self.stored = None;
         Ok(())
@@ -213,27 +210,8 @@ impl VaultKeys {
     }
 
     /// The key in the account's vault secret for `file_id`, if one is kept.
-    /// One that does not open may have been re-sealed since this sign-in
-    /// read the account's binding: the binding and the list are read again,
-    /// once a run.
     fn stored_key(&mut self, client: &Client, file_id: &str) -> Option<VaultKey> {
-        let secret = match self.open_stored(client, file_id) {
-            Some(secret) => secret,
-            None => {
-                let account = self.account.as_mut()?;
-                if account.refreshed {
-                    return None;
-                }
-                account.refreshed = true;
-                let binding = client.me().ok()?.envelope_binding;
-                if binding.is_empty() {
-                    return None;
-                }
-                account.binding = binding;
-                self.stored = None;
-                self.open_stored(client, file_id)?
-            }
-        };
+        let secret = self.open_stored(client, file_id)?;
         let mut key = VaultKey::new();
         if let Some(password) = &secret.password {
             key = key.with_password(password);
@@ -302,9 +280,7 @@ impl VaultKeys {
 
 /// Keeps what opens vault `file_id` (whose current contents are `contents`)
 /// in the account: checked to open the vault by itself, sealed under the
-/// master key for `binding` and stored. A server that says the account was
-/// re-sealed meanwhile (`409 bindingChanged`) gets it sealed for the
-/// binding it reports, once. Returns the envelope (base64).
+/// master key for `binding` and stored. Returns the envelope (base64).
 pub(crate) fn keep_secret(
     client: &Client,
     master_key: &[u8],
@@ -328,25 +304,10 @@ pub(crate) fn keep_secret(
         password: password.map(|p| Zeroizing::new(p.to_owned())),
         key_file: key_file.map(Zeroizing::new),
     };
-    let seal = |binding: &str| -> Result<String> {
-        let sealed = seal_vault_secret(master_key, binding, id.as_bytes(), &secret)?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(sealed))
-    };
-    let envelope = seal(binding)?;
-    match client.put_vault_secret(file_id, &envelope) {
-        Ok(()) => Ok(envelope),
-        Err(error)
-            if error
-                .downcast_ref::<crate::api::ApiError>()
-                .is_some_and(|e| e.binding_changed) =>
-        {
-            let binding = client.me()?.envelope_binding;
-            let envelope = seal(&binding)?;
-            client.put_vault_secret(file_id, &envelope)?;
-            Ok(envelope)
-        }
-        Err(error) => Err(error),
-    }
+    let sealed = seal_vault_secret(master_key, binding, id.as_bytes(), &secret)?;
+    let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
+    client.put_vault_secret(file_id, &envelope)?;
+    Ok(envelope)
 }
 
 /// Where a vault lives on Drive and what opens it there.

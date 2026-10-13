@@ -9,7 +9,6 @@ import { AccountShell } from './app/AccountShell'
 import { Boot } from './app/Boot'
 import { RequireAdmin, RequireSession } from './app/guards'
 import { AuthorizePage } from './features/auth/AuthorizePage'
-import { AccountUpdatePage } from './features/auth/AccountUpdatePage'
 import { FirstLoginPage } from './features/auth/FirstLoginPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { RegisterPage } from './features/auth/RegisterPage'
@@ -75,7 +74,6 @@ export function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/first-login" element={<FirstLoginPage />} />
-            <Route path="/account-update" element={<AccountUpdatePage />} />
             <Route path="/recover" element={<RecoverPage />} />
             <Route path="/authorize" element={<AuthorizePage />} />
             <Route

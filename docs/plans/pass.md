@@ -373,17 +373,10 @@ one database, plus a report of what happened.
   kept secret before the environment and the prompt, offers to keep a typed
   password, and `kutup pass keep|ls|forget` manages them headless.
 - **Vault secrets and the account's binding** (docs/plans/account-identity.md):
-  a vault secret's header names the account's binding (`users.envelope_binding`:
-  the sign-in email until the account is re-sealed, then its permanent random
-  `key_binding`), and its payload the vault's file id. At the re-seal the
-  account app calls `rebindPassVaultSecrets` (`@kutup/session/passRebind`):
-  every record, vaults in the trash included (`GET /api/pass/vault-secrets?all=true`),
-  opened with the old binding and sealed with the new one; a record that does
-  not open with the old binding (it opened nothing already) is sent as
-  `envelope: null` and dropped. The server's part runs in the rebind's
-  transaction (`pass::rebind_vault_secrets`): the request must name exactly the
-  records the account has (else `409`, and nothing changes), each re-sealed
-  envelope must be a vault secret bound to the new binding, no vault twice.
+  a vault secret is an account envelope (suite 2) whose header names the
+  account's permanent random key binding and, as its object, the vault's file
+  id; its AEAD key is derived for that binding and vault alone. The server
+  refuses one bound to another binding or vault.
 - Entry editing covers the KeePassXC fields (research 19 §4): standard fields,
   custom fields (protected or not), tags, attachments, TOTP (`otp`), URLs
   (`URL`, `KP2A_URL*`), expiry, history, groups, recycle bin; passkeys and SSH

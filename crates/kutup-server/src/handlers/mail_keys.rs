@@ -396,12 +396,12 @@ pub async fn add_key(
     // account (which takes the row FOR UPDATE) is waited for, and a key
     // sealed for the binding it replaced is refused.
     let binding: String =
-        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1 FOR SHARE")
+        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *change.tx)
             .await?;
     if header.canonical_login_email != binding {
-        return Err(AppError::binding_changed(
+        return Err(AppError::bad_request(
             "privateKeyEnvelope is not this account's mail key",
         ));
     }

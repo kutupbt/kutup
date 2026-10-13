@@ -11,7 +11,6 @@ import {
   deriveRecoveryAuthProof,
   generateAccountProtectionSalt,
   openAccountEnvelope,
-  resealAccountEnvelope,
   sealAccountEnvelope,
   toBase64,
   type RegistrationKeys,
@@ -25,10 +24,8 @@ import type { AccountProtectionConfig } from '@kutup/crypto/kdf'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
-import { rebindPassVaultSecrets } from '@kutup/session/passRebind'
 import { persistKeys } from '@kutup/session/persist'
 import { activateSession } from '@kutup/session/profile'
-import { getSession, updateSession } from '@kutup/session/store'
 
 interface Preflight {
   accountProtectionSuite: number
@@ -59,7 +56,6 @@ export interface TotpChallenge {
   name: string
   preAuthToken: string
   keyEncryptionKey: Uint8Array
-  loginKey: string
 }
 
 /** An administrator-created account signing in for the first time. */
@@ -68,28 +64,10 @@ export interface PendingSetup {
   setupToken: string
 }
 
-/**
- * An account whose keys are still bound to its old sign-in email: the account
- * app re-seals them to a key binding right after the sign-in
- * (docs/plans/account-identity.md). Holds the password's key-encryption key
- * and login key, never the password, until it is done or put off.
- */
-export interface PendingRebind {
-  name: string
-  oldBinding: string
-  keyEncryptionKey: Uint8Array
-  loginKey: string
-}
-
 export type SignInResult =
-  | { kind: 'signedIn'; rebind?: PendingRebind }
+  | { kind: 'signedIn' }
   | { kind: 'totp'; challenge: TotpChallenge }
   | { kind: 'setup'; setup: PendingSetup }
-
-/** A key binding: what an account's keys are bound to for good (a UUID v4), never a name. */
-export function isKeyBinding(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
-}
 
 function protectionFrom(preflight: Preflight): AccountProtectionConfig {
   return {
@@ -164,13 +142,13 @@ export async function signIn(name: string, password: string): Promise<SignInResu
     return { kind: 'setup', setup: { name, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
-    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, keyEncryptionKey, loginKey } }
+    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, keyEncryptionKey } }
   }
-  return finishSignIn(data, name, keyEncryptionKey, loginKey)
+  return finishSignIn(data, keyEncryptionKey)
 }
 
-/** Unlocks and activates; keeps the password keys for a re-seal when one is due. */
-async function finishSignIn(data: LoginResponse, name: string, keyEncryptionKey: Uint8Array, loginKey: string): Promise<SignInResult> {
+/** Unlocks and activates. */
+async function finishSignIn(data: LoginResponse, keyEncryptionKey: Uint8Array): Promise<SignInResult> {
   const binding = data.envelopeBinding
   if (!binding) {
     keyEncryptionKey.fill(0)
@@ -178,15 +156,10 @@ async function finishSignIn(data: LoginResponse, name: string, keyEncryptionKey:
   }
   try {
     await unlockAndActivate(data, binding, keyEncryptionKey)
-  } catch (error) {
+  } finally {
     keyEncryptionKey.fill(0)
-    throw error
   }
-  if (isKeyBinding(binding)) {
-    keyEncryptionKey.fill(0)
-    return { kind: 'signedIn' }
-  }
-  return { kind: 'signedIn', rebind: { name, oldBinding: binding, keyEncryptionKey, loginKey } }
+  return { kind: 'signedIn' }
 }
 
 export async function completeTotp(challenge: TotpChallenge, code: string): Promise<SignInResult> {
@@ -194,7 +167,7 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.name, challenge.keyEncryptionKey, challenge.loginKey)
+  return finishSignIn(data, challenge.keyEncryptionKey)
 }
 
 /** Fresh account keys bound to a key binding drawn here (Argon2id in a worker). */
@@ -333,130 +306,3 @@ export async function recoverAccount(
   }
 }
 
-/**
- * How the recovery part of a re-seal is made: with the phrase the reader has
- * (checked against the account), or a new one they were shown and confirmed
- * first (it replaces the old phrase).
- */
-export type RecoveryChoice = ({ kind: 'phrase'; mnemonic: string } | { kind: 'new'; mnemonic: string }) & {
-  /** Kept Pass vault keys that no longer open are forgotten (the person agreed). */
-  forgetUnreadableVaultKeys?: boolean
-}
-
-/** A new recovery phrase, to show and confirm before a re-seal uses it. */
-export async function newRecoveryPhrase(): Promise<string> {
-  const { encodeMnemonic } = await import('@kutup/crypto/mnemonic')
-  const entropy = crypto.getRandomValues(new Uint8Array(32))
-  try {
-    return encodeMnemonic(entropy)
-  } finally {
-    entropy.fill(0)
-  }
-}
-
-/** The phrase was not this account's. */
-export class WrongRecoveryPhrase extends Error {}
-
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((byte, i) => byte === b[i])
-}
-
-/**
- * Moves every key of the account from its old sign-in email to a new key
- * binding (docs/plans/account-identity.md), in one request the server takes
- * only whole: the password and recovery wrappings of the master key (the
- * recovery one from the phrase the reader typed, or from a new one, returned
- * to be written down), the recovery check, the Drive key, the Chat backup
- * root, each mail address key and each Pass vault secret.
- */
-export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoice): Promise<void> {
-  const session = getSession()
-  if (!session) throw new Error('not signed in')
-  const { masterKey, privateKey } = session
-  const from = pending.oldBinding
-  const keyBinding = crypto.randomUUID()
-  const { decodeMnemonic } = await import('@kutup/crypto/mnemonic')
-  let recoveryKey: Uint8Array
-  try {
-    recoveryKey = decodeMnemonic(normalizeMnemonic(choice.mnemonic))
-  } catch {
-    throw new WrongRecoveryPhrase('not a recovery phrase')
-  }
-  if (choice.kind === 'phrase') {
-    // The phrase must open the account's recovery wrapping as it is now.
-    const { data } = await api.get<{ recoveryKeyEnvelope: string }>('/auth/recover/preflight', { params: { name: pending.name } })
-    const opened = await openAccountEnvelope(data.recoveryKeyEnvelope, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey, from).catch(
-      () => null,
-    )
-    const matches = !!opened && sameBytes(opened, masterKey)
-    opened?.fill(0)
-    if (!matches) {
-      recoveryKey.fill(0)
-      throw new WrongRecoveryPhrase('this phrase is not this account\'s')
-    }
-  }
-  try {
-    const seal = (plain: Uint8Array, key: Uint8Array, purpose: (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]) => {
-      // A wiped key (all zeros) would seal what anyone can open.
-      if (key.every((b) => b === 0)) throw new Error('refusing to seal under a wiped key')
-      return sealAccountEnvelope(plain, key, purpose, keyBinding)
-    }
-    const backup = await api
-      .get<{ provisioned?: boolean; rootEnvelope?: string | null }>('/chat/backup')
-      .then((r) => r.data)
-      .catch(() => null)
-    const { data: addresses } = await api.get<{ keys: { id: string; privateKeyEnvelope: string }[] }[]>('/mail/addresses')
-    type Purpose = (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]
-    // Review M6: nothing is sent that does not open again, with the new
-    // binding, to exactly what it held (a wrong seal would lock the account out).
-    const mustOpen = async (envelope: string, key: Uint8Array, purpose: Purpose, expected: Uint8Array) => {
-      const opened = await openAccountEnvelope(envelope, key, purpose, keyBinding)
-      const same = sameBytes(opened, expected)
-      opened.fill(0)
-      if (!same) throw new Error('a re-sealed key does not open')
-    }
-    const resealed = async (envelope: string, purpose: Purpose) => {
-      const before = await openAccountEnvelope(envelope, masterKey, purpose, from)
-      try {
-        const after = await resealAccountEnvelope(envelope, masterKey, purpose, from, keyBinding)
-        await mustOpen(after, masterKey, purpose, before)
-        return after
-      } finally {
-        before.fill(0)
-      }
-    }
-    const body = {
-      loginKey: pending.loginKey,
-      keyBinding,
-      masterKeyEnvelope: await seal(masterKey, pending.keyEncryptionKey, ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey),
-      recoveryKeyEnvelope: await seal(masterKey, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey),
-      recoveryProof: await deriveRecoveryAuthProof(toBase64(recoveryKey), keyBinding),
-      drivePrivateKeyEnvelope: await seal(privateKey, masterKey, ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey),
-      chatBackupRootEnvelope: backup?.provisioned && backup.rootEnvelope ? await resealed(backup.rootEnvelope, ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot) : null,
-      chatBackupRootFrom: backup?.provisioned && backup.rootEnvelope ? backup.rootEnvelope : null,
-      mailKeys: await Promise.all(
-        addresses.flatMap((address) =>
-          address.keys.map(async (key) => ({
-            id: key.id,
-            privateKeyEnvelope: await resealed(key.privateKeyEnvelope, ACCOUNT_ENVELOPE_PURPOSE.mailAddressPrivateKey),
-          })),
-        ),
-      ),
-      passVaultSecrets: await rebindPassVaultSecrets(masterKey, from, keyBinding, choice.forgetUnreadableVaultKeys),
-    }
-    await mustOpen(body.masterKeyEnvelope, pending.keyEncryptionKey, ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey, masterKey)
-    await mustOpen(body.recoveryKeyEnvelope, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey, masterKey)
-    await mustOpen(body.drivePrivateKeyEnvelope, masterKey, ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey, privateKey)
-    await api.post('/user/rebind', body)
-    updateSession({ envelopeBinding: keyBinding })
-  } finally {
-    // The password's key stays until the re-seal is done or dropped
-    // (setPendingRebind, dropPendingRebind): a retry seals with it again.
-    recoveryKey.fill(0)
-  }
-}
-
-/** Puts the re-seal off: the keys it held are dropped; it comes back at the next sign-in. */
-export function dropPendingRebind(pending: PendingRebind): void {
-  pending.keyEncryptionKey.fill(0)
-}

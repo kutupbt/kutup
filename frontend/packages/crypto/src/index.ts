@@ -155,7 +155,6 @@ export type {
 export {
   ACCOUNT_ENVELOPE_PURPOSE,
   openAccountEnvelope,
-  resealAccountEnvelope,
   sealAccountEnvelope,
 } from './accountEnvelope'
 

@@ -119,7 +119,7 @@
     "description": "An administrator created the account {{name}} for you. Choose your own password to create your encryption keys."
   },
   "recover": {
-    "nameHint": "Your username. If you have not signed in since usernames came, the email you signed up with.",
+    "nameHint": "Your username, or your Kutup address.",
     "title": "Recover your account",
     "description": "Use your 24-word recovery phrase to choose a new password.",
     "phrase": "Recovery phrase",
@@ -897,24 +897,5 @@
       "checkedPersonal": "I've removed personal details, and this can be public",
       "openIssue": "Open the issue on GitHub"
     }
-  },
-  "rebind": {
-    "unreadableTitle": "Some saved vault passwords no longer open",
-    "unreadableDescription_one": "The password saved for {{count}} Kutup Pass vault no longer opens (it was saved before your keys changed). To finish the update it is forgotten: Kutup Pass asks for that vault's password the next time you open it.",
-    "unreadableDescription_other": "The passwords saved for {{count}} Kutup Pass vaults no longer open (they were saved before your keys changed). To finish the update they are forgotten: Kutup Pass asks for those vaults' passwords the next time you open them.",
-    "unreadableForget": "Forget them and continue",
-    "title": "One more step for your account",
-    "description": "Kutup now signs you in with your username ({{name}}), not an email. Your encryption keys move with it once, here in your browser: confirm your recovery phrase so it keeps working.",
-    "phrase": "Recovery phrase",
-    "phraseHint": "The 24 words you saved when you made your account.",
-    "confirm": "Confirm and update",
-    "wrongPhrase": "These words are not this account’s recovery phrase.",
-    "noPhrase": "I don’t have my recovery phrase",
-    "noPhraseTitle": "Make a new recovery phrase",
-    "noPhraseDescription": "Your old phrase stops working. Write the new one down; it is the only way back into your account if you forget your password.",
-    "later": "Later",
-    "laterHint": "You will be asked again the next time you sign in.",
-    "done": "Your account is updated. You sign in with your username from now on.",
-    "failed": "The update did not go through. Nothing changed; try again."
   }
 }

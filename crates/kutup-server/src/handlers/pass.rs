@@ -20,8 +20,6 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use std::collections::BTreeSet;
-
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
 use crate::middleware::AuthUser;
@@ -47,8 +45,7 @@ pub struct VaultSecretRow {
 
 #[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
 pub struct ListVaultSecretsQuery {
-    /// Also the secrets of vaults in the trash: every record the account
-    /// has, as re-sealing them all (`POST /api/user/rebind`) needs.
+    /// Also the secrets of vaults in the trash: every record the account has.
     #[serde(default)]
     pub all: bool,
 }
@@ -145,12 +142,10 @@ pub async fn put_vault_secret(
     if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await {
         return Err(AppError::not_found("not found"));
     }
-    // The binding is read under a share lock on the account, which a rebind
-    // holds for update: a secret sealed for the old binding cannot land
-    // after the rebind re-sealed the rest (it waits, then is refused).
+    // What the account's keys are bound to (docs/plans/account-identity.md).
     let mut tx = state.pool.begin().await?;
     let binding: String =
-        sqlx::query_scalar("SELECT envelope_binding FROM users WHERE id = $1 FOR SHARE")
+        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -169,8 +164,8 @@ pub async fn put_vault_secret(
 }
 
 /// The envelope in `b64` if it is canonical base64 of at most
-/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and (suite
-/// 2) sealed for vault `file_id`.
+/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and sealed
+/// for vault `file_id`.
 fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8>> {
     let envelope = STANDARD
         .decode(b64)
@@ -188,93 +183,14 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8
         ));
     }
     if Some(header.canonical_login_email) != account_envelope::canonical_login_email(binding).ok() {
-        return Err(AppError::binding_changed(
+        return Err(AppError::bad_request(
             "envelope is not this account's vault secret",
         ));
     }
-    if header.suite == account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
-        && header.object_id != file_id.as_bytes()
-    {
+    if header.object_id != file_id.as_bytes() {
         return Err(AppError::bad_request("envelope is not this vault's secret"));
     }
     Ok(envelope)
-}
-
-/// One vault secret in a rebind (`POST /api/user/rebind`, docs/plans/
-/// account-identity.md): re-sealed for the account's new binding, or `None`
-/// for one that no longer opened with the old binding (useless already),
-/// which is dropped.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RebindVaultSecret {
-    pub file_id: String,
-    /// Base64 of the re-sealed envelope; `null` drops the record.
-    pub envelope: Option<String>,
-}
-
-/// The Pass part of a rebind, inside its transaction: `rows` must name every
-/// vault secret the account has (any one added or removed since the browser
-/// listed them refuses the whole rebind), each re-sealed envelope must be a
-/// vault secret bound to `binding`, and no vault may appear twice.
-pub async fn rebind_vault_secrets(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
-    binding: &str,
-    rows: &[RebindVaultSecret],
-) -> AppResult<()> {
-    let mut wanted = Vec::with_capacity(rows.len());
-    let mut named = BTreeSet::new();
-    for row in rows {
-        let file_id = Uuid::parse_str(&row.file_id)
-            .map_err(|_| AppError::bad_request("a vault secret's file id is not a UUID"))?;
-        if !named.insert(file_id) {
-            return Err(AppError::bad_request("a vault secret is named twice"));
-        }
-        // A re-seal writes the current suite only (docs/plans/account-identity.md).
-        let envelope = match &row.envelope {
-            Some(b64) => Some(super::account_rebind::current_suite(
-                checked_envelope(b64, binding, file_id)?,
-                "passVaultSecrets",
-            )?),
-            None => None,
-        };
-        wanted.push((file_id, envelope));
-    }
-    let held: BTreeSet<Uuid> =
-        sqlx::query_scalar("SELECT file_id FROM pass_vault_secrets WHERE user_id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_all(&mut **tx)
-            .await?
-            .into_iter()
-            .collect();
-    if held != named {
-        return Err(AppError::conflict(
-            "the kept vault keys changed meanwhile; sign in again to finish",
-        ));
-    }
-    for (file_id, envelope) in wanted {
-        match envelope {
-            Some(envelope) => {
-                sqlx::query(
-                    "UPDATE pass_vault_secrets SET envelope = $3, updated_at = NOW()
-                      WHERE user_id = $1 AND file_id = $2",
-                )
-                .bind(user_id)
-                .bind(file_id)
-                .bind(envelope)
-                .execute(&mut **tx)
-                .await?;
-            }
-            None => {
-                sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
-                    .bind(user_id)
-                    .bind(file_id)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// `DELETE /api/pass/vault-secrets/{fileId}` — forget the caller's secret
@@ -576,20 +492,6 @@ mod tests {
             &STANDARD.encode(vec![0u8; MAX_ENVELOPE_BYTES + 1]),
             ID,
             VAULT
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn rebind_rows_read_the_websites_json() {
-        let rows: Vec<RebindVaultSecret> = serde_json::from_str(&format!(
-            r#"[{{"fileId":"{ID}","envelope":"AAAA"}},{{"fileId":"{ID}","envelope":null}}]"#
-        ))
-        .unwrap();
-        assert_eq!(rows[0].envelope.as_deref(), Some("AAAA"));
-        assert!(rows[1].envelope.is_none());
-        assert!(serde_json::from_str::<Vec<RebindVaultSecret>>(
-            r#"[{"fileId":"x","envelope":null,"extra":1}]"#
         )
         .is_err());
     }

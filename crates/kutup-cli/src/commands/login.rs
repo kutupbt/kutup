@@ -109,9 +109,8 @@ pub(crate) fn login_with_password(
     if resp.requires_setup {
         bail!("account requires first-login setup — use the web UI to complete setup first");
     }
-    // What the account's keys are bound to (its key binding, or before the
-    // web app re-seals them its old sign-in email), told only with the
-    // session; never re-sealed here.
+    // What the account's keys are bound to (its key binding), told only with
+    // the session.
     if resp.envelope_binding.is_empty() {
         bail!("the server did not say what the account's keys are bound to");
     }

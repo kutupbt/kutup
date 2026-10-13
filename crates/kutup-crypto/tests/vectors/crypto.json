@@ -39,10 +39,12 @@
   "accountEnvelope": {
     "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
     "key": "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ=",
-    "purpose": 1,
-    "loginEmail": " Alice@Example.COM ",
+    "purpose": 6,
+    "loginEmail": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+    "objectId": "PxyaUmt+Tw6dGiw7TV5vcA==",
     "nonce": "ERERERERERERERERERERERERERERERER",
-    "envelope": "S1VUUEFFMQAAAQEAABFhbGljZUBleGFtcGxlLmNvbREREREREREREREREREREREREREREREREQAAADCpruTQDDdBFxf+GDLYiRAh/WI7QDLdbkkaToZVid7A36K8vZ389lsyoVtSx75SLbg="
+    "envelope": "S1VUUEFFMQAAAgYAACQwYjZiNWUwYy00YzFlLTRiOGUtOWMyZC02YTFmM2U1ZDdjOWIQPxyaUmt+Tw6dGiw7TV5vcBEREREREREREREREREREREREREREREREQAAADC9zv7BGGEMorF6npqeSpv5q3dNu/Xbb+erFItWDAnGUfX1OqqA846THtLaraxjklE=",
+    "aeadKey": "4/8m6mSJ5NH0e8U4iYv4k14GXLnKLViMoPHSyTWTLL0="
   },
   "driveEnvelope": {
     "plaintext": "cHJvamVjdHM=",
@@ -300,15 +302,5 @@
       "sha256": "XQfapCZwe60o9JKABSPv4Ek/O3wVGT2/ITGKpzhdL80=",
       "hash": "5d7b229f40c6325c0f25afbd8fbd0644b53f80bd1b44c1805d59e9bf6bcc9a20"
     }
-  },
-  "accountEnvelopeV2": {
-    "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
-    "key": "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ=",
-    "purpose": 6,
-    "loginEmail": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
-    "objectId": "PxyaUmt+Tw6dGiw7TV5vcA==",
-    "nonce": "ERERERERERERERERERERERERERERERER",
-    "envelope": "S1VUUEFFMQAAAgYAACQwYjZiNWUwYy00YzFlLTRiOGUtOWMyZC02YTFmM2U1ZDdjOWIQPxyaUmt+Tw6dGiw7TV5vcBEREREREREREREREREREREREREREREREQAAADC9zv7BGGEMorF6npqeSpv5q3dNu/Xbb+erFItWDAnGUfX1OqqA846THtLaraxjklE=",
-    "aeadKey": "4/8m6mSJ5NH0e8U4iYv4k14GXLnKLViMoPHSyTWTLL0="
   }
 }

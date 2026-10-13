@@ -199,38 +199,25 @@ impl NameQuery {
 }
 
 /// The account a person names at sign-in (docs/plans/account-identity.md):
-/// its username, or its Kutup address on this server. An account without a
-/// key binding yet (not re-sealed, or an administrator's new account before
-/// its first sign-in) may also give its old sign-in email; an address on this
-/// server is its owner's first.
+/// its username, or its Kutup address on this server.
 pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<Option<Uuid>> {
     let name = name.trim().to_ascii_lowercase();
     if name.is_empty() || name.len() > 320 {
         return Ok(None);
     }
-    let (local, domain) = match name.split_once('@') {
-        Some((local, domain)) => (local, Some(domain)),
-        None => (name.as_str(), None),
-    };
-    if domain.is_none_or(|d| d == state.config.chat_server_name.to_ascii_lowercase()) {
-        let by_username: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
-                .bind(local)
-                .fetch_optional(&state.pool)
-                .await?;
-        if by_username.is_some() {
-            return Ok(by_username);
+    let local = match name.split_once('@') {
+        Some((local, domain)) if domain == state.config.chat_server_name.to_ascii_lowercase() => {
+            local
         }
-    }
-    if domain.is_none() {
-        return Ok(None);
-    }
-    Ok(sqlx::query_scalar(
-        "SELECT id FROM users WHERE lower(btrim(email)) = $1 AND key_binding IS NULL",
+        Some(_) => return Ok(None),
+        None => name.as_str(),
+    };
+    Ok(
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+            .bind(local)
+            .fetch_optional(&state.pool)
+            .await?,
     )
-    .bind(&name)
-    .fetch_optional(&state.pool)
-    .await?)
 }
 
 /// The sign-in lockout's key: the account once the name resolves (sign-in,
@@ -688,8 +675,8 @@ pub async fn register(
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
             login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
-            key_binding, envelope_binding
-        ) VALUES (NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1,$1)"#,
+            key_binding
+        ) VALUES (NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)"#,
     )
     .bind(&req.key_binding)
     .bind(&req.username)
@@ -897,7 +884,7 @@ pub async fn login(
                   drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   is_first_login,
-                  COALESCE(username, ''), COALESCE(color, ''), envelope_binding
+                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, '')
            FROM users WHERE id = $1"#,
     )
     .bind(account)
@@ -1028,7 +1015,7 @@ pub async fn login_two_fa(
                   drive_private_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), is_active, COALESCE(color, ''),
-                  envelope_binding
+                  COALESCE(key_binding, '')
            FROM users WHERE id = $1"#,
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -1101,12 +1088,11 @@ pub async fn get_recovery_preflight(
     Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
     let name = q.name()?;
-    let row: Option<(String, String, bool, String)> = match account_by_name(&state, &name).await? {
+    let row: Option<(String, String)> = match account_by_name(&state, &name).await? {
         Some(id) => {
             sqlx::query_as(
-                "SELECT recovery_key_envelope, envelope_binding, key_binding IS NULL,
-                        COALESCE(lower(btrim(email)), '')
-                   FROM users WHERE id = $1",
+                "SELECT recovery_key_envelope, COALESCE(key_binding, '') FROM users
+                  WHERE id = $1 AND key_binding IS NOT NULL",
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1114,13 +1100,9 @@ pub async fn get_recovery_preflight(
         }
         None => None,
     };
-    // An account not re-sealed yet carries its sign-in email in its binding
-    // and its recovery envelope's header: shown only to someone who names it
-    // by that email already (usernames are public; emails are not).
-    let row = row.filter(|(_, _, old, email)| !old || name == *email);
 
     let resp = match row {
-        Some((recovery_key_envelope, envelope_binding, _, _)) => PreflightRecoverResponse {
+        Some((recovery_key_envelope, envelope_binding)) => PreflightRecoverResponse {
             recovery_key_envelope,
             envelope_binding,
         },
@@ -1161,17 +1143,16 @@ pub async fn recover(
         req.new_argon_parallelism,
     )?;
     let account = account_by_name(&state, &req.name).await?;
-    let stored: Option<(String, String)> = match account {
-        Some(id) => {
-            sqlx::query_as(
-                "SELECT recovery_key_verifier, envelope_binding FROM users WHERE id = $1",
+    let stored: Option<(String, String)> =
+        match account {
+            Some(id) => sqlx::query_as(
+                "SELECT recovery_key_verifier, COALESCE(key_binding, '') FROM users WHERE id = $1",
             )
             .bind(id)
             .fetch_optional(&state.pool)
-            .await?
-        }
-        None => None,
-    };
+            .await?,
+            None => None,
+        };
     // The proof is checked first, at full cost: an unknown name, an account
     // without a verifier and a wrong phrase are all the same 401, and nothing
     // about the account (its binding) is checked before it.
@@ -1318,7 +1299,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, envelope_binding, COALESCE(username, ''), public_key, totp_enabled,
+        r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days,
                   drive_key_binding IS NOT NULL
@@ -1708,7 +1689,7 @@ pub async fn complete_setup(
               argon_memory_kib = $12, argon_iterations = $13,
               argon_parallelism = $14, recovery_key_verifier = $15,
               drive_key_binding = $17,
-              key_binding = $18, envelope_binding = $18,
+              key_binding = $18,
               is_first_login = false, updated_at = NOW()
            WHERE id = $16 AND is_first_login"#,
     )

@@ -31,8 +31,6 @@ struct CryptoVectors {
     account_identity: AccountIdentityVec,
     #[serde(rename = "accountEnvelope")]
     account_envelope: AccountEnvelopeVec,
-    #[serde(rename = "accountEnvelopeV2")]
-    account_envelope_v2: AccountEnvelopeVec,
     #[serde(rename = "driveEnvelope")]
     drive_envelope: DriveEnvelopeVec,
     #[serde(rename = "driveFileBlob")]
@@ -178,10 +176,9 @@ struct AccountEnvelopeVec {
     purpose: u8,
     #[serde(rename = "loginEmail")]
     login_email: String,
-    /// Suite 2 only.
     #[serde(rename = "objectId", default)]
     object_id: String,
-    /// Suite 2 only: the AEAD key derived for this envelope.
+    /// The AEAD key derived for this envelope.
     #[serde(rename = "aeadKey", default)]
     aead_key: String,
     nonce: String,
@@ -369,25 +366,7 @@ fn account_identity_vector() {
 fn account_envelope_vector() {
     let vector = load_crypto().account_envelope;
     let purpose = AccountEnvelopePurpose::try_from(vector.purpose).unwrap();
-    // Suite 1, still read.
-    let envelope = account_envelope::seal_v1_with_nonce(
-        &b64(&vector.plaintext),
-        &b64(&vector.key),
-        purpose,
-        &vector.login_email,
-        &b64(&vector.nonce),
-    )
-    .unwrap();
-    assert_eq!(envelope, b64(&vector.envelope));
-    assert_eq!(
-        account_envelope::open(&envelope, &b64(&vector.key), purpose, "alice@example.com",)
-            .unwrap(),
-        b64(&vector.plaintext)
-    );
-
-    // Suite 2: a key binding, an object, a key derived for them.
-    let vector = load_crypto().account_envelope_v2;
-    let purpose = AccountEnvelopePurpose::try_from(vector.purpose).unwrap();
+    // A key binding, an object, a key derived for them.
     let object = b64(&vector.object_id);
     let envelope = account_envelope::seal_suite(
         account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
@@ -427,8 +406,8 @@ fn account_envelope_vector() {
         ),
         vector.aead_key
     );
-    // Refused: another object, binding or purpose; the suite byte turned back
-    // to 1; the object id in the header changed.
+    // Refused: another object, binding or purpose; the suite byte turned to
+    // the retired 1; the object id in the header changed.
     let key = b64(&vector.key);
     let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
         account_envelope::open_object(envelope, &key, purpose, binding, object).is_err()

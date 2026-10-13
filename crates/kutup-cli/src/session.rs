@@ -40,13 +40,10 @@ fn keyring_service(profile: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub server: String,
-    /// What the account signed in with: its username or Kutup address
-    /// (`email` in caches from before one identity per account).
-    #[serde(alias = "email")]
+    /// What the account signed in with: its username or Kutup address.
     pub name: String,
-    /// What the account's sealed keys are bound to (preflight's
-    /// `envelopeBinding`); empty in caches from before, where it was `name`.
-    #[serde(default)]
+    /// What the account's sealed keys are bound to: its key binding, as the
+    /// sign-in told it.
     pub envelope_binding: String,
     pub user_id: String,
     pub username: String,
@@ -66,11 +63,7 @@ pub struct Session {
 impl Session {
     /// The string every seal and open uses (docs/plans/account-identity.md).
     pub fn binding(&self) -> &str {
-        if self.envelope_binding.is_empty() {
-            &self.name
-        } else {
-            &self.envelope_binding
-        }
+        &self.envelope_binding
     }
 }
 

@@ -35,19 +35,3 @@ export async function openAccountEnvelope(
   const module = await getCryptoWasm()
   return fromBase64(module.openAccountEnvelope(envelopeBase64, toBase64(key), purpose, binding))
 }
-
-/** An envelope sealed again under the same key for another binding (a re-seal). */
-export async function resealAccountEnvelope(
-  envelopeBase64: string,
-  key: Uint8Array,
-  purpose: AccountEnvelopePurpose,
-  from: string,
-  to: string,
-): Promise<string> {
-  const plain = await openAccountEnvelope(envelopeBase64, key, purpose, from)
-  try {
-    return await sealAccountEnvelope(plain, key, purpose, to)
-  } finally {
-    plain.fill(0)
-  }
-}

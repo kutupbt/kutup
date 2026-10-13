@@ -138,7 +138,7 @@ pub async fn provision(
 
     let mut transaction = state.pool.begin().await?;
     let user_row: (String, String, String, String) = sqlx::query_as(
-        "SELECT envelope_binding,account_incarnation_id,account_authority_public_key,
+        "SELECT COALESCE(key_binding, ''),account_incarnation_id,account_authority_public_key,
                 account_authority_key_id FROM users WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)
@@ -146,7 +146,7 @@ pub async fn provision(
     .await?;
     let (binding, account_incarnation_id, authority_public_key, authority_key_id) = user_row;
     if envelope_header.canonical_login_email != binding {
-        return Err(AppError::binding_changed(
+        return Err(AppError::bad_request(
             "Chat backup root envelope account binding mismatch",
         ));
     }

@@ -13,8 +13,7 @@ import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage } from './errors'
-import { completeTotp, signIn, type SignInResult, type TotpChallenge } from './flows'
-import { setPendingRebind } from './pendingRebind'
+import { completeTotp, signIn, type TotpChallenge } from './flows'
 import { setPendingSetup } from './pendingSetup'
 
 /**
@@ -49,13 +48,8 @@ export function LoginPage() {
 
   if (session && !pending) return <Navigate to={next} replace />
 
-  const signedIn = (result: Extract<SignInResult, { kind: 'signedIn' }>) => {
-    if (result.rebind) {
-      setPendingRebind(result.rebind)
-      void navigate(`/account-update?next=${encodeURIComponent(next)}`, { replace: true })
-    } else {
-      void navigate(next, { replace: true })
-    }
+  const signedIn = () => {
+    void navigate(next, { replace: true })
   }
 
   const onCredentials = handleSubmit(async ({ name, password }) => {
@@ -69,7 +63,7 @@ export function LoginPage() {
       } else if (result.kind === 'totp') {
         setChallenge(result.challenge)
       } else {
-        signedIn(result)
+        signedIn()
       }
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.signInFailed'))
@@ -85,7 +79,7 @@ export function LoginPage() {
     setPending(true)
     try {
       const result = await completeTotp(challenge, code.trim())
-      if (result.kind === 'signedIn') signedIn(result)
+      if (result.kind === 'signedIn') signedIn()
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
     } finally {

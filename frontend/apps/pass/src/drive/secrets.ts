@@ -8,7 +8,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { openPassVaultSecret, sealPassVaultSecret } from '@kutup/crypto/passVault'
-import { isBindingChanged, refreshEnvelopeBinding } from '@kutup/session/binding'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
 import { keyFileSecret } from '../vault/client'
@@ -41,14 +40,6 @@ export async function keptKey(session: Session, rows: SecretRow[] | undefined, f
   try {
     return await openRow(session, row, session.envelopeBinding, fileId)
   } catch {
-    // The account may have been re-sealed since this page read its binding
-    // or the list: read both again, once.
-  }
-  try {
-    const binding = await refreshEnvelopeBinding()
-    const fresh = (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
-    return fresh ? await openRow(session, fresh, binding, fileId) : null
-  } catch {
     // Sealed for another account or vault, or Kutup out of reach: as if
     // there were none.
     return null
@@ -59,15 +50,9 @@ export async function keptKey(session: Session, rows: SecretRow[] | undefined, f
 export async function keepVaultKey(session: Session, fileId: string, key: VaultKeyInput): Promise<void> {
   const keyFile = key.keyFile ? await keyFileSecret(key.keyFile) : null
   const secret = { password: key.password, keyFile: keyFile ? toBase64(keyFile) : null }
-  const keep = async (binding: string) =>
-    api.put(`/pass/vault-secrets/${fileId}`, { envelope: await sealPassVaultSecret(toBase64(session.masterKey), binding, fileId, secret) })
-  try {
-    await keep(session.envelopeBinding)
-  } catch (error) {
-    // Re-sealed since this page read the binding: seal for the new one, once.
-    if (!isBindingChanged(error)) throw error
-    await keep(await refreshEnvelopeBinding())
-  }
+  await api.put(`/pass/vault-secrets/${fileId}`, {
+    envelope: await sealPassVaultSecret(toBase64(session.masterKey), session.envelopeBinding, fileId, secret),
+  })
 }
 
 export function useKeepVaultKey() {

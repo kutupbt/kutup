@@ -169,7 +169,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
-  "envelopeBinding": "<the account's key binding (a UUID v4), or its old sign-in email until re-sealed>",
+  "envelopeBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600
@@ -1464,8 +1464,7 @@ updatedAt}]` (`envelope` base64). A vault in the trash keeps its secret,
 unlisted, until it is restored; a secret for a vault the caller can no longer
 open is deleted as it is listed. Purging a vault deletes every secret for it.
 With `?all=true` the trashed ones are listed too (`inTrash: true`): every
-record the account has, as re-sealing them all for `POST /api/user/rebind`
-(`passVaultSecrets: [{fileId, envelope | null}]`) needs.
+record the account has.
 
 ### PUT /api/pass/vault-secrets/:fileId
 

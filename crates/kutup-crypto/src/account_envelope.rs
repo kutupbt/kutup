@@ -4,14 +4,14 @@
 //! header is authenticated as AEAD associated data, so a server-controlled
 //! database cannot relocate a wrap between accounts, purposes or objects.
 //!
-//! Suite 1 used the wrapping key (a password's key-encryption key, the
-//! recovery entropy, the master key) itself as the AEAD key, and bound the
-//! account by its sign-in email. Suite 2 (docs/plans/account-identity.md,
-//! review H2) derives a separate AEAD key per envelope from the wrapping key
-//! (HKDF-SHA256 over the purpose, the binding and the object), so no
-//! long-lived key is ever used raw, and binds the account's key binding and,
-//! where one secret of a purpose exists per object, that object's id. New
-//! envelopes are suite 2; suite 1 still opens, until the account re-seals.
+//! Suite 2 (docs/plans/account-identity.md, review H2) derives a separate
+//! AEAD key per envelope from the wrapping key (a password's key-encryption
+//! key, the recovery entropy, the master key) with HKDF-SHA256 over the
+//! purpose, the binding and the object, so no long-lived key is ever used
+//! raw, and binds the account's key binding and, where one secret of a
+//! purpose exists per object, that object's id. Suite 1 (the wrapping key as
+//! the AEAD key, bound to the sign-in email) is no longer read or written:
+//! no account from before carries over (the private beta was reset).
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -35,12 +35,10 @@ const MAX_PLAINTEXT_LEN: usize = 4096;
 const V2_KEY_SALT: &[u8] = b"kutup/account-envelope/v2\0";
 const V2_KEY_INFO: &[u8] = b"kutup/account-envelope-key/v2\0";
 
-/// Closed registry for account-secret envelope encryption.
+/// Closed registry for account-secret envelope encryption (suite 1 retired).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum AccountEnvelopeSuiteId {
-    /// The wrapping key as the AEAD key; read only.
-    XChaCha20Poly1305V1 = 1,
     /// A per-envelope AEAD key (HKDF-SHA256) and an object id.
     XChaCha20Poly1305HkdfV2 = 2,
 }
@@ -56,7 +54,6 @@ impl TryFrom<u16> for AccountEnvelopeSuiteId {
 
     fn try_from(value: u16) -> Result<Self> {
         match value {
-            1 => Ok(Self::XChaCha20Poly1305V1),
             2 => Ok(Self::XChaCha20Poly1305HkdfV2),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-envelope suite {value}"
@@ -107,11 +104,10 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
 pub struct AccountEnvelopeHeader {
     pub suite: AccountEnvelopeSuiteId,
     pub purpose: AccountEnvelopePurpose,
-    /// What the account is bound by: its key binding (suite 1: its sign-in
-    /// email, or a binding written there), canonical.
+    /// What the account is bound by: its key binding, canonical.
     pub canonical_login_email: String,
-    /// The object the secret belongs to (suite 2; empty when the purpose has
-    /// one secret per account).
+    /// The object the secret belongs to (empty when the purpose has one
+    /// secret per account).
     pub object_id: Vec<u8>,
     pub ciphertext_len: u32,
 }
@@ -124,7 +120,7 @@ struct ParsedEnvelope<'a> {
 }
 
 /// A binding as headers carry it: trimmed and lowercased (a key binding is
-/// already; a suite-1 sign-in email is folded).
+/// already).
 pub fn canonical_login_email(value: &str) -> Result<String> {
     let canonical = value.trim().to_ascii_lowercase();
     if canonical.is_empty()
@@ -157,17 +153,15 @@ fn build_header(
     header.push(0); // reserved; non-zero is rejected to keep the encoding canonical
     header.extend_from_slice(&context_len.to_be_bytes());
     header.extend_from_slice(binding.as_bytes());
-    if suite == AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2 {
-        header.push(u8::try_from(object_id.len()).expect("checked object length"));
-        header.extend_from_slice(object_id);
-    }
+    header.push(u8::try_from(object_id.len()).expect("checked object length"));
+    header.extend_from_slice(object_id);
     header.extend_from_slice(nonce);
     header.extend_from_slice(&ciphertext_len.to_be_bytes());
     Ok(header)
 }
 
-/// The AEAD key of an envelope: suite 1 the wrapping key itself; suite 2 one
-/// derived from it for this purpose, binding and object alone.
+/// The AEAD key of an envelope: derived from the wrapping key for this
+/// purpose, binding and object alone.
 fn aead_key(
     suite: AccountEnvelopeSuiteId,
     key: &[u8],
@@ -177,7 +171,6 @@ fn aead_key(
 ) -> Result<Zeroizing<[u8; 32]>> {
     let mut out = Zeroizing::new([0u8; 32]);
     match suite {
-        AccountEnvelopeSuiteId::XChaCha20Poly1305V1 => out.copy_from_slice(key),
         AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2 => {
             let mut info =
                 Vec::with_capacity(V2_KEY_INFO.len() + 4 + binding.len() + object_id.len());
@@ -275,26 +268,6 @@ pub fn seal_with_nonce(
     )
 }
 
-/// A suite-1 envelope with a fixed nonce, for the vectors that pin suite 1
-/// (still read) only.
-pub fn seal_v1_with_nonce(
-    plaintext: &[u8],
-    key: &[u8],
-    purpose: AccountEnvelopePurpose,
-    login_email: &str,
-    nonce: &[u8],
-) -> Result<Vec<u8>> {
-    seal_suite(
-        AccountEnvelopeSuiteId::XChaCha20Poly1305V1,
-        plaintext,
-        key,
-        purpose,
-        login_email,
-        &[],
-        nonce,
-    )
-}
-
 /// Any suite, object and nonce: for checked-in vectors only.
 pub fn seal_suite(
     suite: AccountEnvelopeSuiteId,
@@ -311,9 +284,7 @@ pub fn seal_suite(
             "account-envelope plaintext length is invalid".into(),
         ));
     }
-    if object_id.len() > MAX_OBJECT_LEN
-        || (suite == AccountEnvelopeSuiteId::XChaCha20Poly1305V1 && !object_id.is_empty())
-    {
+    if object_id.len() > MAX_OBJECT_LEN {
         return Err(CryptoError::InvalidInput(
             "account-envelope object id is invalid".into(),
         ));
@@ -382,23 +353,19 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             "account-envelope context is not canonical".into(),
         ));
     }
-    let (object_id, after_object) = match suite {
-        AccountEnvelopeSuiteId::XChaCha20Poly1305V1 => (Vec::new(), after_context),
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2 => {
-            let object_len = usize::from(envelope[after_context]);
-            if object_len > MAX_OBJECT_LEN {
-                return Err(CryptoError::InvalidInput(
-                    "account-envelope object id is too long".into(),
-                ));
-            }
-            let start = after_context + 1;
-            let end = start.checked_add(object_len).ok_or(CryptoError::TooShort)?;
-            if end > envelope.len() {
-                return Err(CryptoError::TooShort);
-            }
-            (envelope[start..end].to_vec(), end)
-        }
-    };
+    let object_len = usize::from(envelope[after_context]);
+    if object_len > MAX_OBJECT_LEN {
+        return Err(CryptoError::InvalidInput(
+            "account-envelope object id is too long".into(),
+        ));
+    }
+    let after_object = (after_context + 1)
+        .checked_add(object_len)
+        .ok_or(CryptoError::TooShort)?;
+    if after_object > envelope.len() {
+        return Err(CryptoError::TooShort);
+    }
+    let object_id = envelope[after_context + 1..after_object].to_vec();
     let after_nonce = after_object
         .checked_add(NONCE_LEN)
         .ok_or(CryptoError::TooShort)?;
@@ -440,7 +407,7 @@ pub fn inspect(envelope: &[u8]) -> Result<AccountEnvelopeHeader> {
     Ok(parse(envelope)?.header)
 }
 
-/// Checks an envelope's header (either suite) without opening it.
+/// Checks an envelope's header without opening it.
 pub fn validate(
     envelope: &[u8],
     expected_purpose: AccountEnvelopePurpose,
@@ -459,7 +426,7 @@ pub fn validate(
     Ok(())
 }
 
-/// Opens an envelope of either suite with no object.
+/// Opens an envelope with no object.
 pub fn open(
     envelope: &[u8],
     key: &[u8],
@@ -469,8 +436,7 @@ pub fn open(
     open_object(envelope, key, expected_purpose, expected_login_email, &[])
 }
 
-/// Opens an envelope of either suite, sealed for `object_id` (suite 2; a
-/// suite-1 envelope names no object, and opens for any).
+/// Opens an envelope sealed for `object_id`.
 pub fn open_object(
     envelope: &[u8],
     key: &[u8],
@@ -483,8 +449,7 @@ pub fn open_object(
     let suite = parsed.header.suite;
     if parsed.header.purpose != expected_purpose
         || parsed.header.canonical_login_email != canonical_login_email(expected_binding)?
-        || (suite == AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
-            && parsed.header.object_id != object_id)
+        || parsed.header.object_id != object_id
     {
         return Err(CryptoError::AuthFailed);
     }
@@ -548,12 +513,14 @@ pub fn open_b64(
 mod tests {
     use super::*;
 
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
     fn fixture() -> Vec<u8> {
-        seal_v1_with_nonce(
+        seal_with_nonce(
             &[0x42; 32],
             &[0x24; 32],
             AccountEnvelopePurpose::PasswordMasterKey,
-            " Alice@Example.COM ",
+            BINDING,
             &[0x11; 24],
         )
         .unwrap()
@@ -562,18 +529,18 @@ mod tests {
     #[test]
     fn round_trip_is_canonical_and_context_bound() {
         let envelope = fixture();
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD.encode(&envelope),
-            "S1VUUEFFMQAAAQEAABFhbGljZUBleGFtcGxlLmNvbREREREREREREREREREREREREREREREREQAAADCpruTQDDdBFxf+GDLYiRAh/WI7QDLdbkkaToZVid7A36K8vZ389lsyoVtSx75SLbg="
-        );
         let header = inspect(&envelope).unwrap();
-        assert_eq!(header.suite, AccountEnvelopeSuiteId::XChaCha20Poly1305V1);
-        assert_eq!(header.canonical_login_email, "alice@example.com");
+        assert_eq!(
+            header.suite,
+            AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
+        );
+        assert_eq!(header.canonical_login_email, BINDING);
+        assert!(header.object_id.is_empty());
         assert_eq!(header.ciphertext_len, 48);
         validate(
             &envelope,
             AccountEnvelopePurpose::PasswordMasterKey,
-            "ALICE@example.com",
+            &BINDING.to_uppercase(),
             32,
         )
         .unwrap();
@@ -582,28 +549,49 @@ mod tests {
                 &envelope,
                 &[0x24; 32],
                 AccountEnvelopePurpose::PasswordMasterKey,
-                "alice@example.com",
+                BINDING
             )
             .unwrap(),
             vec![0x42; 32]
         );
+        // The wrapping key is never the AEAD key.
+        let raw = XChaCha20Poly1305::new((&[0x24u8; 32]).into());
+        let header_len = envelope.len() - 48;
+        assert!(raw
+            .decrypt(
+                XNonce::from_slice(&[0x11; 24]),
+                Payload {
+                    msg: &envelope[header_len..],
+                    aad: &envelope[..header_len],
+                },
+            )
+            .is_err());
     }
 
     #[test]
-    fn relocation_purpose_tampering_and_trailing_bytes_fail_closed() {
+    fn relocation_purpose_object_tampering_and_trailing_bytes_fail_closed() {
         let envelope = fixture();
+        let key = [0x24; 32];
         assert!(open(
             &envelope,
-            &[0x24; 32],
+            &key,
             AccountEnvelopePurpose::PasswordMasterKey,
-            "mallory@example.com",
+            "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b"
         )
         .is_err());
         assert!(open(
             &envelope,
-            &[0x24; 32],
+            &key,
             AccountEnvelopePurpose::RecoveryMasterKey,
-            "alice@example.com",
+            BINDING
+        )
+        .is_err());
+        assert!(open_object(
+            &envelope,
+            &key,
+            AccountEnvelopePurpose::PasswordMasterKey,
+            BINDING,
+            &[1]
         )
         .is_err());
 
@@ -611,9 +599,9 @@ mod tests {
         tampered[10] = AccountEnvelopePurpose::RecoveryMasterKey.as_u8();
         assert!(open(
             &tampered,
-            &[0x24; 32],
+            &key,
             AccountEnvelopePurpose::RecoveryMasterKey,
-            "alice@example.com",
+            BINDING
         )
         .is_err());
 
@@ -623,116 +611,54 @@ mod tests {
     }
 
     #[test]
-    fn suite_two_derives_a_key_per_envelope_and_binds_its_object() {
-        let binding = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    fn an_object_is_bound_and_its_id_is_bounded() {
         let key = [0x24; 32];
         let envelope = seal_object(
             &[0x42; 32],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
-            binding,
+            BINDING,
             &[7; 16],
         )
         .unwrap();
-        let header = inspect(&envelope).unwrap();
-        assert_eq!(
-            header.suite,
-            AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
-        );
-        assert_eq!(header.object_id, vec![7; 16]);
+        assert_eq!(inspect(&envelope).unwrap().object_id, vec![7; 16]);
         assert_eq!(
             open_object(
                 &envelope,
                 &key,
                 AccountEnvelopePurpose::PassVaultSecret,
-                binding,
+                BINDING,
                 &[7; 16]
             )
             .unwrap(),
             vec![0x42; 32]
         );
-        // Another object, binding or purpose: refused.
-        for (purpose, binding, object) in [
-            (
-                AccountEnvelopePurpose::PassVaultSecret,
-                binding,
-                &[8u8; 16][..],
-            ),
-            (
-                AccountEnvelopePurpose::PassVaultSecret,
-                "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
-                &[7u8; 16][..],
-            ),
-            (
-                AccountEnvelopePurpose::DriveHpkePrivateKey,
-                binding,
-                &[7u8; 16][..],
-            ),
-        ] {
-            assert!(open_object(&envelope, &key, purpose, binding, object).is_err());
-        }
-        // The wrapping key is never the AEAD key: the same bytes under suite 1
-        // do not open with it.
-        let v1 = seal_v1_with_nonce(
-            &[0x42; 32],
+        assert!(open_object(
+            &envelope,
             &key,
-            AccountEnvelopePurpose::PasswordMasterKey,
-            binding,
-            &[0x11; 24],
+            AccountEnvelopePurpose::PassVaultSecret,
+            BINDING,
+            &[8; 16]
         )
-        .unwrap();
-        let v2 = seal_with_nonce(
-            &[0x42; 32],
-            &key,
-            AccountEnvelopePurpose::PasswordMasterKey,
-            binding,
-            &[0x11; 24],
-        )
-        .unwrap();
-        assert_ne!(v1[v1.len() - 48..], v2[v2.len() - 48..]);
-        assert_eq!(
-            open(
-                &v1,
-                &key,
-                AccountEnvelopePurpose::PasswordMasterKey,
-                binding
-            )
-            .unwrap(),
-            open(
-                &v2,
-                &key,
-                AccountEnvelopePurpose::PasswordMasterKey,
-                binding
-            )
-            .unwrap()
-        );
-        // An object id past its limit, or one under suite 1, is refused.
+        .is_err());
         assert!(seal_object(
             &[1],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
-            binding,
+            BINDING,
             &[0; 65]
-        )
-        .is_err());
-        assert!(seal_suite(
-            AccountEnvelopeSuiteId::XChaCha20Poly1305V1,
-            &[1],
-            &key,
-            AccountEnvelopePurpose::PassVaultSecret,
-            binding,
-            &[1],
-            &[0; 24]
         )
         .is_err());
     }
 
     #[test]
-    fn unknown_suite_reserved_byte_and_noncanonical_context_are_rejected() {
+    fn retired_or_unknown_suites_reserved_byte_and_noncanonical_context_are_rejected() {
         let envelope = fixture();
-        let mut unknown_suite = envelope.clone();
-        unknown_suite[9] = 3;
-        assert!(inspect(&unknown_suite).is_err());
+        for suite in [0u8, 1, 3] {
+            let mut other = envelope.clone();
+            other[9] = suite;
+            assert!(inspect(&other).is_err(), "suite {suite}");
+        }
 
         let mut reserved = envelope.clone();
         reserved[11] = 1;

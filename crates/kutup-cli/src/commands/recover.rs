@@ -70,11 +70,7 @@ pub fn run(
     let pre = client
         .recover_preflight(&name)
         .context("recovery preflight (rate-limited — a few attempts per hour)")?;
-    let binding = if pre.envelope_binding.is_empty() {
-        name.clone()
-    } else {
-        pre.envelope_binding.clone()
-    };
+    let binding = pre.envelope_binding.clone();
 
     // A wrong phrase — or an unknown name, which the server answers with
     // deterministic fake data — fails to unwrap here, before anything changes.

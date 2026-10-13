@@ -53,11 +53,10 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test chat_live chat_v1_contract -- --exact --nocapture
 
-# One identity per account: an old account re-sealed to its key binding
-# (docs/plans/account-identity.md); it needs the database to make one.
+# One identity per account (docs/plans/account-identity.md): sign-in by
+# name, the key binding, fake answers, temporary passwords.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
-  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \

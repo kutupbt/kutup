@@ -119,7 +119,7 @@
     "description": "Bir yönetici sizin için {{name}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
   },
   "recover": {
-    "nameHint": "Kullanıcı adınız. Kullanıcı adları geldiğinden beri giriş yapmadıysanız, kaydolduğunuz e-posta.",
+    "nameHint": "Kullanıcı adınız ya da Kutup adresiniz.",
     "title": "Hesabınızı kurtarın",
     "description": "Yeni bir parola seçmek için 24 sözcüklük kurtarma ifadenizi kullanın.",
     "phrase": "Kurtarma ifadesi",
@@ -897,24 +897,5 @@
       "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
       "openIssue": "Konuyu GitHub'da aç"
     }
-  },
-  "rebind": {
-    "unreadableTitle": "Kaydedilmiş bazı kasa parolaları artık açılmıyor",
-    "unreadableDescription_one": "{{count}} Kutup Pass kasası için kaydedilen parola artık açılmıyor (anahtarlarınız değişmeden önce kaydedilmiş). Güncellemeyi bitirmek için unutulur: Kutup Pass o kasayı bir sonraki açışınızda parolasını sorar.",
-    "unreadableDescription_other": "{{count}} Kutup Pass kasası için kaydedilen parolalar artık açılmıyor (anahtarlarınız değişmeden önce kaydedilmiş). Güncellemeyi bitirmek için unutulur: Kutup Pass bu kasaları bir sonraki açışınızda parolalarını sorar.",
-    "unreadableForget": "Unut ve devam et",
-    "title": "Hesabınız için bir adım daha",
-    "description": "Kutup artık sizi e-posta ile değil kullanıcı adınızla ({{name}}) oturum açtırıyor. Şifreleme anahtarlarınız bir kez, burada tarayıcınızda taşınır: çalışmaya devam etmesi için kurtarma ifadenizi onaylayın.",
-    "phrase": "Kurtarma ifadesi",
-    "phraseHint": "Hesabınızı oluştururken kaydettiğiniz 24 kelime.",
-    "confirm": "Onayla ve güncelle",
-    "wrongPhrase": "Bu kelimeler bu hesabın kurtarma ifadesi değil.",
-    "noPhrase": "Kurtarma ifadem yok",
-    "noPhraseTitle": "Yeni bir kurtarma ifadesi oluştur",
-    "noPhraseDescription": "Eski ifadeniz çalışmayı bırakır. Yenisini yazın; parolanızı unutursanız hesabınıza dönmenin tek yolu budur.",
-    "later": "Sonra",
-    "laterHint": "Bir sonraki oturum açışınızda yeniden sorulur.",
-    "done": "Hesabınız güncellendi. Artık kullanıcı adınızla oturum açıyorsunuz.",
-    "failed": "Güncelleme tamamlanamadı. Hiçbir şey değişmedi; yeniden deneyin."
   }
 }
