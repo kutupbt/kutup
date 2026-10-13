@@ -26,8 +26,8 @@ const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 /// A folder name, in bytes.
 pub const MAX_COLLECTION_NAME_BYTES: usize = 1024;
-/// A file's metadata (crate::file_metadata), in bytes.
-pub const MAX_FILE_METADATA_BYTES: usize = 65_536;
+/// A file's metadata, in bytes: the metadata format's own cap.
+pub const MAX_FILE_METADATA_BYTES: usize = crate::file_metadata::MAX_METADATA_BYTES;
 /// Names and metadata are padded to a multiple of this many bytes.
 const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";

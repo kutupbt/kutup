@@ -150,6 +150,7 @@ assert.throws(
   const args = [v.rootKey, v.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
   assert.equal(crypto.openDriveEnvelope(v.envelope, ...args), v.plaintext)
   for (const bad of v.invalidPadding) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
+  for (const bad of v.invalidSealedLength) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
   for (const limit of v.limits) {
     const plain = Buffer.alloc(limit.len, 0x61).toString('base64')
     const limitArgs = [v.rootKey, limit.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
