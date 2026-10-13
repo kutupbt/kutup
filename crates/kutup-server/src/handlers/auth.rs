@@ -92,8 +92,7 @@ pub struct RegisterRequest {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LoginRequest {
-    /// The username or the Kutup address (`email`: older clients; an account
-    /// not yet re-sealed may still give its old sign-in email).
+    /// The username or the Kutup address (`email`: older clients).
     #[serde(alias = "email")]
     name: String,
     login_key: String,
@@ -120,8 +119,8 @@ pub struct LoginResponse {
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
-    /// What the account's envelopes carry (its key binding, or its old
-    /// sign-in email until they are re-sealed); given only with the session.
+    /// The account's key binding, what its envelopes carry; given only with
+    /// the session.
     #[serde(skip_serializing_if = "String::is_empty")]
     envelope_binding: String,
     #[serde(skip_serializing_if = "is_false")]

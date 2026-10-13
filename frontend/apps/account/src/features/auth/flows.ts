@@ -125,8 +125,7 @@ async function ensureDriveKeyBinding(masterKey: Uint8Array): Promise<void> {
  * answers, for every account: one an administrator created too (its
  * temporary password was derived in the administrator's browser), which the
  * server answers with `requiresSetup`. The keys' binding comes only with the
- * session. An account whose keys are still bound to its old sign-in email
- * comes back with a pending re-seal.
+ * session.
  */
 export async function signIn(name: string, password: string): Promise<SignInResult> {
   const { data: preflight } = await api.get<Preflight>('/auth/login/preflight', {

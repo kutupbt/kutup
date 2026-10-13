@@ -9,7 +9,7 @@
 //! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -39,16 +39,6 @@ pub struct VaultSecretRow {
     envelope: String,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
-    /// The vault is in the trash (listed only with `all`).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    in_trash: bool,
-}
-
-#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
-pub struct ListVaultSecretsQuery {
-    /// Also the secrets of vaults in the trash: every record the account has.
-    #[serde(default)]
-    pub all: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -59,21 +49,18 @@ pub struct PutVaultSecretRequest {
 }
 
 /// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
-/// they can still open (with `?all=true`, also those in the trash).
+/// they can still open.
 #[utoipa::path(
     get,
     path = "/api/pass/vault-secrets",
     tag = "pass",
     security(("BearerAuth" = [])),
-    params(ListVaultSecretsQuery),
     responses((status = 200, description = "The caller's sealed vault secrets", body = Vec<VaultSecretRow>))
 )]
 pub async fn list_vault_secrets(
     State(state): State<AppState>,
     user: AuthUser,
-    query: Option<Query<ListVaultSecretsQuery>>,
 ) -> AppResult<Response> {
-    let all = query.is_some_and(|Query(q)| q.all);
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, bool)> = sqlx::query_as(
         "SELECT s.file_id, s.envelope, s.updated_at, f.deleted_at IS NOT NULL
@@ -87,22 +74,20 @@ pub async fn list_vault_secrets(
     let mut out = Vec::with_capacity(rows.len());
     for (file_id, envelope, updated_at, trashed) in rows {
         // A vault in the trash keeps its secret for a restore, unlisted.
-        if trashed && !all {
+        if trashed {
             continue;
         }
         // Out of reach now (unshared, perhaps only for a moment): hidden,
-        // never deleted on a read; a failed check fails the request. The
-        // check sees a trashed file as out of reach, so trashed records skip
-        // it (a restore lists them again). A record goes only with the vault
-        // itself (purged: ON DELETE CASCADE) or when its owner forgets it.
-        if !trashed && !try_can_access_file(&state.pool, user_id, file_id).await? {
+        // never deleted on a read; a failed check fails the request. A record
+        // goes only with the vault itself (purged: ON DELETE CASCADE) or when
+        // its owner forgets it.
+        if !try_can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
         out.push(VaultSecretRow {
             file_id: file_id.to_string(),
             envelope: STANDARD.encode(envelope),
             updated_at,
-            in_trash: trashed,
         });
     }
     Ok(Json(out).into_response())

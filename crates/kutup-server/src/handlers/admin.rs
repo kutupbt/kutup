@@ -611,14 +611,15 @@ pub async fn force_disable_2fa(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let email: Option<String> = sqlx::query_scalar(
-        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1 RETURNING email",
+    let username: Option<String> = sqlx::query_scalar(
+        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1
+         RETURNING COALESCE(username, '')",
     )
     .bind(target)
     .fetch_optional(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
-    let Some(email) = email else {
+    let Some(username) = username else {
         return Err(AppError::not_found("not found"));
     };
     audit(
@@ -626,7 +627,7 @@ pub async fn force_disable_2fa(
         &admin.user_id,
         "user.2fa_disable",
         Some(target),
-        json!({"email": email}),
+        json!({"username": username}),
     )
     .await;
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
@@ -1910,6 +1911,7 @@ pub async fn wipe_user(
                account_protection_salt = $4, argon_memory_kib = $5,
                argon_iterations = $6, argon_parallelism = $7,
                recovery_key_verifier = '', drive_key_binding = NULL,
+               key_binding = NULL,
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
