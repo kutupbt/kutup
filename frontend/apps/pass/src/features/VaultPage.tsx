@@ -22,7 +22,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { asNameTaken } from '@kutup/drive-core/names'
 import { useRequiredSession } from '@kutup/session/store'
 import { useRenameFile } from '@kutup/drive-core/mutations'
-import { keptGeneratedPassword, useForgetVaultKey, useVaultSecrets } from '../drive/secrets'
+import { keptGeneratedPassword, keptKeyKind, useForgetVaultKey, useVaultSecrets } from '../drive/secrets'
 import { VaultKeyDialog } from './VaultKeyDialog'
 import { refreshVaultFile, useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
@@ -232,7 +232,16 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 </DropdownMenuItem>
               ) : null}
               {kept ? (
-                <DropdownMenuItem onSelect={() => (generatedKey ? setForgettingGenerated(true) : forget())}>
+                <DropdownMenuItem
+                  onSelect={() =>
+                    // Asked now, not from what the menu showed: a key Kutup
+                    // Pass generated, or one that cannot be told, warns first.
+                    void keptKeyKind(signedIn, secrets.data, fileId!).then(
+                      (kind) => (kind === 'chosen' ? forget() : setForgettingGenerated(true)),
+                      () => setForgettingGenerated(true),
+                    )
+                  }
+                >
                   <KeyRound />
                   {t('vault.forgetKey')}
                 </DropdownMenuItem>

@@ -61,3 +61,13 @@ describe('kept vault keys', () => {
     expect(put).not.toHaveBeenCalled()
   })
 })
+
+describe('the kind of a kept key, before forgetting it', () => {
+  it('tells generated, chosen, unreadable and none apart', async () => {
+    const { keptKeyKind } = await import('./secrets')
+    expect(await keptKeyKind(session, [row('generated', BINDING)], 'v')).toBe('generated')
+    expect(await keptKeyKind(session, [row('sealed', BINDING)], 'v')).toBe('chosen')
+    expect(await keptKeyKind(session, [row('sealed', 'someone-else')], 'v')).toBe('unknown')
+    expect(await keptKeyKind(session, [], 'v')).toBe('none')
+  })
+})

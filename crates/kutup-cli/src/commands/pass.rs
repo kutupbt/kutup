@@ -34,6 +34,10 @@ pub enum PassCmd {
     Forget {
         /// The vault's file id.
         file_id: String,
+        /// Forget a key Kutup Pass generated too (the account may be the only
+        /// place it is kept: save it first with `kutup pass show-key`).
+        #[arg(long)]
+        force: bool,
     },
     /// Show the key Kutup Pass generated for a vault, to open it in KeePassXC.
     ShowKey {
@@ -50,7 +54,7 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
             no_password,
         } => keep(profile, json, file_id, key_file.as_ref(), *no_password),
         PassCmd::Ls => ls(profile, json),
-        PassCmd::Forget { file_id } => forget(profile, json, file_id),
+        PassCmd::Forget { file_id, force } => forget(profile, json, file_id, *force),
         PassCmd::ShowKey { file_id } => show_key(profile, json, file_id),
     }
 }
@@ -146,8 +150,38 @@ fn ls(profile: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn forget(profile: &str, json: bool, file_id: &str) -> Result<()> {
+fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
     let ctx = require_session(profile)?;
+    if !force {
+        // A generated key may be kept nowhere else: forgetting it would lose
+        // the vault. Not knowing counts as generated.
+        if let Some(row) = ctx
+            .client
+            .list_vault_secrets()?
+            .into_iter()
+            .find(|row| row.file_id == file_id)
+        {
+            let generated = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)
+                .ok()
+                .zip(uuid::Uuid::parse_str(file_id).ok())
+                .and_then(|(envelope, id)| {
+                    kutup_crypto::pass_vault::open_vault_secret(
+                        &envelope,
+                        &ctx.session.master_key_bytes().ok()?,
+                        ctx.session.binding(),
+                        id.as_bytes(),
+                    )
+                    .ok()
+                })
+                .is_none_or(|secret| secret.generated_password.is_some());
+            if generated {
+                anyhow::bail!(
+                    "Kutup Pass made this vault's key, and your account may be the only place it is kept: \
+                     save it first (kutup pass show-key {file_id}), then forget it with --force"
+                );
+            }
+        }
+    }
     ctx.client.delete_vault_secret(file_id)?;
     if json {
         print_json(&serde_json::json!({ "fileId": file_id, "forgotten": true }))?;

@@ -73,7 +73,7 @@ key = once(key, "    /// Modify the database key to include a password\n",
     "    /// Kutup's copy (vendor/keepass/KUTUP.md): modify the database key to\n"
     "    /// include a password given as its SHA-256, the password's part of the\n"
     "    /// composite key.\n"
-    "    pub fn with_password_hash(mut self, hash: [u8; 32]) -> Self {\n"
+    "    pub fn with_password_hash(mut self, hash: &[u8; 32]) -> Self {\n"
     "        self.password_hash = Some(hash.to_vec());\n"
     "        self\n"
     "    }\n\n"
