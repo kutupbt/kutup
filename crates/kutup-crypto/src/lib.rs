@@ -69,6 +69,7 @@ pub mod padding;
 pub mod pass_vault;
 pub mod photos_library;
 pub mod profile_key_share;
+pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;

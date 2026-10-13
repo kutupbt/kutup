@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { memoryRevisionStore, OlderThanSeenError, RevisionGuard } from './revisionGuard'
+import { memoryRevisionStore, OlderThanSeenError, plainGuardKeysForTesting, RevisionGuard } from './revisionGuard'
 
 const T = 1_791_633_600_000
 
-function device(clock: { now: number }, store = memoryRevisionStore()) {
-  return new RevisionGuard(store, 'user-1', () => clock.now)
+function device(clock: { now: number }, store = memoryRevisionStore(), account = 'user-1') {
+  return new RevisionGuard(store, () => Promise.resolve(plainGuardKeysForTesting(account)), () => clock.now)
 }
 
 describe('RevisionGuard', () => {
@@ -18,7 +18,7 @@ describe('RevisionGuard', () => {
     // Another value, scope or account has its own history.
     await guard.accept('contact', 'b', 1)
     await guard.accept('mail-name', 'a', 1)
-    expect(await new RevisionGuard(memoryRevisionStore(), 'user-2').seen('contact', 'a')).toBe(0)
+    expect(await device({ now: T }, memoryRevisionStore(), 'user-2').seen('contact', 'a')).toBe(0)
   })
 
   it('makes a value deleted and made again newer than anything seen', async () => {
@@ -69,5 +69,15 @@ describe('RevisionGuard', () => {
     for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
       await expect(guard.accept('contact', 'a', bad)).rejects.toThrow('invalid revision')
     }
+  })
+
+  it('takes an entry that was altered or moved on disk as none', async () => {
+    const store = memoryRevisionStore()
+    const guard = device({ now: T }, store)
+    await guard.accept('contact', 'a', T + 5)
+    const keys = plainGuardKeysForTesting('user-1')
+    // Moved from another value's entry: does not open for this one.
+    await store.put(keys.entryId('contact', 'a'), `${keys.entryId('contact', 'b')}=${T + 9}`)
+    expect(await guard.seen('contact', 'a')).toBe(0)
   })
 })

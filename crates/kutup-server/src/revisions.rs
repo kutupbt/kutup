@@ -12,9 +12,17 @@ use serde_json::json;
 
 use crate::error::{AppError, AppResult};
 
+/// The highest revision taken: the largest integer JavaScript holds exactly
+/// (unix milliseconds stay far below it). A higher one could only be a
+/// garbage value meant to stop every later write.
+pub const MAX_REVISION: u64 = (1 << 53) - 1;
+
 /// A header revision as the database stores it.
 pub fn stored(revision: u64) -> AppResult<i64> {
-    i64::try_from(revision).map_err(|_| AppError::bad_request("the revision is too large"))
+    if revision == 0 || revision > MAX_REVISION {
+        return Err(AppError::bad_request("the revision is out of range"));
+    }
+    Ok(revision as i64)
 }
 
 /// Checks that `new` (from the sealed value's header) follows `base` (the
@@ -41,8 +49,10 @@ pub fn conflict(message: &'static str, current: i64) -> AppError {
 pub fn mail_name(sealed_b64: &str) -> AppResult<u64> {
     let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, sealed_b64)
         .map_err(|_| AppError::bad_request("name is not base64"))?;
-    kutup_crypto::mail_names::inspect_name(&bytes)
-        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))
+    let revision = kutup_crypto::mail_names::inspect_name(&bytes)
+        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))?;
+    stored(revision)?;
+    Ok(revision)
 }
 
 /// A rename of a mail folder, label or filter: `new` must follow `base` (the
@@ -57,6 +67,16 @@ pub fn check_rename(stored: &str, new: &str, base: Option<i64>) -> AppResult<()>
         return Err(conflict("this name was changed elsewhere", current));
     }
     check_follows(mail_name(new)?, base).map(drop)
+}
+
+/// What to answer when a guarded rename wrote nothing: the row's name now
+/// (`None`: the row is gone).
+pub fn rename_lost(now: Option<String>, gone: &'static str) -> AppError {
+    match now.map(|name| mail_name(&name).and_then(stored_or_conflict)) {
+        None => AppError::not_found(gone),
+        Some(Ok(current)) => conflict("this name was changed elsewhere", current),
+        Some(Err(error)) => error,
+    }
 }
 
 fn stored_or_conflict(revision: u64) -> AppResult<i64> {
@@ -78,5 +98,7 @@ mod tests {
         assert!(check_follows(3, 4).is_err());
         assert!(check_follows(5, -1).is_err());
         assert!(check_follows(u64::MAX, 0).is_err());
+        assert!(check_follows(MAX_REVISION + 1, 0).is_err());
+        assert_eq!(check_follows(MAX_REVISION, 0).unwrap(), MAX_REVISION as i64);
     }
 }
