@@ -42,13 +42,10 @@ pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 pub struct UpdateFileMetadataRequest {
     metadata_envelope: String,
     metadata_revision: i64,
-    /// The new name's hash (docs/plans/drive-unique-names.md). Absent keeps
-    /// the stored one (the metadata changed, not the name); `null` clears it
-    /// (renamed by someone without the folder's key, the file shared by
-    /// itself: the owner's client fills it in).
-    #[serde(deserialize_with = "present")]
-    #[schema(value_type = Option<String>)]
-    name_hash: Option<Option<String>>,
+    /// The new name's hash (docs/plans/drive-unique-names.md); absent when
+    /// the name did not change (the details did). An editor without the
+    /// folder's key (the file shared by itself) sends a random one.
+    name_hash: Option<String>,
 }
 
 /// A field that is there, even as `null` (`Some(None)`), apart from one
@@ -255,7 +252,7 @@ pub async fn upload(
         return Err(AppError::bad_request("missing required fields"));
     }
     let name_hash =
-        crate::drive_names::parse_name_hash(fields.get("nameHash").map(String::as_str))?;
+        crate::drive_names::require_name_hash(fields.get("nameHash").map(String::as_str))?;
     let content_hash =
         crate::drive_names::parse_content_hash(fields.get("contentHash").map(String::as_str))?;
     let Some((tmp_file, file_size)) = tmp else {
@@ -309,11 +306,9 @@ pub async fn upload(
     // retry with the same id nor a concurrent write can slip past.
     let mut tx = state.pool.begin().await?;
     // Before anything is stored: a name already here refuses the upload.
-    if let Some(hash) = &name_hash {
-        let place = crate::drive_names::Place::Folder(coll_id);
-        crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
-    }
+    let place = crate::drive_names::Place::Folder(coll_id);
+    crate::drive_names::lock_place(&mut tx, place).await?;
+    crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, None).await?;
     if !crate::drive_writes::claim_file_id(&mut tx, file_id, None).await? {
         return Err(AppError::conflict("file id already in use"));
     }
@@ -553,7 +548,11 @@ pub async fn update_metadata(
     )?;
 
     let change_name = req.name_hash.is_some();
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.flatten().as_deref())?;
+    let name_hash = req
+        .name_hash
+        .as_deref()
+        .map(|hash| crate::drive_names::require_name_hash(Some(hash)))
+        .transpose()?;
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::Folder(coll_id);
         crate::drive_names::lock_place(&mut tx, place).await?;

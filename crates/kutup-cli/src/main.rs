@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod editor_kind;
 mod errors;
 mod file_crypto;
 mod identity;
@@ -23,6 +24,7 @@ mod syncengine;
 mod transfer;
 mod uploader;
 mod vaultsync;
+mod version_upload;
 mod whiteboard;
 
 use clap::{Parser, Subcommand};
@@ -423,6 +425,10 @@ mod tests {
             let e = anyhow::Error::new(api::ApiError {
                 status,
                 message: "x".into(),
+                code: None,
+                upload_id: None,
+                idle_seconds: None,
+                yours: None,
                 name_taken: None,
                 version_conflict: None,
             })

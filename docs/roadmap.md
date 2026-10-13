@@ -907,6 +907,13 @@ needs tus (or a chunked equivalent) on the federated upload route, so each
 part is acknowledged by the folder's server and an upload can go on from
 its offset there.
 
+### Drive · resumable new versions (Replace above 2 GiB)
+
+Done (October 2026): a version goes over tus (`POST /api/uploads` with
+`versionOf`, docs/api.md), resumable and of any size, as Proton Drive's
+revisions; its metadata and content hash land with it. Still by multipart
+(2 GiB): versions into folders on other servers.
+
 ### Drive · resuming a whole folder upload
 
 Done (October 2026) by names unique in a folder

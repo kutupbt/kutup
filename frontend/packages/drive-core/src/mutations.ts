@@ -16,7 +16,7 @@ import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
-import { atTopLevel, inFolder, nameHashIn, type NamePlace } from './names'
+import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 import { confirmRecipient } from './identityPins'
 
@@ -76,7 +76,8 @@ export function useRenameFolder() {
     )
     const parent = folder.parentId ? cachedFolderIndex(queryClient)?.byId.get(folder.parentId) : null
     const place = folderNamePlace(folder, parent, me.masterKey)
-    await api.put(`/collections/${folder.id}`, { ...next, nameHash: place ? await nameHashIn(place, name.trim()) : null })
+    if (!place) throw new Error('the parent folder is not loaded')
+    await api.put(`/collections/${folder.id}`, { ...next, nameHash: await nameHashIn(place, name.trim()) })
   })
 }
 
@@ -90,9 +91,12 @@ export function useRenameFile() {
       file.fileKey,
       fileMetadataOf(file, { name: name.trim() }),
     )
-    // A file shared by itself is renamed without its folder's key: its hash
-    // is cleared, and the owner's client fills it in.
-    await api.put(`/files/${file.id}`, { ...next, nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : null })
+    // A file shared by itself is renamed without its folder's key: a random
+    // hash, which no other name has (docs/plans/drive-unique-names.md).
+    await api.put(`/files/${file.id}`, {
+      ...next,
+      nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : randomNameHash(),
+    })
   })
 }
 

@@ -3,7 +3,8 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { DriveFile } from '@kutup/drive-core/model'
-import { usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
+import { RestoreCancelled, usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
+import { useRestoreNameDialog } from '@kutup/drive-ui/RestoreNameDialog'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -49,7 +50,8 @@ function TrashTile({ entry, selected, onToggle }: { entry: TrashedPhoto; selecte
 export function TrashPage() {
   const { t } = useTranslation()
   const trash = useTrash()
-  const restore = useRestore()
+  const restoreName = useRestoreNameDialog()
+  const restore = useRestore(restoreName.ask)
   const purge = usePurge()
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [confirming, setConfirming] = useState(false)
@@ -62,23 +64,27 @@ export function TrashPage() {
   )
   const chosen = photos.filter((p) => selected.has(p.id))
 
-  async function each(run: (id: string) => Promise<void>, done: string, failed: string) {
+  async function each(run: (entry: TrashedPhoto) => Promise<void>, done: string, failed: string) {
     let failures = 0
+    let left = 0
     for (const entry of chosen) {
       try {
-        await run(entry.id)
-      } catch {
-        failures++
+        await run(entry)
+      } catch (error) {
+        // Left in the trash by choice (its name is taken where it comes back).
+        if (error instanceof RestoreCancelled) left++
+        else failures++
       }
     }
     setSelected(new Set())
     if (failures) toast.error(t(failed, { count: failures }))
-    else toast.success(t(done, { count: chosen.length }))
+    else if (chosen.length > left) toast.success(t(done, { count: chosen.length - left }))
   }
 
   if (trash.isPending) return <LoadingPanel label={t('trash.loading')} />
   return (
     <PageBody className="px-4 py-6 md:px-8 md:py-8">
+      {restoreName.dialog}
       <PageHeader title={t('trash.title')} description={t('trash.description')} />
       {trash.isError ? (
         <Alert variant="error" title={t('trash.failed')}>
@@ -95,7 +101,7 @@ export function TrashPage() {
             variant="outline"
             size="sm"
             disabled={restore.isPending}
-            onClick={() => void each((id) => restore.mutateAsync(id), 'trash.restored', 'trash.restoreFailed')}
+            onClick={() => void each((entry) => restore.mutateAsync(entry), 'trash.restored', 'trash.restoreFailed')}
           >
             <RotateCcw /> {t('trash.restore')}
           </Button>
@@ -143,7 +149,7 @@ export function TrashPage() {
         pending={purge.isPending}
         errorFallback={t('trash.deleteFailed', { count: chosen.length })}
         onConfirm={() => {
-          void each((id) => purge.mutateAsync(id), 'trash.deleted', 'trash.deleteFailed').then(() => setConfirming(false))
+          void each((entry) => purge.mutateAsync(entry.id), 'trash.deleted', 'trash.deleteFailed').then(() => setConfirming(false))
         }}
       />
     </PageBody>

@@ -26,6 +26,12 @@ export interface PendingUpload {
   metadataEnvelope: string
   /** Base64 of the ciphertext's first bytes (Drive header, secretstream header). */
   prefix: string
+  /**
+   * A new version of the file `fileId` (Replace), not a new file: the
+   * file's key generation it is sealed for and the metadata revision it
+   * brings; `fileKeyEnvelope` is then the file's own at `keyEpoch`.
+   */
+  version?: { keyGeneration: number; metadataRevision: number }
   startedAt: number
   updatedAt: number
 }

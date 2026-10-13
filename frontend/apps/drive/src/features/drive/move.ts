@@ -2,7 +2,7 @@ import { isAxiosError } from 'axios'
 import { wrapFileKeyForV1 } from '@kutup/crypto/fileRecord'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
-import { atTopLevel, asNameTaken, canonicalName, inFolder, nameHashIn } from '@kutup/drive-core/names'
+import { atTopLevel, asNameTaken, canonicalName, contentHashIn, inFolder, nameHashIn } from '@kutup/drive-core/names'
 import { isWithin, namesIn } from './copy'
 import type { FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
@@ -73,18 +73,21 @@ function conflictReason(error: unknown): string | null {
 export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Promise<void> {
   if (!to.key) throw new Error('destination is not open')
   const file = await rekeyFile(from, listed)
-  if (!file.fileKey) throw new Error('file is not open')
+  if (!file.fileKey || !file.name) throw new Error('file is not open')
   const fileKeyEnvelope = await wrapFileKeyForV1(file, file.fileKey, to.id, to.keyEpoch, to.key)
   try {
     // The name's hash belongs to the folder: the destination's. Its content
-    // hash does too, and the plaintext's digest is not kept, so it is
-    // dropped (docs/plans/drive-unique-names.md).
+    // hash does too: worked out again from the SHA-256 in its metadata, as
+    // Proton's move recomputes ContentHash — but only while the one it has
+    // stands (an editor's save clears it, and leaves the SHA-256 behind)
+    // (docs/plans/drive-unique-names.md).
     await api.post(`/files/${file.id}/move`, {
       fromCollectionId: from.id,
       toCollectionId: to.id,
       toKeyEpoch: to.keyEpoch,
       fileKeyEnvelope,
-      ...(file.name ? { nameHash: await nameHashIn(inFolder(to), file.name) } : {}),
+      nameHash: await nameHashIn(inFolder(to), file.name),
+      ...(file.contentHash && file.sha256 ? { contentHash: await contentHashIn(to, file.sha256) } : {}),
     })
   } catch (error) {
     if (asNameTaken(error)) throw new MoveNameTakenError()
@@ -98,10 +101,11 @@ export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Pro
 export async function moveFolder(folder: Folder, parent: Folder | null): Promise<void> {
   const masterKey = getSession()?.masterKey
   const place = parent ? inFolder(parent) : masterKey ? atTopLevel(masterKey) : null
+  if (!place || !folder.name) throw new Error('folder is not open')
   try {
     await api.post(`/collections/${folder.id}/move`, {
       parentCollectionId: parent?.id ?? null,
-      ...(folder.name && place ? { nameHash: await nameHashIn(place, folder.name) } : {}),
+      nameHash: await nameHashIn(place, folder.name),
     })
   } catch (error) {
     if (asNameTaken(error)) throw new MoveNameTakenError()

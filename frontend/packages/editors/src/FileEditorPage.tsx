@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStor
 import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { lostUnsentEdits } from './replacedNotice'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKind } from '@kutup/drive-core/kinds'
 import { kindTileSvg } from '@kutup/drive-ui/kindTile'
@@ -381,7 +382,11 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
             setGeneration((g) => g + 1)
           }
         }}
-        onOutdated={(base) => {
+        onOutdated={(base, reset, unsavedDrawing) => {
+          // Edits not yet stored were made on what was replaced: not kept.
+          if (lostUnsentEdits(reset === true, unsentCollabFrames(), unsavedDrawing)) {
+            toast.warning(t('file.replacedUnsentLost'), { duration: 20_000 })
+          }
           setOpenAt(base ?? null)
           setOpened(null)
           setReopen((n) => n + 1)
@@ -524,7 +529,8 @@ function Workspace({
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
-  onOutdated: (base?: SessionBase) => void
+  /** `unsavedDrawing`: the whiteboard had changes not saved yet. */
+  onOutdated: (base?: SessionBase, reset?: boolean, unsavedDrawing?: boolean) => void
 }) {
   const { t } = useTranslation()
   const back = useBack(folder)
@@ -574,7 +580,15 @@ function Workspace({
           />
         )
       case 'whiteboard':
-        return <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} readOnly={readOnly} />
+        return (
+          <WhiteboardEditor
+            ref={whiteboardRef}
+            {...common}
+            initialBytes={opened.bytes}
+            readOnly={readOnly}
+            onOutdated={(base, reset) => onOutdated(base, reset, whiteboardRef.current?.hasUnsavedChanges() ?? false)}
+          />
+        )
       case 'viewer': {
         const viewer = chooseViewer(name)
         return viewer ? <viewer.Component filename={name} blobUrl={opened.blobUrl} mimeType={opened.mimeType} /> : null
@@ -634,9 +648,7 @@ function Workspace({
               keys={keys}
               saveShortcut={saveShortcut}
               getBytes={async () =>
-                wholeFile === 'office'
-                  ? (await officeRef.current!.save()).bytes
-                  : (await whiteboardRef.current!.save()).bytes
+                wholeFile === 'office' ? { bytes: (await officeRef.current!.save()).bytes } : whiteboardRef.current!.save()
               }
               officePdf={
                 wholeFile === 'office'
@@ -763,7 +775,8 @@ function WholeFileActions({
   kind: EditorKind
   keys: Keys
   saveShortcut: MutableRefObject<(() => void) | null>
-  getBytes: () => Promise<Uint8Array>
+  /** The content to store, and (whiteboards) whom to tell whether it was stored. */
+  getBytes: () => Promise<{ bytes: Uint8Array; settle?: (stored: boolean) => void }>
   /** Office only: the document laid out as a PDF, for its thumbnail. */
   officePdf?: () => Promise<Uint8Array>
   /** Its thumbnail is cropped to the used cells. */
@@ -788,14 +801,19 @@ function WholeFileActions({
       if (savingRef.current) return false
       savingRef.current = true
       setSaving(true)
+      let settle: ((stored: boolean) => void) | undefined
       try {
         // Read before the bytes: every edit up to here is in them (one that
         // lands in between is in them too, and replays harmlessly on top).
         const position = logPosition?.() ?? null
-        const bytes = await getBytes()
+        const content = await getBytes()
+        settle = content.settle
+        const { bytes } = content
         const digest = await sha256(bytes)
         const previous = lastSaved.current
         if (previous && previous.digest === digest) {
+          // Stored already, by the save that produced it.
+          settle?.(true)
           if (opts.label) {
             await patchVersion(keys.target.context.fileId, previous.versionId, {
               label: opts.label,
@@ -809,6 +827,7 @@ function WholeFileActions({
           return true
         }
         const { id: versionId } = await saveSnapshot(keys.target, bytes, { ...opts, position })
+        settle?.(true)
         lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
@@ -818,6 +837,7 @@ function WholeFileActions({
         }
         return true
       } catch (error) {
+        settle?.(false)
         if (!opts.quiet) toast.error(error instanceof QuotaExceededError ? t('editor.quotaSave') : t('common.tryAgain'))
         return false
       } finally {

@@ -196,6 +196,21 @@ struct DriveEnvelopeVec {
     parent_id: String,
     nonce: String,
     envelope: String,
+    /// Well-encrypted envelopes whose padding is wrong: refused on open.
+    #[serde(rename = "invalidPadding")]
+    invalid_padding: Vec<String>,
+    /// Envelopes whose sealed length the policy refuses before decryption.
+    #[serde(rename = "invalidSealedLength")]
+    invalid_sealed_length: Vec<String>,
+    /// A plaintext of `len` bytes seals to `sealed_len` bytes, or is refused.
+    limits: Vec<DriveEnvelopeLimit>,
+}
+#[derive(Deserialize)]
+struct DriveEnvelopeLimit {
+    purpose: u8,
+    len: usize,
+    #[serde(rename = "sealedLen")]
+    sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
 struct DriveFileBlobVec {
@@ -459,6 +474,48 @@ fn drive_envelope_vector() {
         drive_envelope::open(&envelope, &b64(&vector.root_key), context).unwrap(),
         b64(&vector.plaintext)
     );
+    for bad in &vector.invalid_padding {
+        assert!(drive_envelope::open(&b64(bad), &b64(&vector.root_key), context).is_err());
+    }
+    for bad in &vector.invalid_sealed_length {
+        assert!(drive_envelope::validate(&b64(bad), context).is_err());
+        assert!(drive_envelope::open(&b64(bad), &b64(&vector.root_key), context).is_err());
+    }
+    for limit in &vector.limits {
+        let context = DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::try_from(limit.purpose).unwrap(),
+            vector.epoch,
+            vector.revision,
+            &vector.object_id,
+            &vector.parent_id,
+        )
+        .unwrap();
+        let sealed = drive_envelope::seal(&vec![b'a'; limit.len], &b64(&vector.root_key), context);
+        match limit.sealed_len {
+            Some(len) => {
+                let sealed = sealed.unwrap();
+                assert_eq!(
+                    sealed.len(),
+                    len,
+                    "purpose {} len {}",
+                    limit.purpose,
+                    limit.len
+                );
+                assert_eq!(
+                    drive_envelope::open(&sealed, &b64(&vector.root_key), context)
+                        .unwrap()
+                        .len(),
+                    limit.len
+                );
+            }
+            None => assert!(
+                sealed.is_err(),
+                "purpose {} len {}",
+                limit.purpose,
+                limit.len
+            ),
+        }
+    }
 }
 
 #[test]
@@ -925,6 +982,17 @@ fn print_drive_names_vectors() {
         "ISTANBUL.md",
         "İstanbul.md",
         "şeker.txt",
+        // Turkish dotless ı stays itself; capital I folds to i: different names.
+        "ılık.txt",
+        "ILIK.txt",
+        // Capital sigma folds to final ς at the true end of a word, and to σ
+        // where a letter follows (".txt" counts: the dot is case-ignorable).
+        "ΟΔΟΣ.txt",
+        "οδος.txt",
+        "οδοσ.txt",
+        "ΟΔΟΣ",
+        "οδος",
+        "οδοσ",
     ]
     .iter()
     .map(|name| {
@@ -984,5 +1052,54 @@ fn drive_names_vector() {
     assert_eq!(
         drive_names::content_hash(&hash_key, &digest).unwrap(),
         content["hash"].as_str().unwrap()
+    );
+}
+
+/// Prints the `driveEnvelope` negatives for `tests/vectors/crypto.json`:
+/// well-encrypted envelopes with one padding fault each (`invalidPadding`),
+/// and with a sealed length the policy refuses before decryption
+/// (`invalidSealedLength`).
+/// `cargo test -p kutup-crypto --test vectors print_drive_envelope_negatives -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_envelope_negatives() {
+    use base64::Engine as _;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let v = load_crypto().drive_envelope;
+    let context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::try_from(v.purpose).unwrap(),
+        v.epoch,
+        v.revision,
+        &v.object_id,
+        &v.parent_id,
+    )
+    .unwrap();
+    let key = b64(&v.root_key);
+    let nonce = b64(&v.nonce);
+    let seal = |body: &[u8]| {
+        e(&drive_envelope::seal_unchecked_for_vectors(body, &key, context, &nonce).unwrap())
+    };
+    let padded = |text: &[u8], len: usize| {
+        let mut b = text.to_vec();
+        b.push(0x80);
+        b.resize(len, 0);
+        b
+    };
+    let mut marker_then_byte = b"projects".to_vec();
+    marker_then_byte.extend([0x80, 0x01]);
+    marker_then_byte.resize(256, 0);
+    let invalid_padding = [
+        seal(&[0u8; 256]),               // no marker
+        seal(&marker_then_byte),         // a non-zero byte after the marker
+        seal(&padded(b"projects", 512)), // more padding than the policy gives
+        seal(&padded(b"", 256)),         // an empty name
+    ];
+    let invalid_sealed_length = [
+        seal(&padded(b"projects", 300)),    // not a whole bucket
+        seal(&padded(&[b'a'; 1100], 1536)), // a whole bucket past the padded maximum
+    ];
+    println!(
+        "{}",
+        serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
     );
 }

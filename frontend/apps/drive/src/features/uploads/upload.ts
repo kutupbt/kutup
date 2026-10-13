@@ -1,6 +1,7 @@
 import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
+import { hashBlob } from '@kutup/crypto/contentHash'
 import { readMedia } from '@kutup/files/media'
-import { newFileBlobStreamEncryptorV1 } from '@kutup/crypto/fileBlob'
+import { newFileBlobStreamEncryptorV1, type FileBlobContextV1 } from '@kutup/crypto/fileBlob'
 import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import api, { freshAccessToken } from '@kutup/session/client'
@@ -9,6 +10,7 @@ import { loadFolderFiles } from '@kutup/drive-core/files'
 import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import {
   asNameTaken,
+  findAvailableName,
   freeName,
   inFolder,
   nameHashIn,
@@ -17,7 +19,8 @@ import {
   recordContentHash,
   type FolderListing,
 } from '@kutup/drive-core/names'
-import type { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
+import { askNameConflict, type ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
+import { cancelVersionUpload, canReplace, replaceContent } from './replace'
 import type { UploadOutcome } from '@kutup/drive-ui/uploadStore'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
 import type { CreatedFile } from '@kutup/editors/files/embedded'
@@ -35,36 +38,48 @@ async function uploadRemote(
   media: MediaMetadataV1 | undefined,
   signal: AbortSignal,
   progress: (s: number, t: number) => void,
-  nameHash: string | null,
+  nameHash: string,
+  sha256?: string,
 ): Promise<CreatedFile> {
   if (!folder.key) throw new Error('folder is not open')
-  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+  const metadata: FileMetadataV1 = {
+    name: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    size: file.size,
+    sha256: sha256 ?? (await hashBlob(file, signal)),
+  }
   if (media) metadata.media = media
   const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, metadata)
-  const enc = await newFileBlobStreamEncryptorV1(record.fileKey, {
-    fileId: record.fileId,
-    generation: record.keyGeneration,
-  })
-  const parts: BlobPart[] = [enc.prefix as BlobPart]
-  if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)
-  for (let pos = 0; pos < file.size; ) {
-    if (signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
-    const end = Math.min(pos + PLAIN_CHUNK, file.size)
-    const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
-    parts.push(enc.push(plain, end === file.size) as BlobPart)
-    pos = end
-  }
+  const sealed = await sealToBlob(file, { fileId: record.fileId, generation: record.keyGeneration }, record.fileKey, signal)
   const form = new FormData()
   form.append('fileId', record.fileId)
   form.append('metadataEnvelope', record.metadataEnvelope)
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
-  if (nameHash) form.append('nameHash', nameHash)
-  form.append('file', new Blob(parts, { type: 'application/octet-stream' }), 'encrypted')
+  form.append('nameHash', nameHash)
+  form.append('file', sealed, 'encrypted')
   await api.post(`/drive/federation/shares/${shareId}/files`, form, {
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
   })
   return { fileId: record.fileId, fileKey: record.fileKey, keyGeneration: record.keyGeneration }
+}
+
+/**
+ * `file` sealed as Drive stores a file's content, a chunk at a time into a
+ * Blob (which the browser may keep on disk), never whole in memory.
+ */
+async function sealToBlob(file: File, context: FileBlobContextV1, fileKey: Uint8Array, signal?: AbortSignal): Promise<Blob> {
+  const enc = await newFileBlobStreamEncryptorV1(fileKey, context)
+  const parts: BlobPart[] = [enc.prefix as BlobPart]
+  if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)
+  for (let pos = 0; pos < file.size; ) {
+    if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError')
+    const end = Math.min(pos + PLAIN_CHUNK, file.size)
+    const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
+    parts.push(enc.push(plain, end === file.size) as BlobPart)
+    pos = end
+  }
+  return new Blob(parts, { type: 'application/octet-stream' })
 }
 
 /**
@@ -74,11 +89,12 @@ async function uploadRemote(
  * (docs/plans/photos.md); `media` gives them instead (a copy keeps the
  * original's). Its thumbnail is queued from the plaintext still in hand.
  *
- * Its name's hash goes with it, so the server keeps the name unique, and
- * its content hash is recorded once it is stored
- * (docs/plans/drive-unique-names.md); `withoutNameHash` sends none (a file
- * replacing another takes the name after it). A taken name rejects with
- * the server's `name_taken` (`asNameTaken`).
+ * Its name's hash goes with it (`nameHash` when the caller worked it out,
+ * as "Keep both" does), so the server keeps the name unique, and its
+ * content hash is recorded once it is stored
+ * (docs/plans/drive-unique-names.md). `sha256`: the content's, when it was
+ * read already. A taken name rejects with the server's `name_taken`
+ * (`asNameTaken`).
  */
 export async function uploadOne(
   folder: Folder,
@@ -87,14 +103,23 @@ export async function uploadOne(
   progress?: (s: number, t: number) => void,
   media?: MediaMetadataV1 | null,
   waiting?: (waiting: boolean) => void,
-  withoutNameHash = false,
+  known: { nameHash?: string; sha256?: string } = {},
 ): Promise<UploadedFile | null> {
   if (!folder.key) throw new Error('folder is not open')
   const details = media === undefined ? await readMedia(file, signal) : (media ?? undefined)
-  const nameHash = withoutNameHash ? null : await nameHashIn(inFolder(folder), file.name)
+  const nameHash = known.nameHash ?? (await nameHashIn(inFolder(folder), file.name))
   const location = folderLocation(folder)
   if (location.kind === 'remote') {
-    await uploadRemote(folder, location.shareId, file, details, signal ?? new AbortController().signal, progress ?? (() => {}), nameHash)
+    await uploadRemote(
+      folder,
+      location.shareId,
+      file,
+      details,
+      signal ?? new AbortController().signal,
+      progress ?? (() => {}),
+      nameHash,
+      known.sha256,
+    )
     return null
   }
   const owner = getSession()?.userId
@@ -108,7 +133,8 @@ export async function uploadOne(
     media: details,
     // A reload or a crash leaves it to go on with (the upload panel).
     resumable: owner ? { owner } : undefined,
-    nameHash: nameHash ?? undefined,
+    nameHash,
+    sha256: known.sha256,
   })
   await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
   thumbnailAfterUpload(uploaded, file)
@@ -121,16 +147,45 @@ function renamed(file: File, name: string): File {
 }
 
 /**
- * The file `old` gives way to `uploaded`, which was sent without a name
- * hash: `old` goes to the trash (restorable), then the new file takes the
- * name. Stopped in between (a closed tab), both stay, and the owner's next
- * visit names the newer one `name (2)` — nothing is lost.
+ * Replace, asking again when it cannot go ahead: the file changed
+ * meanwhile, or another replacement of it is open (Keep both or Skip — or
+ * cancel this account's own and start again). Never a blind retry.
  */
-async function finishReplace(folder: Folder, old: DriveFile, uploaded: UploadedFile, name: string): Promise<void> {
-  await api.delete(`/files/${old.id}`)
-  await api.post(`/collections/${folder.id}/name-hashes`, {
-    files: [{ id: uploaded.fileId, nameHash: await nameHashIn(inFolder(folder), name) }],
-  })
+async function replaceWithChoices(
+  opts: PlaceFileOptions,
+  holder: DriveFile,
+  keptAs: string,
+  sha256: string | undefined,
+): Promise<'done' | 'keepBoth' | 'skip'> {
+  for (let round = 0; ; round++) {
+    const outcome = await replaceContent(opts.folder, holder, opts.file, {
+      signal: opts.signal,
+      progress: opts.progress,
+      waiting: opts.waiting,
+      sha256,
+    })
+    if ('done' in outcome) {
+      thumbnailAfterUpload(outcome.done, opts.file)
+      return 'done'
+    }
+    const answer = await askNameConflict(
+      {
+        name: opts.file.name,
+        folderName: opts.folderName,
+        holder: 'file',
+        keptAs,
+        canReplace: false,
+        more: false,
+        problem: outcome.problem,
+      },
+      opts.signal,
+    )
+    if (answer.choice === 'restart' && outcome.uploadId && round < 2) {
+      await cancelVersionUpload(holder.id, outcome.uploadId)
+      continue
+    }
+    return answer.choice === 'keepBoth' ? 'keepBoth' : 'skip'
+  }
 }
 
 /** A folder's listing, read once for a batch and again when the server says it changed. */
@@ -172,9 +227,10 @@ export interface PlaceFileOptions {
  * One file into a folder whose names are unique
  * (docs/plans/drive-unique-names.md): a free name is uploaded; the same
  * file already there under its name is skipped; another item holding the
- * name has the person choose — Replace (that file to the trash), Keep both
- * (this one as `name (2)`) or Skip. A name taken meanwhile is looked at
- * again once.
+ * name has the person choose — Replace (this content as the newest version
+ * of the file there), Keep both (this one under the first free
+ * `name (n)`, as the server says) or Skip. A name taken meanwhile is looked
+ * at again once.
  */
 export async function placeFile(opts: PlaceFileOptions): Promise<UploadOutcome> {
   const { folder, file } = opts
@@ -183,29 +239,39 @@ export async function placeFile(opts: PlaceFileOptions): Promise<UploadOutcome> 
     const plan = await planUpload(folder, file, listing, opts.signal)
     if (plan.kind === 'same') return { skipped: 'here' }
     let upload = file
-    let replaces: DriveFile | null = null
+    let nameHash: string | undefined
+    const sha256 = plan.kind === 'taken' ? plan.sha256 : undefined
     if (plan.kind === 'taken') {
-      const keptAs = freeName(file.name, namesIn(listing.files, listing.subfolders))
-      const choice = await opts.policy.choose(
-        {
-          name: file.name,
-          folderName: opts.folderName,
-          holder: plan.holder.kind,
-          keptAs,
-          // Replacing moves the file there to the trash; files on other
-          // servers are not named afterwards here, so they are kept.
-          canReplace: plan.holder.kind === 'file' && folder.canDelete && folderLocation(folder).kind === 'local',
-        },
+      // The next free name, asked of the server (it knows names this
+      // listing may not); a folder on another server is asked of its listing.
+      const kept =
+        folderLocation(folder).kind === 'local'
+          ? await findAvailableName(inFolder(folder), file.name, { skipName: true })
+          : { name: freeName(file.name, namesIn(listing.files, listing.subfolders)), hash: undefined }
+      const replaceable = plan.holder.kind === 'file' && canReplace(folder, plan.holder.file)
+      let choice = await opts.policy.choose(
+        { name: file.name, folderName: opts.folderName, holder: plan.holder.kind, keptAs: kept.name, canReplace: replaceable },
         opts.signal,
       )
+      if (choice === 'replace' && plan.holder.kind === 'file' && replaceable) {
+        const replaced = await replaceWithChoices(opts, plan.holder.file, kept.name, sha256)
+        if (replaced === 'done') {
+          opts.listing.stale()
+          return
+        }
+        choice = replaced
+        // Time has passed: the free name is asked again.
+        if (choice === 'keepBoth' && folderLocation(folder).kind === 'local') {
+          Object.assign(kept, await findAvailableName(inFolder(folder), file.name, { skipName: true }))
+        }
+      }
       if (choice === 'skip') return { skipped: 'chosen' }
-      if (choice === 'keepBoth') upload = renamed(file, keptAs)
-      else if (plan.holder.kind === 'file') replaces = plan.holder.file
+      upload = renamed(file, kept.name)
+      nameHash = kept.hash
     }
     try {
-      const uploaded = await uploadOne(folder, upload, opts.signal, opts.progress, undefined, opts.waiting, replaces !== null)
+      await uploadOne(folder, upload, opts.signal, opts.progress, undefined, opts.waiting, { nameHash, sha256 })
       opts.listing.stale()
-      if (replaces && uploaded) await finishReplace(folder, replaces, uploaded, upload.name)
       return
     } catch (error) {
       if (!asNameTaken(error) || attempt > 0) throw error

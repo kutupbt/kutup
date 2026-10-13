@@ -4,6 +4,7 @@ import { fileMetadataOf, type DriveFile, type Folder } from '@kutup/drive-core/m
 import { readOriginal } from '@kutup/drive-core/original'
 import { enqueueThumbnail, thumbnailInHand, thumbnailWaiting } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
+import { hashBlob } from '@kutup/crypto/contentHash'
 import { readMedia } from '@kutup/files/media'
 import { thumbnailsOfImage, thumbnailsOfVideo } from '@kutup/files/thumbnails'
 import api from '@kutup/session/client'
@@ -31,13 +32,17 @@ export function mayWrite(folder: Folder, file: DriveFile, userId: string): boole
   return folder.canManage || file.uploaderUserId === userId
 }
 
-/** Seal the details (none: null) as a new metadata revision, name and all unchanged. */
-export async function writeMedia(file: DriveFile, media: MediaMetadataV1 | null): Promise<void> {
+/**
+ * Seal the details (none: null) as a new metadata revision, name and all
+ * unchanged; `sha256` too when the content was just read and the metadata
+ * has none.
+ */
+export async function writeMedia(file: DriveFile, media: MediaMetadataV1 | null, sha256?: string): Promise<void> {
   if (!file.fileKey) throw new Error('file is not open')
   const next = await renameFileRecordV1(
     { id: file.id, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
     file.fileKey,
-    fileMetadataOf(file, { media: media ?? undefined }),
+    fileMetadataOf(file, { media: media ?? undefined, ...(sha256 && !file.sha256 ? { sha256 } : {}) }),
   )
   await api.put(`/files/${file.id}`, next)
 }
@@ -79,7 +84,7 @@ export function catchUp(photo: Photo, userId: string, first = false): void {
         if (media) {
           if (mayWrite(folder, file, userId)) {
             try {
-              await writeMedia(file, media)
+              await writeMedia(file, media, file.sha256 ? undefined : await hashBlob(plain))
               stored = true
             } catch {
               rememberMedia(file.id, media)

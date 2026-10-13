@@ -201,10 +201,9 @@ plaintext (SHA-256, read while it encrypts) and records a content hash
 under the same key, so a client about to upload a file with a taken name
 and the same size can tell whether it is the same file: then nothing is
 sent ("Already in this folder"); otherwise the person chooses Replace (the
-file there goes to the trash), Keep both (`name (2)`) or Skip. Items made
-before this, or by a client that sends no hash, are filled in by the
-owner's client when it opens the folder, the later of two duplicates
-renamed `name (2)`.
+upload becomes a new version of the file there), Keep both (the first free
+`name (n)`, asked of the server ten at a time) or Skip. As in Proton Drive,
+every write carries its name hash; there is no item without one.
 
 ---
 

@@ -1,9 +1,11 @@
 //! A Drive file's metadata: the plaintext sealed in its metadata envelope
 //! (`drive_envelope`, purpose `FileMetadata`, under the file key).
 //!
-//! JSON, one object: `name`, `mimeType`, `size`, and for photos and videos
-//! an optional `media` object (docs/plans/photos.md) with when and where it
-//! was taken, its size on screen, its length, a content hash and a caption.
+//! JSON, one object: `name`, `mimeType`, `size`, the SHA-256 of the content
+//! (`sha256`, so a move can recompute the folder's content hash without
+//! reading the file), and for photos and videos an optional `media` object
+//! (docs/plans/photos.md) with when and where it was taken, its size on
+//! screen, its length and a caption.
 //! Encoding is canonical (fixed field order, absent fields omitted); decoding
 //! is strict (unknown fields and out-of-range values are refused), so every
 //! client reads and writes the same thing.
@@ -75,9 +77,6 @@ pub struct MediaMetadataV1 {
     /// Make and model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<String>,
-    /// SHA-256 of the plaintext content, canonical base64.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
     /// A live photo's video names its still (a file id): shown as one.
@@ -91,6 +90,10 @@ pub struct FileMetadataV1 {
     pub name: String,
     pub mime_type: String,
     pub size: u64,
+    /// SHA-256 of the plaintext content, canonical base64 (`ContentHasher`).
+    /// Absent only where the writer never saw the whole content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<MediaMetadataV1>,
 }
@@ -165,12 +168,6 @@ impl MediaMetadataV1 {
             crate::drive_object::parse_canonical_uuid(still, "live photo still")
                 .map_err(|_| invalid("liveOf"))?;
         }
-        if let Some(hash) = &self.hash {
-            let bytes = STANDARD.decode(hash).map_err(|_| invalid("hash"))?;
-            if bytes.len() != 32 || STANDARD.encode(&bytes) != *hash {
-                return Err(invalid("hash"));
-            }
-        }
         Ok(())
     }
 
@@ -189,6 +186,12 @@ impl FileMetadataV1 {
         }
         if self.size > MAX_SAFE_INTEGER {
             return Err(invalid("size"));
+        }
+        if let Some(sha256) = &self.sha256 {
+            let bytes = STANDARD.decode(sha256).map_err(|_| invalid("sha256"))?;
+            if bytes.len() != 32 || STANDARD.encode(&bytes) != *sha256 {
+                return Err(invalid("sha256"));
+            }
         }
         if let Some(media) = &self.media {
             // An empty object says nothing: it is written as no `media`.
@@ -221,7 +224,7 @@ pub fn decode(bytes: &[u8]) -> Result<FileMetadataV1> {
     Ok(metadata)
 }
 
-/// A content hash, fed as the content streams past (`MediaMetadataV1::hash`).
+/// A content hash, fed as the content streams past (`FileMetadataV1::sha256`).
 #[derive(Default, Clone)]
 pub struct ContentHasher(Sha256);
 
@@ -249,6 +252,7 @@ mod tests {
             name: "IMG_0001.jpg".into(),
             mime_type: "image/jpeg".into(),
             size: 2_345_678,
+            sha256: Some(STANDARD.encode([7u8; 32])),
             media: Some(MediaMetadataV1 {
                 taken_at: Some(1_719_835_200_000),
                 taken_offset: Some(180),
@@ -258,7 +262,6 @@ mod tests {
                 width: Some(4032),
                 height: Some(3024),
                 camera: Some("Apple iPhone 15".into()),
-                hash: Some(STANDARD.encode([7u8; 32])),
                 ..Default::default()
             }),
         }
@@ -269,7 +272,7 @@ mod tests {
         let bytes = encode(&photo()).unwrap();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"name":"IMG_0001.jpg","mimeType":"image/jpeg","size":2345678,"media":{"takenAt":1719835200000,"takenOffset":180,"takenFrom":"exif","lat":41.0082,"lon":28.9784,"width":4032,"height":3024,"camera":"Apple iPhone 15","hash":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}}"#
+            r#"{"name":"IMG_0001.jpg","mimeType":"image/jpeg","size":2345678,"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","media":{"takenAt":1719835200000,"takenOffset":180,"takenFrom":"exif","lat":41.0082,"lon":28.9784,"width":4032,"height":3024,"camera":"Apple iPhone 15"}}"#
         );
         assert_eq!(decode(&bytes).unwrap(), photo());
     }
@@ -280,6 +283,7 @@ mod tests {
             name: "a.txt".into(),
             mime_type: "text/plain".into(),
             size: 0,
+            sha256: None,
             media: None,
         };
         let bytes = encode(&plain).unwrap();
@@ -308,7 +312,9 @@ mod tests {
             r#"{"name":"a","mimeType":"","size":1,"media":{"takenAt":9999999999999,"takenFrom":"exif"}}"#,
             r#"{"name":"a","mimeType":"","size":1,"media":{"width":10}}"#,
             r#"{"name":"a","mimeType":"","size":1,"media":{"width":0,"height":1}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"hash":"AAAA"}}"#,
+            r#"{"name":"a","mimeType":"","size":1,"sha256":"AAAA"}"#,
+            r#"{"name":"a","mimeType":"","size":1,"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd="}"#,
+            r#"{"name":"a","mimeType":"","size":1,"media":{"hash":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}}"#,
             r#"{"name":"a","mimeType":"","size":1,"media":{"caption":""}}"#,
         ] {
             assert!(decode(bad.as_bytes()).is_err(), "{bad}");

@@ -181,12 +181,27 @@
       "title": "“{{name}}” is already here",
       "fileThere": "{{folder}} already has a file with this name. Names are compared without letter case.",
       "folderThere": "{{folder}} already has a folder with this name. Names are compared without letter case.",
-      "replaceHint": "Replace: the file there goes to the trash, where you can restore it.",
+      "replaceHint": "Replace: this becomes the newest version of the file there; its older versions stay in its history.",
       "keepBothHint": "Keep both: this one is uploaded as “{{name}}”.",
       "applyToAll": "Do the same for the other name clashes in this upload",
       "replace": "Replace",
       "keepBoth": "Keep both",
       "skip": "Skip"
+    },
+    "replaceProblem": {
+      "changed": {
+        "title": "“{{name}}” changed meanwhile",
+        "description": "The file in {{folder}} changed while this one was being sent, so nothing was replaced."
+      },
+      "ownUpload": {
+        "title": "“{{name}}” has an unfinished replacement",
+        "description": "An earlier replacement of this file in {{folder}} stopped over an hour ago. Cancel it and start again, keep both, or skip."
+      },
+      "othersUpload": {
+        "title": "“{{name}}” is being replaced right now",
+        "description": "A new version of this file in {{folder}} is being uploaded right now, maybe from another device. Keep both, or skip."
+      },
+      "restart": "Cancel it and start again"
     }
   },
   "contactSuggest": {
@@ -373,5 +388,11 @@
     "send": "Send",
     "sent": "Thanks! Your feedback was sent to the administrators.",
     "failed": "Your feedback could not be sent. Try again."
+  },
+  "restoreName": {
+    "title": "“{{name}}” is already there",
+    "description": "Something with this name is where it comes back. Restore it as “{{name}}”, or leave it in the trash.",
+    "restore": "Restore as “{{name}}”",
+    "leave": "Leave in trash"
   }
 }

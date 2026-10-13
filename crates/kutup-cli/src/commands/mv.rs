@@ -380,16 +380,21 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
             dest.key_epoch,
             &dest_key,
         )?;
-        // Its name's hash in the destination; its content hash belongs to
-        // the folder it leaves and is dropped (docs/plans/drive-unique-names.md).
-        let name = crate::file_crypto::open_metadata(&found.file, &found.file_key)
-            .context("decrypt file metadata")?
-            .name;
+        // Its name's and content's hashes under the destination's hash key
+        // (docs/plans/drive-unique-names.md). The content hash is
+        // recomputed from the SHA-256 in its metadata only while the file
+        // has one where it is: a new version clears it until the metadata
+        // follows.
+        let meta = crate::file_crypto::open_metadata(&found.file, &found.file_key)
+            .context("decrypt file metadata")?;
         let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &master_key)?;
-        request.name_hash = Some(crate::names::name_hash(
-            &crate::names::folder_hash_key(&dest_keys, &dest.id)?,
-            &name,
-        )?);
+        let dest_hash_key = crate::names::folder_hash_key(&dest_keys, &dest.id)?;
+        request.name_hash = Some(crate::names::name_hash(&dest_hash_key, &meta.name)?);
+        if found.file.content_hash.is_some() {
+            if let Some(sha256) = meta.sha256.as_deref().and_then(decode_sha256) {
+                request.content_hash = Some(crate::names::content_hash(&dest_hash_key, &sha256)?);
+            }
+        }
         match ctx.client.move_file(id, &request)? {
             MoveOutcome::Moved(moved) => return Ok(moved.collection_id),
             MoveOutcome::Conflict(_) if attempt < 2 => continue,
@@ -397,6 +402,10 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
                 return Err(anyhow::Error::new(ApiError {
                     status: 409,
                     message,
+                    code: None,
+                    upload_id: None,
+                    idle_seconds: None,
+                    yours: None,
                     name_taken: None,
                     version_conflict: None,
                 })
@@ -404,6 +413,16 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
             }
         }
     }
+}
+
+/// The 32 bytes of a metadata `sha256` (canonical base64).
+fn decode_sha256(value: &str) -> Option<[u8; 32]> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .ok()?
+        .try_into()
+        .ok()
 }
 
 /// Whether a file in `source` may move to `dest`, before anything is sealed.

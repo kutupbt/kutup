@@ -71,10 +71,19 @@ export interface DriveFile {
   mimeType: string
   /** Plaintext bytes. */
   size: number
+  /**
+   * SHA-256 of the content as uploaded or last replaced (base64), from the
+   * sealed metadata; null when it was never recorded. An editor's saves do
+   * not update it, so it says what the content is only while the server's
+   * `contentHash` stands (a saved version clears that).
+   */
+  sha256: string | null
   /** A photo's or video's details (docs/plans/photos.md), when read. */
   media: MediaMetadataV1 | null
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
+  /** That key sealed under the folder key at `keyEpoch`, as listed. */
+  fileKeyEnvelope: string
   /** The key generation the upload was sealed under. */
   originalKeyGeneration: number
   /** The key generation of what a download serves. */
@@ -101,11 +110,12 @@ export interface DriveFile {
  * never dropped.
  */
 export function fileMetadataOf(
-  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'>,
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'> & { sha256?: string | null },
   change: Partial<FileMetadataV1> = {},
 ): FileMetadataV1 {
   if (!file.name) throw new Error('file is not open')
   const metadata: FileMetadataV1 = { name: file.name, mimeType: file.mimeType, size: file.size }
+  if (file.sha256) metadata.sha256 = file.sha256
   if (file.media) metadata.media = file.media
   return { ...metadata, ...change }
 }

@@ -16,7 +16,7 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protoc
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
-import { claimSeed, listVersions, localBase, registerDevice } from './api'
+import { claimSeed, listVersions, localBase, newestYjsVersion, registerDevice } from './api'
 import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
 import { encodePubKeyB64, generateDeviceKeypair, loadKeypair, saveKeypair } from './devices'
 import { KIND } from './envelope'
@@ -268,10 +268,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   let maySeed = false
   let neverSaved = false
   try {
-    const versions = await listVersions(fileId, base)
-    neverSaved = versions.length === 0
-    if (versions.length > 0) {
-      const latest = versions[0]
+    // Only Yjs state is decoded here: a whole-file version (never offered
+    // for these files, but stored all the same) is left alone.
+    const latest = newestYjsVersion(await listVersions(fileId, base))
+    neverSaved = latest === undefined
+    if (latest) {
       const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
       if (blob.length > 0) {
@@ -309,8 +310,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   // A saved version trimmed the log past where this document was: merge
   // that version in (merging is safe), and the log continues from there.
   const catchUp = async () => {
-    const versions = await listVersions(fileId, base)
-    const latest = versions[0]
+    const latest = newestYjsVersion(await listVersions(fileId, base))
     if (!latest) return 0
     const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
     const blob = new Uint8Array(r.data as ArrayBuffer)
