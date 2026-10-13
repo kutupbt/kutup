@@ -700,6 +700,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   and `status` (noticing another agent in the shell) are built.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
+- **Vault saves on the resumable version path (after the wipe release).**
+  The CLI saves vaults through tus version uploads, where the version, its
+  metadata and its content hash land in one transaction, and a stale save
+  still gets its 409 before any content is sent. The web Pass still uses
+  multipart `POST /versions` and then a separate metadata write. Owner:
+  third session.
 - **Idea (deferred, decided 2026-10-13): fingerprint / face unlock on the
   web.**
   - How: a passkey made on the device (Touch ID, Windows Hello, Android
