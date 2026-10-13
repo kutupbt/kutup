@@ -35,6 +35,7 @@ mod mail;
 mod maps;
 mod middleware;
 mod models;
+mod opaque_setup;
 mod openapi;
 mod photos;
 mod public_fetch;

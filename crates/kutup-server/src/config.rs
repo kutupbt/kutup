@@ -5,6 +5,9 @@
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
+    /// The keys the OPAQUE server setups are sealed under
+    /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
+    pub opaque_setup_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
@@ -384,6 +387,17 @@ impl Config {
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
+            opaque_setup_keys: {
+                let value = env.required("OPAQUE_SETUP_KEYS");
+                if value.is_empty() {
+                    Default::default()
+                } else {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("OPAQUE_SETUP_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
             s3_endpoint: must_env("S3_ENDPOINT"),
             s3_access_key: must_env("S3_ACCESS_KEY"),
             s3_secret_key: must_env("S3_SECRET_KEY"),
@@ -907,6 +921,10 @@ mod env_tests {
     const REQUIRED: &[(&str, &str)] = &[
         ("DATABASE_URL", "postgres://x"),
         ("JWT_SECRET", "0123456789abcdef0123456789abcdef"),
+        (
+            "OPAQUE_SETUP_KEYS",
+            "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ),
         ("S3_ENDPOINT", "http://s3"),
         ("S3_ACCESS_KEY", "a"),
         ("S3_SECRET_KEY", "b"),
