@@ -64,11 +64,11 @@ export class VaultHandle {
 
   /**
    * What the account keeps of this vault's key (kutup_pass::kept), sealed for
-   * `binding` and `fileId`: the key this vault was opened or made with.
-   * `generated`: its password is one Kutup Pass made. Base64.
+   * `binding` and `fileId` at `revision`: the key this vault was opened or
+   * made with. `generated`: its password is one Kutup Pass made. Base64.
    */
-  keepKey(masterKey: Uint8Array, binding: string, fileId: string, generated: boolean): Promise<string> {
-    return call({ call: 'keepKey', handle: this.handle, masterKey, binding, fileId, generated })
+  keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): Promise<string> {
+    return call({ call: 'keepKey', handle: this.handle, masterKey, binding, fileId, revision, generated })
   }
 
   view(): Promise<VaultView> {
@@ -124,6 +124,8 @@ export interface KeptKey {
   keyFile: string | null
   /** The password, when Kutup Pass generated it (to show). */
   generatedPassword: string | null
+  /** The revision it was kept at. */
+  revision: number
 }
 
 /** Opens what the account keeps for vault `fileId`; throws when it does not open. */

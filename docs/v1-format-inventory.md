@@ -55,7 +55,7 @@ canonically on open) and whether it carries a revision:
 |---|---|---|---|
 | PasswordMasterKey, RecoveryMasterKey, DriveHpkePrivateKey, ChatBackupRoot | none | exactly 32 bytes | no |
 | MailAddressPrivateKey | none | padded to a multiple of 256 bytes | no |
-| PassVaultSecret | the vault's file id (16 bytes) | padded to a multiple of 256 bytes | no |
+| PassVaultSecret | the vault's file id (16 bytes) | padded to one length (`pass_vault::MAX_PAYLOAD_LEN` + 1 = 3121 bytes) | yes |
 
 Every server write path checks an envelope with
 `account_envelope::validate_for(purpose, binding, object)` before storing it,

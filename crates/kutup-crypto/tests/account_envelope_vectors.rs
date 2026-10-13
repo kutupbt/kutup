@@ -77,6 +77,8 @@ fn padded(purpose: AccountEnvelopePurpose) -> Vec<u8> {
 
 fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused> {
     let object = object_for(purpose);
+    // The revision a well-formed envelope of this purpose carries.
+    let rev = purpose.policy().mutable.then_some(1);
     let unchecked = |plain: &[u8], binding: &str, object: &[u8], revision: Option<u64>| {
         seal_unchecked_for_vectors(plain, &KEY, purpose, binding, object, revision, &NONCE).unwrap()
     };
@@ -104,18 +106,18 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
         ObjectPolicy::None => add(
             "an object id where the purpose has none",
             "inspect",
-            unchecked(&padded(purpose), BINDING, &[7; 16], None),
+            unchecked(&padded(purpose), BINDING, &[7; 16], rev),
         ),
         ObjectPolicy::Required(len) => {
             add(
                 "no object id",
                 "inspect",
-                unchecked(&padded(purpose), BINDING, &[], None),
+                unchecked(&padded(purpose), BINDING, &[], rev),
             );
             add(
                 "an object id of the wrong length",
                 "inspect",
-                unchecked(&padded(purpose), BINDING, &vec![7; len + 1], None),
+                unchecked(&padded(purpose), BINDING, &vec![7; len + 1], rev),
             );
         }
     }
@@ -144,7 +146,7 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
     add(
         "a length its padding policy never gives",
         "inspect",
-        unchecked(&long, BINDING, &object, None),
+        unchecked(&long, BINDING, &object, rev),
     );
     if !matches!(purpose.policy().length, Length::Exact(_)) {
         let mut no_marker = padded(purpose);
@@ -153,13 +155,13 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
         add(
             "padding without its 0x80 marker",
             "open",
-            unchecked(&no_marker, BINDING, &object, None),
+            unchecked(&no_marker, BINDING, &object, rev),
         );
     }
     add(
         "sealed for another account",
         "open",
-        unchecked(&padded(purpose), OTHER_BINDING, &object, None),
+        unchecked(&padded(purpose), OTHER_BINDING, &object, rev),
     );
     let mut swapped = envelope.to_vec();
     swapped[10] = if purpose == AccountEnvelopePurpose::PasswordMasterKey {

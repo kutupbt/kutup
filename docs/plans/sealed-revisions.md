@@ -5,8 +5,9 @@ below is a follow-up, not built.
 
 Some values the account keeps on the server are replaced over time, and the
 server can read none of them: contact cards, mail folder, label and filter
-names, and the identity pin list. Kutup Pass vault secrets join them in the
-Pass follow-up of the same release. The server could still hand back an
+names, the identity pin list, and Kutup Pass vault secrets (the key the
+account keeps for each vault, an account envelope of a mutable purpose). The
+server could still hand back an
 older copy (one it kept), or store one device's edit over another's. Each of
 these values therefore carries a revision.
 
@@ -65,7 +66,8 @@ a server that drops the pin list cannot have it rewritten from nothing.
   A disk attacker can delete an entry, which makes the device a fresh one for
   that value, or put back an older copy of one. It can neither read the
   entries nor set one to a revision of its choosing.
-- In the CLI, a file per profile.
+- In the CLI, a file per profile for the pin list; for a Pass vault secret
+  it keeps on top of the revision the server lists.
 - In the Chat core, in memory.
 
 ## Limits

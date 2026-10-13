@@ -80,4 +80,10 @@ describe('RevisionGuard', () => {
     await store.put(keys.entryId('contact', 'a'), `${keys.entryId('contact', 'b')}=${T + 9}`)
     expect(await guard.seen('contact', 'a')).toBe(0)
   })
+
+  it('keeps the higher of two revisions accepted at once', async () => {
+    const guard = device({ now: T })
+    await Promise.all([guard.accept('contact', 'a', T + 9), guard.accept('contact', 'a', T + 5).catch(() => undefined)])
+    expect(await guard.seen('contact', 'a')).toBe(T + 9)
+  })
 })

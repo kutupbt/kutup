@@ -21,6 +21,8 @@ struct Vectors {
     master_key: String,
     binding: String,
     file_id: String,
+    /// The secret's revision, in the envelope's header.
+    revision: u64,
     nonce: String,
     /// A password the person chose (kept only as its SHA-256) and a key file.
     chosen_password: String,
@@ -38,6 +40,7 @@ struct Fixed {
     master: [u8; 32],
     binding: &'static str,
     file_id: uuid::Uuid,
+    revision: u64,
     nonce: [u8; 24],
 }
 
@@ -46,13 +49,22 @@ fn fixed() -> Fixed {
         master: [0x5a; 32],
         binding: "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
         file_id: uuid::Uuid::parse_str("3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap(),
+        // 2026-10-10T12:00:00Z in unix milliseconds.
+        revision: 1_791_633_600_000,
         nonce: [0x44; 24],
     }
 }
 
 fn seal(f: &Fixed, secret: &VaultSecret) -> Vec<u8> {
-    seal_vault_secret_with_nonce(&f.master, f.binding, f.file_id.as_bytes(), secret, &f.nonce)
-        .unwrap()
+    seal_vault_secret_with_nonce(
+        &f.master,
+        f.binding,
+        f.file_id.as_bytes(),
+        f.revision,
+        secret,
+        &f.nonce,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -68,6 +80,7 @@ fn write_vectors() {
         master_key: STANDARD.encode(f.master),
         binding: f.binding.into(),
         file_id: f.file_id.to_string(),
+        revision: f.revision,
         nonce: STANDARD.encode(f.nonce),
         chosen_password: chosen.into(),
         chosen_password_hash: STANDARD.encode(password_hash(chosen).as_slice()),
@@ -89,6 +102,7 @@ fn checked_in_vectors_hold() {
     assert_eq!(STANDARD.decode(&v.master_key).unwrap(), f.master);
     assert_eq!(v.binding, f.binding);
     assert_eq!(v.file_id, f.file_id.to_string());
+    assert_eq!(v.revision, f.revision);
     assert_eq!(STANDARD.decode(&v.nonce).unwrap(), f.nonce);
     let key_file = STANDARD.decode(&v.key_file).unwrap();
     assert_eq!(
@@ -110,7 +124,12 @@ fn checked_in_vectors_hold() {
         assert_eq!(&STANDARD.encode(&resealed), sealed);
         let opened =
             open_vault_secret(&resealed, &f.master, f.binding, f.file_id.as_bytes()).unwrap();
-        assert_eq!(opened, expected);
+        assert_eq!(opened, (expected, f.revision));
+        // Every kind of key seals to one length.
+        assert_eq!(
+            resealed.len(),
+            STANDARD.decode(&v.sealed_chosen).unwrap().len()
+        );
         // Another vault's id does not open it.
         assert!(open_vault_secret(&resealed, &f.master, f.binding, &[0; 16]).is_err());
         assert_eq!(

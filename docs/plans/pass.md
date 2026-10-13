@@ -370,9 +370,14 @@ one database, plus a report of what happened.
   `DatabaseKey::with_password_hash`; checked against KeePassXC's test
   vaults). Whoever opens the envelope cannot read such a password directly;
   a weak one can still be guessed from its unsalted SHA-256. A password
-  Kutup Pass generated (below) is kept as it is, so it can be shown. Every
-  payload is padded to one length (3120 bytes), so an envelope's size does
-  not tell a generated key from a chosen one or a key file's size. A key file is kept as the key element KeePass derives
+  Kutup Pass generated (below) is kept as it is, so it can be shown. The
+  envelope pads every payload to one length (3121 bytes, the purpose's
+  `Fixed` policy), so its size does not tell a generated key from a chosen
+  one or a key file's size, and carries the secret's revision
+  (docs/plans/sealed-revisions.md): a key is kept only on top of the one it
+  replaces (`baseRevision`; another device's keep first is a `409`, after
+  which Kasa reads again and keeps once more), and a key older than the
+  browser has seen is not used. A key file is kept as the key element KeePass derives
   from it (an XML key file's key, a 32-byte or hex file's bytes, any other
   file's SHA-256: 32 bytes that open the vault as the file does, whatever its
   size or padding); an unusual key file whose key is not 32 bytes is kept as
