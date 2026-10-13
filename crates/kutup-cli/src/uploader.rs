@@ -248,7 +248,7 @@ pub fn upload_streaming(
     store.save_resume(&resume_key, &rec)?;
 
     let bar = make_bar(&progress, plain_size, &name);
-    let patched_id = run_patches(client, store, &resume_key, &mut rec, up, 0, &bar)?;
+    let patched_id = run_patches(client, store, &resume_key, &mut rec, up, 0, &bar, &sha256)?;
     let _ = store.delete_resume(&resume_key);
 
     let file_id = pick_file_id(patched_id, &rec)?;
@@ -359,7 +359,9 @@ fn try_resume(
             bar.set_position(up.plain_read() as u64);
 
             let mut rec = rec.clone();
-            let patched_id = run_patches(client, store, resume_key, &mut rec, up, offset, &bar)?;
+            let patched_id = run_patches(
+                client, store, resume_key, &mut rec, up, offset, &bar, sha256,
+            )?;
             let _ = store.delete_resume(resume_key);
 
             let file_id = pick_file_id(patched_id, &rec)?;
@@ -377,6 +379,7 @@ fn try_resume(
 /// Ships remaining chunks. On a permanent (4xx) rejection the session and
 /// local state are dropped; on a transient failure the state is kept and the
 /// error tells the user to rerun.
+#[allow(clippy::too_many_arguments)]
 fn run_patches(
     client: &Client,
     store: &Store,
@@ -385,12 +388,30 @@ fn run_patches(
     mut up: StreamUploader<File>,
     mut offset: i64,
     bar: &ProgressBar,
+    sha256: &[u8; 32],
 ) -> Result<String> {
     let mut file_id = String::new();
     #[cfg(feature = "fail-inject")]
     let mut patches_done: u32 = 0;
     loop {
-        let Some(chunk) = up.next_chunk()? else { break };
+        // The last part goes only once what was sealed is what was hashed
+        // (and sealed in the metadata); a changed file cancels the upload.
+        let next = up.next_chunk().and_then(|chunk| match chunk {
+            Some(_) if up.finished() => up.check_sha256(sha256).map(|()| chunk),
+            chunk => Ok(chunk),
+        });
+        let chunk = match next {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => {
+                bar.finish_and_clear();
+                if err.is::<crate::transfer::ChangedWhileUploading>() {
+                    let _ = client.tus_delete(&rec.upload_id);
+                    let _ = store.delete_resume(resume_key);
+                }
+                return Err(err);
+            }
+        };
         match client.tus_patch(&rec.upload_id, offset, chunk) {
             Ok((new_offset, final_id)) => {
                 offset = new_offset;

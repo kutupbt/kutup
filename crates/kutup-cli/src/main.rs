@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod editor_kind;
 mod errors;
 mod file_crypto;
 mod identity;
