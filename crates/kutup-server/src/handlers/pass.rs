@@ -3,9 +3,10 @@
 //! Each person may keep, per vault they can open, the vault's password and
 //! key file sealed under their master key (`kutup_crypto::pass_vault`), so
 //! Kutup Pass and `kutup sync` unlock vaults with the Kutup sign-in. The
-//! server stores the envelopes and checks only their public header; whoever
-//! loses access to a vault loses its record too. It also keeps the PIN lock
-//! (below).
+//! server stores the envelopes and checks only their public header. A record
+//! of a vault its owner cannot reach now (unshared, perhaps for a moment) is
+//! hidden, never deleted on a read; it goes with the vault (purged) or when
+//! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
@@ -21,7 +22,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::{can_access_file, trusted_uuid};
+use crate::handlers::{can_access_file, trusted_uuid, try_can_access_file};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -76,13 +77,11 @@ pub async fn list_vault_secrets(
         if trashed {
             continue;
         }
-        if !can_access_file(&state.pool, user_id, file_id).await {
-            // Access was taken away: the record goes with it.
-            sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
-                .bind(user_id)
-                .bind(file_id)
-                .execute(&state.pool)
-                .await?;
+        // Out of reach now (unshared, perhaps only for a moment): hidden,
+        // never deleted on a read. A failed check fails the request. The
+        // record goes only with the vault itself (purged: ON DELETE CASCADE)
+        // or when its owner forgets it.
+        if !try_can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
         out.push(VaultSecretRow {
