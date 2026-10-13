@@ -431,7 +431,8 @@ pub fn admin_token(c: &Client, base: &str, _email: &str, password: &str, usernam
     rng.fill_bytes(&mut recovery_entropy);
     rng.fill_bytes(&mut salt);
     let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+    let keys =
+        kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
     let binding = uuid::Uuid::new_v4().to_string();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
@@ -476,7 +477,8 @@ pub fn setup_key(password: &str) -> Value {
     let mut salt = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
     let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+    let keys =
+        kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
     json!({
         "loginKey": b64(keys.login_key.as_slice()),
         "accountProtectionSuite": 1,

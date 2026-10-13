@@ -61,6 +61,21 @@ pub struct RebindRequest {
     pub pass_vault_secrets: Vec<RebindVaultSecret>,
 }
 
+/// A re-sealed envelope is of the current suite (2: a key per envelope,
+/// docs/plans/account-identity.md); the account's re-seal is the one moment
+/// every secret is written again, so none stays on suite 1.
+pub(crate) fn current_suite(envelope: Vec<u8>, field: &str) -> AppResult<Vec<u8>> {
+    let header = account_envelope::inspect(&envelope)
+        .map_err(|_| AppError::bad_request(format!("invalid {field}")))?;
+    if header.suite != account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2 {
+        return Err(AppError::bad_request(format!(
+            "{field} must be sealed with the current suite"
+        )));
+    }
+    Ok(envelope)
+}
+
+/// An account key (32 bytes sealed) for `binding`, of the current suite.
 fn checked(
     value: &str,
     purpose: AccountEnvelopePurpose,
@@ -68,8 +83,29 @@ fn checked(
     field: &str,
 ) -> AppResult<Vec<u8>> {
     validate_account_envelope(value, purpose, binding, field)?;
-    account_envelope::decode_canonical_b64(value)
-        .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))
+    let envelope = account_envelope::decode_canonical_b64(value)
+        .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
+    current_suite(envelope, field)
+}
+
+/// A secret of any length (a mail key's) for `binding`, of the current suite.
+fn checked_secret(
+    value: &str,
+    purpose: AccountEnvelopePurpose,
+    binding: &str,
+    field: &str,
+) -> AppResult<Vec<u8>> {
+    let envelope = account_envelope::decode_canonical_b64(value)
+        .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
+    let header = account_envelope::inspect(&envelope)
+        .map_err(|_| AppError::bad_request(format!("invalid {field}")))?;
+    if header.purpose != purpose
+        || Some(header.canonical_login_email)
+            != account_envelope::canonical_login_email(binding).ok()
+    {
+        return Err(AppError::bad_request(format!("invalid {field} binding")));
+    }
+    current_suite(envelope, field)
 }
 
 #[utoipa::path(
@@ -130,7 +166,7 @@ pub async fn rebind(
     for key in &request.mail_keys {
         let id = Uuid::parse_str(&key.id)
             .map_err(|_| AppError::bad_request("a mail key id is not a UUID"))?;
-        let envelope = checked(
+        let envelope = checked_secret(
             &key.private_key_envelope,
             AccountEnvelopePurpose::MailAddressPrivateKey,
             binding,
@@ -228,4 +264,77 @@ pub async fn rebind(
     updated?;
     tx.commit().await?;
     Ok(Json(OkResponse { ok: true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
+    #[test]
+    fn a_re_seal_takes_the_current_suite_and_secrets_of_any_length() {
+        use base64::Engine as _;
+        let b64 = |bytes: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let key = [9u8; 32];
+        let master = |suite| {
+            b64(account_envelope::seal_suite(
+                suite,
+                &[1u8; 32],
+                &key,
+                AccountEnvelopePurpose::PasswordMasterKey,
+                BINDING,
+                &[],
+                &[3u8; 24],
+            )
+            .unwrap())
+        };
+        use account_envelope::AccountEnvelopeSuiteId::{
+            XChaCha20Poly1305HkdfV2, XChaCha20Poly1305V1,
+        };
+        let field = "masterKeyEnvelope";
+        assert!(checked(
+            &master(XChaCha20Poly1305HkdfV2),
+            AccountEnvelopePurpose::PasswordMasterKey,
+            BINDING,
+            field
+        )
+        .is_ok());
+        assert!(checked(
+            &master(XChaCha20Poly1305V1),
+            AccountEnvelopePurpose::PasswordMasterKey,
+            BINDING,
+            field
+        )
+        .is_err());
+        // A mail key's secret is longer than 32 bytes.
+        let mail = b64(account_envelope::seal(
+            &[5u8; 700],
+            &key,
+            AccountEnvelopePurpose::MailAddressPrivateKey,
+            BINDING,
+        )
+        .unwrap());
+        assert!(checked_secret(
+            &mail,
+            AccountEnvelopePurpose::MailAddressPrivateKey,
+            BINDING,
+            "mailKeys"
+        )
+        .is_ok());
+        assert!(checked_secret(
+            &mail,
+            AccountEnvelopePurpose::DriveHpkePrivateKey,
+            BINDING,
+            "mailKeys"
+        )
+        .is_err());
+        assert!(checked_secret(
+            &mail,
+            AccountEnvelopePurpose::MailAddressPrivateKey,
+            "someone@else",
+            "mailKeys"
+        )
+        .is_err());
+    }
 }

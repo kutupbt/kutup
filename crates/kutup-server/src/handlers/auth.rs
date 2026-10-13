@@ -230,7 +230,12 @@ fn lockout_key(account: Option<Uuid>, name: &str) -> String {
 /// shaped as a real one (a key binding), so preflight tells nothing.
 fn fake_binding(secret: &str, name: &str) -> String {
     let bytes = STANDARD
-        .decode(deterministic_fake_bytes(secret, name, "envelope-binding", 16))
+        .decode(deterministic_fake_bytes(
+            secret,
+            name,
+            "envelope-binding",
+            16,
+        ))
         .unwrap_or_else(|_| vec![0; 16]);
     let mut b = [0u8; 16];
     b.copy_from_slice(&bytes[..16]);
@@ -330,8 +335,8 @@ impl SetupKey {
     /// break-glass administrator in ADMIN_ACCOUNT).
     pub(crate) fn derive(password: &str) -> anyhow::Result<Self> {
         use kutup_crypto::kdf::{
-            derive_account_protection_keys, AccountProtectionParameters,
-            AccountProtectionSuiteId, ACCOUNT_PROTECTION_SALT_LEN,
+            derive_account_protection_keys, AccountProtectionParameters, AccountProtectionSuiteId,
+            ACCOUNT_PROTECTION_SALT_LEN,
         };
         let mut salt = [0u8; ACCOUNT_PROTECTION_SALT_LEN];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
@@ -706,12 +711,7 @@ pub async fn get_login_preflight(
         Some(row) => row,
         None => (
             kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(
-                &state.config.jwt_secret,
-                &name,
-                "account-protection",
-                16,
-            ),
+            deterministic_fake_bytes(&state.config.jwt_secret, &name, "account-protection", 16),
             kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
@@ -1879,8 +1879,8 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 fn deterministic_fake_bytes(secret: &str, name: &str, purpose: &str, len: usize) -> String {
     use hmac::{Hmac, Mac};
     let key = {
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret.as_bytes())
-            .expect("any key length");
+        let mut mac =
+            <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret.as_bytes()).expect("any key length");
         mac.update(b"kutup/fake-account/v1\0");
         mac.finalize().into_bytes()
     };
@@ -1902,7 +1902,12 @@ fn deterministic_fake_bytes(secret: &str, name: &str, purpose: &str, len: usize)
 
 fn deterministic_fake_account_envelope(secret: &str, binding: &str) -> String {
     let key = STANDARD
-        .decode(deterministic_fake_bytes(secret, binding, "recovery-envelope-key", 32))
+        .decode(deterministic_fake_bytes(
+            secret,
+            binding,
+            "recovery-envelope-key",
+            32,
+        ))
         .expect("deterministic fake key is base64");
     let nonce = STANDARD
         .decode(deterministic_fake_bytes(
@@ -1989,8 +1994,10 @@ mod tests {
 
     #[test]
     fn fake_recovery_envelope_is_stable_and_structurally_valid() {
-        let first = deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
-        let second = deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
+        let first =
+            deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
+        let second =
+            deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
         assert_eq!(first, second);
         let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
         kutup_crypto::account_envelope::validate(

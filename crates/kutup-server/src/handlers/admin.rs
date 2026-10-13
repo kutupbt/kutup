@@ -278,12 +278,12 @@ pub async fn update_user(
         sqlx::query_as(
             "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
         )
-            .bind(target)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| AppError::not_found("not found"))?;
+        .bind(target)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| AppError::not_found("not found"))?;
 
     let wants_demote = req.is_admin == Some(false);
     let wants_disable = req.is_active == Some(false);
@@ -2159,7 +2159,18 @@ async fn load_activity_entries(
     Ok(rows
         .into_iter()
         .map(
-            |(id, action, admin_id, a_email, a_username, target_id, t_email, t_username, payload, at)| {
+            |(
+                id,
+                action,
+                admin_id,
+                a_email,
+                a_username,
+                target_id,
+                t_email,
+                t_username,
+                payload,
+                at,
+            )| {
                 ActivityEntry {
                     id,
                     action,

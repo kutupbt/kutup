@@ -196,11 +196,11 @@ changes rides along with the re-seal.
 | Item | What | State |
 |---|---|---|
 | H1 | No password sent to the server ever (temporary passwords derived in the administrator's browser) | done |
-| H2 | Account envelopes suite 2: an AEAD key per purpose and binding (HKDF), never the master key or recovery entropy used raw; the object id in the header | to do |
+| H2 | Account envelopes suite 2: an AEAD key per purpose, binding and object (HKDF-SHA256), never the master key or recovery entropy used raw; the object id in the header (Pass vault secrets name their vault). New envelopes are suite 2; suite 1 still opens; the re-seal takes suite 2 only | done |
 | M4 | Fake preflight answers as HMACs under the server's secret | done |
 | M5 | No binding before the password is proved (it comes with the session) | done |
-| M6 | The browser opens every re-sealed envelope (and checks the proof) before `POST /api/user/rebind` | to do |
-| L2 | Pins, contact cards, mail names and the Chat profile off the address too | to do |
+| M6 | The browser opens every re-sealed envelope with the new binding, to what it held, before `POST /api/user/rebind` | done |
+| L2 | Identity pins, contact cards and mail folder and label names bound to the key binding instead of the address (each a new format version, read both, re-sealed after the rebind); signed statements about an address keep naming it | next PR |
 
 Before v1, each separate: password change, raisable Argon2id parameters,
 OPAQUE/SRP, key transparency. Master key rotation (authority succession, old

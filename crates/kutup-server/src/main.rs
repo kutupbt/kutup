@@ -472,21 +472,20 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     // Derived as the administrator's browser derives any temporary password,
     // so sign-in is the same for every account (Argon2id: off the runtime).
     let secret = password.to_string();
-    let setup = match tokio::task::spawn_blocking(move || {
-        crate::handlers::auth::SetupKey::derive(&secret)
-    })
-    .await
-    {
-        Ok(Ok(setup)) => setup,
-        Ok(Err(e)) => {
-            tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
-            return;
-        }
-        Err(e) => {
-            tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
-            return;
-        }
-    };
+    let setup =
+        match tokio::task::spawn_blocking(move || crate::handlers::auth::SetupKey::derive(&secret))
+            .await
+        {
+            Ok(Ok(setup)) => setup,
+            Ok(Err(e)) => {
+                tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
+                return;
+            }
+        };
     let hash = match setup.checked_hash() {
         Ok(h) => h,
         Err(e) => {

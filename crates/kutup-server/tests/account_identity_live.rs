@@ -25,8 +25,11 @@ fn client() -> Client {
 /// every envelope and the recovery check bound to it, no key binding.
 fn make_old(c: &Client, base: &str, database_url: &str, user: &User, email: &str) {
     let kek = common::password_key_encryption_key(c, base, user);
+    // As such an account's were: suite 1 (the wrapping key itself as the key).
     let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(plain, key, purpose, email).unwrap()
+        let mut nonce = [0u8; 24];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+        b64(&account_envelope::seal_v1_with_nonce(plain, key, purpose, email, &nonce).unwrap())
     };
     let master = seal(
         &user.master_key,
@@ -136,6 +139,19 @@ fn an_old_account_is_re_sealed_to_its_key_binding() {
     let mut named = body.clone();
     named["keyBinding"] = json!("not-a-uuid");
     assert_eq!(rebind(&named).status(), 400);
+    // Re-sealed, but with the old suite (the wrapping key used as the key).
+    let mut old_suite = body.clone();
+    let mut nonce = [0u8; 24];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+    old_suite["drivePrivateKeyEnvelope"] = json!(b64(&account_envelope::seal_v1_with_nonce(
+        user.identity.drive_hpke_private_key(),
+        &user.master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &key_binding,
+        &nonce,
+    )
+    .unwrap()));
+    assert_eq!(rebind(&old_suite).status(), 400, "suite 1 is not taken");
     let mut extra = body.clone();
     extra["mailKeys"] = json!([{ "id": uuid::Uuid::new_v4().to_string(), "privateKeyEnvelope": body["drivePrivateKeyEnvelope"] }]);
     assert_eq!(
@@ -304,10 +320,7 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
     // Preflight answers its salt, as for any account; the password sent as
     // it is fails; derived, the account asks for its setup.
     assert_eq!(salt(&username), setup["accountProtectionSalt"]);
-    assert_eq!(
-        login(&json!(b64(b"Temporary*Password123"))).status(),
-        401
-    );
+    assert_eq!(login(&json!(b64(b"Temporary*Password123"))).status(), 401);
     let first = login(&setup["loginKey"]);
     assert_eq!(first.status(), 200);
     assert!(first.json::<Value>().unwrap()["setupToken"].is_string());

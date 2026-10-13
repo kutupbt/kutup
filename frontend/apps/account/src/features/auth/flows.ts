@@ -400,6 +400,25 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
       .then((r) => r.data)
       .catch(() => null)
     const { data: addresses } = await api.get<{ keys: { id: string; privateKeyEnvelope: string }[] }[]>('/mail/addresses')
+    type Purpose = (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]
+    // Review M6: nothing is sent that does not open again, with the new
+    // binding, to exactly what it held (a wrong seal would lock the account out).
+    const mustOpen = async (envelope: string, key: Uint8Array, purpose: Purpose, expected: Uint8Array) => {
+      const opened = await openAccountEnvelope(envelope, key, purpose, keyBinding)
+      const same = sameBytes(opened, expected)
+      opened.fill(0)
+      if (!same) throw new Error('a re-sealed key does not open')
+    }
+    const resealed = async (envelope: string, purpose: Purpose) => {
+      const before = await openAccountEnvelope(envelope, masterKey, purpose, from)
+      try {
+        const after = await resealAccountEnvelope(envelope, masterKey, purpose, from, keyBinding)
+        await mustOpen(after, masterKey, purpose, before)
+        return after
+      } finally {
+        before.fill(0)
+      }
+    }
     const body = {
       loginKey: pending.loginKey,
       keyBinding,
@@ -407,20 +426,20 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
       recoveryKeyEnvelope: await seal(masterKey, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey),
       recoveryProof: await deriveRecoveryAuthProof(toBase64(recoveryKey), keyBinding),
       drivePrivateKeyEnvelope: await seal(privateKey, masterKey, ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey),
-      chatBackupRootEnvelope:
-        backup?.provisioned && backup.rootEnvelope
-          ? await resealAccountEnvelope(backup.rootEnvelope, masterKey, ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot, from, keyBinding)
-          : null,
+      chatBackupRootEnvelope: backup?.provisioned && backup.rootEnvelope ? await resealed(backup.rootEnvelope, ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot) : null,
       mailKeys: await Promise.all(
         addresses.flatMap((address) =>
           address.keys.map(async (key) => ({
             id: key.id,
-            privateKeyEnvelope: await resealAccountEnvelope(key.privateKeyEnvelope, masterKey, ACCOUNT_ENVELOPE_PURPOSE.mailAddressPrivateKey, from, keyBinding),
+            privateKeyEnvelope: await resealed(key.privateKeyEnvelope, ACCOUNT_ENVELOPE_PURPOSE.mailAddressPrivateKey),
           })),
         ),
       ),
       passVaultSecrets: await rebindPassVaultSecrets(masterKey, from, keyBinding),
     }
+    await mustOpen(body.masterKeyEnvelope, pending.keyEncryptionKey, ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey, masterKey)
+    await mustOpen(body.recoveryKeyEnvelope, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey, masterKey)
+    await mustOpen(body.drivePrivateKeyEnvelope, masterKey, ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey, privateKey)
     await api.post('/user/rebind', body)
     updateSession({ envelopeBinding: keyBinding })
   } finally {

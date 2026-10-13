@@ -34,7 +34,11 @@ export async function rebindPassVaultSecrets(masterKey: Uint8Array, fromBinding:
       out.push({ fileId: row.fileId, envelope: null })
       continue
     }
-    out.push({ fileId: row.fileId, envelope: await sealPassVaultSecret(key, toBinding, row.fileId, secret) })
+    const envelope = await sealPassVaultSecret(key, toBinding, row.fileId, secret)
+    // It must open again, with the new binding, to the same secret.
+    const again = await openPassVaultSecret(envelope, key, toBinding, row.fileId)
+    if (JSON.stringify(again) !== JSON.stringify(secret)) throw new Error('a re-sealed vault key does not open')
+    out.push({ fileId: row.fileId, envelope })
   }
   return out
 }

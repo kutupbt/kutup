@@ -154,7 +154,7 @@ pub async fn put_vault_secret(
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
-    let envelope = checked_envelope(&req.envelope, &binding)?;
+    let envelope = checked_envelope(&req.envelope, &binding, file_id)?;
     sqlx::query(
         "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
          ON CONFLICT (user_id, file_id) DO UPDATE SET envelope = $3, updated_at = NOW()",
@@ -169,8 +169,9 @@ pub async fn put_vault_secret(
 }
 
 /// The envelope in `b64` if it is canonical base64 of at most
-/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, and bound to `binding`.
-fn checked_envelope(b64: &str, binding: &str) -> AppResult<Vec<u8>> {
+/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and (suite
+/// 2) sealed for vault `file_id`.
+fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8>> {
     let envelope = STANDARD
         .decode(b64)
         .ok()
@@ -190,6 +191,11 @@ fn checked_envelope(b64: &str, binding: &str) -> AppResult<Vec<u8>> {
         return Err(AppError::binding_changed(
             "envelope is not this account's vault secret",
         ));
+    }
+    if header.suite == account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
+        && header.object_id != file_id.as_bytes()
+    {
+        return Err(AppError::bad_request("envelope is not this vault's secret"));
     }
     Ok(envelope)
 }
@@ -224,8 +230,12 @@ pub async fn rebind_vault_secrets(
         if !named.insert(file_id) {
             return Err(AppError::bad_request("a vault secret is named twice"));
         }
+        // A re-seal writes the current suite only (docs/plans/account-identity.md).
         let envelope = match &row.envelope {
-            Some(b64) => Some(checked_envelope(b64, binding)?),
+            Some(b64) => Some(super::account_rebind::current_suite(
+                checked_envelope(b64, binding, file_id)?,
+                "passVaultSecrets",
+            )?),
             None => None,
         };
         wanted.push((file_id, envelope));
@@ -545,20 +555,29 @@ mod tests {
         STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], &secret).unwrap())
     }
 
+    const VAULT: Uuid = Uuid::from_bytes([1u8; 16]);
+
     #[test]
     fn a_vault_secret_must_name_the_binding_it_is_checked_against() {
-        assert!(checked_envelope(&sealed(ID), ID).is_ok());
-        assert!(checked_envelope(&sealed("Ayse@Example.org"), "ayse@example.org").is_ok());
-        assert!(checked_envelope(&sealed("ayse@example.org"), ID).is_err());
-        assert!(checked_envelope(&sealed(ID), "ayse@example.org").is_err());
+        assert!(checked_envelope(&sealed(ID), ID, VAULT).is_ok());
+        assert!(checked_envelope(&sealed("Ayse@Example.org"), "ayse@example.org", VAULT).is_ok());
+        assert!(checked_envelope(&sealed("ayse@example.org"), ID, VAULT).is_err());
+        assert!(checked_envelope(&sealed(ID), "ayse@example.org", VAULT).is_err());
+        // Sealed for another vault.
+        assert!(checked_envelope(&sealed(ID), ID, Uuid::from_bytes([2u8; 16])).is_err());
         let other_purpose = STANDARD.encode(
             account_envelope::seal(b"x", &[7u8; 32], AccountEnvelopePurpose::ChatBackupRoot, ID)
                 .unwrap(),
         );
-        assert!(checked_envelope(&other_purpose, ID).is_err());
+        assert!(checked_envelope(&other_purpose, ID, VAULT).is_err());
         let padded = format!("{}\n", sealed(ID));
-        assert!(checked_envelope(&padded, ID).is_err());
-        assert!(checked_envelope(&STANDARD.encode(vec![0u8; MAX_ENVELOPE_BYTES + 1]), ID).is_err());
+        assert!(checked_envelope(&padded, ID, VAULT).is_err());
+        assert!(checked_envelope(
+            &STANDARD.encode(vec![0u8; MAX_ENVELOPE_BYTES + 1]),
+            ID,
+            VAULT
+        )
+        .is_err());
     }
 
     #[test]

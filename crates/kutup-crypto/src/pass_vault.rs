@@ -103,11 +103,12 @@ pub fn seal_vault_secret(
     file_id: &[u8; 16],
     secret: &VaultSecretV1,
 ) -> Result<Vec<u8>> {
-    account_envelope::seal(
+    account_envelope::seal_object(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
         login_email,
+        file_id,
     )
 }
 
@@ -119,11 +120,13 @@ pub fn seal_vault_secret_with_nonce(
     secret: &VaultSecretV1,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_with_nonce(
+    account_envelope::seal_suite(
+        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
         login_email,
+        file_id,
         nonce,
     )
 }
@@ -136,11 +139,12 @@ pub fn open_vault_secret(
     login_email: &str,
     file_id: &[u8; 16],
 ) -> Result<VaultSecretV1> {
-    let plain = Zeroizing::new(account_envelope::open(
+    let plain = Zeroizing::new(account_envelope::open_object(
         envelope,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
         login_email,
+        file_id,
     )?);
     let mut rest = plain.strip_prefix(DOMAIN).ok_or(CryptoError::AuthFailed)?;
     if take(&mut rest, 16)? != file_id {
