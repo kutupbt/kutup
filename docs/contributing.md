@@ -126,8 +126,9 @@ The rules:
   it and start empty.
 
 `scripts/check-migrations.sh [base]` enforces the first two rules against a
-base revision (default `origin/master`; CI uses the pull request's base, and on
-master the commit before): every migration on the base is byte-for-byte
+base revision (default `origin/master`, which CI uses for every branch, since
+what has shipped on master is what is applied anywhere; on master itself, the
+commit before): every migration on the base is byte-for-byte
 unchanged, and every new one is a timestamped `.up.sql`/`.down.sql` pair newer
 than the base's newest. A squash, where every base migration is replaced by one
 newer `_baseline` pair, is the one exception it recognizes. `scripts/gate.sh
