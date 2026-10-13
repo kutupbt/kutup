@@ -183,8 +183,8 @@ fn registration_code(client: &Client, mode: &str) -> Result<Option<String>> {
             None => return Ok(None),
         },
     };
-    client
-        .check_registration_code(&code)
-        .context("this referral code cannot be used")?;
+    // The server's answer as it is (it names the problem, and its status
+    // sets the exit code).
+    client.check_registration_code(&code)?;
     Ok(Some(code))
 }
