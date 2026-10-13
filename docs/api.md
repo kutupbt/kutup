@@ -127,10 +127,10 @@ self-signed first manifest cannot select a replacement authority.
 
 ### GET /api/auth/login/preflight
 
-Fetch the complete account-protection suite and parameters before submitting credentials. Rate-limited.
+Fetch the complete account-protection suite and parameters before submitting credentials. Rate-limited. Every account answers with a salt of its own, one an administrator created too (its temporary password was derived in the administrator's browser); a name that is no account gets a salt that stays the same and that no one without the server's secret can tell from a real one (an HMAC under a key derived from `JWT_SECRET`). What the account's keys are bound to is not told here: it comes with the session (`envelopeBinding` below). Docs: `docs/plans/account-identity.md`.
 
 **Auth:** None
-**Query:** `?email=user@example.com`
+**Query:** `?name=alice` (the username, or the Kutup address `alice@<domain>`)
 
 **Response:**
 ```json
@@ -147,14 +147,14 @@ Fetch the complete account-protection suite and parameters before submitting cre
 
 ### POST /api/auth/login
 
-Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one email lock that account out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown emails too, so a `429` does not reveal whether the account exists.
+Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one account lock it out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown names too, so a `429` does not reveal whether the account exists.
 
 **Auth:** None · **Header:** `X-Kutup-Client: web-account` or `cli` (required; `400` otherwise)
 
 **Request body:**
 ```json
 {
-  "email": "user@example.com",
+  "name": "alice",
   "loginKey": "<base64>"
 }
 ```
@@ -169,6 +169,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
+  "envelopeBinding": "<the account's key binding (a UUID v4), or its old sign-in email until re-sealed>",
   "isAdmin": false,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600
@@ -179,7 +180,7 @@ For `web-account` the refresh token is an HttpOnly, host-only cookie named `refr
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, account created via `ADMIN_ACCOUNT` and not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`. Its temporary password is derived under the preflight salt as any password is; the server never had it.
 
 ---
 
@@ -3276,27 +3277,33 @@ List all registered users.
 ]
 ```
 
-`isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
+`isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var, known by its username). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
 
 ---
 
 ### POST /api/admin/users
 
-Create a user account (admin-initiated, bypasses registration settings). The user logs in with `tempPassword` and is then forced through the first-login setup flow to generate their own key bundle and recovery phrase.
+Create a user account (admin-initiated, bypasses registration settings). The administrator's browser makes a temporary password and derives it as any password is (`setup`: the login key with the salt and Argon2id parameters it came from); the server stores only the login key's hash and never sees the password. The user signs in with their username and the temporary password, and is then forced through the first-login setup flow to generate their own key bundle and recovery phrase. No email is asked: an account signs in with its username.
 
 **Auth:** Bearer JWT (admin)
 
 **Request body:**
 ```json
 {
-  "email": "newuser@example.com",
   "username": "newuser",
-  "tempPassword": "temporaryPassword",
+  "setup": {
+    "loginKey": "<base64 32 bytes>",
+    "accountProtectionSuite": 1,
+    "accountProtectionSalt": "<base64 16 bytes>",
+    "argonMemoryKib": 65536,
+    "argonIterations": 3,
+    "argonParallelism": 1
+  },
   "storageQuotaBytes": 10737418240
 }
 ```
 
-`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `409` if the email or username is already taken.
+`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a `setup` that is not one (a password sent as it is included). `409` if the username is already taken.
 
 ---
 
@@ -3347,7 +3354,7 @@ Replace the temporary password of an account still in first-login state (`isFirs
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** `{"tempPassword": "<new temp password>"}`
+**Request body:** `{"setup": { … }}` — the new temporary password derived in the administrator's browser, as for creating a user.
 
 **Response:** `200 OK` `{"message": "temp password rotated"}` · `409` when the user has completed setup.
 
@@ -3359,7 +3366,7 @@ Destructive account reset for a user who lost both their password and their reco
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** `{"tempPassword": "<new temp password>"}`
+**Request body:** `{"setup": { … }}` — the temporary password it starts again with, derived in the administrator's browser, as for creating a user (checked before anything is purged).
 
 **Response:** `200 OK` `{"message": "account wiped"}`.
 

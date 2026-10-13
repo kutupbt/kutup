@@ -130,11 +130,13 @@ CHAT_WEB_PUSH=true
 # CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
 # CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
 
-# Break-glass admin bootstrap: a single email:username:password triple.
-# Created on first start; the admin completes setup on first login.
+# Break-glass admin bootstrap: username:password (the older
+# email:username:password still reads; the email is not kept).
+# Created on first start; the admin signs in with the username and
+# completes setup on first login.
 # This account is the protected break-glass admin — it can never be
 # demoted, disabled, or deleted. Promote further admins inside the app.
-ADMIN_ACCOUNT=admin@example.com:admin:<strong-admin-password>
+ADMIN_ACCOUNT=admin:<strong-admin-password>
 
 # SeaweedFS master — the admin dashboard probes it for real storage
 # capacity + usage. Default works for the bundled compose.

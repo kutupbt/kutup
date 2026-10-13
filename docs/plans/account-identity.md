@@ -165,16 +165,46 @@ known there).
   typed or the new one shown; the server never sees the phrase.
 - **Accounts that never sign in:** keep working with the old binding; nothing
   is re-sealed server-side (the server cannot).
-- **Name enumeration:** preflight answers a fake salt and binding for unknown
-  names (deterministic, so repeated asks look the same); sign-in failures are
-  the same message; registration still says a username is taken (unavoidable,
-  as Proton).
+- **Name enumeration:** sign-in preflight answers a salt and parameters only,
+  for every account (one awaiting its first sign-in too) and, for a name that
+  is no account, a fake one: the same each time, an HMAC under a key derived
+  from the server's secret, so no one without it tells it from a real one.
+  The keys' binding comes only with a session. Recovery preflight has to
+  answer a binding and an envelope (the phrase opens it offline); for unknown
+  names both are faked the same way. Sign-in failures are the same message;
+  registration still says a username is taken (unavoidable, as Proton).
+- **Temporary passwords:** an administrator's browser makes the temporary
+  password and derives it as any password is (a salt of its own, Argon2id
+  V1): the server stores the login key's hash with that salt and never sees
+  the password, for creating, rotating and wiping alike; the break-glass
+  administrator from `ADMIN_ACCOUNT` is derived the same way once, at first
+  start. Accounts still waiting under a password the server was once sent
+  can no longer sign in (migration 162): an administrator gives them a new
+  one.
 - **Recovery email:** codes hashed, short-lived, few attempts, rate limits per
   account and per target address; an unconfirmed address receives nothing but
   its code; changing it notifies the old one.
 - **Client-drawn key binding:** random, UUID-shaped, checked for form and
   uniqueness; not secret and carries no authority (the server still owns
   sessions and roles); never shown as an identity.
+
+## Encryption review (2026-10-12)
+
+Since every account re-seals once, the whole design was reviewed; what
+changes rides along with the re-seal.
+
+| Item | What | State |
+|---|---|---|
+| H1 | No password sent to the server ever (temporary passwords derived in the administrator's browser) | done |
+| H2 | Account envelopes suite 2: an AEAD key per purpose and binding (HKDF), never the master key or recovery entropy used raw; the object id in the header | to do |
+| M4 | Fake preflight answers as HMACs under the server's secret | done |
+| M5 | No binding before the password is proved (it comes with the session) | done |
+| M6 | The browser opens every re-sealed envelope (and checks the proof) before `POST /api/user/rebind` | to do |
+| L2 | Pins, contact cards, mail names and the Chat profile off the address too | to do |
+
+Before v1, each separate: password change, raisable Argon2id parameters,
+OPAQUE/SRP, key transparency. Master key rotation (authority succession, old
+keys kept to decrypt only) has a plan of its own.
 
 ## Slices
 
