@@ -195,6 +195,11 @@ impl<R: Read> StreamUploader<R> {
 
         let to_read = remaining.min(CHUNK_SIZE as i64) as usize;
         let n = read_full(&mut self.reader, &mut self.buf[..to_read])?;
+        // Shorter than when it was measured: the file changed while it was
+        // read. Stop rather than send empty chunks for ever.
+        if n < to_read {
+            bail!("the file changed while it was being uploaded; run it again");
+        }
         self.plain_read += n as i64;
 
         let is_last = self.plain_read == self.plain_total;
@@ -298,6 +303,16 @@ mod tests {
         let n = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap();
         assert_eq!(n, plain.len() as i64);
         assert_eq!(out, plain);
+    }
+
+    // A file shorter than measured (it changed while read) stops the
+    // upload instead of sending empty chunks for ever.
+    #[test]
+    fn a_file_that_shrinks_stops_the_upload() {
+        let plain = vec![1u8; 100];
+        let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 200, context()).unwrap();
+        let error = up.next_chunk().unwrap_err();
+        assert!(error.to_string().contains("changed"), "{error}");
     }
 
     // Exact-multiple-of-CHUNK_SIZE plaintexts produce a full-size FINAL
