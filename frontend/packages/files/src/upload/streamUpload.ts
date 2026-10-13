@@ -27,7 +27,7 @@ import {
   resumeFileBlobStreamEncryptorV1,
 } from '@kutup/crypto/fileBlob'
 import { ABYTES } from '@kutup/crypto/streamEncryptor'
-import { newContentHasher } from '@kutup/crypto/contentHash'
+import { hashBlob } from '@kutup/crypto/contentHash'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { EncryptedFileSource, fileSource, type PlaintextSource } from './encryptedSource'
 import { holdUpload, pendingUploads, type PendingUpload } from './pendingUploads'
@@ -52,7 +52,13 @@ export interface StreamUploadOptions {
   /** Keep what is needed to go on after a reload, for this account. */
   resumable?: { owner: string }
   /** The name's hash in the folder (docs/plans/drive-unique-names.md): the server keeps it unique. */
-  nameHash?: string
+  nameHash: string
+  /**
+   * SHA-256 of the plaintext (base64), when the caller has it already;
+   * otherwise the file is read once to work it out before it is sealed
+   * into the metadata.
+   */
+  sha256?: string
 }
 
 /** What an upload made: enough to seal things beside it (a thumbnail). */
@@ -62,10 +68,7 @@ export interface UploadedFile {
   /** A new file's key is generation 1. */
   keyGeneration: 1
   collectionId: string
-  /**
-   * SHA-256 of the plaintext (base64), read while it was encrypted; null
-   * if not every byte was read in order here.
-   */
+  /** SHA-256 of the plaintext (base64), as sealed in its metadata; null if it has none. */
   contentSha256: string | null
 }
 
@@ -105,10 +108,14 @@ export class FolderKeyChanged extends Error {
  * id is client-generated and confirmed by the server).
  */
 export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedFile> {
+  // The content's SHA-256 goes into the sealed metadata (never to the
+  // server as such): a move works the folder's content hash out from it.
+  const sha256 = opts.sha256 ?? (await hashBlob(opts.file, opts.signal))
   const meta: FileMetadataV1 = {
     name: opts.file.name,
     mimeType: opts.file.type || 'application/octet-stream',
     size: opts.file.size,
+    sha256,
   }
   if (opts.media) meta.media = opts.media
   const record = await createFileRecordV1(
@@ -133,10 +140,9 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
         prefix: toBase64(first.prefix),
       }
     : null
-  const hashed = await hashingSource(fileSource(opts.file))
   await send({
     ...opts,
-    plaintext: hashed.source,
+    plaintext: fileSource(opts.file),
     fileId: record.fileId,
     prefix: first.prefix,
     // The first pass uses the encryptor that made the prefix; a pass that
@@ -154,7 +160,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
         collectionId: opts.collection.id,
         metadataEnvelope: record.metadataEnvelope,
         fileKeyEnvelope: record.fileKeyEnvelope,
-        ...(opts.nameHash ? { nameHash: opts.nameHash } : {}),
+        nameHash: opts.nameHash,
       },
       remember: pending
         ? async (uploadUrl) => {
@@ -172,35 +178,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
     fileKey: record.fileKey,
     keyGeneration: record.keyGeneration,
     collectionId: opts.collection.id,
-    contentSha256: hashed.digest(),
-  }
-}
-
-/**
- * The plaintext, hashed as it is read. Encryption always reads it from the
- * start and in order (a pass that starts over reads it again from the
- * start), so each byte is hashed the first time it is read in sequence.
- */
-export async function hashingSource(source: PlaintextSource): Promise<{ source: PlaintextSource; digest: () => string | null }> {
-  const hasher = await newContentHasher()
-  let hashedTo = 0
-  let result: string | null | undefined
-  return {
-    source: {
-      size: source.size,
-      read: async (start, end) => {
-        const bytes = await source.read(start, end)
-        if (start === hashedTo && result === undefined) {
-          hasher.update(bytes)
-          hashedTo = start + bytes.length
-        }
-        return bytes
-      },
-    },
-    digest: () => {
-      if (result === undefined) result = hashedTo === source.size ? hasher.finish() : null
-      return result
-    },
+    contentSha256: sha256,
   }
 }
 
@@ -258,19 +236,16 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
   const prefix = fromBase64(upload.prefix)
   // The stored prefix must be this file's, under this key: Rust checks it.
   await resumeFileBlobStreamEncryptorV1(fileKey, context, prefix)
-  // Going on re-encrypts what the server already holds from the start, so
-  // the whole file is read (and hashed) here too.
-  const hashed = await hashingSource(fileSource(opts.file))
   await send({
     ...opts,
-    plaintext: hashed.source,
+    plaintext: fileSource(opts.file),
     fileId: upload.fileId,
     prefix,
     openStream: () => resumeFileBlobStreamEncryptorV1(fileKey, context, prefix),
     uploadUrl: upload.uploadUrl,
     pending: upload,
   })
-  return { fileId: upload.fileId, fileKey, keyGeneration: 1, collectionId: upload.collectionId, contentSha256: hashed.digest() }
+  return { fileId: upload.fileId, fileKey, keyGeneration: 1, collectionId: upload.collectionId, contentSha256: metadata.sha256 ?? null }
 }
 
 /**

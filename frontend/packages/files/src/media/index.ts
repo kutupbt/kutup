@@ -3,7 +3,6 @@
 // key; the server never sees them.
 
 import type { MediaMetadataV1 } from '@kutup/crypto/fileRecord'
-import { hashBlob } from '@kutup/crypto/contentHash'
 import { dateFromFileName } from './dates'
 import { readImageFacts, type ImageFacts } from './exif'
 import { readVideoFacts, type VideoFacts } from './mp4'
@@ -62,7 +61,6 @@ function clean(media: MediaMetadataV1): MediaMetadataV1 | undefined {
     out.durationMs = media.durationMs
   }
   if (media.camera?.trim()) out.camera = [...media.camera.trim()].slice(0, 100).join('')
-  if (media.hash) out.hash = media.hash
   if (media.caption) out.caption = [...media.caption].slice(0, 2000).join('')
   if (media.liveOf && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(media.liveOf)) out.liveOf = media.liveOf
   return Object.keys(out).length ? out : undefined
@@ -70,13 +68,15 @@ function clean(media: MediaMetadataV1): MediaMetadataV1 | undefined {
 
 /**
  * The details of a photo or video: when (the file's own tags, else a date in
- * its name, else its modification date), where, its size and length, and a
- * content hash for finding duplicates. Undefined for other files. Tags that
- * cannot be read are skipped; only a failed read of the content throws.
+ * its name, else its modification date), where, its size and length.
+ * Undefined for other files. Tags that cannot be read are skipped. The
+ * content's SHA-256, which finds duplicates, is the file's own (`sha256` in
+ * its metadata), not a photo detail.
  */
 export async function readMedia(file: File, signal?: AbortSignal): Promise<MediaMetadataV1 | undefined> {
   const kind = mediaKindOf(file.name, file.type)
   if (!kind) return undefined
+  signal?.throwIfAborted()
   let facts: ImageFacts & VideoFacts = {}
   try {
     if (kind === 'image') facts = await readImageFacts(file)
@@ -108,6 +108,5 @@ export async function readMedia(file: File, signal?: AbortSignal): Promise<Media
       media.takenFrom = 'file'
     }
   }
-  media.hash = await hashBlob(file, signal)
   return clean(media)
 }
