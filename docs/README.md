@@ -16,6 +16,7 @@ disagrees with current behavior.
 | HTTP operations and payloads | [`api.md`](api.md) and `GET /api-docs/openapi.json` |
 | Local development and required test gates | [`contributing.md`](contributing.md) and [`../tests/e2e/README.md`](../tests/e2e/README.md) |
 | Web UI architecture, themes, and responsive rules | [`frontend.md`](frontend.md) |
+| Which settings follow the account and which stay on a device | [`settings-model.md`](settings-model.md) |
 | Remaining release work | [`roadmap.md`](roadmap.md) |
 
 ## Automation and test routing
