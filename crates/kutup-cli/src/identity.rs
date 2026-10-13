@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
-use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate};
+use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate, Recorded};
 use kutup_crypto::safety_number;
 
 use crate::api::types::IdentityPinsWrite;
@@ -222,13 +222,15 @@ fn now_seconds() -> u64 {
 
 /// Records `update` about `account` at `authority` (the rules every app shares:
 /// `identity_pins::record`); merges with whatever another app stored meanwhile.
-fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) -> Result<()> {
+fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) -> Result<Recorded> {
     let key = identity_pins::derive_key(&me.master_key)?;
     for _ in 0..5 {
         let (revision, mut list) = load_pins(ctx, me)?;
+        let before = list.clone();
         let since = identity_pins::since_from_unix(now_seconds());
-        if !identity_pins::record(&mut list, account, authority, update, &since)? {
-            return Ok(());
+        let recorded = identity_pins::record(&mut list, account, authority, update, &since)?;
+        if list == before {
+            return Ok(recorded);
         }
         // A time, above every revision seen (docs/plans/drive-identity-pins.md).
         let next = now_millis().max(revision + 1).max(highest_seen(me) + 1);
@@ -238,7 +240,7 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
             envelope: STANDARD.encode(sealed),
         })? {
             remember(me, next);
-            return Ok(());
+            return Ok(recorded);
         }
     }
     bail!("the identity pin list kept changing")
@@ -285,10 +287,16 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
             verified: p.state == PinState::Verified,
         }),
         Some(_) => Ok(Status::Changed),
-        None => {
-            pin(ctx, me, account, &person.authority, PinUpdate::FirstSeen)?;
-            Ok(Status::Ok { verified: false })
-        }
+        None => match pin(ctx, me, account, &person.authority, PinUpdate::FirstSeen)? {
+            // Someone the user knew had this address and is elsewhere now: this
+            // is another person (accept with `kutup identity trust`).
+            Recorded::FormerAddressTaken { .. } => Ok(Status::Changed),
+            // The same account, pinned under another of its names.
+            Recorded::KnownElsewhere { pin } => Ok(Status::Ok {
+                verified: pin.state == PinState::Verified,
+            }),
+            Recorded::Pinned | Recorded::Unchanged => Ok(Status::Ok { verified: false }),
+        },
     }
 }
 
@@ -310,7 +318,7 @@ pub fn safety(
 /// Mark `account` verified (the user compared the safety number with them);
 /// a changed identity is accepted with it.
 pub fn verify(ctx: &Ctx, me: &Me, account: &str, person: &Published) -> Result<()> {
-    pin(ctx, me, account, &person.authority, PinUpdate::Verified)
+    pin(ctx, me, account, &person.authority, PinUpdate::Verified).map(drop)
 }
 
 /// Trust `account`'s current identity from now on, without comparing it.
@@ -320,5 +328,5 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
         bail!("{account} has not signed their Drive keys yet");
     }
     // A new identity is trusted as seen, never as verified.
-    pin(ctx, me, account, &person.authority, PinUpdate::Accepted)
+    pin(ctx, me, account, &person.authority, PinUpdate::Accepted).map(drop)
 }

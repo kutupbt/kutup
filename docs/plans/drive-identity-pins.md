@@ -104,36 +104,75 @@ an older list; a device with no history trusts the first list it reads.
 
 **Renames** (docs/plans/username-renames.md). A pin also carries
 `formerly` (the addresses the same incarnation had before `account`, oldest
-first, at most 32, all on its server) and `renames: { sequence, digest }`, the
-head of the account's rename chain this list has verified. Both are absent
-for an account that was never renamed, so such a list encodes exactly as
-before. The anchor is the rollback guard on every device of the account: a
-later chain is followed only if it holds that statement at that sequence.
+first, at most 32, all on its server; when full the oldest goes, and that
+address loses its "moved" warning) and `renames: { sequence, digest }`, the
+head of the account's rename chain this list has verified. Both are absent for
+an account that was never renamed. The anchor is the rollback guard on every
+device of the account: a later chain is followed only if it holds that
+statement at that sequence.
+
+**An account is pinned once.** An incarnation (an authority key) appears at
+most once in the whole list. Pins pushed off their address are kept in
+`detached`, never dropped: by a rename landing on their address, or by the
+user accepting another authority there. Their `account` is the last address
+they were known at. They keep their trust and history, so their own rename
+chain, or their return to that address, re-attaches them as they were. At
+most 256 are kept; past that, the oldest unverified go first, then the oldest.
+
+**Fields added later (normative).** Every struct of the list (the list, a
+pin, an anchor) keeps fields it does not know. They are read past, kept, and
+written back unchanged, after the known fields and in name order. That is the
+canonical form of any field added after V1, and the stored bytes must be
+canonical. So an older app never strips a newer app's data, and a newer app
+can add fields without a new suite. A writer that adds something older readers
+would misread sets the list's `minReader` above their version (this reader is
+version 1). Those readers then refuse the list ("needs a newer app") instead of
+misreading it. `minReader` is never written as 1.
 
 **One set of rules for every app** (`identity_pins`, also through WASM), so
-a pin one app writes is never undone or misread by another:
+a pin one app writes is never undone or misread by another. Drive, Chat core
+and the CLI all go through them:
 
-- `record(list, account, authority, update, since)`: `firstSeen` pins only
-  an address with no pin (it never replaces one); `accepted` and `verified`
-  replace another authority, keeping its incarnation in `replaced`; the same
-  authority keeps its history (`replaced`, `formerly`, `renames`). Drive, Chat
-  core and the CLI all write through it.
-- `lookup(list, address, publishedAuthority)`: `pinned` (with whether the
-  authority published there is still the pinned one), `renamed` (the authority
-  there is pinned under another address: fetch its chain), `moved` (a pinned
-  account had the address before and is now `pin.account`: whoever is there
-  now is someone else), or `new`.
-- `apply_rename(list, authority, chain)`: verifies the chain against the
-  pinned authority and its anchor, then moves the pin to the chain's current
-  address. The pin keeps its trust, since the safety number did not change. Its
-  `formerly` comes from the chain and its anchor is the chain's head. A pin of
-  another incarnation at the new address goes into `replaced`, and the caller
-  tells the user. Two pins of the same account, made by apps that met it under
-  two names, are merged. Applying the same chain twice changes nothing.
+- **`record(list, account, authority, update, since)`:**
+  - `firstSeen` pins only an address and an account the list knows nothing
+    of. It never replaces a pin.
+  - An address some pin had before gives `formerAddressTaken`: not pinned.
+    Drive and the CLI say `changed`, and Chat quarantines.
+  - An account already pinned under another name gives `knownElsewhere`: not
+    pinned twice. Its trust holds, and following its chain moves it.
+  - `accepted` and `verified` replace another authority at the address. The
+    replaced pin is detached and its incarnation is kept in `replaced`.
+  - The same authority keeps its history.
+  - Whether the list changed is whether it differs from before.
+- **`lookup(list, address, publishedAuthority)`:**
+  - `pinned` (with whether the authority published there is still the
+    pinned one);
+  - `renamed` (the authority there is pinned, or detached, under another
+    address: fetch its chain);
+  - `returned` (a detached pin is back at its last address);
+  - `moved` (pinned accounts had the address before, each with where it is
+    now if known: whoever is there now is someone else);
+  - `new`.
+- **`apply_rename(list, authority, chain)`:**
+  - Verifies the chain against that authority's pin (live or detached). The
+    chain must hold the pin's address and extend its anchor; a rollback or a
+    fork is refused.
+  - Then moves the pin to the chain's current address. It keeps its trust,
+    since the safety number did not change.
+  - Its `formerly` comes from the chain, and its anchor is the chain's head.
+  - The address's previous holder is detached and named in `replaced`, and
+    the caller tells the user.
+  - Applying the same chain twice changes nothing, and a refusal changes
+    nothing.
 
-The vectors (`identity-pins-v2.json`, `renames`) cover one rename followed,
-the rollback refused, each lookup kind, the record rules, and the lists the
-format refuses.
+The vectors (`identity-pins-v2.json`, `renames`) cover:
+- one rename followed, and the rollback refused;
+- each lookup kind and each record outcome;
+- the lists the format refuses (a pin twice, `minReader`);
+- non-canonical encodings;
+- a list with later fields kept through an update.
+
+They run from Rust and WASM.
 
 ### 4. Checking a person (web)
 

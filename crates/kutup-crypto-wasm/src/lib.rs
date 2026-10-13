@@ -2909,13 +2909,16 @@ struct PinsChanged<T: Serialize> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Changed {
+struct RecordedJs {
+    /// Whether the list differs from before (save it then).
     changed: bool,
+    result: kutup_crypto::identity_pins::Recorded,
 }
 
 /// Records what a client learned about `account` (`update`: `firstSeen`,
 /// `accepted` or `verified`), by the rules every app shares:
-/// `{ pins, changed }`.
+/// `{ pins, changed, result: { kind: "pinned" | "unchanged" |
+/// "formerAddressTaken" | "knownElsewhere", … } }`.
 #[wasm_bindgen(js_name = recordIdentityPin)]
 pub fn record_identity_pin(
     pins_json_text: &str,
@@ -2925,10 +2928,11 @@ pub fn record_identity_pin(
     since: &str,
 ) -> Result<JsValue, JsValue> {
     let mut list = pins_arg(pins_json_text)?;
+    let before = list.clone();
     let update: kutup_crypto::identity_pins::PinUpdate =
         serde_json::from_value(serde_json::Value::String(update.to_owned()))
             .map_err(|_| js_error("unknown pin update"))?;
-    let changed = kutup_crypto::identity_pins::record(
+    let result = kutup_crypto::identity_pins::record(
         &mut list,
         account,
         authority_public_base64,
@@ -2938,7 +2942,10 @@ pub fn record_identity_pin(
     .map_err(|error| js_error(&error.to_string()))?;
     PinsChanged {
         pins: pins_json(&list)?,
-        result: Changed { changed },
+        result: RecordedJs {
+            changed: list != before,
+            result,
+        },
     }
     .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
     .map_err(|error| js_error(&format!("encode: {error}")))

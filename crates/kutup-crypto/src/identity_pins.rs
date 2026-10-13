@@ -70,11 +70,17 @@ pub enum PinState {
     Verified,
 }
 
+/// Fields a later version added, kept as they are: read past, written back
+/// after the known fields in name order (the canonical rule for every field
+/// added after V1), so an older app never strips a newer app's data.
+pub type UnknownFields = std::collections::BTreeMap<String, serde_json::Value>;
+
 /// One account's pinned authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityPinV1 {
-    /// Canonical `username@server`.
+    /// Canonical `username@server`. For a pin in [`IdentityPinsV1::detached`],
+    /// the last address it was known at.
     pub account: String,
     /// Canonical padded base64 of the 32-byte Ed25519 authority public key.
     pub authority_public_key: String,
@@ -96,16 +102,20 @@ pub struct IdentityPinV1 {
     /// when `formerly` is not empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renames: Option<RenameAnchorV1>,
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 /// Where an incarnation's verified rename chain ended.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RenameAnchorV1 {
     /// The last statement's sequence (1 for the first rename).
     pub sequence: u64,
     /// That statement's digest, lowercase hex.
     pub digest: String,
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 impl IdentityPinV1 {
@@ -174,7 +184,14 @@ impl IdentityPinV1 {
             replaced: Vec::new(),
             formerly: Vec::new(),
             renames: None,
+            unknown: UnknownFields::new(),
         }
+    }
+
+    /// Whether this incarnation is known to have had `address` before (its
+    /// renames, or the address a detached pin was pushed off).
+    fn had(&self, address: &str) -> bool {
+        self.formerly.iter().any(|former| former == address)
     }
 }
 
@@ -182,19 +199,53 @@ fn server_of(account: &str) -> &str {
     account.split_once('@').map_or("", |(_, server)| server)
 }
 
-/// The whole list: pins sorted by account, one per account.
+/// The version of this format a reader understands. A writer that adds
+/// something older readers would misread sets [`IdentityPinsV1::min_reader`]
+/// above it, and those readers refuse the list ("needs a newer app") instead
+/// of misreading it.
+pub const READER_VERSION: u32 = 1;
+/// The most detached pins a list keeps: past it, the oldest unverified go
+/// first, then the oldest.
+pub const MAX_DETACHED: usize = 256;
+
+/// The whole list: one pin per account at its current address, and the pins
+/// pushed off their address (`detached`). An incarnation (an authority key)
+/// appears at most once in the whole list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityPinsV1 {
+    /// Sorted by account, one each.
     pub pins: Vec<IdentityPinV1>,
+    /// Pins of incarnations pushed off the address they were pinned at (a
+    /// rename landed there, or the user accepted another authority there),
+    /// where they are now unknown. They keep their trust and history, so a
+    /// later rename chain or their return re-attaches them. Sorted by
+    /// (account, authority).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<IdentityPinV1>,
+    /// The lowest [`READER_VERSION`] that may read this list; absent: 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_reader: Option<u32>,
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
 }
 
 impl IdentityPinsV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.pins.len() > MAX_PINS {
+        if self.pins.len() + self.detached.len() > MAX_PINS || self.detached.len() > MAX_DETACHED {
             return Err(invalid("too many pins"));
         }
-        for pin in &self.pins {
+        match self.min_reader {
+            None => {}
+            Some(version) if version > READER_VERSION => {
+                return Err(invalid(&format!(
+                    "this identity list needs a newer app (reader version {version})"
+                )))
+            }
+            // Present only to ask for more than version 1.
+            Some(_) => return Err(invalid("minReader is not above 1")),
+        }
+        for pin in self.pins.iter().chain(&self.detached) {
             pin.validate()?;
         }
         if !self
@@ -204,7 +255,75 @@ impl IdentityPinsV1 {
         {
             return Err(invalid("pins must be sorted by account, one each"));
         }
+        if !self.detached.windows(2).all(|pair| {
+            (&pair[0].account, &pair[0].authority_public_key)
+                < (&pair[1].account, &pair[1].authority_public_key)
+        }) {
+            return Err(invalid(
+                "detached pins must be sorted by account and authority",
+            ));
+        }
+        let mut authorities = std::collections::BTreeSet::new();
+        if !self
+            .pins
+            .iter()
+            .chain(&self.detached)
+            .all(|pin| authorities.insert(pin.authority_public_key.as_str()))
+        {
+            return Err(invalid("an account is pinned more than once"));
+        }
         Ok(())
+    }
+
+    /// The entry for `authority`, live or detached: `(detached, index)`.
+    fn find_authority(&self, authority: &str) -> Option<(bool, usize)> {
+        if let Some(i) = self
+            .pins
+            .iter()
+            .position(|pin| pin.authority_public_key == authority)
+        {
+            return Some((false, i));
+        }
+        self.detached
+            .iter()
+            .position(|pin| pin.authority_public_key == authority)
+            .map(|i| (true, i))
+    }
+
+    fn take(&mut self, (detached, index): (bool, usize)) -> IdentityPinV1 {
+        if detached {
+            self.detached.remove(index)
+        } else {
+            self.pins.remove(index)
+        }
+    }
+
+    fn insert(&mut self, pin: IdentityPinV1) {
+        let at = self
+            .pins
+            .binary_search_by(|p| p.account.as_str().cmp(&pin.account))
+            .unwrap_or_else(|at| at);
+        self.pins.insert(at, pin);
+    }
+
+    /// Moves a pin off its address into `detached`, keeping it whole; drops
+    /// the oldest unverified detached pins (then the oldest) past the cap.
+    fn detach(&mut self, pin: IdentityPinV1) {
+        let key = |p: &IdentityPinV1| (p.account.clone(), p.authority_public_key.clone());
+        let at = self
+            .detached
+            .binary_search_by(|p| key(p).cmp(&key(&pin)))
+            .unwrap_or_else(|at| at);
+        self.detached.insert(at, pin);
+        while self.detached.len() > MAX_DETACHED {
+            let oldest = (0..self.detached.len())
+                .min_by(|&a, &b| {
+                    let rank = |p: &IdentityPinV1| (p.state == PinState::Verified, p.since.clone());
+                    rank(&self.detached[a]).cmp(&rank(&self.detached[b]))
+                })
+                .expect("not empty");
+            self.detached.remove(oldest);
+        }
     }
 }
 
@@ -274,70 +393,166 @@ pub fn since_from_unix(seconds: u64) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PinUpdate {
-    /// Met with a valid binding: pinned only if nothing is pinned for the
-    /// address yet (trust on first use). Never replaces a pin.
+    /// Met with a valid binding: pinned only if nothing is known of the
+    /// address or the account yet (trust on first use). Never replaces a pin.
     FirstSeen,
     /// The user accepted the authority now published (after a change): it
-    /// replaces another one, `seen`; the replaced incarnation is remembered.
+    /// replaces another one, `seen`.
     Accepted,
     /// Compared in person: `verified`, replacing another authority if need be.
     Verified,
 }
 
+/// What [`record`] did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Recorded {
+    /// The list changed.
+    Pinned,
+    /// Nothing to change.
+    Unchanged,
+    /// Not pinned: an account the user knew had this address before, and
+    /// this is another one ("not the person you verified"). The user may
+    /// accept it explicitly ([`PinUpdate::Accepted`]).
+    FormerAddressTaken { pins: Vec<MovedPin> },
+    /// Not pinned again: this account is already pinned under another
+    /// address (`pin.account`, or detached). Follow its rename chain
+    /// ([`apply_rename`]) to move it; an account is never pinned twice. A
+    /// `verified` update still marks that pin verified (the list changes).
+    KnownElsewhere { pin: IdentityPinV1 },
+}
+
 /// Records `update` about `account` at `authority` (canonical base64) at time
-/// `since`. A pin of the same authority keeps its history (`replaced`,
-/// `formerly`, `renames`); one of another authority is replaced, its
-/// incarnation kept in `replaced`. Returns whether the list changed.
+/// `since`; see [`Recorded`]. Whether the list changed is whether it differs
+/// from before. A pin of the same authority keeps its history; a
+/// pin of another authority that is replaced is detached, not lost, so its
+/// trust follows it if it turns up elsewhere.
 pub fn record(
     list: &mut IdentityPinsV1,
     account: &str,
     authority: &str,
     update: PinUpdate,
     since: &str,
-) -> Result<bool> {
+) -> Result<Recorded> {
     let candidate = IdentityPinV1::fresh(account, authority, PinState::Seen, since);
     candidate.validate()?;
-    let index = list.pins.iter().position(|pin| pin.account == account);
-    let Some(index) = index else {
-        let state = match update {
-            PinUpdate::Verified => PinState::Verified,
-            PinUpdate::FirstSeen | PinUpdate::Accepted => PinState::Seen,
-        };
-        insert(list, IdentityPinV1 { state, ..candidate });
-        return Ok(true);
-    };
-    let pin = &mut list.pins[index];
-    if pin.authority_public_key == authority {
-        if update == PinUpdate::Verified && pin.state != PinState::Verified {
-            pin.state = PinState::Verified;
-            pin.since = since.to_owned();
-            return Ok(true);
-        }
-        return Ok(false);
-    }
     let state = match update {
-        PinUpdate::FirstSeen => return Ok(false),
-        PinUpdate::Accepted => PinState::Seen,
         PinUpdate::Verified => PinState::Verified,
+        PinUpdate::FirstSeen | PinUpdate::Accepted => PinState::Seen,
     };
-    let mut replaced = std::mem::take(&mut pin.replaced);
-    replaced.push(pin.incarnation_id()?);
-    let excess = replaced.len().saturating_sub(MAX_REPLACED);
-    replaced.drain(..excess);
-    *pin = IdentityPinV1 {
-        state,
-        replaced,
-        ..candidate
-    };
-    Ok(true)
+    let live = list.pins.iter().position(|pin| pin.account == account);
+    if let Some(i) = live {
+        let pin = &mut list.pins[i];
+        if pin.authority_public_key == authority {
+            if update == PinUpdate::Verified && pin.state != PinState::Verified {
+                pin.state = PinState::Verified;
+                pin.since = since.to_owned();
+                return Ok(Recorded::Pinned);
+            }
+            return Ok(Recorded::Unchanged);
+        }
+        if update == PinUpdate::FirstSeen {
+            // Another authority than the pinned one: the caller warns.
+            return Ok(Recorded::Unchanged);
+        }
+    }
+    let known = list.find_authority(authority);
+    match known {
+        // The same account, pushed off this very address before: it is back.
+        Some((true, j)) if list.detached[j].account == account => {}
+        Some((detached, j)) => {
+            let pin = if detached {
+                &mut list.detached[j]
+            } else {
+                &mut list.pins[j]
+            };
+            // Compared in person: the account is verified wherever it is pinned.
+            if update == PinUpdate::Verified && pin.state != PinState::Verified {
+                pin.state = PinState::Verified;
+                pin.since = since.to_owned();
+            }
+            return Ok(Recorded::KnownElsewhere { pin: pin.clone() });
+        }
+        None if live.is_none() && update == PinUpdate::FirstSeen => {
+            let pins = moved_from(list, account);
+            if !pins.is_empty() {
+                return Ok(Recorded::FormerAddressTaken { pins });
+            }
+        }
+        None => {}
+    }
+    // Pin it: the returning detached pin with its history, or a fresh one.
+    let before = list.clone();
+    let result = pin_now(list, known, candidate, account, state, since);
+    if result.is_err() {
+        *list = before;
+    }
+    result
 }
 
-fn insert(list: &mut IdentityPinsV1, pin: IdentityPinV1) {
-    let at = list
+fn pin_now(
+    list: &mut IdentityPinsV1,
+    known: Option<(bool, usize)>,
+    candidate: IdentityPinV1,
+    account: &str,
+    state: PinState,
+    since: &str,
+) -> Result<Recorded> {
+    let mut pin = match known {
+        Some(entry) => list.take(entry),
+        None => candidate,
+    };
+    if state == PinState::Verified {
+        pin.state = PinState::Verified;
+        pin.since = since.to_owned();
+    }
+    if let Some(i) = list.pins.iter().position(|p| p.account == account) {
+        let previous = list.pins.remove(i);
+        let mut replaced = previous.replaced.clone();
+        replaced.push(previous.incarnation_id()?);
+        let excess = replaced.len().saturating_sub(MAX_REPLACED);
+        replaced.drain(..excess);
+        pin.replaced = replaced;
+        list.detach(previous);
+    }
+    list.insert(pin);
+    list.validate()?;
+    Ok(Recorded::Pinned)
+}
+
+/// A pin that had an address before, and where it is now (`None`: detached,
+/// not known).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedPin {
+    pub pin: IdentityPinV1,
+    pub now: Option<String>,
+}
+
+/// Every pin that had `address` before: live ones (renamed away) first, then
+/// detached ones (last known there).
+fn moved_from(list: &IdentityPinsV1, address: &str) -> Vec<MovedPin> {
+    let live = list
         .pins
-        .binary_search_by(|p| p.account.as_str().cmp(&pin.account))
-        .unwrap_or_else(|at| at);
-    list.pins.insert(at, pin);
+        .iter()
+        .filter(|pin| pin.had(address))
+        .map(|pin| MovedPin {
+            pin: pin.clone(),
+            now: Some(pin.account.clone()),
+        });
+    let detached = list
+        .detached
+        .iter()
+        .filter(|pin| pin.account == address || pin.had(address))
+        .map(|pin| MovedPin {
+            pin: pin.clone(),
+            now: None,
+        });
+    live.chain(detached).collect()
 }
 
 /// What the list says about an address, given the authority its server
@@ -356,13 +571,15 @@ pub enum PinMatch {
         same_authority: bool,
     },
     /// No pin for the address, but the authority published there is pinned
-    /// under another one: this account was renamed (to the address, or back to
-    /// it). Fetch its rename chain and [`apply_rename`].
+    /// under another address (or detached from another): this account was
+    /// renamed. Fetch its rename chain and [`apply_rename`].
     Renamed { pin: IdentityPinV1 },
-    /// No pin for the address, but a pinned account had it before and is now
-    /// `pin.account`; whoever is there now is someone else: "this is not the
-    /// person you verified, they are now …".
-    Moved { pin: IdentityPinV1 },
+    /// The authority published there is a detached pin last known at this
+    /// very address: it is back; [`record`] re-attaches it with its trust.
+    Returned { pin: IdentityPinV1 },
+    /// No pin for the address, but pinned accounts had it before; whoever is
+    /// there now is someone else: "this is not the person you verified".
+    Moved { pins: Vec<MovedPin> },
     /// Nothing known.
     New,
 }
@@ -375,46 +592,52 @@ pub fn lookup(list: &IdentityPinsV1, address: &str, published: Option<&str>) -> 
             same_authority: published == Some(pin.authority_public_key.as_str()),
         };
     }
-    if let Some(published) = published {
-        if let Some(pin) = list
-            .pins
-            .iter()
-            .find(|pin| pin.authority_public_key == published)
-        {
-            return PinMatch::Renamed { pin: pin.clone() };
-        }
+    if let Some(entry) = published.and_then(|published| list.find_authority(published)) {
+        return match entry {
+            (true, j) if list.detached[j].account == address => PinMatch::Returned {
+                pin: list.detached[j].clone(),
+            },
+            (true, j) => PinMatch::Renamed {
+                pin: list.detached[j].clone(),
+            },
+            (false, j) => PinMatch::Renamed {
+                pin: list.pins[j].clone(),
+            },
+        };
     }
-    // The newest move wins when several incarnations once held the address.
-    list.pins
-        .iter()
-        .filter(|pin| pin.formerly.iter().any(|former| former == address))
-        .max_by(|a, b| a.since.cmp(&b.since))
-        .map_or(PinMatch::New, |pin| PinMatch::Moved { pin: pin.clone() })
+    let pins = moved_from(list, address);
+    if pins.is_empty() {
+        PinMatch::New
+    } else {
+        PinMatch::Moved { pins }
+    }
 }
 
 /// What [`apply_rename`] did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenameApplied {
-    /// Where the pin was (an address in the chain).
+    /// Where the pin was (an address in the chain; for a detached pin, the
+    /// last one known).
     pub from: String,
     /// Where it is now: the chain's current address.
     pub to: String,
     /// Whether the list changed (false: this chain was already applied).
     pub changed: bool,
     /// Another incarnation pinned at `to` before: the address's previous
-    /// holder, now in the moved pin's `replaced` (which follows the address:
-    /// the history of `from` stays behind with it). The user is told that `to`
-    /// is now the person they knew as `from`.
+    /// holder, now detached (its trust kept, for when it turns up) and in the
+    /// moved pin's `replaced` (which follows the address). The user is told
+    /// that `to` is now the person they knew as `from`.
     pub displaced: Option<String>,
 }
 
 /// Follows a verified rename of the account whose authority is `authority`:
-/// its pin moves to the chain's current address, keeping its trust (the
-/// safety number did not change), with every earlier address in `formerly`
-/// and the chain's head as its anchor. Refuses a chain that does not verify
-/// against `authority`, or that does not extend the anchor the pin holds (a
-/// rollback). Idempotent.
+/// its pin (live or detached) moves to the chain's current address, keeping
+/// its trust (the safety number did not change), with every earlier address
+/// in `formerly` and the chain's head as its anchor. Refuses a chain that does
+/// not verify against `authority`, does not hold the address the pin is at,
+/// or does not extend the anchor the pin holds (a rollback or a fork).
+/// Idempotent.
 pub fn apply_rename(
     list: &mut IdentityPinsV1,
     authority: &[u8; 32],
@@ -422,37 +645,28 @@ pub fn apply_rename(
 ) -> Result<RenameApplied> {
     let view = account_rename::verify_chain(authority, chain)?;
     let authority_b64 = STANDARD.encode(authority);
-    let mine: Vec<usize> = (0..list.pins.len())
-        .filter(|&i| {
-            list.pins[i].authority_public_key == authority_b64 && view.had(&list.pins[i].account)
-        })
-        .collect();
-    // The pin to move: the one at the newest address of the chain (several
-    // only when apps pinned the account under two of its names meanwhile).
-    let &primary = mine
-        .iter()
-        .max_by_key(|&&i| {
-            view.addresses
-                .iter()
-                .rposition(|address| *address == list.pins[i].account)
-        })
+    let entry = list
+        .find_authority(&authority_b64)
         .ok_or_else(|| invalid("no pin for this account"))?;
-    for &i in &mine {
-        if let Some(anchor) = &list.pins[i].renames {
-            let held = anchor
-                .sequence
-                .checked_sub(1)
-                .and_then(|at| view.digests.get(at as usize))
-                .map(hex::encode);
-            if held.as_deref() != Some(anchor.digest.as_str()) {
-                return Err(invalid("the rename chain does not extend the one pinned"));
-            }
+    let pin = if entry.0 {
+        &list.detached[entry.1]
+    } else {
+        &list.pins[entry.1]
+    };
+    if !view.had(&pin.account) {
+        return Err(invalid("the rename chain does not hold the pinned address"));
+    }
+    if let Some(anchor) = &pin.renames {
+        let held = anchor
+            .sequence
+            .checked_sub(1)
+            .and_then(|at| view.digests.get(at as usize))
+            .map(hex::encode);
+        if held.as_deref() != Some(anchor.digest.as_str()) {
+            return Err(invalid("the rename chain does not extend the one pinned"));
         }
     }
-    let head = RenameAnchorV1 {
-        sequence: view.sequence,
-        digest: hex::encode(view.digests.last().expect("a verified chain is not empty")),
-    };
+    let from = pin.account.clone();
     let mut formerly: Vec<String> = Vec::new();
     for address in &view.addresses[..view.addresses.len() - 1] {
         if *address != view.current {
@@ -462,62 +676,53 @@ pub fn apply_rename(
     }
     let excess = formerly.len().saturating_sub(MAX_FORMERLY);
     formerly.drain(..excess);
-
-    let from = list.pins[primary].account.clone();
-    let mut moved = list.pins[primary].clone();
-    let verified = mine
-        .iter()
-        .any(|&i| list.pins[i].state == PinState::Verified);
-    moved.account = view.current.clone();
-    moved.state = if verified {
-        PinState::Verified
-    } else {
-        PinState::Seen
+    let head = RenameAnchorV1 {
+        sequence: view.sequence,
+        digest: hex::encode(view.digests.last().expect("a verified chain is not empty")),
+        unknown: pin
+            .renames
+            .as_ref()
+            .filter(|anchor| anchor.sequence == view.sequence)
+            .map(|anchor| anchor.unknown.clone())
+            .unwrap_or_default(),
     };
+
+    let before = list.clone();
+    let mut moved = list.take(entry);
+    let restore = |list: &mut IdentityPinsV1, error| {
+        *list = before.clone();
+        error
+    };
+    let changed_address = moved.account != view.current || entry.0;
+    moved.account = view.current.clone();
     moved.formerly = formerly;
     moved.renames = Some(head);
     // `replaced` is the history of an address: the pin now stands at the new
     // one, whose history is its previous holder's, if it had one.
-    if moved.account != from {
+    if changed_address && from != view.current {
         moved.replaced = Vec::new();
     }
-
     let mut displaced = None;
-    let mut next: Vec<IdentityPinV1> = Vec::with_capacity(list.pins.len());
-    for (i, pin) in list.pins.iter().enumerate() {
-        if mine.contains(&i) {
-            continue;
-        }
-        if pin.account == view.current {
-            // Whoever held the new address before: another incarnation.
-            let mut replaced = pin.replaced.clone();
-            replaced.push(pin.incarnation_id()?);
-            moved.replaced = replaced;
-            displaced = Some(pin.incarnation_id()?);
-            continue;
-        }
-        next.push(pin.clone());
+    if let Some(i) = list.pins.iter().position(|p| p.account == view.current) {
+        let holder = list.pins.remove(i);
+        let mut replaced = holder.replaced.clone();
+        let incarnation = holder.incarnation_id().map_err(|e| restore(list, e))?;
+        replaced.push(incarnation.clone());
+        let excess = replaced.len().saturating_sub(MAX_REPLACED);
+        replaced.drain(..excess);
+        moved.replaced = replaced;
+        displaced = Some(incarnation);
+        list.detach(holder);
     }
-    let excess = moved.replaced.len().saturating_sub(MAX_REPLACED);
-    moved.replaced.drain(..excess);
-    let changed = !(mine.len() == 1 && list.pins[primary] == moved && displaced.is_none());
-    if !changed {
-        return Ok(RenameApplied {
-            from,
-            to: view.current,
-            changed,
-            displaced,
-        });
+    list.insert(moved);
+    if let Err(error) = list.validate() {
+        *list = before;
+        return Err(error);
     }
-    moved.validate()?;
-    let mut updated = IdentityPinsV1 { pins: next };
-    insert(&mut updated, moved);
-    updated.validate()?;
-    *list = updated;
     Ok(RenameApplied {
         from,
         to: view.current,
-        changed,
+        changed: *list != before,
         displaced,
     })
 }
@@ -661,6 +866,7 @@ mod tests {
             replaced: vec![],
             formerly: vec![],
             renames: None,
+            unknown: UnknownFields::new(),
         }
     }
 
@@ -670,6 +876,7 @@ mod tests {
         bob.replaced = vec![pin("bob@kutup.dev", 9).incarnation_id().unwrap()];
         IdentityPinsV1 {
             pins: vec![pin("alice@kutup.dev", 1), bob],
+            ..Default::default()
         }
     }
 
@@ -746,6 +953,10 @@ mod tests {
         STANDARD.encode(identity(seed).authority_public_key())
     }
 
+    fn key(seed: u8) -> [u8; 32] {
+        identity(seed).authority_public_key()
+    }
+
     fn renames(seed: u8, addresses: &[&str]) -> Vec<AccountRenameV1> {
         let id = identity(seed);
         addresses
@@ -757,68 +968,49 @@ mod tests {
             .collect()
     }
 
+    fn rec(list: &mut IdentityPinsV1, account: &str, seed: u8, update: PinUpdate) -> Recorded {
+        record(list, account, &authority(seed), update, NOW).unwrap()
+    }
+
     #[test]
     fn record_follows_one_rule_for_every_app() {
         let mut list = IdentityPinsV1::default();
         // First met: pinned; met again under another authority: not replaced.
-        assert!(record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(2),
-            PinUpdate::FirstSeen,
-            NOW
-        )
-        .unwrap());
-        assert!(!record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(3),
-            PinUpdate::FirstSeen,
-            NOW
-        )
-        .unwrap());
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::FirstSeen),
+            Recorded::Pinned
+        );
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 3, PinUpdate::FirstSeen),
+            Recorded::Unchanged
+        );
         assert_eq!(list.pins[0].authority_public_key, authority(2));
         // Verified in person: the same authority keeps its history.
         list.pins[0].formerly = vec!["robert@kutup.dev".into()];
         list.pins[0].renames = Some(RenameAnchorV1 {
             sequence: 1,
             digest: "ab".repeat(32),
+            unknown: UnknownFields::new(),
         });
-        assert!(record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(2),
-            PinUpdate::Verified,
-            NOW
-        )
-        .unwrap());
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified),
+            Recorded::Pinned
+        );
         assert_eq!(list.pins[0].state, PinState::Verified);
         assert_eq!(list.pins[0].formerly, ["robert@kutup.dev"]);
-        assert!(!record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(2),
-            PinUpdate::Verified,
-            NOW
-        )
-        .unwrap());
-        assert!(!record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(2),
-            PinUpdate::Accepted,
-            NOW
-        )
-        .unwrap());
-        // Another authority accepted: a fresh pin, the old incarnation replaced.
-        assert!(record(
-            &mut list,
-            "bob@kutup.dev",
-            &authority(3),
-            PinUpdate::Accepted,
-            NOW
-        )
-        .unwrap());
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified),
+            Recorded::Unchanged
+        );
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Accepted),
+            Recorded::Unchanged
+        );
+        // Another authority accepted: pinned fresh; the old one detached, whole.
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 3, PinUpdate::Accepted),
+            Recorded::Pinned
+        );
         let pin = &list.pins[0];
         assert_eq!(
             (pin.state, pin.authority_public_key.as_str()),
@@ -826,17 +1018,14 @@ mod tests {
         );
         assert_eq!(pin.replaced, [identity(2).incarnation_id()]);
         assert!(pin.formerly.is_empty() && pin.renames.is_none());
-        // Inserted in order; a bad authority or time is refused.
-        record(
-            &mut list,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::FirstSeen,
-            NOW,
-        )
-        .unwrap();
+        assert_eq!(list.detached.len(), 1);
+        assert_eq!(list.detached[0].state, PinState::Verified);
+        assert_eq!(list.detached[0].formerly, ["robert@kutup.dev"]);
+        // Inserted in order; a bad authority or time is refused, the list kept.
+        rec(&mut list, "alice@kutup.dev", 1, PinUpdate::FirstSeen);
         assert_eq!(list.pins[0].account, "alice@kutup.dev");
         assert!(encode(&list).is_ok());
+        let before = list.clone();
         assert!(record(
             &mut list,
             "carol@kutup.dev",
@@ -853,30 +1042,62 @@ mod tests {
             "now"
         )
         .is_err());
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn a_released_name_is_not_pinned_for_its_next_holder() {
+        // Verified alice@; she becomes alicia@; Mallory later takes alice@.
+        let mut list = IdentityPinsV1::default();
+        rec(&mut list, "alice@kutup.dev", 1, PinUpdate::Verified);
+        apply_rename(
+            &mut list,
+            &key(1),
+            &renames(1, &["alice@kutup.dev", "alicia@kutup.dev"]),
+        )
+        .unwrap();
+        match rec(&mut list, "alice@kutup.dev", 6, PinUpdate::FirstSeen) {
+            Recorded::FormerAddressTaken { pins } => {
+                assert_eq!(pins.len(), 1);
+                assert_eq!(pins[0].now.as_deref(), Some("alicia@kutup.dev"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(list.pins.len(), 1, "nothing pinned for the newcomer");
+        // Alice met at a name this device has not followed yet: never a
+        // second, unverified pin; the caller follows her chain first.
+        let mut stale = IdentityPinsV1::default();
+        rec(&mut stale, "alice@kutup.dev", 1, PinUpdate::Verified);
+        for update in [
+            PinUpdate::FirstSeen,
+            PinUpdate::Accepted,
+            PinUpdate::Verified,
+        ] {
+            match rec(&mut stale, "alicia@kutup.dev", 1, update) {
+                Recorded::KnownElsewhere { pin } => assert_eq!(pin.account, "alice@kutup.dev"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(stale.pins.len(), 1);
+        // Accepting the newcomer is the user's explicit choice.
+        assert_eq!(
+            rec(&mut list, "alice@kutup.dev", 6, PinUpdate::Accepted),
+            Recorded::Pinned
+        );
+        assert_eq!(list.pins.len(), 2);
+        // Two pins for one authority are not a valid list.
+        let mut twice = list.clone();
+        twice.pins[0].authority_public_key = authority(1);
+        assert!(encode(&twice).is_err());
     }
 
     #[test]
     fn a_rename_moves_the_pin_with_its_trust() {
         let mut list = IdentityPinsV1::default();
-        record(
-            &mut list,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::Verified,
-            NOW,
-        )
-        .unwrap();
-        record(
-            &mut list,
-            "zed@kutup.dev",
-            &authority(9),
-            PinUpdate::FirstSeen,
-            NOW,
-        )
-        .unwrap();
+        rec(&mut list, "alice@kutup.dev", 1, PinUpdate::Verified);
+        rec(&mut list, "zed@kutup.dev", 9, PinUpdate::FirstSeen);
         let chain = renames(1, &["alice@kutup.dev", "alicia@kutup.dev"]);
-        let key = identity(1).authority_public_key();
-        let applied = apply_rename(&mut list, &key, &chain).unwrap();
+        let applied = apply_rename(&mut list, &key(1), &chain).unwrap();
         assert_eq!(
             applied,
             RenameApplied {
@@ -891,15 +1112,12 @@ mod tests {
         assert_eq!(pin.state, PinState::Verified);
         assert_eq!(pin.formerly, ["alice@kutup.dev"]);
         assert_eq!(pin.renames.as_ref().unwrap().sequence, 1);
-        assert_eq!(list.pins[1].account, "zed@kutup.dev");
         assert!(encode(&list).is_ok());
         // Again: nothing changes.
         let before = list.clone();
-        assert!(!apply_rename(&mut list, &key, &chain).unwrap().changed);
+        assert!(!apply_rename(&mut list, &key(1), &chain).unwrap().changed);
         assert_eq!(list, before);
 
-        // Lookups: the new address is pinned; the old one, now someone else's,
-        // is "moved"; the account seen at a name it went back to is "renamed".
         assert!(matches!(
             lookup(&list, "alicia@kutup.dev", Some(&authority(1))),
             PinMatch::Pinned {
@@ -908,7 +1126,9 @@ mod tests {
             }
         ));
         match lookup(&list, "alice@kutup.dev", Some(&authority(5))) {
-            PinMatch::Moved { pin } => assert_eq!(pin.account, "alicia@kutup.dev"),
+            PinMatch::Moved { pins } => {
+                assert_eq!(pins[0].now.as_deref(), Some("alicia@kutup.dev"))
+            }
             other => panic!("{other:?}"),
         }
         assert!(matches!(
@@ -926,23 +1146,29 @@ mod tests {
 
         // The next rename extends the anchor; the old chain alone is a rollback.
         let longer = renames(1, &["alice@kutup.dev", "alicia@kutup.dev", "ali@kutup.dev"]);
-        apply_rename(&mut list, &key, &longer).unwrap();
+        apply_rename(&mut list, &key(1), &longer).unwrap();
         assert_eq!(list.pins[0].account, "ali@kutup.dev");
         assert_eq!(
             list.pins[0].formerly,
             ["alice@kutup.dev", "alicia@kutup.dev"]
         );
+        let before = list.clone();
         assert!(
-            apply_rename(&mut list, &key, &chain).is_err(),
+            apply_rename(&mut list, &key(1), &chain).is_err(),
             "rolled back"
         );
-        // A rewritten history under the same authority is refused too.
+        // A fork: the same sequence with another statement.
         let id = identity(1);
-        let rewritten = vec![
+        let fork = vec![
             account_rename::sign(&id, 1, "alice@kutup.dev", "alicia@kutup.dev", T + 7).unwrap(),
             account_rename::sign(&id, 2, "alicia@kutup.dev", "ali@kutup.dev", T + 8).unwrap(),
         ];
-        assert!(apply_rename(&mut list, &key, &rewritten).is_err());
+        assert!(apply_rename(&mut list, &key(1), &fork).is_err());
+        // A forked chain that never had the pinned address.
+        let elsewhere =
+            vec![account_rename::sign(&id, 1, "al@kutup.dev", "alix@kutup.dev", T).unwrap()];
+        assert!(apply_rename(&mut list, &key(1), &elsewhere).is_err());
+        assert_eq!(list, before, "refusals change nothing");
         // Back to a former name: it leaves `formerly`.
         let back = renames(
             1,
@@ -953,97 +1179,186 @@ mod tests {
                 "alice@kutup.dev",
             ],
         );
-        apply_rename(&mut list, &key, &back).unwrap();
+        apply_rename(&mut list, &key(1), &back).unwrap();
         assert_eq!(list.pins[0].account, "alice@kutup.dev");
         assert_eq!(list.pins[0].formerly, ["alicia@kutup.dev", "ali@kutup.dev"]);
     }
 
     #[test]
-    fn a_rename_is_only_followed_for_its_own_authority() {
+    fn formerly_keeps_the_newest_addresses() {
+        let names: Vec<String> = (0..=MAX_FORMERLY + 2)
+            .map(|i| format!("n{i}@kutup.dev"))
+            .collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let mut list = IdentityPinsV1::default();
-        record(
-            &mut list,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::FirstSeen,
-            NOW,
-        )
-        .unwrap();
-        // The next holder of a name cannot move the old owner's pin, nor can
-        // a chain signed by another authority than the pinned one.
-        let other = renames(2, &["alice@kutup.dev", "mallory@kutup.dev"]);
-        assert!(apply_rename(&mut list, &identity(2).authority_public_key(), &other).is_err());
-        assert!(apply_rename(&mut list, &identity(1).authority_public_key(), &other).is_err());
-        // A chain about addresses the pin never had moves nothing.
-        let unrelated = renames(1, &["bob@kutup.dev", "rob@kutup.dev"]);
-        assert!(apply_rename(&mut list, &identity(1).authority_public_key(), &unrelated).is_err());
+        rec(&mut list, refs[0], 1, PinUpdate::FirstSeen);
+        apply_rename(&mut list, &key(1), &renames(1, &refs)).unwrap();
+        let pin = &list.pins[0];
+        assert_eq!(pin.formerly.len(), MAX_FORMERLY);
+        assert_eq!(
+            pin.formerly.last().map(String::as_str),
+            Some(refs[refs.len() - 2])
+        );
+        assert!(!pin.had(refs[0]), "the oldest went");
+        assert_eq!(lookup(&list, refs[0], Some(&authority(5))), PinMatch::New);
     }
 
     #[test]
-    fn a_rename_onto_a_pinned_address_replaces_its_previous_holder() {
+    fn a_rename_is_only_followed_for_its_own_authority() {
         let mut list = IdentityPinsV1::default();
-        record(
-            &mut list,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::FirstSeen,
-            NOW,
-        )
-        .unwrap();
-        record(
-            &mut list,
-            "alicia@kutup.dev",
-            &authority(7),
-            PinUpdate::Verified,
-            NOW,
-        )
-        .unwrap();
-        // The same account also pinned under its new name by another app.
-        let key = identity(1).authority_public_key();
-        let applied = apply_rename(
-            &mut list,
-            &key,
-            &renames(1, &["alice@kutup.dev", "alicia@kutup.dev"]),
-        )
-        .unwrap();
-        assert_eq!(applied.displaced, Some(identity(7).incarnation_id()));
-        assert_eq!(list.pins.len(), 1);
-        let pin = &list.pins[0];
-        assert_eq!(pin.authority_public_key, authority(1));
-        assert_eq!(pin.replaced, [identity(7).incarnation_id()]);
-        assert_eq!(
-            pin.state,
-            PinState::Seen,
-            "the displaced pin's trust is not inherited"
-        );
+        rec(&mut list, "alice@kutup.dev", 1, PinUpdate::FirstSeen);
+        let other = renames(2, &["alice@kutup.dev", "mallory@kutup.dev"]);
+        assert!(apply_rename(&mut list, &key(2), &other).is_err());
+        assert!(apply_rename(&mut list, &key(1), &other).is_err());
+        let unrelated = renames(1, &["bob@kutup.dev", "rob@kutup.dev"]);
+        assert!(apply_rename(&mut list, &key(1), &unrelated).is_err());
+    }
 
-        // Pinned under both names (two apps raced): merged, keeping the trust.
-        let mut twice = IdentityPinsV1::default();
-        record(
-            &mut twice,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::Verified,
-            NOW,
+    #[test]
+    fn a_displaced_holder_keeps_its_trust_whatever_the_order() {
+        // Erin (verified) held alicia@ and moves to erin@; Alice takes alicia@.
+        let alice = renames(1, &["alice@kutup.dev", "alicia@kutup.dev"]);
+        let erin = renames(7, &["alicia@kutup.dev", "erin@kutup.dev"]);
+        for alice_first in [true, false] {
+            let mut list = IdentityPinsV1::default();
+            rec(&mut list, "alice@kutup.dev", 1, PinUpdate::FirstSeen);
+            rec(&mut list, "alicia@kutup.dev", 7, PinUpdate::Verified);
+            if alice_first {
+                let applied = apply_rename(&mut list, &key(1), &alice).unwrap();
+                assert_eq!(applied.displaced, Some(identity(7).incarnation_id()));
+                assert_eq!(list.detached[0].authority_public_key, authority(7));
+                assert!(matches!(
+                    lookup(&list, "erin@kutup.dev", Some(&authority(7))),
+                    PinMatch::Renamed { .. }
+                ));
+                apply_rename(&mut list, &key(7), &erin).unwrap();
+            } else {
+                apply_rename(&mut list, &key(7), &erin).unwrap();
+                assert!(apply_rename(&mut list, &key(1), &alice)
+                    .unwrap()
+                    .displaced
+                    .is_none());
+            }
+            assert!(list.detached.is_empty(), "alice_first: {alice_first}");
+            let erin_pin = list
+                .pins
+                .iter()
+                .find(|p| p.account == "erin@kutup.dev")
+                .unwrap();
+            assert_eq!(
+                erin_pin.state,
+                PinState::Verified,
+                "alice_first: {alice_first}"
+            );
+            let alice_pin = list
+                .pins
+                .iter()
+                .find(|p| p.account == "alicia@kutup.dev")
+                .unwrap();
+            assert_eq!(alice_pin.authority_public_key, authority(1));
+            assert!(encode(&list).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_detached_pin_comes_back_with_its_trust() {
+        let mut list = IdentityPinsV1::default();
+        rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified);
+        rec(&mut list, "bob@kutup.dev", 3, PinUpdate::Accepted);
+        // The newcomer leaves; the one detached from bob@ is back there.
+        list.pins.clear();
+        assert!(matches!(
+            lookup(&list, "bob@kutup.dev", Some(&authority(2))),
+            PinMatch::Returned { .. }
+        ));
+        match lookup(&list, "bob@kutup.dev", Some(&authority(4))) {
+            PinMatch::Moved { pins } => assert_eq!(pins[0].now, None),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::FirstSeen),
+            Recorded::Pinned
+        );
+        assert_eq!(list.pins[0].state, PinState::Verified);
+        assert!(list.detached.is_empty());
+    }
+
+    #[test]
+    fn two_accounts_that_had_one_address_are_both_named() {
+        let mut list = IdentityPinsV1::default();
+        rec(&mut list, "x@kutup.dev", 1, PinUpdate::FirstSeen);
+        apply_rename(
+            &mut list,
+            &key(1),
+            &renames(1, &["x@kutup.dev", "y@kutup.dev"]),
         )
         .unwrap();
-        record(
-            &mut twice,
-            "alicia@kutup.dev",
-            &authority(1),
-            PinUpdate::FirstSeen,
-            NOW,
+        rec(&mut list, "x@kutup.dev", 2, PinUpdate::Accepted);
+        apply_rename(
+            &mut list,
+            &key(2),
+            &renames(2, &["x@kutup.dev", "z@kutup.dev"]),
         )
         .unwrap();
-        let applied = apply_rename(
-            &mut twice,
-            &key,
-            &renames(1, &["alice@kutup.dev", "alicia@kutup.dev"]),
-        )
-        .unwrap();
-        assert!(applied.changed && applied.displaced.is_none());
-        assert_eq!(twice.pins.len(), 1);
-        assert_eq!(twice.pins[0].state, PinState::Verified);
+        match lookup(&list, "x@kutup.dev", Some(&authority(3))) {
+            PinMatch::Moved { pins } => {
+                let now: Vec<_> = pins.iter().map(|p| p.now.clone().unwrap()).collect();
+                assert_eq!(now, ["y@kutup.dev", "z@kutup.dev"]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn detached_pins_are_capped_unverified_first() {
+        let mut list = IdentityPinsV1::default();
+        for i in 0..=MAX_DETACHED {
+            let mut pin = pin(&format!("p{i}@kutup.dev"), 0);
+            let id = AccountIdentityKeysV1::derive(&{
+                let mut seed = [0u8; 32];
+                seed[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+                seed
+            })
+            .unwrap();
+            pin.authority_public_key = STANDARD.encode(id.authority_public_key());
+            pin.state = if i == 0 {
+                PinState::Verified
+            } else {
+                PinState::Seen
+            };
+            pin.since = since_from_unix(1_790_000_000 + i as u64);
+            list.detach(pin);
+        }
+        assert_eq!(list.detached.len(), MAX_DETACHED);
+        assert!(
+            list.detached.iter().any(|p| p.account == "p0@kutup.dev"),
+            "the verified one stays"
+        );
+        assert!(
+            !list.detached.iter().any(|p| p.account == "p1@kutup.dev"),
+            "the oldest unverified went"
+        );
+    }
+
+    #[test]
+    fn later_fields_are_kept_and_newer_lists_refused() {
+        let text = r#"{"pins":[{"account":"bob@kutup.dev","authorityPublicKey":"AUTH","state":"seen","since":"2026-10-10T12:00:00Z","nickname":"B","zone":1}],"later":true}"#
+            .replace("AUTH", &authority(2));
+        let mut list = decode(text.as_bytes()).unwrap();
+        assert_eq!(list.pins[0].unknown["nickname"], "B");
+        assert_eq!(String::from_utf8(encode(&list).unwrap()).unwrap(), text);
+        // An app that updates the pin keeps what it does not know.
+        rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified);
+        assert_eq!(list.pins[0].unknown["zone"], 1);
+        assert_eq!(list.unknown["later"], true);
+        // Not in name order after the known fields: not canonical.
+        let unordered = text.replace(r#""nickname":"B","zone":1"#, r#""zone":1,"nickname":"B""#);
+        assert!(decode(unordered.as_bytes()).is_err());
+        // A list for newer readers is refused, not misread.
+        let newer = r#"{"pins":[],"minReader":2}"#;
+        let error = decode(newer.as_bytes()).unwrap_err().to_string();
+        assert!(error.contains("newer app"), "{error}");
+        assert!(decode(br#"{"pins":[],"minReader":1}"#).is_err());
     }
 
     #[test]
@@ -1054,8 +1369,12 @@ mod tests {
             p.renames = Some(RenameAnchorV1 {
                 sequence,
                 digest: "0f".repeat(32),
+                unknown: UnknownFields::new(),
             });
-            IdentityPinsV1 { pins: vec![p] }
+            IdentityPinsV1 {
+                pins: vec![p],
+                ..Default::default()
+            }
         };
         assert!(encode(&anchored(vec!["alice@kutup.dev"], 1)).is_ok());
         for (case, list) in [

@@ -21,12 +21,19 @@ export interface IdentityPin {
   /** Addresses this same account had before `account` (its renames), oldest first. */
   formerly?: string[]
   /** The newest rename verified for it: a later chain must hold it (no rollback). */
-  renames?: { sequence: number; digest: string }
+  renames?: { sequence: number; digest: string; [later: string]: unknown }
+  /** Fields from a later version: kept and written back as they are. */
+  [later: string]: unknown
 }
 
 export interface IdentityPins {
   /** Sorted by account, one each. */
   pins: IdentityPin[]
+  /** Pins pushed off their address (a rename landed there, or another identity was accepted there): kept with their trust. */
+  detached?: IdentityPin[]
+  /** The lowest reader version that may read the list (absent: 1). */
+  minReader?: number
+  [later: string]: unknown
 }
 
 /** The account's Drive key binding, signed with its authority. */
@@ -94,10 +101,34 @@ export async function recordIdentityPin(
   authorityPublicKey: string,
   update: PinUpdate,
   since: string,
-): Promise<{ list: IdentityPins; changed: boolean }> {
-  const result = (await getCryptoWasm()).recordIdentityPin(JSON.stringify(list), account, authorityPublicKey, update, since)
-  return { list: JSON.parse(result.pins) as IdentityPins, changed: result.changed }
+): Promise<{ list: IdentityPins; changed: boolean; result: Recorded }> {
+  const out = (await getCryptoWasm()).recordIdentityPin(JSON.stringify(list), account, authorityPublicKey, update, since) as {
+    pins: string
+    changed: boolean
+    result: Recorded
+  }
+  return { list: JSON.parse(out.pins) as IdentityPins, changed: out.changed, result: out.result }
 }
+
+/** A pin that had an address before, and where it is now (`null`: detached, not known). */
+export interface MovedPin {
+  pin: IdentityPin
+  now: string | null
+}
+
+/**
+ * What `recordIdentityPin` decided:
+ * - `pinned` / `unchanged`;
+ * - `formerAddressTaken`: not pinned; someone the user knew had this address
+ *   and is elsewhere now (`pins`): this is another person ("changed");
+ * - `knownElsewhere`: not pinned again; the same account is pinned under
+ *   another of its names (`pin`); follow its rename chain to move it.
+ */
+export type Recorded =
+  | { kind: 'pinned' }
+  | { kind: 'unchanged' }
+  | { kind: 'formerAddressTaken'; pins: MovedPin[] }
+  | { kind: 'knownElsewhere'; pin: IdentityPin }
 
 /**
  * What the list says about `address`, given the authority published there
@@ -105,14 +136,17 @@ export async function recordIdentityPin(
  * - `pinned`: a pin for the address (`sameAuthority`: still that one);
  * - `renamed`: the authority there is pinned under another address: this
  *   account was renamed; fetch its chain and `applyAccountRenameToPins`;
- * - `moved`: a pinned account had the address before and is now `pin.account`;
- *   whoever is there now is someone else;
+ * - `returned`: a detached pin last known at this address is back
+ *   (`recordIdentityPin` re-attaches it with its trust);
+ * - `moved`: pinned accounts had the address before (`now`: where they are,
+ *   or `null` if detached); whoever is there now is someone else;
  * - `new`: nothing known.
  */
 export type PinMatch =
   | { kind: 'pinned'; pin: IdentityPin; sameAuthority: boolean }
   | { kind: 'renamed'; pin: IdentityPin }
-  | { kind: 'moved'; pin: IdentityPin }
+  | { kind: 'returned'; pin: IdentityPin }
+  | { kind: 'moved'; pins: MovedPin[] }
   | { kind: 'new' }
 
 export async function lookupIdentityPin(list: IdentityPins, address: string, publishedAuthority: string | null): Promise<PinMatch> {

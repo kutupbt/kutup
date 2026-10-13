@@ -116,7 +116,9 @@ fn identity_pins_sync_by_revision() {
             replaced: vec![],
             formerly: vec![],
             renames: None,
+            unknown: Default::default(),
         }],
+        ..Default::default()
     };
     let get = || {
         bearer(

@@ -64,6 +64,12 @@ struct RenameVectors {
     records: Vec<RecordCase>,
     /// Lists the format refuses.
     refused_lists: Vec<RefusedList>,
+    /// Valid lists stored in a form that is not canonical: refused when
+    /// opened (the stored bytes must be canonical), whatever their content.
+    noncanonical: Vec<RefusedList>,
+    /// A list with fields from a later version, at every level: read, kept,
+    /// and written back unchanged (after the known fields, in name order).
+    preserved: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,7 +91,8 @@ struct RecordCase {
     update: PinUpdate,
     since: String,
     after: String,
-    changed: bool,
+    /// `record`'s answer, as JSON.
+    result: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -168,6 +175,7 @@ fn plain(pin: (&str, &AccountIdentityKeysV1, PinState)) -> IdentityPinV1 {
         replaced: vec![],
         formerly: vec![],
         renames: None,
+        unknown: Default::default(),
     }
 }
 
@@ -190,6 +198,7 @@ fn renames() -> RenameVectors {
             plain(("david@kutup.dev", &erin, PinState::Seen)),
             plain(("frank@example.org", &frank, PinState::Seen)),
         ],
+        ..Default::default()
     };
     let mut after = before.clone();
     let applied =
@@ -201,6 +210,8 @@ fn renames() -> RenameVectors {
         ("frank@example.org", Some(b64(&stranger))),
         ("dave2@kutup.dev", Some(b64(&dave))),
         ("nobody@kutup.dev", Some(b64(&stranger))),
+        // Erin, detached from david@, seen at a new address: renamed.
+        ("erin@kutup.dev", Some(b64(&erin))),
     ]
     .into_iter()
     .map(|(address, published)| LookupCase {
@@ -213,7 +224,7 @@ fn renames() -> RenameVectors {
     let record_case =
         |case: &str, list: &IdentityPinsV1, account: &str, who: &AccountIdentityKeysV1, update| {
             let mut next = list.clone();
-            let changed =
+            let result =
                 identity_pins::record(&mut next, account, &b64(who), update, SINCE).unwrap();
             RecordCase {
                 case: case.into(),
@@ -223,9 +234,17 @@ fn renames() -> RenameVectors {
                 update,
                 since: SINCE.into(),
                 after: json(&next),
-                changed,
+                result: serde_json::to_value(result).unwrap(),
             }
         };
+    // Dave not yet verified, before the rename.
+    let mut before_seen = before.clone();
+    before_seen.pins[0].state = PinState::Seen;
+    // Dave moved on from david@: Erin, detached from it, is met there again.
+    let mut without_david = after.clone();
+    without_david
+        .pins
+        .retain(|pin| pin.account != "david@kutup.dev");
     // The renamed pin as only seen: verifying it keeps its former addresses.
     let mut seen_after = after.clone();
     seen_after.pins[0].state = PinState::Seen;
@@ -259,19 +278,62 @@ fn renames() -> RenameVectors {
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "accepted, another authority: replaced",
+            "accepted, another authority: replaced, the old one detached",
             &after,
             "frank@example.org",
             &stranger,
             PinUpdate::Accepted,
         ),
+        record_case(
+            "first met at a former address: not pinned",
+            &after,
+            "dave@kutup.dev",
+            &stranger,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "accepted at a former address: pinned",
+            &after,
+            "dave@kutup.dev",
+            &stranger,
+            PinUpdate::Accepted,
+        ),
+        record_case(
+            "first met under a name not followed yet: known elsewhere",
+            &before,
+            "davey@kutup.dev",
+            &dave,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "verified under a name not followed yet: that pin verified",
+            &before_seen,
+            "davey@kutup.dev",
+            &dave,
+            PinUpdate::Verified,
+        ),
+        record_case(
+            "the detached holder met at its last address: back with its trust",
+            &without_david,
+            "david@kutup.dev",
+            &erin,
+            PinUpdate::FirstSeen,
+        ),
     ];
     let anchored = |formerly: &[&str], anchor: Option<(u64, String)>| {
         let mut pin = plain(("david@kutup.dev", &dave, PinState::Seen));
         pin.formerly = formerly.iter().map(|a| a.to_string()).collect();
-        pin.renames = anchor.map(|(sequence, digest)| RenameAnchorV1 { sequence, digest });
+        pin.renames = anchor.map(|(sequence, digest)| RenameAnchorV1 {
+            sequence,
+            digest,
+            unknown: Default::default(),
+        });
         // Built by hand: these do not pass `encode`.
-        serde_json::to_string(&IdentityPinsV1 { pins: vec![pin] }).unwrap()
+        serde_json::to_string(&IdentityPinsV1 {
+            pins: vec![pin],
+            ..Default::default()
+        })
+        .unwrap()
     };
     let digest = || "ab".repeat(32);
     let refused_lists = vec![
@@ -308,9 +370,54 @@ fn renames() -> RenameVectors {
             pins: anchored(&["dave@kutup.dev"], Some((1, "AB".repeat(32)))),
         },
         RefusedList {
-            case: "an unknown field".into(),
-            pins: anchored(&["dave@kutup.dev"], Some((1, digest())))
-                .replace("\"state\"", "\"later\":1,\"state\""),
+            case: "one account pinned twice".into(),
+            pins: serde_json::to_string(&IdentityPinsV1 {
+                pins: vec![
+                    plain(("dave@kutup.dev", &dave, PinState::Seen)),
+                    plain(("david@kutup.dev", &dave, PinState::Seen)),
+                ],
+                ..Default::default()
+            })
+            .unwrap(),
+        },
+        RefusedList {
+            case: "pinned and detached at once".into(),
+            pins: serde_json::to_string(&IdentityPinsV1 {
+                pins: vec![plain(("dave@kutup.dev", &dave, PinState::Seen))],
+                detached: vec![plain(("david@kutup.dev", &dave, PinState::Seen))],
+                ..Default::default()
+            })
+            .unwrap(),
+        },
+        RefusedList {
+            case: "for a newer reader".into(),
+            pins: r#"{"pins":[],"minReader":2}"#.into(),
+        },
+        RefusedList {
+            case: "minReader 1, which is never written".into(),
+            pins: r#"{"pins":[],"minReader":1}"#.into(),
+        },
+    ];
+    let preserved = format!(
+        r#"{{"pins":[{{"account":"dave@kutup.dev","authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","formerly":["davey@kutup.dev"],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"detached":[{{"account":"frank@example.org","authorityPublicKey":"{}","state":"verified","since":"2026-10-12T09:00:00Z","note":null}}],"laterList":{{"a":[1,2]}}}}"#,
+        b64(&dave),
+        digest(),
+        b64(&frank)
+    );
+    let noncanonical = vec![
+        RefusedList {
+            case: "a later field before the known ones".into(),
+            pins: preserved
+                .replace(r#","colour":"blue","zone":7"#, r#","zone":7"#)
+                .replace(r#"{"account":"dave"#, r#"{"colour":"blue","account":"dave"#),
+        },
+        RefusedList {
+            case: "later fields out of name order".into(),
+            pins: preserved.replace(r#""colour":"blue","zone":7"#, r#""zone":7,"colour":"blue""#),
+        },
+        RefusedList {
+            case: "spaces".into(),
+            pins: preserved.replace("\":", "\": "),
         },
     ];
     RenameVectors {
@@ -323,6 +430,8 @@ fn renames() -> RenameVectors {
         lookups,
         records,
         refused_lists,
+        noncanonical,
+        preserved,
     }
 }
 
@@ -340,6 +449,7 @@ fn pins() -> IdentityPinsV1 {
                 replaced: vec![],
                 formerly: vec![],
                 renames: None,
+                unknown: Default::default(),
             },
             IdentityPinV1 {
                 account: "cara@kutup.dev".into(),
@@ -355,7 +465,9 @@ fn pins() -> IdentityPinsV1 {
                 renames: Some(RenameAnchorV1 {
                     sequence: 2,
                     digest: "5f".repeat(32),
+                    unknown: Default::default(),
                 }),
+                unknown: Default::default(),
             },
             IdentityPinV1 {
                 account: "carol@example.org".into(),
@@ -365,8 +477,10 @@ fn pins() -> IdentityPinsV1 {
                 replaced: vec![carol_before.incarnation_id()],
                 formerly: vec![],
                 renames: None,
+                unknown: Default::default(),
             },
         ],
+        ..Default::default()
     }
 }
 
@@ -499,7 +613,7 @@ fn check_renames(r: &RenameVectors) {
     ));
     for case in &r.records {
         let mut next = identity_pins::decode(case.before.as_bytes()).unwrap();
-        let changed = identity_pins::record(
+        let result = identity_pins::record(
             &mut next,
             &case.account,
             &case.authority,
@@ -508,9 +622,30 @@ fn check_renames(r: &RenameVectors) {
         )
         .unwrap();
         assert_eq!(
-            (changed, json(&next)),
-            (case.changed, case.after.clone()),
+            (serde_json::to_value(result).unwrap(), json(&next)),
+            (case.result.clone(), case.after.clone()),
             "{}",
+            case.case
+        );
+    }
+    assert_eq!(r.preserved, want.preserved);
+    let kept = identity_pins::decode(r.preserved.as_bytes()).unwrap();
+    assert_eq!(
+        json(&kept),
+        r.preserved,
+        "later fields written back unchanged"
+    );
+    for case in &r.noncanonical {
+        assert!(
+            identity_pins::decode(case.pins.as_bytes()).is_err(),
+            "{} opened",
+            case.case
+        );
+        let parsed: IdentityPinsV1 = serde_json::from_str(&case.pins).unwrap();
+        assert_eq!(
+            json(&parsed),
+            r.preserved,
+            "{}: the same content",
             case.case
         );
     }
