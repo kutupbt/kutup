@@ -190,6 +190,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     let body: Value = r.json().unwrap();
     assert_eq!(body["code"], "versionUploading");
     assert_eq!(body["uploadId"], at.rsplit('/').next().unwrap());
+    assert!(body["idleSeconds"].as_i64().unwrap() < 60, "{body}");
 
     // A blob sealed for another file is refused at its first byte.
     let other = drive_object::encrypt_file_blob(
