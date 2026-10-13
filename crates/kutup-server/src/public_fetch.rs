@@ -1,5 +1,9 @@
-//! A narrow fetcher for public web content the server gets on a user's
-//! behalf: Chat link previews, Kutup Pass site icons and Mail's image proxy.
+//! The one narrow fetcher for public web content the server gets on a
+//! user's behalf: Chat link previews, Kutup Pass site icons, Mail's image
+//! proxy, outside mail keys (WKD and keyservers) and one-click unsubscribe.
+//! Nothing else in the server makes outbound requests to addresses a user
+//! gave, except federation, whose transport checks peers with the same
+//! address list (`ssrf::is_public`).
 //!
 //! It runs inside the server's network, so it fetches only https on port
 //! 443 (and, when a caller asks, http on port 80: mail images), every
@@ -34,9 +38,13 @@ pub struct Request<'a> {
     /// Whether the answer's media type (lowercase, without parameters) is
     /// wanted; checked before the body is read.
     pub wanted: &'a (dyn Fn(&str) -> bool + Sync),
+    /// A POST with this body (its media type and bytes) instead of a GET.
+    pub body: Option<(&'a str, &'a [u8])>,
 }
 
 pub struct Fetched {
+    /// The answer's status: a success, or a redirect when [`Redirects::Stop`].
+    pub status: StatusCode,
     /// Where the content came from after redirects.
     pub final_url: Url,
     /// Lowercase, without parameters.
@@ -49,10 +57,21 @@ pub fn unusable(message: &'static str) -> AppError {
     AppError::new(StatusCode::UNPROCESSABLE_ENTITY, message)
 }
 
+/// What a fetch does with a redirect.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Redirects {
+    /// Followed (at most three), each target checked again.
+    Follow,
+    /// Not followed: the redirect is the answer (one-click unsubscribe,
+    /// where a redirect means the request was taken).
+    Stop,
+}
+
 /// More than most callers need.
 pub struct Options<'a> {
     /// http on port 80 too, for the first address and redirects.
     pub allow_http: bool,
+    pub redirects: Redirects,
     /// Whether a redirect's target may be followed; refused, nothing is fetched from it.
     pub follow: &'a (dyn Fn(&Url) -> bool + Sync),
 }
@@ -61,6 +80,7 @@ impl Default for Options<'_> {
     fn default() -> Self {
         Options {
             allow_http: false,
+            redirects: Redirects::Follow,
             follow: &|_| true,
         }
     }
@@ -114,12 +134,28 @@ pub(crate) async fn fetch(
             .user_agent(request.user_agent)
             .build()
             .map_err(|_| AppError::internal("public fetch client"))?;
-        let response = client
-            .get(url.clone())
+        let builder = match request.body {
+            Some((media_type, bytes)) => client
+                .post(url.clone())
+                .header(reqwest::header::CONTENT_TYPE, media_type)
+                .body(bytes.to_vec()),
+            None => client.get(url.clone()),
+        };
+        let response = builder
             .header(reqwest::header::ACCEPT, request.accept)
             .send()
             .await
             .map_err(|_| unusable("the site did not answer"))?;
+        let status = StatusCode::from_u16(response.status().as_u16())
+            .map_err(|_| unusable("the site answered oddly"))?;
+        if response.status().is_redirection() && options.redirects == Redirects::Stop {
+            return Ok(Fetched {
+                status,
+                final_url: url,
+                content_type: String::new(),
+                body: Vec::new(),
+            });
+        }
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -153,6 +189,7 @@ pub(crate) async fn fetch(
         }
         let body = read_limited(response, request.limit, request.truncate).await?;
         return Ok(Fetched {
+            status,
             final_url: url,
             content_type,
             body,
@@ -312,6 +349,117 @@ mod tests {
         }
         for public in ["1.1.1.1", "93.184.215.14", "2606:4700:4700::1111"] {
             assert!(crate::ssrf::is_public(public.parse().unwrap()), "{public}");
+        }
+    }
+
+    mod served {
+        use super::super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const LOCAL: Checks = Checks {
+            public: |_| true,
+            any_port: true,
+        };
+
+        /// Serves `responses` in turn, one per connection; the requests it
+        /// read come back on the channel.
+        async fn serve(
+            responses: Vec<String>,
+        ) -> (SocketAddr, tokio::sync::mpsc::UnboundedReceiver<String>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (seen, requests) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(async move {
+                for response in responses {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = vec![0u8; 8192];
+                    let n = socket.read(&mut request).await.unwrap_or(0);
+                    let _ = seen.send(String::from_utf8_lossy(&request[..n]).into_owned());
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                    let _ = socket.shutdown().await;
+                }
+            });
+            (address, requests)
+        }
+
+        fn http(status: &str, headers: &str, body: &str) -> String {
+            format!(
+                "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+
+        fn request<'a>(body: Option<(&'a str, &'a [u8])>) -> Request<'a> {
+            Request {
+                accept: "*/*",
+                user_agent: "test",
+                timeout: Duration::from_secs(5),
+                limit: 1024,
+                truncate: false,
+                wanted: &|_| true,
+                body,
+            }
+        }
+
+        fn local(options: Redirects) -> Options<'static> {
+            Options {
+                allow_http: true,
+                redirects: options,
+                follow: &|_| true,
+            }
+        }
+
+        #[tokio::test]
+        async fn a_post_carries_its_body_and_a_stopped_redirect_is_the_answer() {
+            let (address, mut requests) =
+                serve(vec![http("302 Found", "Location: /elsewhere\r\n", "")]).await;
+            let url = Url::parse(&format!("http://{address}/unsubscribe")).unwrap();
+            let answer = fetch(
+                url,
+                &request(Some((
+                    "application/x-www-form-urlencoded",
+                    b"List-Unsubscribe=One-Click",
+                ))),
+                &local(Redirects::Stop),
+                &LOCAL,
+            )
+            .await
+            .unwrap();
+            assert_eq!(answer.status, StatusCode::FOUND);
+            let sent = requests.recv().await.unwrap();
+            assert!(sent.starts_with("POST /unsubscribe "), "{sent}");
+            assert!(sent.contains("application/x-www-form-urlencoded"), "{sent}");
+            assert!(sent.ends_with("List-Unsubscribe=One-Click"), "{sent}");
+            // Not followed: nothing else was asked.
+            assert!(requests.try_recv().is_err());
+        }
+
+        #[tokio::test]
+        async fn a_get_follows_redirects_by_default() {
+            let (address, mut requests) = serve(vec![
+                http("302 Found", "Location: /there\r\n", ""),
+                http("200 OK", "Content-Type: text/plain\r\n", "arrived"),
+            ])
+            .await;
+            let url = Url::parse(&format!("http://{address}/here")).unwrap();
+            let answer = fetch(url, &request(None), &local(Redirects::Follow), &LOCAL)
+                .await
+                .unwrap();
+            assert_eq!(answer.status, StatusCode::OK);
+            assert_eq!(answer.body, b"arrived");
+            assert!(requests.recv().await.unwrap().starts_with("GET /here "));
+            assert!(requests.recv().await.unwrap().starts_with("GET /there "));
+        }
+
+        #[tokio::test]
+        async fn an_error_answer_is_unusable() {
+            let (address, _requests) = serve(vec![http("500 Internal Server Error", "", "")]).await;
+            let url = Url::parse(&format!("http://{address}/x")).unwrap();
+            assert!(
+                fetch(url, &request(None), &local(Redirects::Follow), &LOCAL)
+                    .await
+                    .is_err()
+            );
         }
     }
 }

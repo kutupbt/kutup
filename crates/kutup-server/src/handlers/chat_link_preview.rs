@@ -97,6 +97,7 @@ pub async fn fetch(
             // live, comes first.
             truncate: true,
             wanted: &|kind| kind == "text/html" || kind == "application/xhtml+xml",
+            body: None,
         },
         LinkPreviewFetchKind::Image => public_fetch::Request {
             accept: "image/webp,image/png,image/jpeg,image/gif;q=0.8",
@@ -110,6 +111,7 @@ pub async fn fetch(
                     "image/jpeg" | "image/png" | "image/webp" | "image/gif"
                 )
             },
+            body: None,
         },
     };
     let fetched = public_fetch::get(url, &fetched).await?;

@@ -368,7 +368,18 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - Axum handlers organized by domain (`crates/kutup-server/src/handlers/` — auth, collections, files, shares, federation, admin, …). Each file opens with a `//!` doc comment.
 - Use `sqlx` runtime queries (`sqlx::query`/`query_as`) — no compile-time-checked macros (no live DB at build), no ORM.
 - All cryptographic operations are the client's responsibility; the backend must never attempt to decrypt anything. Shared primitives live in `crates/kutup-crypto`.
-- SSRF validation (`crates/kutup-server/src/ssrf.rs`) must be applied to all user-supplied URLs before making outbound requests (federation).
+- **Outbound requests to an address a user or a peer named go through one
+  fetcher and one address list.** `crates/kutup-server/src/public_fetch.rs`
+  is the only way to fetch such a URL (https on 443, or http on 80 where a
+  caller opts in; every resolved address public; the connection pinned to
+  the checked address; no environment proxy; redirects checked again; size
+  and time limits; GET or a POST with a body). `ssrf::is_public` is the one
+  address list, used by it and by the federation transport (which alone may
+  reach private peers, on a test stack with `FEDERATION_TEST_ALLOW_PRIVATE`).
+  Never build a `reqwest::Client` for a user-supplied URL elsewhere. Clients
+  for addresses the operator configured (LiveKit, map providers, the storage
+  probe) and Web Push (an allow-list of push-service hosts, https only) are
+  not user-supplied URLs.
 - Gate every change with `cargo clippy --all-targets -- -D warnings` + `cargo fmt` + `cargo test`.
 
 ### Frontend (TypeScript)

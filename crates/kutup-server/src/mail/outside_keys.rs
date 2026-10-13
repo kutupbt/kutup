@@ -9,7 +9,6 @@
 //! redirects followed by hand and checked again, small size and time limits.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -50,9 +49,7 @@ const HIT_TTL: Duration = Duration::from_secs(3600);
 const MISS_TTL: Duration = Duration::from_secs(900);
 const CACHE_MAX: usize = 10_000;
 const KEY_LIMIT_BYTES: usize = 256 * 1024;
-pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_REDIRECTS: usize = 3;
 const USER_AGENT: &str = "Kutup mail key lookup (+https://kutup.dev)";
 
 type Cache = HashMap<String, (Instant, Option<OutsideKey>)>;
@@ -165,34 +162,26 @@ async fn fetch(state: &AppState, url: &str) -> Result<Vec<u8>, Unusable> {
             .map_err(|_| Unusable)?;
         return read(response).await;
     }
-    let mut url = public_https(url)?;
-    for _ in 0..=MAX_REDIRECTS {
-        let address = resolve_public(&url).await?;
-        let host = url.host_str().ok_or(Unusable)?.to_owned();
-        let response = reqwest::Client::builder()
-            .resolve(&host, address)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|_| Unusable)?
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|_| Unusable)?;
-        if response.status().is_redirection() {
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(Unusable)?;
-            url = public_https(url.join(location).map_err(|_| Unusable)?.as_str())?;
-            continue;
-        }
-        return read(response).await;
-    }
-    Err(Unusable)
+    // The one narrow fetcher (https on 443, public addresses only, the
+    // connection pinned, redirects checked again, no environment proxy).
+    let url = crate::public_fetch::parse_public_https(url).map_err(|_| Unusable)?;
+    let fetched = crate::public_fetch::get(
+        url,
+        &crate::public_fetch::Request {
+            accept: "application/pgp-keys, application/octet-stream;q=0.9, */*;q=0.5",
+            user_agent: USER_AGENT,
+            timeout: TOTAL_TIMEOUT,
+            limit: KEY_LIMIT_BYTES,
+            truncate: false,
+            // Keyservers answer under many types; the bytes are checked
+            // as OpenPGP keys afterwards.
+            wanted: &|_| true,
+            body: None,
+        },
+    )
+    .await
+    .map_err(|_| Unusable)?;
+    Ok(fetched.body)
 }
 
 async fn read(response: reqwest::Response) -> Result<Vec<u8>, Unusable> {
@@ -209,32 +198,6 @@ async fn read(response: reqwest::Response) -> Result<Vec<u8>, Unusable> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-pub(crate) fn public_https(url: &str) -> Result<Url, Unusable> {
-    let url = Url::parse(url).map_err(|_| Unusable)?;
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.host_str().is_none()
-    {
-        return Err(Unusable);
-    }
-    Ok(url)
-}
-
-pub(crate) async fn resolve_public(url: &Url) -> Result<SocketAddr, Unusable> {
-    let host = url.host_str().ok_or(Unusable)?;
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
-        .await
-        .map_err(|_| Unusable)?
-        .collect();
-    if addresses.is_empty() || addresses.iter().any(|a| !crate::ssrf::is_public(a.ip())) {
-        return Err(Unusable);
-    }
-    Ok(addresses[0])
 }
 
 #[cfg(test)]
@@ -277,13 +240,5 @@ mod tests {
         assert!(candidates("a", "example.org", "a@example.org")
             .iter()
             .all(|(source, _)| *source != KeySource::Proton));
-    }
-
-    #[test]
-    fn only_public_https_is_fetched() {
-        assert!(public_https("https://openpgpkey.example.org/x").is_ok());
-        assert!(public_https("http://example.org/x").is_err());
-        assert!(public_https("https://example.org:8443/x").is_err());
-        assert!(public_https("https://user:pw@example.org/x").is_err());
     }
 }
