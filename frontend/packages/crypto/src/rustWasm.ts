@@ -46,6 +46,12 @@ export interface CryptoWasmModule {
   signDriveKeyBinding(masterKeyBase64: string, account: string): string
   deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
   safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
+  signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
+  verifyAccountRenameChain(
+    authorityPublicBase64: string,
+    chainJson: string,
+    knownDigestsJson?: string | null,
+  ): { incarnationId: string; first: string; current: string; addresses: string[]; sequence: number; digests: string[] }
   verifyDriveKeyBinding(
     account: string,
     authorityPublicKeyBase64: string,

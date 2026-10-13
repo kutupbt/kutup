@@ -890,4 +890,27 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.equal(crypto.safetyQrMatches(v.localAuthority, v.newIncarnationAuthority, safety.qrPayload), false)
 }
 
+// Account renames (kutup-crypto account_rename): a chain signed by the
+// authority; rollbacks, broken and foreign chains are refused.
+{
+  const v = vectors.accountRename
+  for (const statement of v.chain) {
+    assert.deepEqual(
+      JSON.parse(crypto.signAccountRename(v.masterKey, statement.sequence, statement.previous, statement.current, statement.issuedAtMs)),
+      statement,
+    )
+  }
+  const view = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain))
+  assert.equal(view.first, v.first)
+  assert.equal(view.current, v.current)
+  assert.deepEqual(view.addresses, ['alice@kutup.dev', 'alicia@kutup.dev', 'ali@kutup.dev'])
+  const shorter = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)))
+  crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain), JSON.stringify(shorter.digests))
+  assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)), JSON.stringify(view.digests)))
+  for (const bad of v.invalidChains) {
+    assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(bad.chain)), bad.why)
+  }
+  assert.throws(() => crypto.verifyAccountRenameChain(v.otherAuthorityPublicKey, JSON.stringify(v.chain)))
+}
+
 console.log('crypto WASM canonical vectors passed')

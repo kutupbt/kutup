@@ -3104,3 +3104,79 @@ impl RevisionGuardKeys {
         Ok(revision as f64)
     }
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameChainJs {
+    incarnation_id: String,
+    first: String,
+    current: String,
+    addresses: Vec<String>,
+    sequence: u64,
+    /// One hex digest per statement: what a client keeps of a verified chain.
+    digests: Vec<String>,
+}
+
+/// One rename, signed with the account authority derived from the master key
+/// (docs/plans/username-renames.md). Returns the statement as JSON.
+#[wasm_bindgen(js_name = signAccountRename)]
+pub fn sign_account_rename(
+    master_key_base64: &str,
+    sequence: f64,
+    previous: &str,
+    current: &str,
+    issued_at_ms: f64,
+) -> Result<String, JsValue> {
+    let master = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .map_err(|error| js_error(&error.to_string()))?;
+    if sequence.fract() != 0.0 || !(1.0..=1000.0).contains(&sequence) {
+        return Err(js_error("invalid rename sequence"));
+    }
+    if issued_at_ms.fract() != 0.0 || !issued_at_ms.is_finite() {
+        return Err(js_error("invalid rename time"));
+    }
+    let statement = kutup_crypto::account_rename::sign(
+        &identity,
+        sequence as u64,
+        previous,
+        current,
+        issued_at_ms as i64,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_json::to_string(&statement).map_err(|error| js_error(&error.to_string()))
+}
+
+/// Verifies an account's rename chain (JSON array) against its authority key.
+/// With `known_digests_json` (the digests of a chain verified before, a JSON
+/// array of hex), the chain must extend it: a server cannot roll a rename
+/// back. Returns where the account is and every address it has had.
+#[wasm_bindgen(js_name = verifyAccountRenameChain)]
+pub fn verify_account_rename_chain(
+    authority_public_base64: &str,
+    chain_json: &str,
+    known_digests_json: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let authority = public_key_32(authority_public_base64, "authority key")?;
+    let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
+        serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
+    let view = kutup_crypto::account_rename::verify_chain(&authority, &chain)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let digests: Vec<String> = view.digests.iter().map(hex::encode).collect();
+    if let Some(known) = known_digests_json {
+        let known: Vec<String> =
+            serde_json::from_str(&known).map_err(|_| js_error("invalid known digests"))?;
+        if known.len() > digests.len() || digests[..known.len()] != known[..] {
+            return Err(js_error("the rename chain does not extend the one seen before"));
+        }
+    }
+    serde_wasm_bindgen::to_value(&RenameChainJs {
+        incarnation_id: view.incarnation_id,
+        first: view.first,
+        current: view.current,
+        addresses: view.addresses,
+        sequence: view.sequence,
+        digests,
+    })
+    .map_err(|error| js_error(&format!("encode rename chain: {error}")))
+}
