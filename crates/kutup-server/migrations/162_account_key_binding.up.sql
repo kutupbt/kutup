@@ -15,3 +15,8 @@ $$;
 ALTER TABLE users ADD COLUMN key_binding TEXT UNIQUE
     CHECK (key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
 ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+-- The server's own key for answers about names that are no account (fake
+-- preflight salts and bindings), kept as its other generated keys.
+ALTER TABLE server_generated_keys DROP CONSTRAINT server_generated_keys_purpose_check;
+ALTER TABLE server_generated_keys ADD CONSTRAINT server_generated_keys_purpose_check
+    CHECK (purpose IN ('federation-identity', 'mls-control', 'mail-group-authority', 'fake-accounts'));
