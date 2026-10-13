@@ -1,0 +1,8 @@
+specs/76-pass-vault.spec.ts
+specs/77-pass-merge.spec.ts
+specs/78-pass-offline.spec.ts
+specs/79-pass-unlock.spec.ts
+specs/150-pass-import.spec.ts
+specs/151-pass-pin.spec.ts
+specs/152-pass-site-icons.spec.ts
+specs/153-pass-custom-icons.spec.ts
