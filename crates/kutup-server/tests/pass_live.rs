@@ -81,6 +81,18 @@ fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> St
     put_on(c, base, user, file_id, envelope, on).status()
 }
 
+/// Removes a file for good (trash, then purge): the gates check that a purged
+/// account leaves nothing stored behind, so these tests leave nothing either.
+fn purge_file(c: &Client, base: &str, user: &User, file_id: &str) {
+    bearer(c.delete(format!("{base}/api/files/{file_id}")), &user.token)
+        .send()
+        .unwrap();
+    let purged = bearer(c.delete(format!("{base}/api/trash/{file_id}")), &user.token)
+        .send()
+        .unwrap();
+    assert_eq!(purged.status(), StatusCode::NO_CONTENT, "purge {file_id}");
+}
+
 fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
     let r = bearer(c.get(format!("{base}/api/pass/vault-secrets")), &user.token)
         .send()
@@ -187,14 +199,8 @@ fn vault_secrets() {
     assert!(statuses
         .iter()
         .all(|s| *s == StatusCode::NO_CONTENT || *s == StatusCode::CONFLICT));
-    // Forgotten again: the rest of this test counts the first vault's.
-    let forgot = bearer(
-        c.delete(format!("{base}/api/pass/vault-secrets/{}", fresh.id)),
-        &owner.token,
-    )
-    .send()
-    .unwrap();
-    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    // Removed again: the rest of this test counts the first vault's.
+    purge_file(&c, &base, &owner, &fresh.id);
 
     // Kept only on top of the key the change started from: a device that
     // read the first one does not overwrite the second, nor does an older
@@ -327,6 +333,8 @@ fn vault_secrets() {
     .send()
     .unwrap();
     assert_eq!(list(&c, &base, &owner).len(), 0);
+    // Nothing left stored by this test.
+    assert_eq!(used(&c, &base, &owner.token), 0);
 }
 
 #[test]
@@ -768,4 +776,9 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     let back = list(&c, &base, &member);
     assert_eq!(back.len(), 1);
     assert_eq!(back[0]["fileId"], vault.id.as_str());
+
+    // Purged, the vault takes every kept key with it, and nothing stays stored.
+    purge_file(&c, &base, &owner, &vault.id);
+    assert_eq!(held(), 0, "a purged vault keeps no secrets");
+    assert_eq!(used(&c, &base, &owner.token), 0);
 }
