@@ -164,6 +164,8 @@ jobs:
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.
       RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443
@@ -269,6 +271,8 @@ jobs:
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.
       RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
       # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
       # and outside sending on for spec 58's pause notice; spec 59 turns it
       # off in Administration and back on (tests/e2e/README.md).
@@ -351,6 +355,8 @@ jobs:
         run: scripts/gate.sh browser contacts
       - name: Run the Pass browser specs
         run: scripts/gate.sh browser pass
+      - name: Run the Account browser specs
+        run: scripts/gate.sh browser account
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

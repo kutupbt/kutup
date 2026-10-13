@@ -31,6 +31,8 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_PREFLIGHT_PER_MIN", 20),
     ("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30),
     ("RATE_LIMIT_REGISTER_PER_HOUR", 10),
+    ("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30),
+    ("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20),
     ("RATE_LIMIT_REPORT_PER_HOUR", 20),
     ("RATE_LIMIT_FEEDBACK_PER_HOUR", 10),
     ("RATE_LIMIT_ADMIN_PER_MIN", 120),
@@ -202,6 +204,23 @@ pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static REGISTER: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_REGISTER_PER_HOUR", 10) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Checking a referral code before signing up: 30 / hour / IP, valid or not
+/// (`RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR`).
+pub static REGISTRATION_CODE_CHECK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Referral codes that admitted no one, from checks and sign-ups together:
+/// 20 / hour / IP (`RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR`), so a
+/// code cannot be guessed (100 bits would hold anyway).
+pub static REGISTRATION_CODE_FAILURES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20) as usize,
         Duration::from_secs(3600),
     )
 });
@@ -536,6 +555,8 @@ pub fn spawn_cleanup() {
             RECOVERY.cleanup();
             FED_USERS.cleanup();
             LOGIN.cleanup();
+            REGISTRATION_CODE_CHECK.cleanup();
+            REGISTRATION_CODE_FAILURES.cleanup();
             PREFLIGHT.cleanup();
             FORK.cleanup();
             CALL_LINK.cleanup();

@@ -138,6 +138,12 @@ CHAT_WEB_PUSH=true
 # demoted, disabled, or deleted. Promote further admins inside the app.
 ADMIN_ACCOUNT=admin:<strong-admin-password>
 
+# Who may register on a fresh database: on (anyone), code (only with a
+# referral code an administrator made) or off (nobody; the default). Used only
+# while the database holds no choice yet: from then on the administrators set
+# it under Account → Admin → Server settings, and this is not read again.
+# REGISTRATION_MODE=off
+
 # SeaweedFS master — the admin dashboard probes it for real storage
 # capacity + usage. Default works for the bundled compose.
 SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
@@ -177,6 +183,8 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds
 # RATE_LIMIT_USER_LOOKUP_PER_MIN=30
 # RATE_LIMIT_REGISTER_PER_HOUR=10
+# RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR=30    # checking a referral code before signing up
+# RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR=20 # wrong referral codes, checks and sign-ups together
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_REPORT_PER_HOUR=20        # reporting a public link needs no account
 # RATE_LIMIT_FEEDBACK_PER_HOUR=10      # per account: feedback from the apps' sidebar
@@ -1107,6 +1115,7 @@ publishing new DKIM records.
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
+- **Referral codes:** stored only as HMACs under a key the server makes once and keeps in its database (`server_generated_keys`), so rotating `JWT_SECRET` leaves open codes working and a database restore keeps them; a new, empty database voids them.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.

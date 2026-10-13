@@ -108,6 +108,27 @@ fn register_attempt(
     binding: bool,
     username: String,
 ) -> Result<User, StatusCode> {
+    register_full(c, base, binding, username, None).map_err(|(status, _)| status)
+}
+
+/// Registers a fresh account with a referral code (or none): the account,
+/// or the refusal's status and body.
+pub fn register_coded(
+    c: &Client,
+    base: &str,
+    code: Option<&str>,
+) -> Result<User, (StatusCode, Value)> {
+    let tag = rand::thread_rng().next_u64() % 1_000_000_000;
+    register_full(c, base, true, format!("ref{tag}"), code)
+}
+
+fn register_full(
+    c: &Client,
+    base: &str,
+    binding: bool,
+    username: String,
+    code: Option<&str>,
+) -> Result<User, (StatusCode, Value)> {
     let mut rng = rand::thread_rng();
     let key_binding = uuid::Uuid::new_v4().to_string();
     let password = "integrity-pw-123456";
@@ -146,6 +167,9 @@ fn register_attempt(
             "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
             "recoveryProof": b64(recovery_proof.as_slice()),
     });
+    if let Some(code) = code {
+        body["registrationCode"] = json!(code);
+    }
     if binding {
         let account = format!("{username}@{}", server_domain(c, base));
         body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
@@ -159,7 +183,8 @@ fn register_attempt(
         .send()
         .unwrap();
     if !r.status().is_success() {
-        return Err(r.status());
+        let status = r.status();
+        return Err((status, r.json().unwrap_or(Value::Null)));
     }
     let r = c
         .post(format!("{base}/api/auth/login"))

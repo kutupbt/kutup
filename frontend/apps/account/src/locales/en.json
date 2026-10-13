@@ -31,7 +31,8 @@
     "keys": "Encryption keys",
     "mailSending": "Mail sending",
     "mailGroups": "Mail groups",
-    "feedback": "Feedback"
+    "feedback": "Feedback",
+    "referralCodes": "Referral codes"
   },
   "auth": {
     "fields": {
@@ -110,7 +111,15 @@
     "closedTitle": "Registration is closed",
     "closedDescription": "This server does not accept new accounts. Ask its administrator for one.",
     "backToSignIn": "Back to sign-in",
-    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account."
+    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account.",
+    "code": "Referral code",
+    "codeHint": "This server admits new accounts with a referral code from its administrators.",
+    "codeOptionalHint": "If someone gave you a code, enter it here.",
+    "haveCode": "Have a referral code?",
+    "codeRequired": "Enter your referral code.",
+    "codeInvalid": "This referral code cannot be used. Check it, or ask for a new one.",
+    "codeRateLimited": "Too many tries from here. Wait a while and try again.",
+    "codeCheckFailed": "The code could not be checked. Try again."
   },
   "firstLogin": {
     "title": "Finish setting up your account",
@@ -522,7 +531,10 @@
       "deleteDescription": "{{name}} and everything it owns are removed from this server.",
       "deleteWarning": "This cannot be undone.",
       "deleted": "{{name}} deleted",
-      "actionFailed": "The action failed."
+      "actionFailed": "The action failed.",
+      "signedUpWith": "Signed up with",
+      "signedUpWithBy": "Code made by {{name}}; used {{when}}",
+      "noReferralCode": "No referral code"
     },
     "reports": {
       "title": "Reports",
@@ -595,15 +607,17 @@
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
         "shareRemove": "{{admin}} took down a public link of {{target}}",
-        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}"
+        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
+        "registrationCodeCreated": "{{admin}} made a referral code (…{{hint}})",
+        "registrationCodeRevoked": "{{admin}} revoked the referral code …{{hint}}"
       }
     },
     "settings": {
       "title": "Server settings",
       "description": "Defaults and limits for everyone on this server.",
       "accounts": "Accounts",
-      "registration": "Open registration",
-      "registrationHint": "Anyone who can reach this server can create an account. Off: only administrators create accounts.",
+      "registration": "Registration",
+      "registrationHint": "Who may create an account on this server. Administrators can always create accounts.",
       "chat": "Chat",
       "chatHint": "Encrypted message and media delivery on this server.",
       "mailboxDays": "Undelivered messages (days)",
@@ -615,7 +629,12 @@
       "saved": "Settings saved",
       "saveFailed": "The settings could not be saved.",
       "defaultQuota": "Default storage quota (GiB)",
-      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page."
+      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
+      "registrationMode": {
+        "on": "Open to anyone",
+        "code": "With a referral code",
+        "off": "Closed"
+      }
     },
     "federation": {
       "title": "Federation",
@@ -894,6 +913,70 @@
       "issueBodyHint": "Who sent the feedback is not included. Edit out anything else personal.",
       "checkedPersonal": "I've removed personal details, and this can be public",
       "openIssue": "Open the issue on GitHub"
+    },
+    "codes": {
+      "title": "Referral codes",
+      "description": "Codes that let people sign up when registration needs one. A code is shown once, when you make it.",
+      "new": "New code",
+      "emptyTitle": "No referral codes yet",
+      "emptyDescription": "Make one to let someone sign up while registration needs a code.",
+      "columns": {
+        "code": "Code",
+        "note": "Note",
+        "uses": "Uses",
+        "expires": "Expires",
+        "state": "State",
+        "actions": "Actions"
+      },
+      "madeBy": "Made by {{name}}, {{when}}",
+      "usesOf": "{{uses}} of {{max}}",
+      "usesUnlimited": "{{uses}} (no limit)",
+      "never": "Never",
+      "state": {
+        "active": "Active",
+        "expired": "Expired",
+        "usedUp": "Used up",
+        "revoked": "Revoked"
+      },
+      "usedBy": "Used by",
+      "usedByFor": "Who used the code …{{hint}}",
+      "revoke": "Revoke",
+      "revokeFor": "Revoke the code …{{hint}}",
+      "revokeTitle": "Revoke this referral code?",
+      "revokeDescription": "The code …{{hint}} stops working at once. Accounts already made with it stay.",
+      "revokeFailed": "The code could not be revoked.",
+      "revoked": "Referral code revoked",
+      "newTitle": "New referral code",
+      "newDescription": "Choose how long it works and how many accounts it may create.",
+      "note": "Note",
+      "noteHint": "Who or what the code is for. Only administrators see it.",
+      "noteTooLong": "A note is at most 200 characters.",
+      "expires": "Works for",
+      "expiry": {
+        "day": "1 day",
+        "week": "7 days",
+        "month": "30 days",
+        "never": "No expiry"
+      },
+      "usesLabel": "Accounts it may create",
+      "usesHint": "Each sign-up with the code uses one.",
+      "limit": {
+        "one": "One",
+        "number": "A number",
+        "unlimited": "No limit"
+      },
+      "howMany": "How many",
+      "howManyRange": "From 1 to {{max}}.",
+      "createFailed": "The code could not be made.",
+      "make": "Make code",
+      "madeTitle": "Your referral code",
+      "madeDescription": "Copy it now: it is not shown again. Afterwards you see only its last four characters.",
+      "theCode": "The referral code",
+      "copyCode": "Copy code",
+      "copyLink": "Copy sign-up link",
+      "done": "Done",
+      "usesTitle": "Accounts made with …{{hint}}",
+      "noNote": "No note"
     }
   }
 }

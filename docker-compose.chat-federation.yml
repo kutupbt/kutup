@@ -133,6 +133,7 @@ services:
       CHAT_MLS_CONTROL_SIGNING_KEY: d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3c=
       CHAT_MLS_ORDERING_POLICY: '{"policyVersion":1,"canonicalDomain":"a.test","suite":3,"anonymousDeliverySuite":1,"controlSigningKeyId":"d2f381d7b0b5f1d39239f186fdee4dd3bdba42ce9448709c1d54741131e7f814","controlSigningPublicKey":"yFOtDwzSthmuqSzuxP1Wok1kmdWEznklfkXP2BObYKc=","acceptsGroupOrdering":true,"maximumGroupMembers":256,"maximumAuthorities":64,"maximumControlPayloadBytes":1048576,"pendingMessageRequests":{"maximumMessages":32,"maximumCiphertextBytes":1048576,"expirySeconds":2592000},"abuseLimits":{"anonymousAttemptsPerIpMinute":60,"capabilityBundleRequestsPerMinute":30,"sealedSendsPerCapabilityMinute":120,"sealedSendsPerCapabilityDay":10000,"federatedSealedSendsPerOriginMinute":600,"maximumEnvelopesPerRequest":32,"maximumRequestBytes":1048576}}'
       RATE_LIMITS_RELAXED: "true"
+      REGISTRATION_MODE: "on"
     depends_on:
       postgres-a:
         condition: service_healthy
@@ -176,6 +177,7 @@ services:
       CHAT_MLS_CONTROL_SIGNING_KEY: iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg=
       CHAT_MLS_ORDERING_POLICY: '{"policyVersion":1,"canonicalDomain":"b.test","suite":3,"anonymousDeliverySuite":1,"controlSigningKeyId":"a2392944d82466b712478b25d95a5633111bc767c03121aada27dbd348406801","controlSigningPublicKey":"skkdlQKuKGMKK6yy4MdFEP/N0yjDNP8+E5PnWy0x59w=","acceptsGroupOrdering":true,"maximumGroupMembers":256,"maximumAuthorities":64,"maximumControlPayloadBytes":1048576,"pendingMessageRequests":{"maximumMessages":32,"maximumCiphertextBytes":1048576,"expirySeconds":2592000},"abuseLimits":{"anonymousAttemptsPerIpMinute":60,"capabilityBundleRequestsPerMinute":30,"sealedSendsPerCapabilityMinute":120,"sealedSendsPerCapabilityDay":10000,"federatedSealedSendsPerOriginMinute":600,"maximumEnvelopesPerRequest":32,"maximumRequestBytes":1048576}}'
       RATE_LIMITS_RELAXED: "true"
+      REGISTRATION_MODE: "on"
     depends_on:
       postgres-b:
         condition: service_healthy

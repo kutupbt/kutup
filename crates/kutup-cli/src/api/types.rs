@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
     pub chat: ChatSettings,
+    /// `on`, `code` or `off`.
+    pub registration_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +45,9 @@ pub struct LoginRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
     pub username: String,
+    /// A referral code, when the server's registration mode asks for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_code: Option<String>,
     /// The account's key binding, drawn here (a UUID v4).
     pub key_binding: String,
     pub login_key: String,

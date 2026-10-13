@@ -6,6 +6,8 @@
 //! here behaves identically to one made in the browser — same login flow, same recovery
 //! phrase. The 24-word recovery phrase is shown once and never stored; the user must save it.
 
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use rand::RngCore;
@@ -31,6 +33,12 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         Some(u) => u.to_string(),
         None => prompt_line("Username: ")?,
     };
+
+    // Who may register here, before any key work: a closed server or a bad
+    // referral code is said at once, not after Argon2.
+    let client = Client::new(&server, "");
+    let settings = client.settings().context("server settings")?;
+    let registration_code = registration_code(&client, &settings.registration_mode)?;
 
     // Password: KUTUP_PASSWORD env (non-interactive), else a hidden prompt confirmed twice
     // (a typo here would set an unknown password on a brand-new account).
@@ -95,14 +103,9 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
 
-    let client = Client::new(&server, "");
     // The address the account will have here, which its authority vouches
     // for together with its Drive keys.
-    let server_name = client
-        .settings()
-        .context("server settings")?
-        .chat
-        .server_name;
+    let server_name = settings.chat.server_name;
     let drive_key_binding = kutup_crypto::drive_key_binding::sign(
         &account_identity,
         &format!("{username}@{server_name}"),
@@ -111,6 +114,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
 
     let req = RegisterRequest {
         username: username.clone(),
+        registration_code,
         key_binding: key_binding.clone(),
         login_key: b64.encode(account_keys.login_key.as_slice()),
         master_key_envelope,
@@ -146,4 +150,41 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         println!("Then log in with:  kutup login --server {server} --username {username}");
     }
     Ok(())
+}
+
+/// The referral code to sign up with, for the server's registration `mode`:
+/// `KUTUP_REGISTRATION_CODE`, else (when the server needs one) a hidden
+/// prompt, never an argument, which shell history and `ps` would keep. A code
+/// is checked here, before any key work; checking uses nothing up.
+fn registration_code(client: &Client, mode: &str) -> Result<Option<String>> {
+    let from_env = std::env::var("KUTUP_REGISTRATION_CODE")
+        .ok()
+        .map(|code| code.trim().to_owned())
+        .filter(|code| !code.is_empty());
+    let code = match mode {
+        "off" => anyhow::bail!("registration is closed on this server"),
+        "code" => match from_env {
+            Some(code) => code,
+            None if std::io::stdin().is_terminal() => {
+                let code = rpassword::prompt_password("Referral code: ")?;
+                let code = code.trim().to_owned();
+                if code.is_empty() {
+                    anyhow::bail!("this server needs a referral code to register");
+                }
+                code
+            }
+            None => anyhow::bail!(
+                "this server needs a referral code to register: set KUTUP_REGISTRATION_CODE"
+            ),
+        },
+        // `on`: anyone; a code given anyway is recorded with the account.
+        _ => match from_env {
+            Some(code) => code,
+            None => return Ok(None),
+        },
+    };
+    // The server's answer as it is (it names the problem, and its status
+    // sets the exit code).
+    client.check_registration_code(&code)?;
+    Ok(Some(code))
 }

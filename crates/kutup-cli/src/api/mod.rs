@@ -259,6 +259,15 @@ impl Client {
         check_ok(resp)
     }
 
+    /// Whether a referral code can admit a sign-up now (uses nothing up).
+    pub fn check_registration_code(&self, code: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/auth/registration-code/check",
+            &serde_json::json!({ "code": code }),
+        )?;
+        check_ok(resp)
+    }
+
     pub fn login_preflight(&self, name: &str) -> Result<PreflightResponse> {
         // .query() form-encodes the value — a raw `+` in a name would
         // otherwise decode server-side as a space.

@@ -47,6 +47,7 @@ const MailGroupsPage = page(() => import('./features/admin/MailGroupsPage').then
 const MapsSettingsPage = page(() => import('./features/admin/MapsSettingsPage').then((m) => ({ default: m.MapsSettingsPage })))
 const ReportsPage = page(() => import('./features/admin/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const FeedbackPage = page(() => import('./features/admin/FeedbackPage').then((m) => ({ default: m.FeedbackPage })))
+const RegistrationCodesPage = page(() => import('./features/admin/RegistrationCodesPage').then((m) => ({ default: m.RegistrationCodesPage })))
 const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPage').then((m) => ({ default: m.ServerSettingsPage })))
 const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
 const UsersPage = page(() => import('./features/admin/UsersPage').then((m) => ({ default: m.UsersPage })))
@@ -101,6 +102,7 @@ export function App() {
               <Route path="/admin/activity" element={<RequireAdmin><ActivityPage /></RequireAdmin>} />
               <Route path="/admin/federation" element={<RequireAdmin><FederationPage /></RequireAdmin>} />
               <Route path="/admin/settings" element={<RequireAdmin><ServerSettingsPage /></RequireAdmin>} />
+              <Route path="/admin/codes" element={<RequireAdmin><RegistrationCodesPage /></RequireAdmin>} />
               <Route path="/admin/maps" element={<RequireAdmin><MapsSettingsPage /></RequireAdmin>} />
               <Route path="/admin/mail" element={<RequireAdmin><MailSendingPage /></RequireAdmin>} />
               <Route path="/admin/mail/groups" element={<RequireAdmin><MailGroupsPage /></RequireAdmin>} />

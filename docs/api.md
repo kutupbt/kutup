@@ -50,6 +50,9 @@ Specific codes, where an app does something particular (a test in
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
+| `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
+| `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
+| `registrationCodeInvalid` | 403 | The referral code admits no one: one answer whether it is unknown, expired, revoked or used up |
 | `newKeyNeeded` | 409 | A new key must be made first |
 | `noAddressKey` | 409 | The address has no key yet |
 | `sharesNeeded` | 409 | Shares must be updated first |
@@ -100,7 +103,8 @@ Design: `docs/plans/multi-app-web-rewrite.md`.
 
 ### GET /api/auth/settings
 
-Returns public server settings: whether registration is open, the Chat
+Returns public server settings: who may register (`registrationMode`:
+`on`, `code` with a referral code, or `off`), the Chat
 capability advertisement, and where each web app lives (`apps`, from
 `KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
@@ -109,7 +113,7 @@ capability advertisement, and where each web app lives (`apps`, from
 **Response:**
 ```jsonc
 {
-  "registrationEnabled": true,
+  "registrationMode": "code",
   "chat": {
     "enabled": true,
     "protocolVersion": 1,
@@ -144,6 +148,15 @@ federated path is enabled.
 ### POST /api/auth/register
 
 Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE_LIMIT_REGISTER_PER_HOUR`).
+Who may register is the registration mode (docs/plans/registration-codes.md),
+checked before anything else: `off` refuses everyone (`registrationClosed`),
+`code` needs `registrationCode` (`registrationCodeRequired` without one), `on`
+admits anyone and records a code if one is given. A code that admits no one
+gets `403 registrationCodeInvalid`, the same answer for every reason, and
+counts against the address (20 an hour together with code checks,
+`RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR`; then `429 rateLimited`). A
+code is used up in the transaction that creates the account, so a code with N
+uses admits exactly N accounts however many sign up at once.
 
 **Auth:** None
 
@@ -151,6 +164,7 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
 ```json
 {
   "username": "alice",
+  "registrationCode": "7KQ2M-9XD4T-PAV3W-8HCNR",
   "keyBinding": "<lowercase UUID v4 drawn by the client>",
   "loginKey": "<base64>",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -190,7 +204,26 @@ docs/plans/drive-identity-pins.md); `400` when missing or not matching.
 
 **Response:** `201 Created`
 
-**Errors:** `403` if registration is disabled, `409` if the username is already taken.
+**Errors:** `403` with `registrationClosed`, `registrationCodeRequired` or
+`registrationCodeInvalid` (above), `409` if the username is already taken.
+
+---
+
+### POST /api/auth/registration-code/check
+
+Whether a referral code can admit a sign-up now, so the sign-up page can say
+so before it derives the account's keys. It uses nothing up; the account's
+own registration takes the use.
+
+**Auth:** None. Rate-limited per address (30 an hour,
+`RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR`), and a code that admits no one
+counts with sign-ups' wrong codes (above).
+
+**Request body:** `{ "code": "7kq2m 9xd4t pav3w 8hcnr" }`: case, spaces and
+dashes do not matter, and I/L read as 1, O as 0.
+
+**Response:** `204`; `403 registrationCodeInvalid` (the same answer for every
+reason), `403 registrationClosed` when registration is off, `429 rateLimited`.
 
 ---
 
@@ -3608,7 +3641,7 @@ Return current global server settings.
 **Response:**
 ```json
 {
-  "registrationEnabled": true,
+  "registrationMode": "code",
   "defaultStorageQuotaBytes": 10737418240,
   "chatMailboxRetentionDays": 30,
   "chatMediaDeliveryRetentionDays": 45
@@ -3630,14 +3663,45 @@ Update global server settings.
 **Request body:** any of the fields, at least one.
 ```json
 {
-  "registrationEnabled": false,
+  "registrationMode": "code",
   "defaultStorageQuotaBytes": 21474836480
 }
 ```
 
+`registrationMode`: `on` (anyone), `code` (with a referral code) or `off`
+(nobody). A fresh database starts in `REGISTRATION_MODE` (default `off`).
+
 `defaultStorageQuotaBytes` must be positive (`400` otherwise).
 
 **Response:** Same shape as `GET /api/admin/settings`.
+
+---
+
+### Referral codes (admin)
+
+Codes that admit a sign-up when the registration mode asks for one
+(docs/plans/registration-codes.md). A code is 20 Crockford base32 characters
+(100 random bits) shown once, when it is made; the server keeps only its HMAC
+under a key of its own, so a database dump gives no usable code. Each change is
+in the audit log (`registration_code.created`, `registration_code.revoked`).
+
+- `POST /api/admin/registration-codes` with `{ "note": "beta testers",
+  "expiresAt": "2026-11-01T00:00:00Z" | null, "maxUses": 5 | null }` (a note of
+  at most 200 characters; an expiry in the future or none; 1 to 100000 uses or
+  unlimited) → `201` with the code's row and `code`, the text, never returned
+  again.
+- `GET /api/admin/registration-codes` → every code, newest first: `{ id, hint
+  (its last 4 characters), note, createdBy, createdAt, expiresAt, maxUses,
+  uses, revokedAt, state }`, `state` one of `active`, `expired`, `usedUp`,
+  `revoked`.
+- `POST /api/admin/registration-codes/{id}/revoke` → the row, revoked at once
+  (also "expire now").
+- `GET /api/admin/registration-codes/{id}/uses` → `[{ userId, username,
+  usedAt }]`, the accounts that signed up with it.
+- `GET /api/admin/users/{id}/registration-code` → `{ codeId, hint, note,
+  createdBy, usedAt }`, the code an account signed up with, or `null`.
+
+**Auth:** Bearer JWT (admin)
 
 ---
 

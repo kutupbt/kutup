@@ -39,6 +39,7 @@ mod openapi;
 mod photos;
 mod public_fetch;
 mod ratelimit;
+mod registration;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -338,6 +339,12 @@ async fn main() -> anyhow::Result<()> {
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
         std::process::exit(code);
+    }
+
+    // A new database takes its registration mode from REGISTRATION_MODE; after
+    // that only administrators change it. A failure leaves registration closed.
+    if let Err(error) = registration::seed_mode(&pool, config.registration_mode).await {
+        tracing::error!(%error, "could not seed the registration mode; registration stays closed");
     }
 
     // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
@@ -665,6 +672,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/auth/register",
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
+        )
+        .route(
+            "/api/auth/registration-code/check",
+            post(auth::check_registration_code)
+                .route_layer(from_fn(middleware::rate_limit_registration_code_check)),
         )
         .route(
             "/api/auth/login/preflight",
@@ -2023,6 +2035,23 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
+                )
+                .route(
+                    "/api/admin/registration-codes",
+                    get(handlers::registration_codes::list)
+                        .post(handlers::registration_codes::create),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/revoke",
+                    post(handlers::registration_codes::revoke),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/uses",
+                    get(handlers::registration_codes::uses),
+                )
+                .route(
+                    "/api/admin/users/:id/registration-code",
+                    get(handlers::registration_codes::user_code),
                 )
                 .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(

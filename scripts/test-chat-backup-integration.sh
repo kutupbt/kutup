@@ -16,6 +16,8 @@ export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 export RATE_LIMIT_LOGIN_PER_MIN=1000
 export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
+# The live tests register their own accounts.
+export REGISTRATION_MODE=on
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
@@ -78,6 +80,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test version_uploads_live -- --nocapture
+# Registration modes and referral codes (docs/plans/registration-codes.md):
+# one test that switches the mode, so it runs on its own; it puts the mode
+# back to on.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test registration_codes_live -- --nocapture
 
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.

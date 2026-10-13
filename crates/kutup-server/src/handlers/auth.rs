@@ -41,6 +41,9 @@ use crate::auth_check::{self, BCRYPT_COST, FAKE_BCRYPT_HASH};
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterRequest {
     username: String,
+    /// A referral code (docs/plans/registration-codes.md): required when the
+    /// registration mode is `code`, optional (and recorded) when it is `on`.
+    registration_code: Option<String>,
     /// The account's key binding, drawn by the browser (a UUID v4): what its
     /// envelopes are bound to, for good (docs/plans/account-identity.md).
     key_binding: String,
@@ -436,6 +439,91 @@ pub(crate) fn hash_recovery_proof(proof: &str) -> AppResult<String> {
 
 // --- handlers ---
 
+/// Whether a sign-up may go ahead under the registration mode, and the hash
+/// of the referral code it brings (to use up with the account). The code is
+/// checked here, cheaply and before any other work, and taken in the
+/// account's transaction. One answer for every code that admits no one.
+async fn admitted(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    code: Option<&str>,
+) -> AppResult<Option<[u8; 32]>> {
+    use crate::registration::RegistrationMode;
+    let mode = crate::registration::mode(state).await?;
+    let code = code.map(str::trim).filter(|code| !code.is_empty());
+    match (mode, code) {
+        (RegistrationMode::Off, _) => {
+            return Err(AppError::forbidden("registration is closed")
+                .with_details(serde_json::json!({ "code": "registrationClosed" })))
+        }
+        (RegistrationMode::Code, None) => {
+            return Err(AppError::forbidden("a referral code is required")
+                .with_details(serde_json::json!({ "code": "registrationCodeRequired" })))
+        }
+        (RegistrationMode::On, None) => return Ok(None),
+        (_, Some(_)) => {}
+    }
+    let code = code.expect("matched above");
+    let client =
+        crate::middleware::client_key(crate::middleware::client_ip_from_headers(headers), peer);
+    Ok(Some(check_code(state, &client, code).await?))
+}
+
+/// The hash of `code` if it can admit a sign-up now; counts a code that
+/// cannot against `client` (sign-ups and checks together).
+async fn check_code(state: &AppState, client: &str, code: &str) -> AppResult<[u8; 32]> {
+    crate::registration::attempt(client)?;
+    let key = crate::registration::codes_key(&state.pool).await?;
+    // Something that is not shaped like a code is refused without a lookup,
+    // with the same answer as an unknown code (and counted the same way).
+    let Some(canonical) = crate::registration::canonical(code) else {
+        return Err(crate::registration::invalid());
+    };
+    let hash = crate::registration::hash(&key, &canonical);
+    if !crate::registration::redeemable(&state.pool, &hash).await? {
+        return Err(crate::registration::invalid());
+    }
+    crate::registration::attempt_succeeded(client);
+    Ok(hash)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrationCodeCheck {
+    pub code: String,
+}
+
+/// `POST /api/auth/registration-code/check` — whether a referral code can
+/// admit a sign-up now, before the sign-up page derives the account's keys.
+/// It uses nothing up; the same answer for every code that cannot.
+#[utoipa::path(
+    post,
+    path = "/api/auth/registration-code/check",
+    tag = "auth",
+    request_body = RegistrationCodeCheck,
+    responses(
+        (status = 204, description = "The code can admit a sign-up now"),
+        (status = 403, description = "It cannot (registrationCodeInvalid), or registration is closed (registrationClosed)"),
+        (status = 429, description = "Too many checks or wrong codes from this address (rateLimited)")
+    )
+)]
+pub async fn check_registration_code(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<RegistrationCodeCheck>,
+) -> AppResult<Response> {
+    if crate::registration::mode(&state).await? == crate::registration::RegistrationMode::Off {
+        return Err(AppError::forbidden("registration is closed")
+            .with_details(serde_json::json!({ "code": "registrationClosed" })));
+    }
+    let client =
+        crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
+    check_code(&state, &client, &req.code).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+}
+
 /// `GET /api/auth/settings` — mirrors `GetPublicSettings`.
 #[utoipa::path(
     get,
@@ -444,10 +532,7 @@ pub(crate) fn hash_recovery_proof(proof: &str) -> AppResult<String> {
     responses((status = 200, description = "Public registration settings", body = SettingsResponse))
 )]
 pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Response> {
-    let val: Option<String> =
-        sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
-            .fetch_optional(&state.pool)
-            .await?;
+    let registration_mode = crate::registration::mode(&state).await?;
     let federation_enabled = match state.federation.as_ref() {
         Some(federation) => {
             federation
@@ -531,7 +616,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         ..Default::default()
     };
     Ok(Json(SettingsResponse {
-        registration_enabled: val.as_deref() != Some("false"),
+        registration_mode,
         chat,
         apps: state.config.apps.clone(),
         feedback: crate::models::FeedbackSettings {
@@ -551,17 +636,14 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
 )]
 pub async fn register(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Result<Json<RegisterRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let reg_enabled: Option<String> =
-        sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
-            .fetch_optional(&state.pool)
-            .await?;
-    if reg_enabled.as_deref() == Some("false") {
-        return Err(AppError::forbidden("registration disabled"));
-    }
-
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    // Who may register, before anything costly or visible
+    // (docs/plans/registration-codes.md).
+    let code_hash = admitted(&state, peer, &headers, req.registration_code.as_deref()).await?;
 
     if req.login_key.is_empty() {
         return Err(AppError::bad_request("missing required fields"));
@@ -668,6 +750,15 @@ pub async fn register(
         Ok(id) => id,
         Err(err) => return Err(map_insert_conflict(err)),
     };
+    // The code is used up with the account (a failure below rolls both back):
+    // checked above, taken here, where the row's lock orders concurrent
+    // sign-ups, so a code with N uses admits N accounts.
+    if let Some(hash) = &code_hash {
+        let code_id = crate::registration::redeem(&mut tx, hash)
+            .await?
+            .ok_or_else(crate::registration::invalid)?;
+        crate::registration::record_use(&mut tx, code_id, user_id).await?;
+    }
     // The account's mail address comes with it (a GET never makes one).
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,

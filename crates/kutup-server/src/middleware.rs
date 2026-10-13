@@ -250,6 +250,15 @@ async fn limit(
     next.run(req).await
 }
 
+/// 30/hour/IP — checking a referral code before signing up.
+pub async fn rate_limit_registration_code_check(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::REGISTRATION_CODE_CHECK, None, req, next).await
+}
+
 /// 10/min/IP — mirrors `LoginRateLimit`.
 pub async fn rate_limit_login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
