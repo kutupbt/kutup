@@ -49,6 +49,8 @@ pub struct ApiError {
     pub code: Option<String>,
     /// A `409 versionUploading` for an upload of the caller's: its id.
     pub upload_id: Option<String>,
+    /// A `409 versionUploading`: seconds since the open upload's last part.
+    pub idle_seconds: Option<i64>,
     /// A `409 name_taken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
@@ -102,6 +104,7 @@ impl ApiError {
         let upload_id = parsed
             .as_ref()
             .and_then(|v| v.get("uploadId")?.as_str().map(str::to_string));
+        let idle_seconds = parsed.as_ref().and_then(|v| v.get("idleSeconds")?.as_i64());
         let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
@@ -117,6 +120,7 @@ impl ApiError {
             message,
             code,
             upload_id,
+            idle_seconds,
             name_taken,
             version_conflict,
         }

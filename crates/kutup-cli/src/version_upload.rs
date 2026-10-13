@@ -7,8 +7,10 @@
 //! A local file's upload keeps a resume record in the same store as a new
 //! file's (keyed `version\n{file id}\n{path}`), so a run cut short goes on
 //! where it stopped. The server allows one open version upload per file:
-//! when it reports ours open without a record that resumes it, it is
-//! cancelled and opened again.
+//! one of ours with no record, idle longer than the request's
+//! `crashed_after_secs`, was left by a crash and is cancelled and opened again; one still moving (another
+//! device of the account) or someone else's is [`Landed::Busy`]: wait and
+//! try again, never treat it as a conflict.
 //!
 //! A conflict, when the upload opens or when it lands (the file holds
 //! another version than `basedOn`, its metadata moved on, its key changed),
@@ -30,6 +32,14 @@ use crate::api::{ApiError, Client, File};
 use crate::session::{ResumeState, Store};
 use crate::transfer::{chunk_boundary, cipher_size, StreamUploader};
 use crate::uploader::{is_permanent, make_bar, mtime_parts, now_unix, Progress};
+
+/// A vault save is one small part: an open upload of ours idle this long
+/// was left by a crash, not by another device still saving.
+pub(crate) const VAULT_CRASHED_AFTER_SECS: i64 = 120;
+
+/// A Drive file's parts are 5 MiB each, and on a slow link one can take
+/// minutes: only an upload of ours idle this long is taken as abandoned.
+pub(crate) const FILE_CRASHED_AFTER_SECS: i64 = 3600;
 
 /// The tus calls a version upload makes.
 pub(crate) trait VersionTus {
@@ -121,6 +131,10 @@ pub(crate) struct VersionRequest<'a> {
     /// `original`).
     pub based_on: Option<String>,
     pub progress: Progress,
+    /// An open upload of ours, with no record, idle at least this long was
+    /// left by a crash and is cancelled ([`VAULT_CRASHED_AFTER_SECS`],
+    /// [`FILE_CRASHED_AFTER_SECS`]); below it, it is busy.
+    pub crashed_after_secs: i64,
 }
 
 /// How a version upload ended.
@@ -130,13 +144,16 @@ pub(crate) enum Landed {
     Stored(String),
     /// Refused because the file moved on: the server's answer.
     Conflict(anyhow::Error),
+    /// Another upload of a new version of this file is under way (another
+    /// device, or someone else): nothing was sent; try again later.
+    Busy,
 }
 
 /// What a refusal means for a version upload.
 enum Refusal {
-    /// Another upload of a version of this file is open; ours when its id
-    /// is given.
-    Uploading(Option<String>),
+    /// Another upload of a version of this file is open: ours when its id
+    /// is given, with the seconds since its last part.
+    Uploading(Option<String>, i64),
     /// The file moved on (a version, its metadata, its key).
     Conflict,
     Other,
@@ -145,7 +162,7 @@ enum Refusal {
 fn refusal(error: &anyhow::Error) -> Refusal {
     match error.chain().find_map(|c| c.downcast_ref::<ApiError>()) {
         Some(api) if api.status == 409 && api.code.as_deref() == Some("versionUploading") => {
-            Refusal::Uploading(api.upload_id.clone())
+            Refusal::Uploading(api.upload_id.clone(), api.idle_seconds.unwrap_or(0))
         }
         Some(api) if api.status == 409 => Refusal::Conflict,
         _ => Refusal::Other,
@@ -194,9 +211,9 @@ pub(crate) fn upload_version(
 
     let meta = version_meta(&request, plain_size as u64)?;
     let cipher_total = cipher_size(plain_size);
-    let upload_id = match open(tus, cipher_total, &meta)? {
-        Ok(id) => id,
-        Err(conflict) => return Ok(Landed::Conflict(conflict)),
+    let upload_id = match open(tus, cipher_total, &meta, request.crashed_after_secs)? {
+        Opened::Upload(id) => id,
+        Opened::Not(landed) => return Ok(landed),
     };
     let context = DriveFileBlobContextV1::new(&file.id, file.key_generation)?;
     let now = now_unix();
@@ -262,33 +279,36 @@ fn version_meta(request: &VersionRequest<'_>, size: u64) -> Result<VersionUpload
     })
 }
 
-/// Opens the upload: `Ok(Err(_))` is a conflict. An upload of ours left
-/// open (with no record to resume it) is cancelled and the upload opened
-/// again, once.
+/// What opening the upload gave.
+enum Opened {
+    Upload(String),
+    /// Not opened: a conflict, or busy.
+    Not(Landed),
+}
+
+/// Opens the upload. An upload of ours left open by a crash (no record
+/// resumed it, idle `crashed_after_secs` or more) is cancelled and the
+/// upload opened again, once; one still moving, or someone else's, is busy.
 fn open(
     tus: &impl VersionTus,
     cipher_total: i64,
     meta: &VersionUploadMeta,
-) -> Result<std::result::Result<String, anyhow::Error>> {
+    crashed_after_secs: i64,
+) -> Result<Opened> {
     let mut cancelled = false;
     loop {
         let error = match tus.create(cipher_total, meta) {
-            Ok(id) => return Ok(Ok(id)),
+            Ok(id) => return Ok(Opened::Upload(id)),
             Err(error) => error,
         };
         match refusal(&error) {
-            Refusal::Uploading(Some(ours)) if !cancelled => {
+            Refusal::Uploading(Some(ours), idle) if idle >= crashed_after_secs && !cancelled => {
                 tus.delete(&ours)
-                    .context("cancel an earlier upload of this file's new version")?;
+                    .context("cancel an abandoned upload of this file's new version")?;
                 cancelled = true;
             }
-            Refusal::Uploading(Some(_)) => return Err(error),
-            Refusal::Uploading(None) => {
-                return Err(error.context(
-                    "someone else is uploading a new version of this file; try again later",
-                ))
-            }
-            Refusal::Conflict => return Ok(Err(error)),
+            Refusal::Uploading(..) => return Ok(Opened::Not(Landed::Busy)),
+            Refusal::Conflict => return Ok(Opened::Not(Landed::Conflict(error))),
             Refusal::Other => return Err(error),
         }
     }
@@ -438,6 +458,11 @@ mod tests {
         fail_patch: Cell<Option<u32>>,
         /// Refuse when the last part lands, as a file that moved on.
         conflict_at_finish: Cell<bool>,
+        /// Seconds since the open upload's last part.
+        idle: Cell<i64>,
+        /// The open upload is someone else's.
+        foreign: Cell<bool>,
+        deletes: Cell<u32>,
     }
 
     fn api(status: u16, body: &str) -> anyhow::Error {
@@ -448,9 +473,17 @@ mod tests {
         fn create(&self, total: i64, meta: &VersionUploadMeta) -> Result<String> {
             self.creates.set(self.creates.get() + 1);
             if let Some(open) = self.uploads.borrow().keys().next() {
+                let ours = if self.foreign.get() {
+                    String::new()
+                } else {
+                    format!(r#","uploadId":"{open}""#)
+                };
                 return Err(api(
                     409,
-                    &format!(r#"{{"error":"open","code":"versionUploading","uploadId":"{open}"}}"#),
+                    &format!(
+                        r#"{{"error":"open","code":"versionUploading","idleSeconds":{}{ours}}}"#,
+                        self.idle.get()
+                    ),
                 ));
             }
             let id = uuid::Uuid::new_v4().to_string();
@@ -499,6 +532,7 @@ mod tests {
             })
         }
         fn delete(&self, id: &str) -> Result<()> {
+            self.deletes.set(self.deletes.get() + 1);
             self.uploads.borrow_mut().remove(id);
             Ok(())
         }
@@ -568,6 +602,7 @@ mod tests {
             hash_key: Some(hash_key),
             based_on: None,
             progress: Progress::Quiet,
+            crashed_after_secs: VAULT_CRASHED_AFTER_SECS,
         }
     }
 
@@ -654,11 +689,15 @@ mod tests {
         assert!(records.0.borrow().is_empty());
     }
 
+    /// A run that crashed right after opening its upload (no part sent, no
+    /// record kept): the next save finds it idle past the threshold,
+    /// cancels it and saves.
     #[test]
-    fn our_open_upload_without_a_record_is_cancelled_and_opened_again() {
+    fn an_upload_left_by_a_crash_is_cancelled_and_the_save_goes_on() {
         let (file, key) = file();
         let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
         let left = tus.create(1, &VersionUploadMeta::default()).unwrap();
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS);
         let landed = upload_version(
             &tus,
             &records,
@@ -670,6 +709,49 @@ mod tests {
             tus.head(&left).unwrap().is_none(),
             "the old one is cancelled"
         );
-        assert_eq!(tus.creates.get(), 3);
+        assert_eq!(tus.deletes.get(), 1);
+        assert_eq!(tus.stored.borrow().len(), 1);
+    }
+
+    /// Ours but still moving (another device of the account), or someone
+    /// else's: busy, never cancelled; once the slot frees, the save lands.
+    #[test]
+    fn an_upload_still_moving_is_busy_and_never_cancelled() {
+        let (file, key) = file();
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        let other = tus.create(1, &VersionUploadMeta::default()).unwrap();
+        for (idle, foreign) in [(VAULT_CRASHED_AFTER_SECS - 1, false), (9999, true)] {
+            tus.idle.set(idle);
+            tus.foreign.set(foreign);
+            let landed = upload_version(
+                &tus,
+                &records,
+                request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+            )
+            .unwrap();
+            assert!(matches!(landed, Landed::Busy), "{landed:?}");
+        }
+        // A Drive file waits much longer before taking an upload as left.
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS * 5);
+        tus.foreign.set(false);
+        let mut slow = request(&file, &key, Content::Bytes(b"v2"), &hash_key);
+        slow.crashed_after_secs = FILE_CRASHED_AFTER_SECS;
+        assert!(matches!(
+            upload_version(&tus, &records, slow).unwrap(),
+            Landed::Busy
+        ));
+        assert_eq!(tus.deletes.get(), 0, "nothing cancelled");
+        assert!(tus.stored.borrow().is_empty());
+
+        // The other device finishes; the next try saves.
+        tus.uploads.borrow_mut().remove(&other);
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Stored(_)));
+        assert_eq!(tus.deletes.get(), 0);
     }
 }

@@ -426,6 +426,7 @@ mod tests {
                 message: "x".into(),
                 code: None,
                 upload_id: None,
+                idle_seconds: None,
                 name_taken: None,
                 version_conflict: None,
             })

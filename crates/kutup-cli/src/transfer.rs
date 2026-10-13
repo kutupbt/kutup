@@ -309,7 +309,7 @@ mod tests {
     // upload instead of sending empty chunks for ever.
     #[test]
     fn a_file_that_shrinks_stops_the_upload() {
-        let plain = vec![1u8; 100];
+        let plain = [1u8; 100];
         let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 200, context()).unwrap();
         let error = up.next_chunk().unwrap_err();
         assert!(error.to_string().contains("changed"), "{error}");

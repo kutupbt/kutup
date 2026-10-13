@@ -79,11 +79,18 @@ pub fn extract_and_upload(
             hash_key: Some(hash_key),
             based_on: None,
             progress: crate::uploader::Progress::Quiet,
+            crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
         },
     )
     .context("store version")?;
-    if let crate::version_upload::Landed::Conflict(error) = landed {
-        return Err(error.context("store version: the whiteboard changed meanwhile"));
+    match landed {
+        crate::version_upload::Landed::Stored(_) => {}
+        crate::version_upload::Landed::Conflict(error) => {
+            return Err(error.context("store version: the whiteboard changed meanwhile"))
+        }
+        crate::version_upload::Landed::Busy => {
+            anyhow::bail!("store version: another upload of the whiteboard is under way")
+        }
     }
     eprintln!("  + uploaded {uploaded} image asset(s) and re-snapshotted");
     Ok(())

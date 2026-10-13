@@ -595,7 +595,7 @@ fn execute_file_action(
     result: &mut SyncResult,
 ) -> Result<()> {
     if is_vault(rel) && !opts.dry_run {
-        let handled = execute_vault_action(
+        let handled = match execute_vault_action(
             client,
             store,
             pair,
@@ -607,7 +607,15 @@ fn execute_file_action(
             base,
             vaults,
             result,
-        )?;
+        ) {
+            // Another device is saving it: nothing merged, nothing recorded,
+            // so the next run pushes it again.
+            Err(e) if e.chain().any(|c| c.is::<crate::vaultsync::VaultBusy>()) => {
+                eprintln!("  ⏸ {rel}: {e:#}");
+                return Ok(());
+            }
+            handled => handled?,
+        };
         match handled {
             VaultHandled::Done => return Ok(()),
             VaultHandled::NotHandled => {}
@@ -667,10 +675,21 @@ fn execute_file_action(
                 FileAction::PushUpdate { old_file_id } => {
                     let entry = remote_entries.get(rel).context("remote entry vanished")?;
                     match push_version(client, store, &abs, &entry.file, dir, &sha256)? {
-                        Some(version) => (old_file_id.clone(), version),
+                        Pushed::Stored(version) => (old_file_id.clone(), version),
+                        // Another upload of it is under way (another device,
+                        // or someone else): not a conflict; the next run
+                        // pushes it, as nothing is recorded now.
+                        Pushed::Busy => {
+                            result.uploaded -= 1;
+                            eprintln!(
+                                "  ⏸ {rel}: a new version is being uploaded elsewhere; \
+                                 left for the next sync run"
+                            );
+                            return Ok(());
+                        }
                         // Drive's side moved on since planning: keep both,
                         // as when both sides were edited.
-                        None => {
+                        Pushed::Conflict => {
                             result.uploaded -= 1;
                             return execute_file_action(
                                 client,
@@ -1026,8 +1045,7 @@ fn download_decrypt(
 
 /// Uploads the local file `abs` as a new version of `file` over tus,
 /// resumable at any size; its metadata (size, SHA-256) and content hash land
-/// with it. Returns the version's id, or `None` when the file moved on
-/// (another version, a rename, a re-key) and the edit is a conflict.
+/// with it.
 fn push_version(
     client: &Client,
     store: &Store,
@@ -1035,7 +1053,7 @@ fn push_version(
     file: &crate::api::File,
     dir: &RemoteDir,
     sha256: &[u8; 32],
-) -> Result<Option<String>> {
+) -> Result<Pushed> {
     let file_key = crate::file_crypto::open_key(file, &dir.keys).context("decrypt file key")?;
     // New content goes under a key only the folder's current people hold.
     let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
@@ -1057,15 +1075,27 @@ fn push_version(
             hash_key: Some(&dir.hash_key),
             based_on: None,
             progress: Progress::Quiet,
+            crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
         },
     )?;
     match landed {
-        version_upload::Landed::Stored(version) => Ok(Some(version)),
+        version_upload::Landed::Stored(version) => Ok(Pushed::Stored(version)),
         version_upload::Landed::Conflict(why) => {
             eprintln!("    {}: {why:#}", abs.display());
-            Ok(None)
+            Ok(Pushed::Conflict)
         }
+        version_upload::Landed::Busy => Ok(Pushed::Busy),
     }
+}
+
+/// How pushing an edit as a version ended.
+enum Pushed {
+    /// The version's id.
+    Stored(String),
+    /// The file moved on (another version, a rename, a re-key).
+    Conflict,
+    /// Another upload of a version of it is under way.
+    Busy,
 }
 
 fn record_base(
