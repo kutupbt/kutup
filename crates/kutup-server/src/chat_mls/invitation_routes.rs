@@ -28,13 +28,13 @@ pub(crate) async fn list_invitations(
     auth: AuthUser,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
-    let local_domain = state
+    state
         .federation
         .as_ref()
-        .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?
-        .server_name();
+        .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?;
     let user_id = trusted_uuid(&auth.user_id)?;
-    expire_invitations(&state, user_id, local_domain).await?;
+    // A read changes nothing: expired invitations are left out here (by
+    // time) and expired, with their notices, by the jobs loop.
     let rows: Vec<(Uuid, i64, Vec<u8>, i64, OffsetDateTime)> = sqlx::query_as(
         "SELECT m.conversation_id, m.incarnation, i.mls_group_id,
                 m.joined_epoch, m.invitation_expires_at
@@ -237,6 +237,45 @@ pub(crate) async fn respond_invitation(
         idempotent: false,
     })
     .into_response())
+}
+
+/// How often expired invitations are expired, with their federation notices.
+const INVITATION_EXPIRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Expires due invitations for every account, in the background: a GET of
+/// the list never writes (docs/contributing.md).
+pub(crate) fn spawn_invitation_expiry(state: AppState) {
+    let Some(local_domain) = state
+        .federation
+        .as_ref()
+        .map(|f| f.server_name().to_owned())
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(INVITATION_EXPIRY_INTERVAL);
+        loop {
+            tick.tick().await;
+            if let Err(error) = expire_due_invitations(&state, &local_domain).await {
+                tracing::warn!(error = %error.message, "expiring MLS invitations failed");
+            }
+        }
+    });
+}
+
+async fn expire_due_invitations(state: &AppState, local_domain: &str) -> AppResult<()> {
+    let users: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT user_id FROM chat_mls_local_members
+          WHERE membership_status = 'pending' AND removed_epoch IS NULL
+            AND invitation_expires_at <= now()
+          LIMIT 500",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for user_id in users {
+        expire_invitations(state, user_id, local_domain).await?;
+    }
+    Ok(())
 }
 
 async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str) -> AppResult<()> {

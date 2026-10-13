@@ -302,7 +302,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
-    bootstrap_admin(&pool, &config.admin_account).await;
+    bootstrap_admin(&pool, &config.admin_account, &config.chat_server_name).await;
 
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
@@ -375,6 +375,7 @@ async fn main() -> anyhow::Result<()> {
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
+    chat_mls::spawn_invitation_expiry(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
@@ -439,7 +440,7 @@ async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> any
 /// This account is the protected break-glass admin (never demotable/disableable/deletable; see
 /// the guards in `handlers/admin.rs`); other admins are promoted in-app. The admin must complete
 /// first-login setup to establish their E2EE key material — mirrors `main.bootstrapAdmin`.
-async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
+async fn bootstrap_admin(pool: &PgPool, account_env: &str, server_name: &str) {
     if account_env.is_empty() {
         return;
     }
@@ -489,7 +490,14 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     let storage_quota_bytes = crate::storage_pool::default_quota(pool)
         .await
         .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
-    let res = sqlx::query(
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: {e}");
+            return;
+        }
+    };
+    let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
             username, login_key_hash,
             master_key_envelope, recovery_key_envelope,
@@ -499,7 +507,8 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
             is_admin, is_first_login, storage_quota_bytes
-        ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,true,true,$8)"#,
+        ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,true,true,$8)
+        RETURNING id"#,
     )
     .bind(username)
     .bind(&hash)
@@ -509,11 +518,29 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     .bind(i32::try_from(setup.argon_iterations).unwrap_or(i32::MAX))
     .bind(i32::try_from(setup.argon_parallelism).unwrap_or(i32::MAX))
     .bind(storage_quota_bytes)
-    .execute(pool)
+    .fetch_one(&mut *tx)
     .await;
-    match res {
-        Ok(_) => tracing::info!("bootstrapAdmin: created break-glass admin account @{username}"),
-        Err(e) => tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}"),
+    let created = match res {
+        Ok(id) => {
+            crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username).await
+        }
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}");
+            return;
+        }
+    };
+    match created {
+        Ok(true) => match tx.commit().await {
+            Ok(()) => {
+                tracing::info!("bootstrapAdmin: created break-glass admin account @{username}")
+            }
+            Err(e) => tracing::warn!("bootstrapAdmin: commit error for @{username}: {e}"),
+        },
+        Ok(false) => tracing::warn!("bootstrapAdmin: the address of @{username} is taken"),
+        Err(e) => tracing::warn!(
+            "bootstrapAdmin: address error for @{username}: {}",
+            e.message
+        ),
     }
 }
 

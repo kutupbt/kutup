@@ -202,6 +202,7 @@ pub async fn create_user(
         return Err(AppError::bad_request("storage quota must be positive"));
     }
 
+    let mut tx = state.pool.begin().await?;
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
                username, login_key_hash,
@@ -223,12 +224,23 @@ pub async fn create_user(
     .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
     .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
     .bind(req.storage_quota_bytes)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await;
     let new_id = match res {
         Ok(id) => id,
         Err(e) => return Err(map_insert_conflict(e)),
     };
+    if !crate::handlers::mail_keys::create_own_address(
+        &mut tx,
+        &state.config.chat_server_name,
+        new_id,
+        &req.username,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("username already taken"));
+    }
+    tx.commit().await?;
     audit(
         &state.pool,
         &admin.user_id,
