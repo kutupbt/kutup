@@ -14,6 +14,7 @@ import { createFileRecordV1, renameFileRecordV1, type FileMetadataV1 } from '@ku
 import type { PendingUpload } from './pendingUploads'
 import {
   pendingUploadName,
+  settleUploadError,
   uploadIdOf,
   versionRefusalOf,
   versionUploadMetadata,
@@ -82,10 +83,15 @@ describe('a refused version', () => {
     expect((versionRefusalOf(refusal(409, { code: 'revision_conflict' })) as VersionConflict).kind).toBe('revision')
     expect((versionRefusalOf(refusal(409, { error: 'file key changed' })) as VersionConflict).kind).toBe('key')
     expect((versionRefusalOf(refusal(409, { error: 'file needs a re-key' })) as VersionConflict).kind).toBe('key')
-    const ours = versionRefusalOf(refusal(409, { code: 'versionUploading', uploadId: 'u1', idleSeconds: 42 }))
+    const ours = versionRefusalOf(refusal(409, { code: 'versionUploading', uploadId: 'u1', idleSeconds: 42, yours: true }))
     expect(ours).toBeInstanceOf(VersionUploading)
     expect((ours as VersionUploading).uploadId).toBe('u1')
     expect((ours as VersionUploading).idleSeconds).toBe(42)
+    expect((ours as VersionUploading).yours).toBe(true)
+    // The folder's owner sees the id, not as theirs.
+    const owners = versionRefusalOf(refusal(409, { code: 'versionUploading', uploadId: 'u2', idleSeconds: 4000, yours: false }))
+    expect((owners as VersionUploading).yours).toBe(false)
+    expect((owners as VersionUploading).uploadId).toBe('u2')
     expect((versionRefusalOf(refusal(409, { code: 'versionUploading' })) as VersionUploading).uploadId).toBeNull()
   })
 
@@ -94,5 +100,23 @@ describe('a refused version', () => {
     expect(versionRefusalOf(refusal(413, { code: 'version_conflict' }))).toBeNull()
     expect(versionRefusalOf(refusal(409, 'not json'))).toBeNull()
     expect(versionRefusalOf(new Error('network'))).toBeNull()
+  })
+})
+
+describe('a failed upload request', () => {
+  it('forgets the remembered upload when the server discarded it', () => {
+    // The writer lost access mid-upload: the server already dropped it.
+    expect(settleUploadError(403, null, false)).toEqual({ kind: 'final', forget: true })
+    expect(settleUploadError(403, null, true)).toEqual({ kind: 'final', forget: true })
+    expect(settleUploadError(409, new VersionConflict('revision'), true)).toEqual({ kind: 'refused', forget: true })
+    expect(settleUploadError(404, null, true)).toEqual({ kind: 'gone', forget: true })
+  })
+
+  it('keeps the record of an open version upload that refused this one at create', () => {
+    expect(settleUploadError(409, new VersionUploading('u1', 3, true), false)).toEqual({ kind: 'refused', forget: false })
+  })
+
+  it('waits when the connection or the server is away', () => {
+    for (const status of [0, 409, 423, 429, 500, 503]) expect(settleUploadError(status, null, true)).toEqual({ kind: 'wait', forget: false })
   })
 })

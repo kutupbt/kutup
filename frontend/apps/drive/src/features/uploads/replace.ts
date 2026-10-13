@@ -113,8 +113,10 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
     if (!(error instanceof VersionUploading)) throw error
     if (!error.uploadId) return { problem: 'othersUpload' }
     const uploadId = error.uploadId
-    // Ours: gone on with when this browser remembers it for this same file.
-    const mine = owner
+    // Ours (`yours`): gone on with when this browser remembers it for this
+    // same file. The folder's owner sees someone else's (not yours): never
+    // gone on with, only cancelled once abandoned.
+    const mine = owner && error.yours
       ? (await pendingUploads.list(owner)).find(
           (p) => p.fileId === holder.id && p.version && uploadIdOf(p.uploadUrl) === uploadId,
         )
