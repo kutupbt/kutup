@@ -501,6 +501,20 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
     .fetch_one(&state.pool)
     .await?;
     if head != Some(row.sequence) {
+        // Behind a head that waits for the server to support chat.v2: so
+        // does this one, and the client is told so.
+        let parked: Option<bool> = sqlx::query_scalar(
+            "SELECT last_error_class = 'peer_unsupported' FROM chat_sealed_federation_outbox
+              WHERE destination = $1 AND state = 'pending' AND sequence = $2",
+        )
+        .bind(&row.destination)
+        .bind(head)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+        if parked == Some(true) {
+            return Ok(FederatedSealedOutcome::PeerUnsupported);
+        }
         return Ok(FederatedSealedOutcome::Pending);
     }
     let transaction: FederatedSealedTransactionV1 = serde_json::from_value(row.transaction.clone())
@@ -597,7 +611,9 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         // A signed refusal of this very message: sending it again cannot
         // help, and waiting on it would hold every later sealed send to that
         // server. The client learns it was refused.
-        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+            if refused_sequence(&response.body) == Some(row.sequence) =>
+        {
             sqlx::query(
                 "UPDATE chat_sealed_federation_outbox
                  SET state = 'rejected', attempts = attempts + 1,
@@ -617,6 +633,15 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
             Ok(FederatedSealedOutcome::Pending)
         }
     }
+}
+
+/// The sequence a signed sealed refusal names as final, if it names one.
+fn refused_sequence(body: &[u8]) -> Option<i64> {
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .get("refused")?
+        .get("sequence")?
+        .as_i64()
 }
 
 async fn park_sealed_for_upgrade(
@@ -1119,15 +1144,26 @@ pub fn spawn_retry_worker(state: AppState) {
 }
 
 async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
+    // Only each destination's head: rows behind a waiting head (parked for
+    // an upgrade, or backing off) would only return early, and a long queue
+    // for one server must not fill the page and starve the others.
     let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM chat_sealed_federation_outbox
-         WHERE state = 'pending' AND next_attempt_at <= now()
-         ORDER BY destination, sequence LIMIT 100",
+        "SELECT id FROM (
+                 SELECT DISTINCT ON (destination) id, destination, next_attempt_at
+                 FROM chat_sealed_federation_outbox
+                 WHERE state = 'pending'
+                 ORDER BY destination, sequence
+             ) heads
+             WHERE next_attempt_at <= now()
+             ORDER BY destination
+             LIMIT 100",
     )
     .fetch_all(&state.pool)
     .await?;
     for id in ids {
-        let _ = attempt_sealed_outbox(state, id).await;
+        if let Err(error) = attempt_sealed_outbox(state, id).await {
+            tracing::warn!(%id, error = %error.message, "queued sealed federation send failed");
+        }
     }
     Ok(())
 }
@@ -1959,10 +1995,13 @@ fn signed_json<T: serde::Serialize>(
     federation.signed_response(authenticated, status, JSON_CONTENT_TYPE, body)
 }
 
-/// Refuses a sealed transaction for good (400), recording the refusal
-/// against its sequence when that sequence is next, so a replay gets the same
-/// answer and the origin's later sends are not held up by a gap. `tx` holds
-/// (or takes) the origin's lock.
+/// Refuses a sealed transaction (400). The refusal is final only when it is
+/// recorded against the transaction's sequence (that sequence is next, and
+/// its sendId is a fresh UUID): then the answer names the sequence
+/// (`refused.sequence`), a replay gets the same answer, and the origin's
+/// later sends meet no gap. Otherwise the 400 names nothing and the origin
+/// keeps the send pending. Counted in the origin's rate first, so refusals
+/// cannot be written faster than deliveries.
 async fn refuse_sealed(
     mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     federation: &FederationStack,
@@ -1975,6 +2014,26 @@ async fn refuse_sealed(
         .bind(&transaction.origin)
         .execute(&mut *tx)
         .await?;
+    let origin_digest: [u8; 32] = sha2::Sha256::digest(
+        [
+            b"kutup/sealed-origin-rate/v1\0".as_slice(),
+            transaction.origin.as_bytes(),
+        ]
+        .concat(),
+    )
+    .into();
+    if let Err(limited) = crate::handlers::chat::consume_anonymous_rate(
+        &mut tx,
+        "federation_origin",
+        &origin_digest,
+        600,
+        60,
+    )
+    .await
+    {
+        tx.rollback().await?;
+        return signed_app_error(federation, authenticated, limited);
+    }
     let last_sequence: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sequence), 0) FROM chat_sealed_federation_inbound
          WHERE origin = $1",
@@ -1982,23 +2041,44 @@ async fn refuse_sealed(
     .bind(&transaction.origin)
     .fetch_one(&mut *tx)
     .await?;
-    let value = serde_json::json!({ "error": error });
-    if sequence == last_sequence + 1 {
-        sqlx::query(
-            "INSERT INTO chat_sealed_federation_inbound
+    let send_id = Uuid::parse_str(&transaction.send_id).ok();
+    let final_value = serde_json::json!({ "error": error, "refused": { "sequence": sequence } });
+    let recorded = match send_id {
+        Some(send_id) if sequence == last_sequence + 1 => {
+            sqlx::query(
+                "INSERT INTO chat_sealed_federation_inbound
                  (origin, sequence, send_id, response_status, response)
-             VALUES ($1,$2,$3,$4,$5)",
-        )
-        .bind(&transaction.origin)
-        .bind(sequence)
-        .bind(Uuid::parse_str(&transaction.send_id).unwrap_or(Uuid::nil()))
-        .bind(StatusCode::BAD_REQUEST.as_u16() as i16)
-        .bind(&value)
-        .execute(&mut *tx)
-        .await?;
-    }
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT DO NOTHING",
+            )
+            .bind(&transaction.origin)
+            .bind(sequence)
+            .bind(send_id)
+            .bind(StatusCode::BAD_REQUEST.as_u16() as i16)
+            .bind(&final_value)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+                == 1
+        }
+        _ => false,
+    };
     tx.commit().await?;
-    signed_json(federation, authenticated, StatusCode::BAD_REQUEST, &value)
+    if recorded {
+        signed_json(
+            federation,
+            authenticated,
+            StatusCode::BAD_REQUEST,
+            &final_value,
+        )
+    } else {
+        signed_json(
+            federation,
+            authenticated,
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({ "error": error }),
+        )
+    }
 }
 
 fn signed_app_error(
@@ -2121,6 +2201,18 @@ fn is_canonical_account(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_refusal_naming_the_sequence_is_final() {
+        let named = br#"{"error":"bad","refused":{"sequence":7}}"#;
+        assert_eq!(super::refused_sequence(named), Some(7));
+        // A 400 before the sequence was known names none: not final.
+        assert_eq!(
+            super::refused_sequence(br#"{"error":"invalid sealed federation transaction"}"#),
+            None
+        );
+        assert_eq!(super::refused_sequence(b"not json"), None);
+    }
+
     #[test]
     fn federated_accounts_must_be_spelled_canonically() {
         assert!(super::is_canonical_account("alice@origin.example"));

@@ -192,6 +192,9 @@ impl FederationStack {
                 self.transport.negative.lock().await.remove(domain);
                 Ok(peer)
             }
+            // Not a broken peer, only one without this feature: nothing to
+            // forget or hold against its other features.
+            Err(error) if lacks_capability(&error) => Err(error),
             Err(error) => {
                 let message = format!("{error:#}");
                 self.transport.positive.lock().await.remove(domain);
@@ -222,11 +225,14 @@ impl FederationStack {
         let Some(cached) = cached else {
             return Ok(None);
         };
-        if cached.discovery.expires_at <= now.unix_timestamp()
-            || !has_feature(&cached.discovery, feature)
-        {
+        if cached.discovery.expires_at <= now.unix_timestamp() {
             self.transport.positive.lock().await.remove(domain);
             return Ok(None);
+        }
+        // A verified discovery without the feature stays cached until it
+        // expires (an upgrade shows then); nothing is fetched meanwhile.
+        if !has_feature(&cached.discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
         }
         let Some(pinned) = self.trust.pinned_peer(domain).await? else {
             self.transport.positive.lock().await.remove(domain);
@@ -277,10 +283,6 @@ impl FederationStack {
         if discovery.identity.sequence > MAX_IDENTITY_SEQUENCE {
             anyhow::bail!("federation identity sequence exceeds the supported history bound");
         }
-        if !has_feature(&discovery, feature) {
-            return Err(PeerLacksCapability { feature }.into());
-        }
-
         let mut chain = Vec::with_capacity(discovery.identity.sequence as usize + 1);
         for sequence in 0..discovery.identity.sequence {
             let url = Url::parse(&format!("{origin}{IDENTITY_PATH_PREFIX}{sequence}.json"))?;
@@ -325,6 +327,12 @@ impl FederationStack {
                 discovery: discovery.clone(),
             },
         );
+        // Checked once the discovery is verified and cached: a peer that
+        // lacks one feature keeps its others (Drive with a chat.v1 peer), and
+        // asking again until the discovery expires costs nothing.
+        if !has_feature(&discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
+        }
         Ok(resolved_peer(discovery, pinned))
     }
 

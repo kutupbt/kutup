@@ -115,6 +115,16 @@ sending client gets `503` with `code: peerUnsupported` instead of a send that
 never ends. Showing that code in the apps is a follow-up (the chat engine
 keeps such a message queued and only logs it today).
 
+A sealed send is refused for good only when the receiver says so for that
+sequence: a signed `400` whose body names it (`refused.sequence`), recorded
+by the receiver so a replay gets the same answer and the next sequence
+meets no gap. The sender then rejects the row (`502 code: peerRefused` to
+the client). Any other `400` (before the sequence was known, or a refusal
+that could not be recorded, such as a reused `sendId`) leaves the send
+pending. A refusal holds for its sequence: a corrected message is a new
+send with a new sequence and `sendId`, never the refused one again.
+Refusals are counted in the origin's rate like deliveries.
+
 The identity's current key signs these deterministic bytes:
 
 ```text

@@ -548,7 +548,7 @@ fn replay_metadata(
         FederationHttpRequest {
             method: "POST".into(),
             authority: "local.example".into(),
-            path: "/api/fed/chat/v1/transactions".into(),
+            path: "/api/fed/chat/messages".into(),
             query: "?".into(),
             content_type: "application/json".into(),
             body: body.to_vec(),
