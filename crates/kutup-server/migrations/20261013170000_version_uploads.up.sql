@@ -14,6 +14,6 @@ ALTER TABLE uploads
         (kind = 'file' AND name_hash IS NOT NULL AND file_key_envelope IS NOT NULL
             AND key_generation IS NULL AND content_hash IS NULL AND based_on IS NULL)
         OR (kind = 'version' AND name_hash IS NULL AND file_key_envelope IS NULL
-            AND key_generation > 0
+            AND key_generation IS NOT NULL AND key_generation > 0
             AND (content_hash IS NULL OR content_hash ~ '^[0-9a-f]{64}$'))
     );
