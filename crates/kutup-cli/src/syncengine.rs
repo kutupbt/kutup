@@ -112,6 +112,21 @@ pub(crate) enum DirAction {
     Forget,
 }
 
+/// Paths whose Drive side a run could not read: a folder whose listing
+/// failed, or a file whose versions could not be listed.
+#[derive(Default)]
+pub(crate) struct Unknown {
+    pub dirs: BTreeSet<String>,
+    pub files: BTreeSet<String>,
+}
+
+impl Unknown {
+    /// Whether `rel` is one of them (its own entry, or in such a folder).
+    pub fn covers(&self, rel: &str) -> bool {
+        self.files.contains(rel) || self.dirs.contains(split_rel(rel).0)
+    }
+}
+
 /// The three-way matrix. Pure: indexes in, ordered actions out.
 pub(crate) fn plan_files(
     base: &BTreeMap<String, BaseFile>,
@@ -375,11 +390,17 @@ pub fn sync(
     // signal) is fetched only for paths the base tracks — new files don't
     // need it for planning.
     let mut remote_entries: BTreeMap<String, RemoteEntry> = BTreeMap::new();
+    // What Drive holds is unknown this run for these: they get no action at
+    // all (their base stays), never one planned as if the remote were gone.
+    let mut unknown = Unknown::default();
     for (rel_dir, dir) in &remote_dirs {
         let files = match client.list_files(&dir.collection_id) {
             Ok(f) => f,
             Err(e) => {
-                result.errors.push(format!("list files {rel_dir}: {e}"));
+                result
+                    .errors
+                    .push(format!("list files {rel_dir}: {e}; left for the next run"));
+                unknown.dirs.insert(rel_dir.clone());
                 continue;
             }
         };
@@ -403,12 +424,12 @@ pub fn sync(
             let latest_version_id = if base_files.contains_key(&rel) {
                 match latest_version_id(client, &f.id) {
                     Ok(id) => id,
-                    // Not known this run: leave the file out of it, so it
-                    // is neither pulled nor pushed on a guess.
+                    // Not known this run: the file sits it out (see `unknown`).
                     Err(e) => {
                         result
                             .errors
                             .push(format!("{rel}: {e:#}; left for the next run"));
+                        unknown.files.insert(rel);
                         continue;
                     }
                 }
@@ -549,7 +570,10 @@ pub fn sync(
         })
         .collect();
 
-    for (rel, action) in plan_files(&base_files, &local_files, &remote_sigs, opts.delete) {
+    for (rel, action) in plan_files(&base_files, &local_files, &remote_sigs, opts.delete)
+        .into_iter()
+        .filter(|(rel, _)| !unknown.covers(rel))
+    {
         let outcome = execute_file_action(
             client,
             store,
@@ -669,10 +693,19 @@ fn execute_file_action(
     }
     match action {
         FileAction::SkipYjs => {
-            eprintln!(
-                "  ⏸ {rel}: Drive keeps this file as its editor's live state; \
-                 edit it in the browser (CLI sync of notes, code and place lists is coming)"
-            );
+            // Once per file per process: `--watch` plans it every pass.
+            static TOLD: std::sync::Mutex<BTreeSet<String>> =
+                std::sync::Mutex::new(BTreeSet::new());
+            let first = TOLD
+                .lock()
+                .map(|mut told| told.insert(format!("{pair}/{rel}")))
+                .unwrap_or(true);
+            if first {
+                eprintln!(
+                    "  ⏸ {rel}: Drive keeps this file as its editor's live state; \
+                     edit it in the browser (CLI sync of notes, code and place lists is coming)"
+                );
+            }
         }
         FileAction::Pull => {
             eprintln!("  ↓ {rel}");
@@ -789,10 +822,11 @@ fn execute_file_action(
                 .context("remote dir vanished")?;
             let copy = free_conflict_name(client, root, rel, dir)?;
             eprintln!("  ⚠ {rel} (remote copy → {copy})");
-            pull_to(client, entry, &dir.keys, &root.join(&copy))?;
-            // Mark the base conflicted: remote side = current (stops the
-            // conflict from re-firing), local side = dirty sentinel (the
-            // canonical name pushes and wins remotely next pass).
+            let downloaded = pull_to(client, entry, &dir.keys, &root.join(&copy))?;
+            // Mark the base conflicted: remote side = what was downloaded
+            // (stops the conflict from re-firing; a version landing since is
+            // a change again), local side = dirty sentinel (the canonical
+            // name pushes and wins remotely next pass).
             store.put_sync_file(
                 pair,
                 rel,
@@ -802,7 +836,7 @@ fn execute_file_action(
                     local_size: -1,
                     local_mtime_secs: 0,
                     local_mtime_nanos: 0,
-                    remote_version_id: latest_version_id(client, &entry.file.id)?,
+                    remote_version_id: downloaded_version(client, &entry.file.id, downloaded)?,
                     synced_at: now_unix(),
                 },
             )?;
@@ -837,7 +871,7 @@ fn execute_file_action(
                         local_size: -1,
                         local_mtime_secs: 0,
                         local_mtime_nanos: 0,
-                        remote_version_id: latest_version_id(client, &entry.file.id)?,
+                        remote_version_id: downloaded_version(client, &entry.file.id, version)?,
                         synced_at: now_unix(),
                     },
                 )?;
@@ -1178,13 +1212,7 @@ fn record_base(
     downloaded: Option<String>,
 ) -> Result<()> {
     let stat = stat_local(local_path)?;
-    // The very version it got: the next push is made from it (`basedOn`),
-    // so a version landing after the download is a conflict, not a base.
-    // Only when the server did not say which, the newest one now.
-    let remote_version_id = match downloaded {
-        Some(version) => recorded(&version),
-        None => latest_version_id(client, &entry.file.id)?,
-    };
+    let remote_version_id = downloaded_version(client, &entry.file.id, downloaded)?;
     store.put_sync_file(
         pair,
         rel,
@@ -1198,6 +1226,20 @@ fn record_base(
             synced_at: now_unix(),
         },
     )
+}
+
+/// The version a download got, as the base records it: the next push is made
+/// from it (`basedOn`), so a version landing after the download is a change,
+/// not a base. Only when the server did not say which, the newest one now.
+fn downloaded_version(
+    client: &Client,
+    file_id: &str,
+    downloaded: Option<String>,
+) -> Result<String> {
+    match downloaded {
+        Some(version) => Ok(recorded(&version)),
+        None => latest_version_id(client, file_id),
+    }
 }
 
 /// The file's newest version of any kind (`""`: none). A listing that fails
@@ -1379,6 +1421,24 @@ fn sanitize_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A path whose Drive side could not be read this run gets no action:
+    /// planned as if the remote were gone, it would be deleted locally,
+    /// pushed as new, or forgotten.
+    #[test]
+    fn paths_not_read_this_run_sit_it_out() {
+        let mut unknown = Unknown::default();
+        unknown.files.insert("docs/a.dat".into());
+        unknown.dirs.insert("photos".into());
+        assert!(unknown.covers("docs/a.dat"));
+        assert!(unknown.covers("photos/one.jpg"));
+        assert!(!unknown.covers("docs/b.dat"));
+        assert!(
+            !unknown.covers("photos/2024/one.jpg"),
+            "a subfolder is listed on its own"
+        );
+        assert!(!unknown.covers("photos"));
+    }
 
     /// Until the CLI syncs Yjs-backed files as a Yjs peer, they are never
     /// pulled (a stale copy) nor updated (a fork), and nothing is recorded;

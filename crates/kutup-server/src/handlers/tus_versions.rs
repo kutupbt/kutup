@@ -335,8 +335,11 @@ pub(super) async fn finish(
             // A commit can fail in the reporting after it took effect: look
             // before deleting the object of a version that landed.
             Err(error) => match landed_version(state, landing.upload_id).await {
-                Some(seq) => Ok(seq),
-                None => Err(AppError::from(error)),
+                Ok(Some(seq)) => Ok(seq),
+                Ok(None) => Err(AppError::from(error)),
+                // Not known whether it landed: keep everything (the object
+                // and, if it did not land, the row for the sweep) and say so.
+                Err(_) => return tus_error(AppError::internal("db commit (outcome unknown)")),
             },
         },
         Err(error) => {
@@ -382,13 +385,11 @@ pub(super) async fn finish(
 }
 
 /// The version's recorded log position, if it was stored after all.
-async fn landed_version(state: &AppState, version_id: Uuid) -> Option<i64> {
+async fn landed_version(state: &AppState, version_id: Uuid) -> sqlx::Result<Option<i64>> {
     sqlx::query_scalar("SELECT seq_at_snapshot FROM file_versions WHERE id = $1")
         .bind(version_id)
         .fetch_optional(&state.pool)
         .await
-        .ok()
-        .flatten()
 }
 
 /// Whether a check's error refuses the upload for good (rather than failing

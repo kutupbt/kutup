@@ -1,7 +1,8 @@
 //! Which files a Kutup editor keeps as collaboration state (Yjs) rather than
 //! as whole-file versions: the text editor's kinds and Maps' place lists.
 //! Their editors read the newest version as Yjs, so new content for them is
-//! never stored as a `file` version (a sync uploads a new file instead).
+//! never stored as a `file` version: sync leaves them alone until the CLI
+//! edits them as a Yjs peer (docs/plans/cli-yjs-sync.md).
 
 /// Mirrors `TEXT_EXT` in `frontend/packages/drive-core/src/editorKind.ts`
 /// exactly; change both together.

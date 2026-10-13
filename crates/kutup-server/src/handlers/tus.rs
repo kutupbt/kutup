@@ -864,9 +864,21 @@ pub async fn patch(
         drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete upload");
     }
-    if tx.commit().await.is_err() && !file_landed(&state, file_id).await {
-        drop_landed(&state, &storage_path, upload_id).await;
-        return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db commit");
+    if tx.commit().await.is_err() {
+        match file_landed(&state, file_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                drop_landed(&state, &storage_path, upload_id).await;
+                return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db commit");
+            }
+            // Not known whether it landed: keep the object, and say so.
+            Err(_) => {
+                return tus_text(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "db commit (outcome unknown)",
+                )
+            }
+        }
     }
 
     (
@@ -882,12 +894,11 @@ pub async fn patch(
 
 /// Whether the file row exists after all: a commit can fail in the reporting
 /// after it took effect, and then its object must stay.
-async fn file_landed(state: &AppState, file_id: Uuid) -> bool {
+async fn file_landed(state: &AppState, file_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM files WHERE id = $1)")
         .bind(file_id)
         .fetch_one(&state.pool)
         .await
-        .unwrap_or(true)
 }
 
 /// After the parts were stitched, storing the file failed: the upload cannot
