@@ -146,7 +146,7 @@ impl DatabaseKey {
     /// Kutup's copy (vendor/keepass/KUTUP.md): modify the database key to
     /// include a password given as its SHA-256, the password's part of the
     /// composite key.
-    pub fn with_password_hash(mut self, hash: [u8; 32]) -> Self {
+    pub fn with_password_hash(mut self, hash: &[u8; 32]) -> Self {
         self.password_hash = Some(hash.to_vec());
         self
     }

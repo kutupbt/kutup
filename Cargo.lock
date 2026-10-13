@@ -3237,6 +3237,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "uuid",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]

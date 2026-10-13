@@ -46,8 +46,8 @@ impl VaultKey {
 
     /// Adds the vault password as its SHA-256 (the password's part of the
     /// composite key), which opens and saves the vault as the password does.
-    pub fn with_password_hash(mut self, hash: [u8; 32]) -> Self {
-        self.password_hash = Some(Zeroizing::new(hash));
+    pub fn with_password_hash(mut self, hash: &[u8; 32]) -> Self {
+        self.password_hash = Some(Zeroizing::new(*hash));
         self
     }
 
@@ -65,7 +65,7 @@ impl VaultKey {
         if let Some(password) = &self.password {
             key = key.with_password(password);
         } else if let Some(hash) = &self.password_hash {
-            key = key.with_password_hash(**hash);
+            key = key.with_password_hash(hash);
         }
         if let Some(contents) = &self.key_file {
             key = key
@@ -177,14 +177,14 @@ mod tests {
         for (by_password, by_hash) in [
             (
                 VaultKey::new().with_password("parola-çğ"),
-                VaultKey::new().with_password_hash(hash),
+                VaultKey::new().with_password_hash(&hash),
             ),
             (
                 VaultKey::new()
                     .with_password("parola-çğ")
                     .with_key_file(&file),
                 VaultKey::new()
-                    .with_password_hash(hash)
+                    .with_password_hash(&hash)
                     .with_key_file(&file),
             ),
         ] {
@@ -195,7 +195,7 @@ mod tests {
         }
         let wrong: [u8; 32] = Sha256::digest(b"other").into();
         let saved = save(&sample(), &VaultKey::new().with_password("parola-çğ")).unwrap();
-        assert!(open(&saved, &VaultKey::new().with_password_hash(wrong)).is_err());
+        assert!(open(&saved, &VaultKey::new().with_password_hash(&wrong)).is_err());
     }
 
     #[test]

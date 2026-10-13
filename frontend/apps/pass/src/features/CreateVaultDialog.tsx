@@ -45,7 +45,8 @@ export function CreateVaultDialog({
   const [name, setName] = useState('')
   const [folderId, setFolderId] = useState('')
   const [mode, setMode] = useState<'random' | 'chosen'>('random')
-  const [unkept, setUnkept] = useState<string | null>(null)
+  /** A generated key that could not be kept, and its vault: shown until kept or saved. */
+  const [unkept, setUnkept] = useState<{ key: string; fileId: string } | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [keyFile, setKeyFile] = useState<{ name: string; contents: Uint8Array } | null>(null)
@@ -99,7 +100,7 @@ export function CreateVaultDialog({
         } catch {
           if (generated) {
             // Kept nowhere else: shown now, or the vault is lost.
-            setUnkept(generated)
+            setUnkept({ key: generated, fileId })
             toast.error(t('vaultKey.notKept'))
             return
           }
@@ -116,8 +117,29 @@ export function CreateVaultDialog({
     }
   }
 
+  const finish = (fileId: string) => {
+    setUnkept(null)
+    toast.success(t('vaults.created'))
+    onOpenChange(false)
+    void navigate(`/v/${fileId}`)
+  }
+
+  const keepAgain = async () => {
+    if (!unkept) return
+    setPending(true)
+    try {
+      await keepKey(session, unkept.fileId, { password: unkept.key, keyFile: null }, true)
+      finish(unkept.fileId)
+    } catch {
+      toast.error(t('vaultKey.notKept'))
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+    // A key kept nowhere yet: no closing until it is kept or saved.
+    <Dialog open={open} onOpenChange={(next) => !pending && !unkept && onOpenChange(next)}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t('vaults.newTitle')}</DialogTitle>
@@ -187,15 +209,26 @@ export function CreateVaultDialog({
           )}
           {noKey ? <p className="text-xs text-muted-foreground">{t('vaults.needsKey')}</p> : null}
           {error ? <Alert variant="error">{error}</Alert> : null}
-          {unkept ? <VaultKeyShown value={unkept} warning={t('vaultKey.notKeptDescription')} /> : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" loading={pending} disabled={!folder || !name.trim() || mismatch || noKey || unkept !== null}>
-              {t('vaults.create')}
-            </Button>
-          </DialogFooter>
+          {unkept ? <VaultKeyShown value={unkept.key} warning={t('vaultKey.notKeptDescription')} /> : null}
+          {unkept ? (
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => finish(unkept.fileId)} disabled={pending}>
+                {t('vaultKey.saved')}
+              </Button>
+              <Button type="button" loading={pending} onClick={() => void keepAgain()}>
+                {t('vaultKey.keepAgain')}
+              </Button>
+            </DialogFooter>
+          ) : (
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+                {t('common.cancel')}
+              </Button>
+              <Button type="submit" loading={pending} disabled={!folder || !name.trim() || mismatch || noKey}>
+                {t('vaults.create')}
+              </Button>
+            </DialogFooter>
+          )}
         </form>
       </DialogContent>
     </Dialog>

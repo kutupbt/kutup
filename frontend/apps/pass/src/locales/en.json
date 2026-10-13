@@ -61,7 +61,7 @@
     "label": "Vault key",
     "show": "Show vault key…",
     "title": "Key of {{name}}",
-    "description": "Kasa made this key for the vault. Use it, with the vault's file from Drive, to open the vault in KeePassXC or another KeePass app. Enter your Kutup password to see it.",
+    "description": "Kasa made this key for the vault. Use it, with the vault's file from Drive, to open the vault in KeePassXC or another KeePass app; type it exactly as shown, in lowercase, with its dashes. Enter your Kutup password to see it.",
     "reveal": "Show key",
     "copy": "Copy vault key",
     "copied": "Vault key copied",
@@ -69,7 +69,9 @@
     "notKept": "The key could not be kept in your account",
     "notKeptDescription": "The vault was made, but its key could not be kept in your Kutup account. Copy the key now and keep it safe: without it the vault cannot be opened.",
     "forgetTitle": "Forget this vault's key?",
-    "forgetDescription": "Kasa made this vault's key, and your account is the only place it is kept unless you saved it yourself. Show the vault key and save it first; without it the vault cannot be opened again."
+    "forgetDescription": "Kasa made this vault's key, and your account is the only place it is kept unless you saved it yourself. Show the vault key and save it first; without it the vault cannot be opened again.",
+    "saved": "I saved the key",
+    "keepAgain": "Try keeping it again"
   },
   "unlock": {
     "title": "Unlock {{name}}",

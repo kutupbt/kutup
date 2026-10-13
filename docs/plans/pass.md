@@ -368,9 +368,11 @@ one database, plus a report of what happened.
   password is kept only as its SHA-256, which is KeePass's password part of
   the composite key (the vendored library opens and saves with it,
   `DatabaseKey::with_password_hash`; checked against KeePassXC's test
-  vaults), so a vault password used elsewhere too is not given away with the
-  master key. A password Kutup Pass generated (below) is kept as it is, so it
-  can be shown. Key files are kept as they are, those over 2048 bytes as
+  vaults). Whoever opens the envelope cannot read such a password directly;
+  a weak one can still be guessed from its unsalted SHA-256. A password
+  Kutup Pass generated (below) is kept as it is, so it can be shown. Every
+  payload is padded to one length (3120 bytes), so an envelope's size does
+  not tell a generated key from a chosen one or a key file's size. Key files are kept as they are, those over 2048 bytes as
   their SHA-256, which KeePass treats as the same key; what is kept is
   checked to open the vault first. Stored by the server
   (`pass_vault_secrets`, `/api/pass/vault-secrets`), unreadable to it.
@@ -393,9 +395,20 @@ one database, plus a report of what happened.
   the vault's menu → "Show vault key…" shows it after the account password is
   given again (`/api/user/reauth`), with copy (cleared from the clipboard
   after 30 seconds); `kutup pass show-key <file-id>` prints it. "A password I
-  choose" stays offered for vaults opened by typing in KeePass apps. If the
+  choose" stays offered for vaults opened by typing in KeePass apps. The key
+  is lowercase and case-sensitive: typed as shown, with its dashes. If the
   new key cannot be kept, the dialog shows it at once, as it is kept nowhere
-  else; forgetting a generated key asks first, pointing to "Show vault key".
+  else, and closes only once it is kept ("Try keeping it again") or saved ("I
+  saved the key"). Forgetting a generated key, or one that cannot be told,
+  asks first, pointing to "Show vault key"; `kutup pass forget` refuses it
+  without `--force`, pointing to `kutup pass show-key`.
+  The account-password step before showing guards against someone at an
+  unlocked screen, not against code running in the tab: the key is opened
+  in the browser either way, and `kutup pass show-key` asks nothing more
+  than the CLI's sign-in. A random-key vault opens only with the master key
+  (or the key saved by hand): any account reset that gives up the master key
+  (a future reset by recovery email) loses such vaults, which its plan must
+  say.
 - Entry editing covers the KeePassXC fields (research 19 §4): standard fields,
   custom fields (protected or not), tags, attachments, TOTP (`otp`), URLs
   (`URL`, `KP2A_URL*`), expiry, history, groups, recycle bin; passkeys and SSH

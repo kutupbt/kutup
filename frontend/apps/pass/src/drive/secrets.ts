@@ -53,6 +53,18 @@ export async function keptKey(session: Session, rows: SecretRow[] | undefined, f
   }
 }
 
+/**
+ * What kind of key the account keeps for vault `fileId`: one Kutup Pass
+ * generated (kept nowhere else unless saved), one the person chose, or
+ * `unknown` when it does not open here (to be treated as generated).
+ */
+export async function keptKeyKind(session: Session, rows: SecretRow[] | undefined, fileId: string): Promise<'generated' | 'chosen' | 'unknown' | 'none'> {
+  if (!rows?.some((r) => r.fileId === fileId)) return 'none'
+  const secret = await openRow(session, rows, fileId)
+  if (!secret) return 'unknown'
+  return secret.generatedPassword ? 'generated' : 'chosen'
+}
+
 /** The vault's key to show, when Kutup Pass generated it (for KeePass apps). */
 export async function keptGeneratedPassword(session: Session, rows: SecretRow[] | undefined, fileId: string): Promise<string | null> {
   return (await openRow(session, rows, fileId))?.generatedPassword ?? null

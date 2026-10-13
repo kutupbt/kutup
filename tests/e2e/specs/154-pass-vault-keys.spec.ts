@@ -52,6 +52,24 @@ test('pass: a new vault gets a random key kept in the account, shown for KeePass
   await expect(page.getByRole('heading', { name: 'Anahtarlı', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await expect(page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: 'Banka' })).toBeVisible()
 
+  // A new key that could not be kept is shown, and the dialog stays until it
+  // is kept or saved.
+  await page.route('**/api/pass/vault-secrets/*', (route) => (route.request().method() === 'PUT' ? route.fulfill({ status: 503, body: '' }) : route.continue()))
+  await page.getByRole('button', { name: 'New vault' }).first().click()
+  const create = page.getByRole('dialog', { name: 'New vault' })
+  await create.getByLabel('Vault name').fill('Saklanamayan')
+  await create.getByRole('button', { name: 'Create vault' }).click()
+  await expect(create.getByText('Copy the key now and keep it safe')).toBeVisible({ timeout: 60_000 })
+  await expect(create.getByLabel('Vault key', { exact: true })).toBeVisible()
+  await expect(create.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(create).toBeVisible()
+  await page.unroute('**/api/pass/vault-secrets/*')
+  await create.getByRole('button', { name: 'Try keeping it again' }).click()
+  await expect(page.getByRole('heading', { name: 'Saklanamayan', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Saklanamayan', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
+
   // A vault with a password the person chose has no key to show.
   await createVault(page, 'Parolalı', 'kendi-parolam-154')
   await page.getByRole('button', { name: 'Vault actions' }).click()

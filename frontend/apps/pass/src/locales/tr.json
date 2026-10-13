@@ -61,7 +61,7 @@
     "label": "Kasa anahtarı",
     "show": "Kasa anahtarını göster…",
     "title": "{{name}} anahtarı",
-    "description": "Bu anahtarı kasa için Kasa oluşturdu. Kasayı KeePassXC ya da başka bir KeePass uygulamasında açmak için bunu, Drive'daki kasa dosyasıyla birlikte kullanın. Görmek için Kutup parolanızı girin.",
+    "description": "Bu anahtarı kasa için Kasa oluşturdu. Kasayı KeePassXC ya da başka bir KeePass uygulamasında açmak için bunu, Drive'daki kasa dosyasıyla birlikte kullanın; tam gösterildiği gibi, küçük harflerle ve tireleriyle yazın. Görmek için Kutup parolanızı girin.",
     "reveal": "Anahtarı göster",
     "copy": "Kasa anahtarını kopyala",
     "copied": "Kasa anahtarı kopyalandı",
@@ -69,7 +69,9 @@
     "notKept": "Anahtar hesabınızda saklanamadı",
     "notKeptDescription": "Kasa oluşturuldu, ancak anahtarı Kutup hesabınızda saklanamadı. Anahtarı şimdi kopyalayıp güvenle saklayın: o olmadan kasa açılamaz.",
     "forgetTitle": "Bu kasanın anahtarı unutulsun mu?",
-    "forgetDescription": "Bu kasanın anahtarını Kasa oluşturdu ve kendiniz kaydetmediyseniz tek saklandığı yer hesabınızdır. Önce kasa anahtarını gösterip kaydedin; o olmadan kasa bir daha açılamaz."
+    "forgetDescription": "Bu kasanın anahtarını Kasa oluşturdu ve kendiniz kaydetmediyseniz tek saklandığı yer hesabınızdır. Önce kasa anahtarını gösterip kaydedin; o olmadan kasa bir daha açılamaz.",
+    "saved": "Anahtarı kaydettim",
+    "keepAgain": "Yeniden saklamayı dene"
   },
   "unlock": {
     "title": "{{name}} kasasını aç",

@@ -215,7 +215,7 @@ impl VaultKeys {
         let secret = self.open_stored(client, file_id)?;
         let mut key = VaultKey::new();
         if let Some(hash) = secret.password_element() {
-            key = key.with_password_hash(*hash);
+            key = key.with_password_hash(&hash);
         }
         if let Some(file) = &secret.key_file {
             key = key.with_key_file(file);

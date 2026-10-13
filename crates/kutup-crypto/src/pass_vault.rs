@@ -7,12 +7,14 @@
 //! (purpose `PassVaultSecret`, the vault's file id as the header's object),
 //! one per person and vault, stored by the server and unreadable to it.
 //!
-//! What is kept opens the vault without telling a password the person chose:
+//! What is kept opens the vault without holding a password the person chose:
 //! of such a password only its SHA-256 is kept, which is how KeePass uses a
-//! password in the composite key, so a password used elsewhere too is not
-//! given away with the master key. A password Kutup Pass generated for the
-//! vault (one nobody uses elsewhere) is kept as it is, so it can be shown for
-//! a KeePass app. Key files are kept as KeePass reads them.
+//! password in the composite key. Whoever opens the envelope (with the master
+//! key) cannot read the password directly; a weak one can still be guessed
+//! from its unsalted hash. A password Kutup Pass generated for the vault (one
+//! nobody uses elsewhere) is kept as it is, so it can be shown for a KeePass
+//! app. Key files are kept as KeePass reads them. Every payload is padded to
+//! one length, so an envelope's size does not tell which of these it holds.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -30,6 +32,10 @@ pub const MAX_PASSWORD_BYTES: usize = 1024;
 /// The largest key file kept, in bytes. KeePass reduces any other file to
 /// its SHA-256, which works as the same key (`kutup_pass::key_file_secret`).
 pub const MAX_KEY_FILE_BYTES: usize = 2048;
+/// Every payload's length: the largest one (a key file and a generated
+/// password at their limits), the rest padded with zeros to it.
+const PAYLOAD_LEN: usize =
+    DOMAIN.len() + 16 + 1 + (2 + MAX_KEY_FILE_BYTES) + (2 + MAX_PASSWORD_BYTES);
 
 /// What opens one vault.
 #[derive(Clone, PartialEq, Eq)]
@@ -106,9 +112,7 @@ fn payload(file_id: &[u8; 16], secret: &VaultSecret) -> Result<Zeroizing<Vec<u8>
     {
         return Err(invalid("a vault needs a password or a key file"));
     }
-    let mut out = Zeroizing::new(Vec::with_capacity(
-        DOMAIN.len() + 16 + 1 + 32 + 2 + MAX_PASSWORD_BYTES + 2 + MAX_KEY_FILE_BYTES,
-    ));
+    let mut out = Zeroizing::new(Vec::with_capacity(PAYLOAD_LEN));
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(file_id);
     let mut flags = 0;
@@ -137,6 +141,8 @@ fn payload(file_id: &[u8; 16], secret: &VaultSecret) -> Result<Zeroizing<Vec<u8>
         }
         push(&mut out, password.as_bytes());
     }
+    debug_assert!(out.len() <= PAYLOAD_LEN);
+    out.resize(PAYLOAD_LEN, 0);
     Ok(out)
 }
 
@@ -211,6 +217,14 @@ pub fn open_vault_secret(
         binding,
         file_id,
     )?);
+    parse_payload(&plain, file_id)
+}
+
+/// Reads a payload, held to the same bounds sealing keeps.
+fn parse_payload(plain: &[u8], file_id: &[u8; 16]) -> Result<VaultSecret> {
+    if plain.len() != PAYLOAD_LEN {
+        return Err(CryptoError::AuthFailed);
+    }
     let mut rest = plain.strip_prefix(DOMAIN).ok_or(CryptoError::AuthFailed)?;
     if take(&mut rest, 16)? != file_id {
         return Err(CryptoError::AuthFailed);
@@ -231,12 +245,19 @@ pub fn open_vault_secret(
         None
     };
     let key_file = if flags & HAS_KEY_FILE != 0 {
-        Some(Zeroizing::new(take_value(&mut rest)?.to_vec()))
+        let bytes = take_value(&mut rest)?;
+        if bytes.is_empty() || bytes.len() > MAX_KEY_FILE_BYTES {
+            return Err(CryptoError::AuthFailed);
+        }
+        Some(Zeroizing::new(bytes.to_vec()))
     } else {
         None
     };
     let generated_password = if flags & HAS_GENERATED_PASSWORD != 0 {
         let bytes = take_value(&mut rest)?;
+        if bytes.is_empty() || bytes.len() > MAX_PASSWORD_BYTES {
+            return Err(CryptoError::AuthFailed);
+        }
         Some(Zeroizing::new(
             std::str::from_utf8(bytes)
                 .map_err(|_| CryptoError::AuthFailed)?
@@ -245,7 +266,8 @@ pub fn open_vault_secret(
     } else {
         None
     };
-    if !rest.is_empty() {
+    // Only the padding may follow.
+    if rest.iter().any(|&byte| byte != 0) {
         return Err(CryptoError::AuthFailed);
     }
     Ok(VaultSecret {
@@ -326,6 +348,92 @@ mod tests {
         )
         .is_err());
         assert!(open_vault_secret(&sealed, &[8; 32], BINDING, &VAULT).is_err());
+    }
+
+    /// Seals `payload` as a vault secret's envelope as is, to hand the
+    /// parser what sealing never makes.
+    fn sealed_raw(payload: &[u8]) -> Vec<u8> {
+        account_envelope::seal_object(
+            payload,
+            &MASTER,
+            AccountEnvelopePurpose::PassVaultSecret,
+            BINDING,
+            &VAULT,
+        )
+        .unwrap()
+    }
+
+    fn padded(mut payload: Vec<u8>) -> Vec<u8> {
+        payload.resize(PAYLOAD_LEN, 0);
+        payload
+    }
+
+    fn head(flags: u8) -> Vec<u8> {
+        let mut out = DOMAIN.to_vec();
+        out.extend_from_slice(&VAULT);
+        out.push(flags);
+        out
+    }
+
+    #[test]
+    fn every_kind_of_key_seals_to_one_length() {
+        let sizes: std::collections::BTreeSet<usize> = [
+            VaultSecret::chosen(Some("p"), None),
+            VaultSecret::chosen(Some("p"), Some(&[1; MAX_KEY_FILE_BYTES])),
+            VaultSecret::chosen(None, Some(b"k")),
+            VaultSecret::generated(
+                &"g".repeat(MAX_PASSWORD_BYTES),
+                Some(&[1; MAX_KEY_FILE_BYTES]),
+            ),
+            VaultSecret::generated("g", None),
+        ]
+        .iter()
+        .map(|s| {
+            seal_vault_secret(&MASTER, BINDING, &VAULT, s)
+                .unwrap()
+                .len()
+        })
+        .collect();
+        assert_eq!(sizes.len(), 1, "{sizes:?}");
+    }
+
+    #[test]
+    fn the_parser_takes_only_what_sealing_makes() {
+        let open =
+            |payload: &[u8]| open_vault_secret(&sealed_raw(payload), &MASTER, BINDING, &VAULT);
+        // What sealing makes, by hand, opens.
+        let mut good = head(HAS_PASSWORD_HASH);
+        good.extend_from_slice(&[3; 32]);
+        assert!(open(&padded(good.clone())).is_ok());
+        // Unpadded, or padded with something other than zeros.
+        assert!(open(&good).is_err());
+        let mut dirty = padded(good.clone());
+        *dirty.last_mut().unwrap() = 1;
+        assert!(open(&dirty).is_err());
+        // Unknown flags, no flags, a hash and a generated password together.
+        for flags in [0, 8, HAS_PASSWORD_HASH | HAS_GENERATED_PASSWORD] {
+            let mut p = head(flags);
+            p.extend_from_slice(&[3; 32]);
+            p.extend_from_slice(&[0, 1, b'g']);
+            assert!(open(&padded(p)).is_err(), "flags {flags}");
+        }
+        // An empty key file or generated password.
+        for flags in [HAS_KEY_FILE, HAS_GENERATED_PASSWORD] {
+            let mut p = head(flags);
+            p.extend_from_slice(&[0, 0]);
+            assert!(open(&padded(p)).is_err(), "empty, flags {flags}");
+        }
+        // Another vault's id, or the v1 domain.
+        let mut other = DOMAIN.to_vec();
+        other.extend_from_slice(&[2; 16]);
+        other.push(HAS_PASSWORD_HASH);
+        other.extend_from_slice(&[3; 32]);
+        assert!(open(&padded(other)).is_err());
+        let mut v1 = b"kutup/pass-vault-secret/v1\0".to_vec();
+        v1.extend_from_slice(&VAULT);
+        v1.push(1);
+        v1.extend_from_slice(&[0, 1, b'p']);
+        assert!(open(&padded(v1)).is_err());
     }
 
     #[test]

@@ -85,10 +85,14 @@ impl Vault {
     ) -> Result<Vault, JsValue> {
         let key = match password_hash {
             Some(hash) if password.is_none() => {
-                let hash: [u8; 32] = hash
-                    .try_into()
-                    .map_err(|_| js_error("a password hash is 32 bytes"))?;
-                let mut key = VaultKey::new().with_password_hash(hash);
+                // Wiped once used, the copy too.
+                let hash = zeroize::Zeroizing::new(hash);
+                let hash: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                    hash.as_slice()
+                        .try_into()
+                        .map_err(|_| js_error("a password hash is 32 bytes"))?,
+                );
+                let mut key = VaultKey::new().with_password_hash(&hash);
                 if let Some(file) = key_file {
                     key = key.with_key_file(&file);
                 }

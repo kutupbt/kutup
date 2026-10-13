@@ -65,7 +65,7 @@ fn keys(dir: &Path, name: &str) -> Vec<(VaultKey, Option<VaultKey>)> {
             let hash: [u8; 32] = Sha256::digest(password.as_bytes()).into();
             (
                 VaultKey::new().with_password(password),
-                Some(VaultKey::new().with_password_hash(hash)),
+                Some(VaultKey::new().with_password_hash(&hash)),
             )
         })
         .collect();
