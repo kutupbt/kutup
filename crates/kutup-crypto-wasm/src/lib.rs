@@ -3614,8 +3614,9 @@ impl AccountHeadKeys {
 
 /// The account's statement for a collaboration device key
 /// (docs/plans/device-registration.md): the authority (from the master key)
-/// signs the incarnation, the account, the device key, its purpose and the
-/// server's one-time challenge. Returns the canonical base64 signature.
+/// signs the incarnation, the server, the account, the device key, its
+/// purpose, the server's one-time challenge and the time. Returns the
+/// canonical base64 signature.
 #[wasm_bindgen(js_name = signDeviceRegistration)]
 pub fn sign_device_registration(
     master_key_base64: &str,
@@ -3623,19 +3624,51 @@ pub fn sign_device_registration(
     user_id: &str,
     device_public_base64: &str,
     challenge_base64: &str,
+    issued_at_ms: f64,
 ) -> Result<String, JsValue> {
     let master = master_key_32(master_key_base64)?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
         .map_err(|error| js_error(&error.to_string()))?;
     let device = public_key_32(device_public_base64, "device key")?;
     let challenge = public_key_32(challenge_base64, "challenge")?;
-    kutup_crypto::device_registration::sign(
-        &identity,
+    let statement = kutup_crypto::device_registration::DeviceStatement {
         server,
         user_id,
+        device_public: &device,
+        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: millis(issued_at_ms)?,
+    };
+    kutup_crypto::device_registration::sign(&identity, &statement)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The account's revocation of a device key, signed with its authority.
+/// Returns the canonical base64 signature.
+#[wasm_bindgen(js_name = signDeviceRevocation)]
+pub fn sign_device_revocation(
+    master_key_base64: &str,
+    server: &str,
+    device_public_base64: &str,
+    revoked_at_ms: f64,
+) -> Result<String, JsValue> {
+    let master = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let device = public_key_32(device_public_base64, "device key")?;
+    kutup_crypto::device_registration::sign_revocation(
+        &identity,
+        server,
         &device,
-        kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        &challenge,
+        millis(revoked_at_ms)?,
     )
     .map_err(|error| js_error(&error.to_string()))
+}
+
+/// A time from JavaScript: positive whole milliseconds.
+fn millis(value: f64) -> Result<i64, JsValue> {
+    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
+        return Err(js_error("time must be positive whole milliseconds"));
+    }
+    Ok(value as i64)
 }

@@ -198,6 +198,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         // --- devices ---
         crate::handlers::devices::register,
         crate::handlers::devices::challenge,
+        crate::handlers::devices::renew,
         crate::handlers::devices::list,
         crate::handlers::devices::revoke,
         // --- tus resumable uploads ---

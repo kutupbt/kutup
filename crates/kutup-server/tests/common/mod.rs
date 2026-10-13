@@ -590,7 +590,7 @@ pub fn device_challenge(c: &Client, base: &str, user: &User) -> String {
 }
 
 /// The registration body for `device_key`, signed by `signer`'s authority for
-/// `user`'s account over `challenge` (docs/plans/device-registration.md).
+/// `user`'s account over `challenge`, now (docs/plans/device-registration.md).
 pub fn device_registration_body(
     c: &Client,
     base: &str,
@@ -600,21 +600,43 @@ pub fn device_registration_body(
     challenge: &str,
 ) -> Value {
     let raw: [u8; 32] = STANDARD.decode(challenge).unwrap().try_into().unwrap();
-    let signature = kutup_crypto::device_registration::sign(
-        &signer.identity,
-        &server_domain(c, base),
-        &user.id,
-        device_key,
-        kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        &raw,
-    )
-    .unwrap();
+    let server = server_domain(c, base);
+    let issued_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let statement = kutup_crypto::device_registration::DeviceStatement {
+        server: &server,
+        user_id: &user.id,
+        device_public: device_key,
+        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        challenge: &raw,
+        issued_at_ms,
+    };
+    let signature = kutup_crypto::device_registration::sign(&signer.identity, &statement).unwrap();
     json!({
         "publicSigning": STANDARD.encode(device_key),
         "label": "test device",
         "challenge": challenge,
+        "issuedAtMs": issued_at_ms,
         "signature": signature,
     })
+}
+
+/// The account's signed revocation body for `device_key`.
+pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &[u8; 32]) -> Value {
+    let revoked_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let signature = kutup_crypto::device_registration::sign_revocation(
+        &user.identity,
+        &server_domain(c, base),
+        device_key,
+        revoked_at_ms,
+    )
+    .unwrap();
+    json!({ "revokedAtMs": revoked_at_ms, "signature": signature })
 }
 
 /// A device registered the proper way: a fresh challenge, signed by the

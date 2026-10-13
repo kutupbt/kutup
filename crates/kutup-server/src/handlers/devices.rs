@@ -2,8 +2,10 @@
 //! a browser tab or the CLI signs collaboration frames with. Each is vouched
 //! for by the account's authority (from the master key), over a one-time
 //! challenge this server issued, so a session token alone cannot add one and
-//! a captured registration cannot be played again. Revoking a device marks it
-//! inactive; open sockets close within the access recheck.
+//! a captured registration cannot be played again. The statement carries its
+//! time: renewed by the client every two weeks, it is what lets another
+//! server keep the device only while it is fresh. Revoking a device takes the
+//! account's signed revocation; the key never registers again.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,21 +16,31 @@ use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::{Postgres, Transaction};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-use kutup_crypto::device_registration::{self, CHALLENGE_LEN, PURPOSE_COLLAB_FRAMES};
+use kutup_crypto::device_registration::{
+    self, DeviceStatement, CHALLENGE_LEN, PURPOSE_COLLAB_FRAMES,
+};
 
 /// How long a challenge may be answered.
 const CHALLENGE_MINUTES: i64 = 5;
 /// The most challenges one account holds unanswered; a new one evicts the
 /// oldest, so nobody can fill the table.
 const MAX_OPEN_CHALLENGES: i64 = 5;
+/// The most active devices one account has (here, and per account at a
+/// server elsewhere: the same rule).
+pub(crate) const MAX_ACTIVE_DEVICES: i64 = 20;
+/// How far a statement's time may be from this server's clock: lenient, so a
+/// skewed device still registers (the challenge makes it single use).
+const MAX_CLOCK_SKEW_MS: i64 = 24 * 3600 * 1000;
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -37,8 +49,8 @@ pub struct DeviceChallenge {
     challenge: String,
 }
 
-/// `POST /api/devices/challenge` — a one-time challenge for registering a
-/// device: what the account's statement for the device key signs.
+/// `POST /api/devices/challenge` — a one-time challenge for registering or
+/// renewing a device: what the account's statement for the device key signs.
 #[utoipa::path(
     post,
     path = "/api/devices/challenge",
@@ -84,6 +96,21 @@ pub async fn challenge(State(state): State<AppState>, user: AuthUser) -> AppResu
     .into_response())
 }
 
+/// The account's statement for a device key, as a request carries it.
+#[derive(Debug, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeviceStatementBody {
+    /// The challenge from `POST /api/devices/challenge`, canonical base64.
+    challenge: String,
+    /// When the statement was made, UTC milliseconds (within a day of this
+    /// server's clock).
+    issued_at_ms: i64,
+    /// The account authority's `DeviceRegistrationV1` signature over the
+    /// incarnation, the server, the account, the device key, its purpose,
+    /// the challenge and the time (`kutup_crypto::device_registration`).
+    signature: String,
+}
+
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterDeviceRequest {
@@ -91,12 +118,8 @@ pub struct RegisterDeviceRequest {
     public_signing: String,
     /// What the account calls it (not signed: it can be renamed).
     label: String,
-    /// The challenge from `POST /api/devices/challenge`, canonical base64.
-    challenge: String,
-    /// The account authority's `DeviceRegistrationV1` signature over the
-    /// incarnation, the account, the device key, its purpose and the
-    /// challenge (`kutup_crypto::device_registration`), canonical base64.
-    signature: String,
+    #[serde(flatten)]
+    statement: DeviceStatementBody,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -113,11 +136,16 @@ pub struct RegisterDeviceResponse {
 pub struct DeviceRow {
     device_id: i64,
     label: String,
+    /// The device's Ed25519 public key, canonical base64: what a revocation names.
+    public_signing: String,
     is_active: bool,
     /// Active and registered under the account's current incarnation: the
     /// collaboration routes accept it. A client whose stored device is not
     /// trusted registers a new one.
     trusted: bool,
+    /// When its newest statement was made (UTC milliseconds): a client
+    /// renews it when it is two weeks old.
+    statement_issued_at_ms: i64,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -140,10 +168,77 @@ fn canonical_32(value: &str, field: &str) -> AppResult<[u8; 32]> {
         })
 }
 
+/// The account's authority key and current incarnation.
+async fn account_authority(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> AppResult<([u8; 32], String)> {
+    let (authority, incarnation): (String, String) = sqlx::query_as(
+        "SELECT account_authority_public_key, account_incarnation_id FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let authority = STANDARD
+        .decode(&authority)
+        .ok()
+        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+        .ok_or_else(|| not_authorized("the account has no authority key yet"))?;
+    Ok((authority, incarnation.trim().to_owned()))
+}
+
+/// Checks a statement for `device_key`: its challenge (used up here, in the
+/// caller's transaction, whatever comes next), its time, and its signature
+/// under the account's authority. Returns the challenge's bytes.
+async fn check_statement(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    device_key: &[u8; 32],
+    body: &DeviceStatementBody,
+) -> AppResult<Option<[u8; 32]>> {
+    let challenge = canonical_32(&body.challenge, "challenge")?;
+    // Looked up by its hash (an index lookup: nothing compares the secret
+    // itself in variable time).
+    let fresh: Option<bool> = sqlx::query_scalar(
+        "DELETE FROM device_registration_challenges
+         WHERE challenge_hash = $1 AND user_id = $2
+         RETURNING expires_at >= now()",
+    )
+    .bind(Sha256::digest(challenge).to_vec())
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if fresh != Some(true) {
+        return Ok(None);
+    }
+    let now_ms = OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    if (body.issued_at_ms - now_ms).abs() > MAX_CLOCK_SKEW_MS {
+        return Ok(None);
+    }
+    let (authority, _) = account_authority(tx, user_id).await?;
+    let user = user_id.to_string();
+    let statement = DeviceStatement {
+        server: &state.config.chat_server_name,
+        user_id: &user,
+        device_public: device_key,
+        purpose: PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: body.issued_at_ms,
+    };
+    Ok(
+        device_registration::verify(&authority, &statement, &body.signature)
+            .ok()
+            .map(|()| challenge),
+    )
+}
+
 /// `POST /api/devices` — registers a device key the account vouches for.
 /// `403 deviceNotAuthorized` when the statement does not verify under the
-/// account's authority, or its challenge is unknown, used or expired (get a
-/// new one and sign again); `409` when the key is another device's.
+/// account's authority, is more than a day off this server's clock, or its
+/// challenge is unknown, used or expired (get a new one and sign again);
+/// `409` when the key is another device's (revoked ones included) or the
+/// account has 20 active devices (`tooManyDevices`).
 #[utoipa::path(
     post,
     path = "/api/devices",
@@ -153,7 +248,8 @@ fn canonical_32(value: &str, field: &str) -> AppResult<[u8; 32]> {
     request_body = RegisterDeviceRequest,
     responses(
         (status = 201, description = "Device signing key registered", body = RegisterDeviceResponse),
-        (status = 403, description = "deviceNotAuthorized: the account's statement does not verify, or the challenge is not one to answer")
+        (status = 403, description = "deviceNotAuthorized: the account's statement does not verify, or the challenge is not one to answer"),
+        (status = 409, description = "The key is another device's, or tooManyDevices")
     )
 )]
 pub async fn register(
@@ -163,69 +259,52 @@ pub async fn register(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let device_key = canonical_32(&req.public_signing, "publicSigning")?;
-    let challenge = canonical_32(&req.challenge, "challenge")?;
     if req.label.chars().count() > 100 {
         return Err(AppError::bad_request("label is too long"));
     }
 
     let mut tx = state.pool.begin().await?;
-    // The challenge is used up whatever comes next: one answer each.
-    let fresh: Option<bool> = sqlx::query_scalar(
-        "DELETE FROM device_registration_challenges
-         WHERE challenge_hash = $1 AND user_id = $2
-         RETURNING expires_at >= now()",
-    )
-    .bind(Sha256::digest(challenge).to_vec())
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if fresh != Some(true) {
-        tx.commit().await?;
-        return Err(not_authorized("the challenge is unknown, used or expired"));
-    }
-    let (authority, incarnation_id): (String, String) = sqlx::query_as(
-        "SELECT account_authority_public_key, account_incarnation_id FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let authority = STANDARD
-        .decode(&authority)
-        .ok()
-        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-        .ok_or_else(|| not_authorized("the account has no authority key yet"))?;
-    // The challenge is looked up by its hash (an index lookup, so nothing
-    // compares the secret itself in variable time) and used up in this
-    // transaction, which also stores the device.
-    if device_registration::verify(
-        &authority,
-        &state.config.chat_server_name,
-        &user_id.to_string(),
-        &device_key,
-        PURPOSE_COLLAB_FRAMES,
-        &challenge,
-        &req.signature,
-    )
-    .is_err()
-    {
+    let Some(challenge) =
+        check_statement(&state, &mut tx, user_id, &device_key, &req.statement).await?
+    else {
+        // The challenge stays used up.
         tx.commit().await?;
         return Err(not_authorized(
-            "the account's statement for this device does not verify",
+            "the account's statement for this device does not verify, or its challenge is not one to answer",
         ));
+    };
+    // One count per account, under its row's lock.
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let active: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM user_devices WHERE user_id = $1 AND is_active")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if active >= MAX_ACTIVE_DEVICES {
+        tx.commit().await?;
+        return Err(AppError::conflict(format!(
+            "too many devices for this account (at most {MAX_ACTIVE_DEVICES}): revoke one first"
+        ))
+        .with_details(serde_json::json!({ "code": "tooManyDevices" })));
     }
-
+    let (_, incarnation_id) = account_authority(&mut tx, user_id).await?;
     let inserted: Result<(i64, OffsetDateTime), sqlx::Error> = sqlx::query_as(
         r#"INSERT INTO user_devices (user_id, public_signing, label, incarnation_id,
-                                     registration_challenge, registration_signature)
-           VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6)
+                                     registration_challenge, registration_issued_at_ms,
+                                     registration_signature)
+           VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7)
            RETURNING id, created_at"#,
     )
     .bind(user_id)
     .bind(device_key.to_vec())
     .bind(&req.label)
-    .bind(incarnation_id.trim())
+    .bind(&incarnation_id)
     .bind(challenge.to_vec())
-    .bind(&req.signature)
+    .bind(req.statement.issued_at_ms)
+    .bind(&req.statement.signature)
     .fetch_one(&mut *tx)
     .await;
     let (id, created_at) = match inserted {
@@ -248,7 +327,71 @@ pub async fn register(
         .into_response())
 }
 
-/// `GET /api/devices` — mirrors `List`.
+/// `POST /api/devices/{id}/renew` — a newer statement for an active device of
+/// the account's current incarnation (the same checks as registering). A
+/// client renews when its device's statement is two weeks old; servers
+/// elsewhere keep the device only while its newest statement is fresh.
+#[utoipa::path(
+    post,
+    path = "/api/devices/{id}/renew",
+    tag = "devices",
+    security(("BearerAuth" = [])),
+    params(("id" = i64, Path, description = "Device id")),
+    request_body = DeviceStatementBody,
+    responses(
+        (status = 204, description = "Renewed"),
+        (status = 403, description = "deviceNotAuthorized")
+    )
+)]
+pub async fn renew(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<DeviceStatementBody>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let device_id: i64 = id
+        .parse()
+        .map_err(|_| AppError::bad_request("invalid id"))?;
+    let mut tx = state.pool.begin().await?;
+    let key: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT d.public_signing FROM user_devices d JOIN users u ON u.id = d.user_id
+         WHERE d.id = $1 AND d.user_id = $2 AND d.is_active
+           AND d.incarnation_id = u.account_incarnation_id
+         FOR UPDATE OF d",
+    )
+    .bind(device_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(key) = key else {
+        return Err(not_authorized("no such trusted device: register one"));
+    };
+    let key: [u8; 32] = key
+        .try_into()
+        .map_err(|_| AppError::internal("device key"))?;
+    let Some(challenge) = check_statement(&state, &mut tx, user_id, &key, &body).await? else {
+        tx.commit().await?;
+        return Err(not_authorized(
+            "the renewal does not verify, or its challenge is not one to answer",
+        ));
+    };
+    sqlx::query(
+        "UPDATE user_devices SET registration_challenge = $2, registration_issued_at_ms = $3,
+                                 registration_signature = $4
+         WHERE id = $1 AND registration_issued_at_ms < $3",
+    )
+    .bind(device_id)
+    .bind(challenge.to_vec())
+    .bind(body.issued_at_ms)
+    .bind(&body.signature)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `GET /api/devices` — the account's devices.
 #[utoipa::path(
     get,
     path = "/api/devices",
@@ -259,72 +402,117 @@ pub async fn register(
 )]
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    type Row = (
-        i64,
-        String,
-        bool,
-        bool,
-        OffsetDateTime,
-        Option<OffsetDateTime>,
-    );
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: i64,
+        label: String,
+        public_signing: Vec<u8>,
+        is_active: bool,
+        trusted: bool,
+        issued_at_ms: i64,
+        created_at: OffsetDateTime,
+        last_seen_at: Option<OffsetDateTime>,
+    }
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT d.id, COALESCE(d.label, ''), d.is_active,
-                  d.is_active AND d.incarnation_id = u.account_incarnation_id,
-                  d.created_at, d.last_seen_at
+        r#"SELECT d.id, COALESCE(d.label, '') AS label, d.public_signing, d.is_active,
+                  d.is_active AND d.incarnation_id = u.account_incarnation_id AS trusted,
+                  d.registration_issued_at_ms AS issued_at_ms, d.created_at, d.last_seen_at
            FROM user_devices d JOIN users u ON u.id = d.user_id
            WHERE d.user_id = $1 ORDER BY d.created_at DESC"#,
     )
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-
     let out: Vec<DeviceRow> = rows
         .into_iter()
-        .map(
-            |(device_id, label, is_active, trusted, created_at, last_seen_at)| DeviceRow {
-                device_id,
-                label,
-                is_active,
-                trusted,
-                created_at,
-                last_seen_at,
-            },
-        )
+        .map(|row| DeviceRow {
+            device_id: row.id,
+            label: row.label,
+            public_signing: STANDARD.encode(row.public_signing),
+            is_active: row.is_active,
+            trusted: row.trusted,
+            statement_issued_at_ms: row.issued_at_ms,
+            created_at: row.created_at,
+            last_seen_at: row.last_seen_at,
+        })
         .collect();
     Ok(Json(out).into_response())
 }
 
-/// `DELETE /api/devices/{id}` — mirrors `Revoke`.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RevokeDeviceRequest {
+    /// When, in UTC milliseconds (signed).
+    revoked_at_ms: i64,
+    /// The account authority's `DeviceRevocationV1` signature over the
+    /// incarnation, the server, the device key and `revokedAtMs`.
+    signature: String,
+}
+
+/// `DELETE /api/devices/{id}` — revokes a device for good, with the account's
+/// signed revocation (a session alone cannot revoke an account's devices; the
+/// statement is what other servers are told). The key never registers again.
 #[utoipa::path(
     delete,
     path = "/api/devices/{id}",
     tag = "devices",
     security(("BearerAuth" = [])),
     params(("id" = i64, Path, description = "Device id")),
-    responses((status = 204, description = "Device revoked; live collab connections dropped"))
+    request_body = RevokeDeviceRequest,
+    responses(
+        (status = 204, description = "Device revoked; live collab connections dropped"),
+        (status = 403, description = "deviceNotAuthorized: the revocation does not verify under the account's authority")
+    )
 )]
 pub async fn revoke(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    Json(req): Json<RevokeDeviceRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let device_id: i64 = id
         .parse()
         .map_err(|_| AppError::bad_request("invalid id"))?;
 
-    let res = sqlx::query(
-        "UPDATE user_devices SET is_active = false WHERE id = $1 AND user_id = $2 AND is_active = true",
+    let mut tx = state.pool.begin().await?;
+    let key: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT public_signing FROM user_devices
+         WHERE id = $1 AND user_id = $2 AND is_active FOR UPDATE",
     )
     .bind(device_id)
     .bind(user_id)
-    .execute(&state.pool)
-    .await;
-    match res {
-        Ok(r) if r.rows_affected() > 0 => {}
-        _ => return Err(AppError::not_found("not found")),
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(key) = key else {
+        return Err(AppError::not_found("not found"));
+    };
+    let key: [u8; 32] = key
+        .try_into()
+        .map_err(|_| AppError::internal("device key"))?;
+    let (authority, _) = account_authority(&mut tx, user_id).await?;
+    if device_registration::verify_revocation(
+        &authority,
+        &state.config.chat_server_name,
+        &key,
+        req.revoked_at_ms,
+        &req.signature,
+    )
+    .is_err()
+    {
+        return Err(not_authorized("the account's revocation does not verify"));
     }
-    // Drop this device's live collab WS connections — mirrors Go's hub.CloseDevice.
+    sqlx::query(
+        "UPDATE user_devices SET is_active = false, revoked_at_ms = $2, revocation_signature = $3
+         WHERE id = $1",
+    )
+    .bind(device_id)
+    .bind(req.revoked_at_ms)
+    .bind(&req.signature)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    // Drop this device's live collab connections.
     state.hub.close_device(device_id);
     Ok(StatusCode::NO_CONTENT.into_response())
 }

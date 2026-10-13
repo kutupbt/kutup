@@ -8,7 +8,15 @@ DELETE FROM user_devices;
 ALTER TABLE user_devices
     ADD COLUMN incarnation_id character(64) NOT NULL,
     ADD COLUMN registration_challenge bytea NOT NULL,
+    -- When the newest statement was made (renewed every two weeks).
+    ADD COLUMN registration_issued_at_ms bigint NOT NULL,
     ADD COLUMN registration_signature text NOT NULL,
+    -- The account's signed revocation (DeviceRevocationV1), once revoked.
+    ADD COLUMN revoked_at_ms bigint,
+    ADD COLUMN revocation_signature text,
+    ADD CONSTRAINT user_devices_revocation_check CHECK (
+        (revoked_at_ms IS NULL) = (revocation_signature IS NULL)
+        AND (revoked_at_ms IS NULL OR NOT is_active)),
     ADD CONSTRAINT user_devices_incarnation_id_check CHECK (incarnation_id ~ '^[0-9a-f]{64}$'),
     ADD CONSTRAINT user_devices_registration_challenge_check CHECK (octet_length(registration_challenge) = 32),
     ADD CONSTRAINT user_devices_public_signing_key UNIQUE (public_signing);

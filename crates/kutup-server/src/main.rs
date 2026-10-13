@@ -1134,6 +1134,7 @@ fn build_router(state: AppState) -> Router {
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/challenge", post(devices::challenge))
+        .route("/api/devices/:id/renew", post(devices::renew))
         .route("/api/devices/:id", delete(devices::revoke))
         // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
