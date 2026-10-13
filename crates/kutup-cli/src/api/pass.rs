@@ -25,17 +25,22 @@ impl Client {
 
     /// Keeps (or replaces) the caller's secret for vault `file_id`, on top
     /// of the revision the change started from (`base_revision`, 0 for none).
+    /// `false`: another device kept a key first.
     pub fn put_vault_secret(
         &self,
         file_id: &str,
         envelope: &str,
         base_revision: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let resp = self
             .request(Method::PUT, &format!("/pass/vault-secrets/{file_id}"))
             .json(&serde_json::json!({ "envelope": envelope, "baseRevision": base_revision }))
             .send()?;
-        super::check_ok(resp)
+        if resp.status().as_u16() == 409 {
+            return Ok(false);
+        }
+        super::check_ok(resp)?;
+        Ok(true)
     }
 
     /// Forgets the caller's secret for vault `file_id`.

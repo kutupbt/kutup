@@ -7,7 +7,7 @@ import type { ChatHistoryEntry } from '@kutup/chat-core/types'
 const all: ChatHistoryEntry[] = Array.from({ length: 350 }, (_, i): ChatHistoryEntry => ({
   id: `m${350 - i}`,
   conversation: { kind: 'group', groupId: 'g1' },
-  peer: '',
+  sender: '',
   direction: 'incoming',
   timestampMs: 350 - i,
   delivered: true,

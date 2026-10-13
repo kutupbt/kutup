@@ -61,6 +61,26 @@ impl VaultKey {
         self.key_file.as_deref().map(Vec::as_slice)
     }
 
+    /// Whether `other` is the same composite key: the same password part
+    /// (a password and its SHA-256 are the same part) and the same key file
+    /// element, so each opens what the other does.
+    pub fn same_as(&self, other: &VaultKey) -> bool {
+        use sha2::{Digest as _, Sha256};
+        let password = |key: &VaultKey| -> Option<[u8; 32]> {
+            match (&key.password, &key.password_hash) {
+                (Some(password), _) => Some(Sha256::digest(password.as_bytes()).into()),
+                (None, Some(hash)) => Some(**hash),
+                (None, None) => None,
+            }
+        };
+        let element = |key: &VaultKey| {
+            key.key_file
+                .as_deref()
+                .and_then(|file| keepass::key_file_element(file))
+        };
+        password(self) == password(other) && element(self) == element(other)
+    }
+
     /// Adds the contents of a key file (any of KeePass's key file kinds).
     pub fn with_key_file(mut self, contents: &[u8]) -> Self {
         self.key_file = Some(Zeroizing::new(contents.to_vec()));
@@ -209,6 +229,22 @@ mod tests {
         let wrong: [u8; 32] = Sha256::digest(b"other").into();
         let saved = save(&sample(), &VaultKey::new().with_password("parola-çğ")).unwrap();
         assert!(open(&saved, &VaultKey::new().with_password_hash(&wrong)).is_err());
+    }
+
+    #[test]
+    fn the_same_key_however_it_is_held() {
+        use sha2::{Digest as _, Sha256};
+        let hash: [u8; 32] = Sha256::digest(b"p").into();
+        let by_password = VaultKey::new().with_password("p").with_key_file(&[7; 32]);
+        let by_hash = VaultKey::new()
+            .with_password_hash(&hash)
+            .with_key_file(&[7; 32]);
+        assert!(by_password.same_as(&by_hash));
+        assert!(!by_password.same_as(&VaultKey::new().with_password("q").with_key_file(&[7; 32])));
+        assert!(!by_password.same_as(&VaultKey::new().with_password("p")));
+        assert!(!VaultKey::new()
+            .with_password("p")
+            .same_as(&VaultKey::new().with_key_file(&[7; 32])));
     }
 
     /// Every kind of key file is kept as 32 bytes that open the vault as it does.

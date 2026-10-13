@@ -32,10 +32,9 @@ import type {
 // timer changes) in one list; these functions fold them together. Pure, so
 // the rules are tested once instead of living inside components.
 
-/** Who wrote an entry: this account for outgoing ones, else the peer. */
-export function messageActor(message: ChatHistoryEntry, selfAddress: string): string | null {
-  if (message.direction === 'outgoing') return selfAddress
-  return message.conversation.kind === 'direct' ? directAddress(message.conversation) : message.peer
+/** Who wrote an entry: this account for outgoing ones, else its sender. */
+export function messageActor(message: ChatHistoryEntry, selfAddress: string): string {
+  return message.direction === 'outgoing' ? selfAddress : message.sender
 }
 
 /** The id other entries (replies, reactions, edits) point at. */
@@ -464,7 +463,7 @@ export function threadView(
     return {
       entry,
       id,
-      author: messageActor(entry, selfAddress) ?? entry.peer,
+      author: messageActor(entry, selfAddress),
       outgoing: entry.direction === 'outgoing',
       mutation: mutations.get(id) ?? null,
       replyTo,
@@ -491,7 +490,7 @@ export function threadView(
       entry: {
         id: `viewed:${body.messageId}`,
         conversation: body.conversation,
-        peer: body.sender,
+        sender: body.sender,
         direction: outgoing ? 'outgoing' : 'incoming',
         timestampMs: body.timestampMs,
         delivered: true,

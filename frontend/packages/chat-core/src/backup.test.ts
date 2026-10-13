@@ -181,8 +181,9 @@ class ScriptedTransport implements ChatBackupTransport {
 function historyEntry(): ChatHistoryEntry {
   return {
     id: '33333333-3333-4333-8333-333333333333',
-    conversation: { kind: 'direct', address: { username: 'user', server: 'kutup.dev' } },
-    peer: 'user@kutup.dev',
+    // Outgoing to someone else, so the chat and the sender differ.
+    conversation: { kind: 'direct', address: { username: 'bob', server: 'kutup.dev' } },
+    sender: 'user@kutup.dev',
     direction: 'outgoing',
     senderDeviceId: 9,
     timestampMs: 1_700_000_000_000,
@@ -380,6 +381,8 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(history).toHaveLength(1)
     expect(history[0].senderDeviceId).toBe(9)
     expect(history[0].delivered).toBe(true)
+    expect(history[0].sender).toBe('user@kutup.dev')
+    expect(history[0].conversation).toEqual({ kind: 'direct', address: { username: 'bob', server: 'kutup.dev' } })
   })
 
   it('accepts a second device deleting a record another device already deleted', async () => {
@@ -847,7 +850,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       ...entry,
       id: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
       conversation: { kind: 'group', groupId: conversation },
-      peer: '',
+      sender: 'user@kutup.dev',
       timestampMs: 1_700_000_000_000 + id,
       content: { ...entry.content, messageId: `10000000-0000-4000-8000-${String(id).padStart(12, '0')}`, body: { text }, text, ...extra },
     }

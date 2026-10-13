@@ -25,6 +25,7 @@ interface WasmVault {
   mergeWith(base: Uint8Array | null | undefined, theirs: Uint8Array, password?: string | null, keyFile?: Uint8Array | null): unknown
   changeKey(password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): void
   keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): string
+  keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): boolean
   free(): void
 }
 
@@ -100,6 +101,8 @@ async function run(request: Request): Promise<unknown> {
     }
     case 'keepKey':
       return vault(request.handle).keepKey(request.masterKey, request.binding, request.fileId, request.revision, request.generated)
+    case 'keptKeyIsMine':
+      return vault(request.handle).keptKeyIsMine(request.envelope, request.masterKey, request.binding, request.fileId)
     case 'openKept':
       return module.openKept(request.envelope, request.masterKey, request.binding, request.fileId)
     case 'importPreview':

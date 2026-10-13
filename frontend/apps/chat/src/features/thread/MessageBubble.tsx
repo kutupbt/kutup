@@ -158,7 +158,7 @@ export function MessageBubble({
                   <span className="block font-semibold">
                     {view.replyTo.direction === 'outgoing'
                       ? t('chat.you')
-                      : profiles.get(view.replyTo.peer)?.displayName || view.replyTo.peer}
+                      : profiles.get(view.replyTo.sender)?.displayName || view.replyTo.sender}
                   </span>
                   <span className="line-clamp-2 opacity-90">{messagePreview(view.replyTo, view.replyToMutation, t)}</span>
                 </>

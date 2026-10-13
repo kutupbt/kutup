@@ -6,7 +6,7 @@ function entry(id: string, groupId: string, timestampMs: number): ChatHistoryEnt
   return {
     id,
     conversation: { kind: 'group', groupId },
-    peer: '',
+    sender: '',
     direction: 'incoming',
     timestampMs,
     delivered: true,

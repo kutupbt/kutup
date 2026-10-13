@@ -9,7 +9,7 @@ function entry(id: string, expiresAtMs?: number): ChatHistoryEntry {
   return {
     id,
     conversation: { kind: 'group', groupId: 'g1' },
-    peer: '',
+    sender: '',
     direction: 'incoming',
     timestampMs: 1,
     delivered: true,

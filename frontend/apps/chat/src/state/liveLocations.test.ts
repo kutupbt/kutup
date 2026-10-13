@@ -9,11 +9,11 @@ function live(generation: number, streamId: string, untilMs = 10_000): ChatLiveL
   return { shareId: SHARE, generation, server: 'a.test', streamId, key: 'k', readCapability: 'r', untilMs }
 }
 
-function entry(id: string, peer: string, content: Record<string, unknown>, timestampMs = 1): ChatHistoryEntry {
+function entry(id: string, sender: string, content: Record<string, unknown>, timestampMs = 1): ChatHistoryEntry {
   return {
     id,
     conversation,
-    peer,
+    sender,
     direction: 'incoming',
     timestampMs,
     delivered: true,
@@ -22,7 +22,7 @@ function entry(id: string, peer: string, content: Record<string, unknown>, times
   } as unknown as ChatHistoryEntry
 }
 
-const actor = (m: ChatHistoryEntry) => m.peer
+const actor = (m: ChatHistoryEntry) => m.sender
 
 describe('foldLiveLocations', () => {
   it('follows the sharer’s newer streams and stop, not anyone else’s', () => {
