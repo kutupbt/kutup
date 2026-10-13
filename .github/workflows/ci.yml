@@ -31,32 +31,22 @@ env:
 
 jobs:
   format-and-fuzz:
-    name: Formatting and fuzz targets
+    name: Static checks (format, lint, docs)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - name: Verify Compose S3 credential wiring
-        run: python3 scripts/test-compose-s3-credentials.py
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: security-fuzz
-          workspaces: |
-            . -> target
-            fuzz -> fuzz/target
-      - name: Check formatting
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path crates/kutup-chat-core/Cargo.toml -- --check
-          cargo fmt --manifest-path fuzz/Cargo.toml -- --check
-      - name: Compile all parser fuzz targets
-        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+          shared-key: security-static
+      - name: Static checks
+        run: scripts/gate.sh static
 
   rust-workspace:
     name: Rust workspace
@@ -72,10 +62,10 @@ jobs:
         with:
           shared-key: rust-workspace
       - name: Run workspace tests
-        run: cargo test --locked --workspace --all-targets
+        run: scripts/gate.sh rust-workspace
 
   chat-core:
-    name: Chat core
+    name: Standalone crates (Chat core, FFI, fuzz)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -86,10 +76,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: chat-core
-          workspaces: crates/kutup-chat-core -> crates/kutup-chat-core/target
-      - name: Run standalone Chat core tests
-        run: cargo test --locked --manifest-path crates/kutup-chat-core/Cargo.toml --all-targets
+          shared-key: standalone-crates
+          workspaces: |
+            crates/kutup-chat-core -> crates/kutup-chat-core/target
+            crates/kutup-client-ffi -> crates/kutup-client-ffi/target
+            fuzz -> fuzz/target
+      - name: Run the standalone crates (Chat core tests, FFI and fuzz lockfiles)
+        run: scripts/gate.sh rust-standalone
 
   web:
     name: Web, WASM, and frontend tests
@@ -119,20 +112,8 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install frontend dependencies
-        run: pnpm -C frontend install --frozen-lockfile
-      - name: Build WASM modules
-        run: pnpm -C frontend run build:wasm
-      - name: Run frontend tests
-        run: pnpm -C frontend exec vitest run --reporter=dot
-      - name: Verify generated crypto WASM vectors
-        run: pnpm -C frontend run test:crypto-wasm
-      - name: Check the Kutup Pass WASM module
-        run: pnpm -C frontend run test:pass-wasm
-      - name: Check Mail's search index WASM module
-        run: pnpm -C frontend run test:mail-search-wasm
-      - name: Build production web app
-        run: pnpm -C frontend run build
+      - name: Frontend install, WASM, type check, lint, tests and build
+        run: scripts/gate.sh web
 
   chat-backup-integration:
     name: Chat backup lifecycle (Postgres and SeaweedFS)
@@ -151,7 +132,7 @@ jobs:
         with:
           shared-key: chat-backup-integration
       - name: Run isolated live backup lifecycle
-        run: scripts/test-chat-backup-integration.sh
+        run: scripts/gate.sh live backup
 
   chat-backup-browser:
     name: Clean-browser Chat backup recovery
@@ -244,8 +225,7 @@ jobs:
             --resolve account.localhost:38443:127.0.0.1 \
             https://account.localhost:38443/register >/dev/null
       - name: Run clean-browser recovery
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts specs/36-chat-local-groups.spec.ts specs/38-chat-group-device-replaced.spec.ts specs/40-chat-open-failures.spec.ts specs/90-load-retries.spec.ts --project=chromium
+        run: scripts/gate.sh browser chat-backup
       - name: Collect sanitized backup diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single
@@ -357,14 +337,11 @@ jobs:
             --resolve account.localhost:38443:127.0.0.1 \
             https://account.localhost:38443/register >/dev/null
       - name: Run the Mail browser specs
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/54-mail-address-keys.spec.ts specs/57-mail.spec.ts specs/58-mail-sending-safety.spec.ts specs/59-mail-outside-off.spec.ts specs/60-mail-groups.spec.ts specs/80-mail-people.spec.ts specs/81-mail-list.spec.ts specs/82-mail-folders-labels.spec.ts specs/83-mail-filters.spec.ts specs/84-mail-block-allow.spec.ts specs/85-mail-settings-empty.spec.ts specs/86-mail-encrypt-sign.spec.ts specs/87-mail-identity.spec.ts specs/88-mail-auto-reply.spec.ts specs/89-mail-appearance.spec.ts specs/91-mail-pgp-settings.spec.ts specs/92-contact-keys.spec.ts specs/93-mail-list-filters.spec.ts specs/94-mail-message-tools.spec.ts specs/95-mail-link-confirm.spec.ts specs/96-mail-attachments.spec.ts specs/97-mail-paging.spec.ts specs/98-mail-select-all.spec.ts specs/99-mail-one-time-code.spec.ts specs/100-mail-read-receipts.spec.ts specs/101-mail-remote-images.spec.ts specs/102-mail-undo-send.spec.ts specs/103-mail-scheduled-send.spec.ts specs/104-mail-snooze.spec.ts specs/105-mail-composer-format.spec.ts specs/106-mail-images-emoji.spec.ts specs/107-mail-recipient-groups.spec.ts specs/108-mail-expiring.spec.ts specs/109-mail-image-proxy.spec.ts specs/110-mail-image-settings.spec.ts specs/111-mail-advanced-search.spec.ts specs/112-mail-desktop-notifications.spec.ts specs/113-mail-body-search.spec.ts --project=chromium
+        run: scripts/gate.sh browser mail
       - name: Run the Contacts browser specs
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/55-contacts.spec.ts specs/56-contact-pickers.spec.ts specs/74-contact-shields.spec.ts --project=chromium
+        run: scripts/gate.sh browser contacts
       - name: Run the Pass browser specs
-        working-directory: tests/e2e
-        run: npm exec -- playwright test specs/76-pass-vault.spec.ts specs/77-pass-merge.spec.ts specs/78-pass-offline.spec.ts specs/79-pass-unlock.spec.ts specs/150-pass-import.spec.ts specs/151-pass-pin.spec.ts specs/152-pass-site-icons.spec.ts specs/153-pass-custom-icons.spec.ts specs/154-pass-vault-keys.spec.ts --project=chromium
+        run: scripts/gate.sh browser pass
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single
@@ -428,7 +405,7 @@ jobs:
             }
           skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
       - name: Run the mail gate
-        run: scripts/test-mail-inbound.sh
+        run: scripts/gate.sh live mail
 
   chat-security-e2e:
     name: Two-server browser security
@@ -496,7 +473,7 @@ jobs:
             }
           skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
       - name: Run two-server federation and browser gate
-        run: scripts/test-chat-federation.sh
+        run: scripts/gate.sh live federation
       - name: Upload browser failure artifacts
         if: failure()
         uses: actions/upload-artifact@v7

@@ -22,7 +22,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::{can_access_file, trusted_uuid};
+use crate::handlers::{can_access_file, trusted_uuid, try_can_access_file};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
