@@ -494,9 +494,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         }
     };
 
-    let storage_quota_bytes = crate::storage_pool::default_quota(pool)
-        .await
-        .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
+    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
+            return;
+        }
+    };
     let res = sqlx::query(
         r#"INSERT INTO users (
             username, login_key_hash,

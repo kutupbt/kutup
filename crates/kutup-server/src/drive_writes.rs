@@ -45,7 +45,12 @@ pub const FILE_SHARE_CURRENT: &str =
 
 /// Whether `user_id` edits the file through a share of the file itself, at
 /// its current key (so may also rename it, as Google Drive lets editors).
-pub async fn is_file_share_editor(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+/// A failed query is an error, never "no".
+pub async fn is_file_share_editor(
+    pool: &PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(&format!(
         r#"SELECT EXISTS(SELECT 1 FROM file_shares fs
                   JOIN files f ON f.id = fs.file_id
@@ -58,7 +63,6 @@ pub async fn is_file_share_editor(pool: &PgPool, user_id: Uuid, file_id: Uuid) -
     .bind(user_id)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
 }
 
 /// Locks the user's row, which serialises every charge to their storage

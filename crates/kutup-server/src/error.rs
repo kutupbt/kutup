@@ -154,6 +154,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_database_error_is_a_generic_500() {
+        // What a handler's `?` on a failed query becomes: a 500 that names
+        // nothing about the database.
+        let (status, body) = body_string(AppError::from(sqlx::Error::PoolTimedOut)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, r#"{"error":"internal server error"}"#);
+    }
+
+    #[tokio::test]
     async fn server_error_is_generic() {
         // 5xx detail must not leak — mirrors the Go handlers' generic 500 body.
         let (status, body) = body_string(AppError::internal("secret db dsn leaked")).await;

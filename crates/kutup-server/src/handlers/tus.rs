@@ -239,7 +239,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((owner_user_id, key_epoch)) = collection else {
         return tus_text(StatusCode::FORBIDDEN, "forbidden");
@@ -258,7 +261,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         .await
         {
             Ok(value) => value,
-            Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+            Err(error) => {
+                tracing::error!(%error, "upload: a database read failed");
+                return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+            }
         };
         if can_upload != Some(true) {
             return tus_text(StatusCode::FORBIDDEN, "forbidden");
@@ -432,7 +438,10 @@ pub async fn head(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((total_bytes, received_bytes)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
@@ -550,7 +559,10 @@ pub async fn patch(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((
         coll_id,
@@ -905,7 +917,10 @@ pub async fn delete(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((storage_path, s3_upload_id)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");

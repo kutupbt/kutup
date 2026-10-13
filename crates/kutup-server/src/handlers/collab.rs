@@ -278,22 +278,33 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
         .execute(&state.pool)
         .await;
 
-    // hello payload fields.
-    let doc_key_id: i64 = sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
+    // hello payload fields. These are not best-effort: a client told a
+    // wrong head or sender seq could reuse sequence numbers and have its edits
+    // dropped as replays, so a failed read closes the socket before hello.
+    let read = async {
+        let doc_key_id: i64 =
+            sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
+                .bind(file_uuid)
+                .fetch_one(&state.pool)
+                .await?;
+        let head_seq: i64 = log_head(&state.pool, file_uuid).await?;
+        let my_sender_seq: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log \
+             WHERE file_id = $1 AND sender_device = $2",
+        )
         .bind(file_uuid)
+        .bind(device_id)
         .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
-    let head_seq: i64 = log_head(&state.pool, file_uuid).await.unwrap_or(0);
-    let my_sender_seq: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log \
-         WHERE file_id = $1 AND sender_device = $2",
-    )
-    .bind(file_uuid)
-    .bind(device_id)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
+        .await?;
+        Ok::<_, sqlx::Error>((doc_key_id, head_seq, my_sender_seq))
+    };
+    let (doc_key_id, head_seq, my_sender_seq) = match read.await {
+        Ok(values) => values,
+        Err(error) => {
+            tracing::error!(%error, "collab: could not read the document's state; closing");
+            return;
+        }
+    };
 
     // Peer summaries BEFORE join (so the new peer isn't in its own hello list).
     let hello = Hello {
@@ -337,12 +348,14 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
         tokio::select! {
             _ = peer.close.notified() => break,
             _ = recheck.tick() => {
-                let session_live =
-                    crate::sessions::live(&state.pool, conn.session_id, conn.user_uuid).await.is_ok();
-                // Closed on a definite "no"; a failed check is tried again
-                // at the next tick.
+                // Closed on a definite "no" (the session ended, the access
+                // gone); a failed check is tried again at the next tick.
+                let session_ended = matches!(
+                    crate::sessions::live(&state.pool, conn.session_id, conn.user_uuid).await,
+                    Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
+                );
                 let access = file_access(&state.pool, conn.user_uuid, file_uuid).await;
-                if !session_live || matches!(access, Ok(None | Some(Access::None))) {
+                if session_ended || matches!(access, Ok(None | Some(Access::None))) {
                     break;
                 }
             }
@@ -560,7 +573,8 @@ async fn handle_frame(
 
     // Everything else changes the document: editors only, checked per frame
     // (a share can be narrowed while the socket is open).
-    // A failed check refuses the edit (never "allowed" on an error).
+    // A failed check never lets the edit through: it closes the socket, as
+    // a definite "no" does (the client reconnects).
     match file_access(&state.pool, conn.user_uuid, file_uuid).await {
         Ok(Some(Access::Write)) => {}
         Ok(Some(Access::Read)) => return true,

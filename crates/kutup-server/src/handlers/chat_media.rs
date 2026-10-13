@@ -394,7 +394,10 @@ pub async fn head_upload(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((total, received)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
@@ -462,7 +465,10 @@ pub async fn patch_upload(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((
         attachment_id,
@@ -613,7 +619,12 @@ pub async fn patch_upload(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        // The object is already complete in storage: the cleanup below
+        // deletes it, so a failed finalize leaves nothing behind.
+        Err(error) => {
+            tracing::error!(%error, "chat media: finalizing an upload failed");
+            None
+        }
     };
     if storage_reference_id.is_none()
         || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
@@ -670,7 +681,10 @@ pub async fn delete_upload(
     .await
     {
         Ok(value) => value,
-        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
     };
     let Some((storage_path, s3_upload_id)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");

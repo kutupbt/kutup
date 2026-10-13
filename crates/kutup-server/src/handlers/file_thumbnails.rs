@@ -200,7 +200,11 @@ pub async fn upload(
 
 /// A file in its owner's trash (on its own, not inside a trashed folder):
 /// its owner, who may restore it, may still see its picture (Photos' trash).
-async fn owns_trashed_file(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+async fn owns_trashed_file(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
                         WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_user_id = $2
@@ -210,7 +214,6 @@ async fn owns_trashed_file(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) ->
     .bind(user_id)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
 }
 
 /// `GET /api/files/{fileId}/thumbnails/{variant}` — the envelope.
@@ -238,7 +241,7 @@ pub async fn download(
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let variant = parse_variant(&variant)?;
     if !can_access_file(&state.pool, user_id, fid).await?
-        && !owns_trashed_file(&state.pool, user_id, fid).await
+        && !owns_trashed_file(&state.pool, user_id, fid).await?
     {
         return Err(AppError::forbidden("forbidden"));
     }

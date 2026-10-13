@@ -376,8 +376,9 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
   `Result<bool, sqlx::Error>`; request handlers propagate the error (a 500),
   never read it as "no", "not found" or zero. Code that cannot fail a request
   (a background loop, a WebSocket recheck) logs and retries, and acts only on
-  a definite answer: a recheck closes a socket on a definite "no", a write
-  check refuses on an error.
+  a definite answer: a recheck closes a socket on a definite "no" (a session
+  that ended, access gone) and retries on an error; a check guarding a write
+  never lets it through on an error (it refuses, or closes the socket).
 - **A GET changes nothing a person owns.** A GET may fill caches of derived
   data (a ciphertext digest, map tiles, a peer's policy) or record timing,
   but never creates, changes or deletes user data; that belongs to a write

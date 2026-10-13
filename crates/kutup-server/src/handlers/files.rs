@@ -528,7 +528,7 @@ pub async fn update_metadata(
     };
     // The folder's owner, an uploader who may delete, or someone the file
     // itself is shared with for editing.
-    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await {
+    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await? {
         require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
     }
 

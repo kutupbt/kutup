@@ -295,8 +295,7 @@ pub async fn update_user(
         )
         .bind(target)
         .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+        .await?;
         if other_usable == 0 {
             return Err(AppError::bad_request("cannot remove the last admin"));
         }
