@@ -121,6 +121,27 @@ with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.m
 
 ### Running tests
 
+**The gate.** `scripts/gate.sh` runs the same checks CI runs. Every CI job calls
+one of its stages, so a stage that passes locally passes in CI:
+
+```sh
+scripts/gate.sh static              # fmt (every Cargo root), workspace clippy, docs and Compose checks
+scripts/gate.sh rust                # workspace tests; Chat core tests; FFI and fuzz lockfiles
+scripts/gate.sh web                 # install, WASM build, tsc, lint, vitest, WASM vectors, build
+scripts/gate.sh browser mail pass   # browser specs of the named suites, against a running stack
+scripts/gate.sh live mail           # live gates: mail, backup, federation
+scripts/gate.sh all                 # static + rust + web
+```
+
+Two crates stay outside the Cargo workspace with their own `Cargo.lock`:
+`crates/kutup-chat-core` and `crates/kutup-client-ffi`, as do the `fuzz` targets.
+Root-level `cargo fmt --all` and `cargo test --workspace` never see them; the gate
+does. Browser spec lists live in `tests/e2e/suites/<suite>.txt`, one path per
+line. Add a new spec there, not in the workflow; CI and the gate both read
+those files.
+
+The individual commands, for running one thing at a time:
+
 ```sh
 cargo test                                      # all crates
 cargo test -p kutup-crypto                      # crypto byte-parity vectors
@@ -175,7 +196,7 @@ build the whole stack, so they run on pushes to `master` and on demand
 two-server security gate, the Mail browser specs (the Mail and Contacts
 Playwright lines) and the Mail gate (`scripts/test-mail-inbound.sh`, a real
 Stalwart with SMTP and GnuPG). Run them locally before opening a pull request,
-with the commands above. They carry the image builds' Cargo caches between
+with `scripts/gate.sh browser …` and `scripts/gate.sh live …`. They carry the image builds' Cargo caches between
 runs. Dependabot pull requests also skip the backup-lifecycle job.
 
 Changes confined to `.github/workflows/**` run the separate lightweight

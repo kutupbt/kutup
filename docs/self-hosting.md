@@ -1133,6 +1133,31 @@ line, `KUTUP_STALWART_SETUP_IMAGE=…`; add `docker-compose.mail.yml` and
 `docker-compose.mail-images.yml` to the compose files (after
 `docker-compose.images.yml`) so it is pulled rather than built there.
 
+### Scripted updates
+
+`scripts/deploy.sh` does a whole update from the build machine over ssh, the
+same way every time, and stops at the first failure:
+
+```sh
+KUTUP_DEPLOY_HOST=root@kutup.example scripts/deploy.sh <commit> --dry-run
+KUTUP_DEPLOY_HOST=root@kutup.example scripts/deploy.sh <commit>
+```
+
+It refuses a commit whose CI on `master` did not pass. It pulls the three
+images and records their digests and the running ones under `deploy-history/`
+on the server, so a rollback is exact. Then it runs both backups (see Database
+backups and Mail), sets the image lines in `.env` (keeping `.env.bak-<old>`),
+checks out the commit, validates nginx, starts the stack and checks it:
+migrations, backend errors, Stalwart's setup, storage, and every app host. It
+keeps the new and the previous release's images and removes older ones.
+`--dry-run` stops after pulling and changes nothing. `KUTUP_DEPLOY_KEY`,
+`KUTUP_DEPLOY_DIR` and `KUTUP_DEPLOY_HOSTS` are optional.
+
+`--wipe` is for a clean-slate release: after typing the host name to confirm,
+it drops the database volume and empties the bucket, keeping the backup
+prefixes and Stalwart's volume (its DKIM keys). Every account and its data is
+gone. It refuses a release without the squashed baseline migration.
+
 ## Using another S3 store
 
 Kutup's server needs only ordinary S3 requests: put, get, list, delete,
