@@ -7,45 +7,14 @@
 //!     cargo test -p kutup-server --test collab_frames_live -- --nocapture
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::SigningKey;
 use futures_util::{SinkExt, StreamExt};
 use kutup_crypto::envelope::{self, kind, CollabFrameContextV1, Frame};
-use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 mod common;
 use common::*;
-
-struct Device {
-    id: i64,
-    seed: [u8; 32],
-}
-
-fn device(c: &Client, base: &str, user: &User) -> Device {
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-    let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
-    let r: Value = bearer(c.post(format!("{base}/api/devices")), &user.token)
-        .json(&json!({
-            "publicSigning": STANDARD.encode(public),
-            "label": "collab test",
-            "authSig": STANDARD.encode([0u8; 64]),
-            "timestamp": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    Device {
-        id: r["deviceId"].as_i64().unwrap(),
-        seed,
-    }
-}
 
 /// A sealed, signed frame; `tweak` changes its context before sealing.
 fn frame(
@@ -117,9 +86,9 @@ fn http_and_socket_refuse_the_same_frames() {
     assert!(upload(&c, &base, &owner.token, &folder, &other_file)
         .status()
         .is_success());
-    let mine = device(&c, &base, &owner);
-    let second = device(&c, &base, &owner);
-    let theirs = device(&c, &base, &viewer);
+    let mine = register_device(&c, &base, &owner);
+    let second = register_device(&c, &base, &owner);
+    let theirs = register_device(&c, &base, &viewer);
 
     // Kept, and read back with its position and this device's sequence.
     let (status, body) = post(

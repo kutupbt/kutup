@@ -572,3 +572,70 @@ pub fn setup_key(password: &str) -> Value {
         "argonParallelism": parameters.parallelism,
     })
 }
+
+/// A collaboration device: its id and the seed of the key it signs frames with.
+pub struct Device {
+    pub id: i64,
+    pub seed: [u8; 32],
+}
+
+/// A one-time device registration challenge (base64).
+pub fn device_challenge(c: &Client, base: &str, user: &User) -> String {
+    let r: Value = bearer(c.post(format!("{base}/api/devices/challenge")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    r["challenge"].as_str().unwrap().to_string()
+}
+
+/// The registration body for `device_key`, signed by `signer`'s authority for
+/// `user`'s account over `challenge` (docs/plans/device-registration.md).
+pub fn device_registration_body(
+    c: &Client,
+    base: &str,
+    user: &User,
+    signer: &User,
+    device_key: &[u8; 32],
+    challenge: &str,
+) -> Value {
+    let raw: [u8; 32] = STANDARD.decode(challenge).unwrap().try_into().unwrap();
+    let signature = kutup_crypto::device_registration::sign(
+        &signer.identity,
+        &server_domain(c, base),
+        &user.id,
+        device_key,
+        kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        &raw,
+    )
+    .unwrap();
+    json!({
+        "publicSigning": STANDARD.encode(device_key),
+        "label": "test device",
+        "challenge": challenge,
+        "signature": signature,
+    })
+}
+
+/// A device registered the proper way: a fresh challenge, signed by the
+/// account's own authority.
+pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    let challenge = device_challenge(c, base, user);
+    let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
+        .json(&device_registration_body(
+            c, base, user, user, &key, &challenge,
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED, "register a device");
+    let body: Value = r.json().unwrap();
+    Device {
+        id: body["deviceId"].as_i64().unwrap(),
+        seed,
+    }
+}

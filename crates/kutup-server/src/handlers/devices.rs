@@ -114,6 +114,10 @@ pub struct DeviceRow {
     device_id: i64,
     label: String,
     is_active: bool,
+    /// Active and registered under the account's current incarnation: the
+    /// collaboration routes accept it. A client whose stored device is not
+    /// trusted registers a new one.
+    trusted: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -255,9 +259,20 @@ pub async fn register(
 )]
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let rows: Vec<(i64, String, bool, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
-        r#"SELECT id, COALESCE(label, ''), is_active, created_at, last_seen_at
-           FROM user_devices WHERE user_id = $1 ORDER BY created_at DESC"#,
+    type Row = (
+        i64,
+        String,
+        bool,
+        bool,
+        OffsetDateTime,
+        Option<OffsetDateTime>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"SELECT d.id, COALESCE(d.label, ''), d.is_active,
+                  d.is_active AND d.incarnation_id = u.account_incarnation_id,
+                  d.created_at, d.last_seen_at
+           FROM user_devices d JOIN users u ON u.id = d.user_id
+           WHERE d.user_id = $1 ORDER BY d.created_at DESC"#,
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -266,10 +281,11 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     let out: Vec<DeviceRow> = rows
         .into_iter()
         .map(
-            |(device_id, label, is_active, created_at, last_seen_at)| DeviceRow {
+            |(device_id, label, is_active, trusted, created_at, last_seen_at)| DeviceRow {
                 device_id,
                 label,
                 is_active,
+                trusted,
                 created_at,
                 last_seen_at,
             },

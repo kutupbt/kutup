@@ -92,6 +92,10 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test collab_frames_live -- --nocapture
+# Collaboration devices: only the account's own statement registers one.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test devices_live -- --nocapture
 
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.
