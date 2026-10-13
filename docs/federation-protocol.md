@@ -119,6 +119,12 @@ never ends. The chat app shows it above that conversation ("<server> does
 not support this Chat version yet"); the message stays queued. A final
 refusal (`peerRefused`) leaves the client's queue as a sealed refusal does.
 
+The same release pads Drive's sealed names and file metadata
+(`DriveEnvelopeV1` purposes 2 and 4, 256-byte buckets, `crate::padding`), and
+requires a name hash on every Drive write. A Drive peer running code from
+before it cannot read names from this release or write into its folders; both
+servers must run the clean-slate release.
+
 A sealed send is refused for good only when the receiver says so for that
 sequence: a signed `400` whose body names it (`refused.sequence`), recorded
 by the receiver so a replay gets the same answer and the next sequence

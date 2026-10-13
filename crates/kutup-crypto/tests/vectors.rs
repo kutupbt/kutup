@@ -196,6 +196,18 @@ struct DriveEnvelopeVec {
     parent_id: String,
     nonce: String,
     envelope: String,
+    /// Well-encrypted envelopes whose padding is wrong: refused on open.
+    #[serde(rename = "invalidPadding")]
+    invalid_padding: Vec<String>,
+    /// A plaintext of `len` bytes seals to `sealed_len` bytes, or is refused.
+    limits: Vec<DriveEnvelopeLimit>,
+}
+#[derive(Deserialize)]
+struct DriveEnvelopeLimit {
+    purpose: u8,
+    len: usize,
+    #[serde(rename = "sealedLen")]
+    sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
 struct DriveFileBlobVec {
@@ -459,6 +471,44 @@ fn drive_envelope_vector() {
         drive_envelope::open(&envelope, &b64(&vector.root_key), context).unwrap(),
         b64(&vector.plaintext)
     );
+    for bad in &vector.invalid_padding {
+        assert!(drive_envelope::open(&b64(bad), &b64(&vector.root_key), context).is_err());
+    }
+    for limit in &vector.limits {
+        let context = DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::try_from(limit.purpose).unwrap(),
+            vector.epoch,
+            vector.revision,
+            &vector.object_id,
+            &vector.parent_id,
+        )
+        .unwrap();
+        let sealed = drive_envelope::seal(&vec![b'a'; limit.len], &b64(&vector.root_key), context);
+        match limit.sealed_len {
+            Some(len) => {
+                let sealed = sealed.unwrap();
+                assert_eq!(
+                    sealed.len(),
+                    len,
+                    "purpose {} len {}",
+                    limit.purpose,
+                    limit.len
+                );
+                assert_eq!(
+                    drive_envelope::open(&sealed, &b64(&vector.root_key), context)
+                        .unwrap()
+                        .len(),
+                    limit.len
+                );
+            }
+            None => assert!(
+                sealed.is_err(),
+                "purpose {} len {}",
+                limit.purpose,
+                limit.len
+            ),
+        }
+    }
 }
 
 #[test]

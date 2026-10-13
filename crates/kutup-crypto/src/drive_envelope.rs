@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
 use crate::error::{CryptoError, Result};
+use crate::padding::Length;
 use crate::thumbnail::{ThumbnailVariant, MAX_THUMBNAIL_PLAINTEXT_BYTES};
 
 const MAGIC: &[u8; 8] = b"KUTPDE1\0";
@@ -23,6 +24,12 @@ const HEADER_LEN: usize = 8 + 2 + 1 + 1 + 4 + 8 + 16 + 16 + 24 + 4;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
+/// A folder name, in bytes.
+pub const MAX_COLLECTION_NAME_BYTES: usize = 1024;
+/// A file's metadata (crate::file_metadata), in bytes.
+pub const MAX_FILE_METADATA_BYTES: usize = 65_536;
+/// Names and metadata are padded to a multiple of this many bytes.
+const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
 const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
 const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
@@ -77,8 +84,9 @@ impl DriveEnvelopePurpose {
         self as u8
     }
 
-    fn validate_plaintext_len(self, len: usize) -> Result<()> {
-        let valid = match self {
+    /// The plaintext lengths this purpose seals.
+    fn plaintext_range(self) -> std::ops::RangeInclusive<usize> {
+        match self {
             Self::CollectionKey
             | Self::FileKey
             | Self::PublicLinkCollectionKey
@@ -86,13 +94,51 @@ impl DriveEnvelopePurpose {
             | Self::PublicLinkKey
             | Self::PreviousFileKey
             | Self::PublicLinkFileKey
-            | Self::AlbumFileKey => len == KEY_LEN,
-            Self::CollectionName => (1..=1024).contains(&len),
-            Self::FileMetadata => (1..=65_536).contains(&len),
-            Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
+            | Self::AlbumFileKey => KEY_LEN..=KEY_LEN,
+            Self::CollectionName => 1..=MAX_COLLECTION_NAME_BYTES,
+            Self::FileMetadata => 1..=MAX_FILE_METADATA_BYTES,
+            Self::WhiteboardAsset => 1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES,
             // The per-variant cap is the container's to enforce; this is the largest.
-            Self::Thumbnail => (1..=MAX_THUMBNAIL_PLAINTEXT_BYTES).contains(&len),
+            Self::Thumbnail => 1..=MAX_THUMBNAIL_PLAINTEXT_BYTES,
+        }
+    }
+
+    /// How much of the plaintext's length the envelope shows. Names and file
+    /// metadata are padded (crate::padding), so the server cannot tell a
+    /// name's length; keys are always 32 bytes; assets and thumbnails are
+    /// content, sealed as they are (as file blobs).
+    pub const fn padding(self) -> Option<Length> {
+        match self {
+            Self::CollectionName | Self::FileMetadata => Some(Length::Bucket(NAME_BUCKET)),
+            Self::WhiteboardAsset | Self::Thumbnail => None,
+            _ => Some(Length::Exact(KEY_LEN)),
+        }
+    }
+
+    /// Whether `len` bytes (padding included) can be what this purpose seals:
+    /// checked before any decryption.
+    fn validate_sealed_len(self, len: usize) -> Result<()> {
+        let range = self.plaintext_range();
+        let valid = match self.padding() {
+            Some(policy @ Length::Bucket(_)) => {
+                policy.allows_padded_len(len)
+                    && policy
+                        .padded_len(*range.end())
+                        .is_some_and(|max| len <= max)
+            }
+            _ => range.contains(&len),
         };
+        if valid {
+            return Ok(());
+        }
+        Err(CryptoError::InvalidInput(format!(
+            "invalid sealed length for Drive envelope purpose {}",
+            self.as_u8()
+        )))
+    }
+
+    fn validate_plaintext_len(self, len: usize) -> Result<()> {
+        let valid = self.plaintext_range().contains(&len);
         if !valid {
             return Err(CryptoError::InvalidInput(format!(
                 "invalid plaintext length for Drive envelope purpose {}",
@@ -370,6 +416,20 @@ pub fn seal_with_nonce(
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     context.purpose.validate_plaintext_len(plaintext.len())?;
+    let padded = match context.purpose.padding() {
+        Some(policy) => policy.pad(plaintext)?,
+        None => plaintext.to_vec(),
+    };
+    seal_body(&padded, root_key, context, nonce)
+}
+
+/// Seals `plaintext` as given (any padding already applied).
+fn seal_body(
+    plaintext: &[u8],
+    root_key: &[u8],
+    context: DriveEnvelopeContextV1,
+    nonce: &[u8],
+) -> Result<Vec<u8>> {
     let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::InvalidLength {
         expected: NONCE_LEN,
         got: nonce.len(),
@@ -422,7 +482,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             "Drive envelope ciphertext length is invalid".into(),
         ));
     }
-    purpose.validate_plaintext_len(ciphertext_len_usize.saturating_sub(TAG_LEN))?;
+    purpose.validate_sealed_len(ciphertext_len_usize.saturating_sub(TAG_LEN))?;
     Ok(ParsedEnvelope {
         header: DriveEnvelopeHeaderV1 {
             suite,
@@ -462,7 +522,7 @@ pub fn open(envelope: &[u8], root_key: &[u8], expected: DriveEnvelopeContextV1) 
     let key = derive_key(root_key, expected)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
         .map_err(|_| CryptoError::Backend("Drive envelope AEAD init".into()))?;
-    cipher
+    let body = cipher
         .decrypt(
             XNonce::from_slice(parsed.nonce),
             Payload {
@@ -470,7 +530,26 @@ pub fn open(envelope: &[u8], root_key: &[u8], expected: DriveEnvelopeContextV1) 
                 aad: parsed.aad,
             },
         )
-        .map_err(|_| CryptoError::AuthFailed)
+        .map_err(|_| CryptoError::AuthFailed)?;
+    let plaintext = match expected.purpose.padding() {
+        Some(policy) => policy.unpad(body)?,
+        None => body,
+    };
+    expected.purpose.validate_plaintext_len(plaintext.len())?;
+    Ok(plaintext)
+}
+
+/// An envelope sealed as given, without the purpose's checks or padding:
+/// for negative vectors only, which need well-encrypted envelopes of the
+/// wrong shape.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn seal_unchecked_for_vectors(
+    body: &[u8],
+    root_key: &[u8],
+    context: DriveEnvelopeContextV1,
+    nonce: &[u8],
+) -> Result<Vec<u8>> {
+    seal_body(body, root_key, context, nonce)
 }
 
 pub fn seal_b64(
