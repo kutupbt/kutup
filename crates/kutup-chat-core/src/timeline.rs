@@ -196,6 +196,35 @@ fn content_of(bytes: &[u8]) -> Option<ChatContent> {
     serde_json::from_slice(bytes).ok()
 }
 
+/// The kind a record whose content does not decode is shown as: as the
+/// timeline indexes it (visible), the history shows it, as "a message from a
+/// newer client", never failing the whole history. Content from an older
+/// client (no `messageId`) or a stranger's malformed message lands here.
+pub(crate) const UNSUPPORTED: &str = "unsupported";
+
+/// `bytes` as content, or the unsupported placeholder named `id` (the
+/// record's own id) and dated `sent_at`.
+pub(crate) fn content_or_unsupported(bytes: &[u8], id: &str, sent_at: String) -> ChatContent {
+    content_of(bytes).unwrap_or_else(|| ChatContent {
+        v: ChatContent::VERSION,
+        kind: UNSUPPORTED.to_owned(),
+        sent_at,
+        seq: 0,
+        message_id: id.to_owned(),
+        reply_to: None,
+        profile_key: None,
+        profile_suite: None,
+        body: serde_json::Value::Null,
+        extra: serde_json::Map::new(),
+    })
+}
+
+/// Whether `bytes` decode to one of the kinds `hidden` leaves out; content
+/// that does not decode is never hidden (it shows as unsupported).
+pub(crate) fn decodes_to(bytes: &[u8], hidden: fn(&str) -> bool) -> bool {
+    content_of(bytes).is_some_and(|content| hidden(&content.kind))
+}
+
 /// Where a record is indexed (once, or twice for a routed control), or
 /// nowhere when the full history leaves it out. A record whose content does
 /// not decode is indexed as visible, as the full history shows it.
@@ -1234,5 +1263,39 @@ mod tests {
         let commits = db.commit_count();
         block_on(ensure_built(&db)).unwrap();
         assert_eq!(db.commit_count(), commits, "a current index is left alone");
+    }
+}
+
+#[cfg(test)]
+mod unsupported_tests {
+    use super::*;
+
+    #[test]
+    fn content_without_a_message_id_shows_as_unsupported_not_an_error() {
+        // An older client's message: everything but messageId.
+        let old = br#"{"v":1,"kind":"text","sentAt":"2026-10-13T10:00:00Z","seq":1,"body":{"text":"hi"}}"#;
+        let shown = content_or_unsupported(old, "mbox-1", "2026-10-13T10:00:01Z".into());
+        assert_eq!(shown.kind, UNSUPPORTED);
+        assert_eq!(shown.message_id, "mbox-1");
+        assert!(!decodes_to(old, |_| true));
+        for junk in [&b"not json"[..], b"{}", br#"{"messageId":5}"#] {
+            assert_eq!(
+                content_or_unsupported(junk, "x", String::new()).kind,
+                UNSUPPORTED
+            );
+        }
+        // Real content passes through untouched.
+        let text = serde_json::to_vec(&ChatContent::text_with_id(
+            "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+            "2026-10-13T10:00:00Z",
+            1,
+            "hi",
+        ))
+        .unwrap();
+        assert_eq!(
+            content_or_unsupported(&text, "x", String::new()).kind,
+            "text"
+        );
+        assert!(decodes_to(&text, |kind| kind == "text"));
     }
 }
