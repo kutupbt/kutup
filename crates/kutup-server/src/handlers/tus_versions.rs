@@ -102,7 +102,8 @@ async fn check(
 /// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
 /// new version of this file is open (with its `uploadId` when it is the
-/// caller's, to go on with or cancel).
+/// caller's, to go on with or cancel, and `idleSeconds` since its last part:
+/// one idle a while was left by a crash, one active belongs to another device).
 pub(super) async fn create(
     state: &AppState,
     user_id: Uuid,
@@ -160,13 +161,18 @@ async fn open(
         None,
     )
     .await?;
-    let open: Option<(Uuid, Uuid)> =
-        sqlx::query_as("SELECT id, user_id FROM uploads WHERE file_id = $1")
-            .bind(file_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if let Some((upload_id, owner)) = open {
-        let mut details = serde_json::json!({ "code": "versionUploading" });
+    let open: Option<(Uuid, Uuid, i64)> = sqlx::query_as(
+        "SELECT id, user_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint
+         FROM uploads WHERE file_id = $1",
+    )
+    .bind(file_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((upload_id, owner, idle_seconds)) = open {
+        // How long since its last part tells a crashed upload (cancel it)
+        // from one still running on another device (wait for it).
+        let mut details =
+            serde_json::json!({ "code": "versionUploading", "idleSeconds": idle_seconds.max(0) });
         if owner == user_id {
             details["uploadId"] = upload_id.to_string().into();
         }

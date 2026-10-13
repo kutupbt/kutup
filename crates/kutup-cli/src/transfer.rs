@@ -195,6 +195,11 @@ impl<R: Read> StreamUploader<R> {
 
         let to_read = remaining.min(CHUNK_SIZE as i64) as usize;
         let n = read_full(&mut self.reader, &mut self.buf[..to_read])?;
+        // Shorter than when it was measured: the file changed while it was
+        // read. Stop rather than send empty chunks for ever.
+        if n < to_read {
+            bail!("the file changed while it was being uploaded; run it again");
+        }
         self.plain_read += n as i64;
 
         let is_last = self.plain_read == self.plain_total;
@@ -214,42 +219,6 @@ impl<R: Read> StreamUploader<R> {
             self.done = true;
         }
         Ok(Some(out))
-    }
-}
-
-/// The ciphertext of a [`StreamUploader`] as one reader, for a body sent
-/// in a single request (a version: `POST /files/:id/versions`).
-pub struct CipherReader<R: Read> {
-    up: StreamUploader<R>,
-    pending: Vec<u8>,
-    at: usize,
-}
-
-impl<R: Read> CipherReader<R> {
-    pub fn new(up: StreamUploader<R>) -> Self {
-        Self {
-            up,
-            pending: Vec::new(),
-            at: 0,
-        }
-    }
-}
-
-impl<R: Read> Read for CipherReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        while self.at == self.pending.len() {
-            match self.up.next_chunk().map_err(io::Error::other)? {
-                Some(chunk) => {
-                    self.pending = chunk;
-                    self.at = 0;
-                }
-                None => return Ok(0),
-            }
-        }
-        let n = buf.len().min(self.pending.len() - self.at);
-        buf[..n].copy_from_slice(&self.pending[self.at..self.at + n]);
-        self.at += n;
-        Ok(n)
     }
 }
 
@@ -336,25 +305,14 @@ mod tests {
         assert_eq!(out, plain);
     }
 
+    // A file shorter than measured (it changed while read) stops the
+    // upload instead of sending empty chunks for ever.
     #[test]
-    fn a_version_body_is_the_blob_a_version_holds() {
-        let key = [5u8; 32];
-        let plain: Vec<u8> = (0..CHUNK_SIZE + 99).map(|i| (i % 241) as u8).collect();
-        let up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
-        let mut body = Vec::new();
-        // Small reads cross chunk ends.
-        let mut reader = CipherReader::new(up);
-        let mut buf = [0u8; 4093];
-        loop {
-            let n = reader.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            body.extend_from_slice(&buf[..n]);
-        }
-        assert_eq!(body.len() as i64, cipher_size(plain.len() as i64));
-        let opened = drive_object::decrypt_file_blob(&body, &key, context()).unwrap();
-        assert_eq!(opened, plain);
+    fn a_file_that_shrinks_stops_the_upload() {
+        let plain = vec![1u8; 100];
+        let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 200, context()).unwrap();
+        let error = up.next_chunk().unwrap_err();
+        assert!(error.to_string().contains("changed"), "{error}");
     }
 
     // Exact-multiple-of-CHUNK_SIZE plaintexts produce a full-size FINAL

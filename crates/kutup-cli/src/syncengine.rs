@@ -25,11 +25,12 @@ use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use crate::api::Client;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_file_meta};
 use crate::session::{sync_pair_id, Session, Store, SyncDirState, SyncFileState};
-use crate::transfer::{self, stream_download};
+use crate::transfer::stream_download;
 use crate::uploader::{self, now_unix, Progress, UploadRequest};
 use crate::vaultsync::{
     describe, is_vault, merge_and_save, recorded, save_version, VaultFile, VaultKeys,
 };
+use crate::version_upload;
 
 pub struct SyncOptions {
     /// Propagate deletions (both directions). Off = count + skip.
@@ -665,13 +666,27 @@ fn execute_file_action(
             let (file_id, remote_version_id) = match action {
                 FileAction::PushUpdate { old_file_id } => {
                     let entry = remote_entries.get(rel).context("remote entry vanished")?;
-                    if transfer::cipher_size(stat.size) <= MAX_VERSION_BYTES {
-                        let version = push_version(client, &abs, &entry.file, dir, &sha256)?;
-                        (old_file_id.clone(), version)
-                    } else {
-                        let id =
-                            push_replacement(client, store, &abs, entry, dir, &sha256, result)?;
-                        (id, String::new())
+                    match push_version(client, store, &abs, &entry.file, dir, &sha256)? {
+                        Some(version) => (old_file_id.clone(), version),
+                        // Drive's side moved on since planning: keep both,
+                        // as when both sides were edited.
+                        None => {
+                            result.uploaded -= 1;
+                            return execute_file_action(
+                                client,
+                                store,
+                                pair,
+                                root,
+                                rel,
+                                &FileAction::Conflict,
+                                remote_dirs,
+                                remote_entries,
+                                base,
+                                vaults,
+                                opts,
+                                result,
+                            );
+                        }
                     }
                 }
                 _ => {
@@ -1009,20 +1024,18 @@ fn download_decrypt(
     }
 }
 
-/// The largest version the server stores in one request
-/// (`DRIVE_VERSION_LIMIT_BYTES`); a bigger edit goes up as a new file.
-const MAX_VERSION_BYTES: i64 = 2 * 1024 * 1024 * 1024;
-
-/// Stores the local file `abs` as a new version of `file`, streamed, then
-/// its metadata's size and content SHA-256 and its content hash; returns
-/// the version's id.
+/// Uploads the local file `abs` as a new version of `file` over tus,
+/// resumable at any size; its metadata (size, SHA-256) and content hash land
+/// with it. Returns the version's id, or `None` when the file moved on
+/// (another version, a rename, a re-key) and the edit is a conflict.
 fn push_version(
     client: &Client,
+    store: &Store,
     abs: &Path,
     file: &crate::api::File,
     dir: &RemoteDir,
     sha256: &[u8; 32],
-) -> Result<String> {
+) -> Result<Option<String>> {
     let file_key = crate::file_crypto::open_key(file, &dir.keys).context("decrypt file key")?;
     // New content goes under a key only the folder's current people hold.
     let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
@@ -1033,92 +1046,26 @@ fn push_version(
         &dir.collection_id,
         dir.key_epoch,
     )?;
-    let size = std::fs::metadata(abs)?.len();
-    let up = transfer::StreamUploader::new(
-        std::fs::File::open(abs)?,
-        &file_key,
-        size as i64,
-        DriveFileBlobContextV1::new(&file.id, file.key_generation)?,
-    )?;
-    let row = client
-        .create_version_stream(
-            &file.id,
-            transfer::CipherReader::new(up),
-            transfer::cipher_size(size as i64) as u64,
-            &crate::api::versions::NewVersion {
-                kind: "file".into(),
-                doc_key_id: 1,
-                ..Default::default()
-            },
-        )
-        .context("store new version")?;
-    uploader::follow_new_content(client, &file, &file_key, &dir.hash_key, size, sha256)?;
-    Ok(row.id)
-}
-
-/// An edit too big for a version: uploaded as a new file under a free
-/// numbered name, the old one trashed, and the new one renamed to the name.
-/// Returns the new file's id.
-fn push_replacement(
-    client: &Client,
-    store: &Store,
-    abs: &Path,
-    entry: &RemoteEntry,
-    dir: &RemoteDir,
-    sha256: &[u8; 32],
-    result: &mut SyncResult,
-) -> Result<String> {
-    let name = crate::file_crypto::open_metadata(
-        &entry.file,
-        &crate::file_crypto::open_key(&entry.file, &dir.keys)?,
-    )?
-    .name;
-    let (interim, _) = crate::names::first_available(
-        client,
-        Some(&dir.collection_id),
-        &dir.hash_key,
-        crate::names::numbered_names(&name).skip(1),
-        |_| false,
-    )?;
-    let up = uploader::upload_streaming(
+    let landed = version_upload::upload_version(
         client,
         store,
-        abs,
-        UploadRequest {
-            collection_id: &dir.collection_id,
-            key_epoch: dir.key_epoch,
-            collection_key: &dir.key,
-            resume: true,
+        version_upload::VersionRequest {
+            file: &file,
+            file_key: &file_key,
+            content: version_upload::Content::Path(abs),
+            sha256: *sha256,
+            hash_key: Some(&dir.hash_key),
+            based_on: None,
             progress: Progress::Quiet,
-            hash_key: dir.hash_key,
-            name: Some(&interim),
-            sha256: Some(*sha256),
         },
     )?;
-    if let Err(e) = client.delete_file(&entry.file.id) {
-        result.errors.push(format!(
-            "{name}: retire old version: {e}; the new one is {interim}"
-        ));
-        return Ok(up.file_id);
+    match landed {
+        version_upload::Landed::Stored(version) => Ok(Some(version)),
+        version_upload::Landed::Conflict(why) => {
+            eprintln!("    {}: {why:#}", abs.display());
+            Ok(None)
+        }
     }
-    let renamed = (|| -> Result<()> {
-        let file = client
-            .list_files(&dir.collection_id)?
-            .into_iter()
-            .find(|f| f.id == up.file_id)
-            .context("the new file is not listed")?;
-        let mut meta = crate::file_crypto::open_metadata(&file, &up.file_key)?;
-        meta.name = name.clone();
-        let mut request = crate::file_crypto::rename_request(&file, &up.file_key, &meta)?;
-        request.name_hash = Some(crate::names::name_hash(&dir.hash_key, &name)?);
-        client.update_file_metadata(&file.id, &request)
-    })();
-    if let Err(e) = renamed {
-        result.errors.push(format!(
-            "{name}: uploaded as {interim}, rename back failed: {e:#}"
-        ));
-    }
-    Ok(up.file_id)
 }
 
 fn record_base(

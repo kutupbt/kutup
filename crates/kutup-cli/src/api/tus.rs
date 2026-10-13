@@ -13,6 +13,30 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+/// What one PATCH answered.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Patched {
+    pub offset: i64,
+    /// Set on the last part.
+    pub file_id: String,
+    /// Set on the last part of a version upload.
+    pub version_id: String,
+}
+
+/// The `Upload-Metadata` of a version upload.
+#[derive(Debug, Default, Clone)]
+pub struct VersionUploadMeta {
+    pub version_of: String,
+    /// The file's metadata at `metadata_revision`: its new size and sha256.
+    pub metadata_envelope: String,
+    /// The file's next metadata revision.
+    pub metadata_revision: u64,
+    /// The new content's hash in its folder.
+    pub content_hash: Option<String>,
+    /// A version id or `original`: stored only if the file still holds it.
+    pub based_on: Option<String>,
+}
+
 impl Client {
     /// Opens a new tus session; `total_bytes` is the ciphertext byte count.
     /// Returns `(upload_id, file_id)` — the upload id from the `Location`
@@ -90,6 +114,13 @@ impl Client {
     /// Ships one chunk; returns `(new_offset, file_id)` — `file_id` is only set
     /// on the final chunk. Mirrors `TusPatch`.
     pub fn tus_patch(&self, upload_id: &str, offset: i64, body: Vec<u8>) -> Result<(i64, String)> {
+        self.tus_patch_landed(upload_id, offset, body)
+            .map(|patched| (patched.offset, patched.file_id))
+    }
+
+    /// [`Self::tus_patch`], with the version id the last part of a version
+    /// upload answers (`X-Kutup-Version-Id`).
+    pub fn tus_patch_landed(&self, upload_id: &str, offset: i64, body: Vec<u8>) -> Result<Patched> {
         let len = body.len();
         let resp = self
             .upload_request(Method::PATCH, &format!("/uploads/{upload_id}"))
@@ -102,14 +133,55 @@ impl Client {
         if resp.status().as_u16() != 204 {
             return Err(api_error(resp)).context("tus patch");
         }
-        let new_offset = header_i64(&resp, "Upload-Offset");
-        let file_id = resp
-            .headers()
-            .get("X-Kutup-File-Id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        Ok((new_offset, file_id))
+        let text = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        Ok(Patched {
+            offset: header_i64(&resp, "Upload-Offset"),
+            file_id: text("X-Kutup-File-Id"),
+            version_id: text("X-Kutup-Version-Id"),
+        })
+    }
+
+    /// Opens a tus upload of a new version of `version_of`
+    /// (docs/api.md, "POST /api/uploads with versionOf"); returns its id,
+    /// which is the version's.
+    pub fn tus_create_version(&self, total_bytes: i64, meta: &VersionUploadMeta) -> Result<String> {
+        let mut upload_meta = vec![
+            format!("versionOf {}", b64(meta.version_of.as_bytes())),
+            format!(
+                "metadataEnvelope {}",
+                b64(meta.metadata_envelope.as_bytes())
+            ),
+            format!(
+                "metadataRevision {}",
+                b64(meta.metadata_revision.to_string().as_bytes())
+            ),
+        ];
+        if let Some(hash) = &meta.content_hash {
+            upload_meta.push(format!("contentHash {}", b64(hash.as_bytes())));
+        }
+        if let Some(based_on) = &meta.based_on {
+            upload_meta.push(format!("basedOn {}", b64(based_on.as_bytes())));
+        }
+        let resp = self
+            .upload_request(Method::POST, "/uploads/")
+            .header("Tus-Resumable", TUS_VERSION)
+            .header("Upload-Length", total_bytes.to_string())
+            .header("Upload-Metadata", upload_meta.join(","))
+            .send()?;
+        if resp.status().as_u16() != 201 {
+            return Err(api_error(resp)).context("tus create version");
+        }
+        resp.json::<serde_json::Value>()
+            .ok()
+            .and_then(|v| v.get("versionId")?.as_str().map(str::to_string))
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("tus create version: no versionId"))
     }
 
     /// Cancels an in-flight upload (best-effort). Mirrors `TusDelete`.
