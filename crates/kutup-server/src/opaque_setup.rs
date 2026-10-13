@@ -92,6 +92,119 @@ impl OpaqueSetupKeys {
     }
 }
 
+/// The server's OPAQUE setups, opened at startup and kept in memory.
+pub struct OpaqueServer {
+    setups: std::collections::BTreeMap<u16, kutup_crypto::opaque::ServerSecrets>,
+    keys: OpaqueSetupKeys,
+}
+
+impl OpaqueServer {
+    /// Opens every stored setup whose key is configured, and makes the
+    /// current key's setup if it has none (first start, or a new key). A
+    /// stored setup that does not open under its key stops the server: that
+    /// is a wrong key, and going on would lock everyone out. Setups older
+    /// than the current one that no account uses any more are dropped.
+    pub async fn load(pool: &sqlx::PgPool, keys: &OpaqueSetupKeys) -> Result<Self, String> {
+        let (current, current_key) = keys.current().ok_or("OPAQUE_SETUP_KEYS has no key")?;
+        let rows: Vec<(i16, Vec<u8>)> =
+            sqlx::query_as("SELECT key_id, sealed_setup FROM opaque_server_setups")
+                .fetch_all(pool)
+                .await
+                .map_err(|e| format!("read the OPAQUE setups: {e}"))?;
+        let mut setups = std::collections::BTreeMap::new();
+        for (id, sealed) in rows {
+            let id = u16::try_from(id).map_err(|_| "a stored OPAQUE setup has a bad id")?;
+            let Some(key) = keys.get(id) else {
+                continue;
+            };
+            let secrets =
+                kutup_crypto::opaque::open_server_setup(&sealed, key, id).map_err(|_| {
+                    format!(
+                    "the stored OPAQUE setup {id} does not open under OPAQUE_SETUP_KEYS key {id}: \
+                     the key is wrong (restore the right one; changing it locks every account out)"
+                )
+                })?;
+            setups.insert(id, secrets);
+        }
+        if !setups.contains_key(&current) {
+            let secrets = kutup_crypto::opaque::ServerSecrets::generate();
+            let sealed = kutup_crypto::opaque::seal_server_setup(&secrets, current_key, current)
+                .map_err(|e| format!("seal the OPAQUE setup: {e}"))?;
+            // Another instance starting at once may win: then use its setup.
+            sqlx::query(
+                "INSERT INTO opaque_server_setups (key_id, sealed_setup) VALUES ($1, $2)
+                 ON CONFLICT (key_id) DO NOTHING",
+            )
+            .bind(current as i16)
+            .bind(&sealed)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("store the OPAQUE setup: {e}"))?;
+            let stored: Vec<u8> = sqlx::query_scalar(
+                "SELECT sealed_setup FROM opaque_server_setups WHERE key_id = $1",
+            )
+            .bind(current as i16)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("read the OPAQUE setup: {e}"))?;
+            let secrets = kutup_crypto::opaque::open_server_setup(&stored, current_key, current)
+                .map_err(|_| {
+                    format!("the stored OPAQUE setup {current} does not open under its key")
+                })?;
+            tracing::info!(key_id = current, "made a new OPAQUE setup");
+            setups.insert(current, secrets);
+        }
+        // Older setups no account is registered with any more go.
+        sqlx::query(
+            "DELETE FROM opaque_server_setups s WHERE s.key_id < $1
+             AND NOT EXISTS (SELECT 1 FROM users u WHERE u.opaque_server_key_id = s.key_id)",
+        )
+        .bind(current as i16)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("drop retired OPAQUE setups: {e}"))?;
+        let stranded: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE opaque_server_key_id IS NOT NULL
+             AND NOT (opaque_server_key_id = ANY($1))",
+        )
+        .bind(setups.keys().map(|id| *id as i16).collect::<Vec<_>>())
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("count accounts without a setup: {e}"))?;
+        if stranded > 0 {
+            tracing::warn!(
+                accounts = stranded,
+                "accounts are registered with an OPAQUE setup whose key is not in OPAQUE_SETUP_KEYS: \
+                 they cannot sign in (only with their recovery phrase) until the key is restored"
+            );
+        }
+        Ok(Self {
+            setups,
+            keys: keys.clone(),
+        })
+    }
+
+    /// The setup new registrations use, and its id.
+    pub fn current(&self) -> (u16, &kutup_crypto::opaque::ServerSecrets) {
+        let (id, secrets) = self
+            .setups
+            .last_key_value()
+            .expect("load makes the current setup");
+        (*id, secrets)
+    }
+
+    /// The setup with this id, if its key is configured.
+    pub fn get(&self, id: u16) -> Option<&kutup_crypto::opaque::ServerSecrets> {
+        self.setups.get(&id)
+    }
+
+    /// The key a sign-in's state is sealed under while it waits (that of
+    /// setup `id`).
+    pub fn state_key(&self, id: u16) -> Option<&[u8; 32]> {
+        self.keys.get(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

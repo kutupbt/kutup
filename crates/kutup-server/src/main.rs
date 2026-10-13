@@ -26,6 +26,7 @@ mod drive_writes;
 mod error;
 mod federation;
 mod file_content;
+mod grants;
 mod handlers;
 mod hub;
 mod jobs;

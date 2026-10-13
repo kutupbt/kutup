@@ -68,6 +68,7 @@ pub mod mail_search;
 pub mod mnemonic;
 pub mod named_share;
 pub mod opaque;
+pub mod opaque_login_state;
 pub mod padding;
 pub mod pass_vault;
 pub mod photos_library;
