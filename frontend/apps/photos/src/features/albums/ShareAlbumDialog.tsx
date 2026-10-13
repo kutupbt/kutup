@@ -112,7 +112,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             if (email.trim()) share()
           }}
         >
-          <Field label={t('share.email')}>
+          <Field label={t('share.address')}>
             {(field) => <ContactSuggestInput {...field} type="email" value={email} onValueChange={setEmail} />}
           </Field>
           <div className="flex items-center gap-2">

@@ -190,7 +190,6 @@ pub struct LinkReport {
     #[serde(with = "time::serde::rfc3339::option")]
     share_removed_at: Option<OffsetDateTime>,
     owner_user_id: Uuid,
-    owner_email: String,
     owner_username: String,
     owner_is_active: bool,
     /// Open reports on the same link, this one included.
@@ -218,7 +217,6 @@ type ReportRow = (
     OffsetDateTime,
     Option<OffsetDateTime>,
     Uuid,
-    String,
     Option<String>,
     bool,
     i64,
@@ -247,7 +245,7 @@ pub async fn list_reports(
     let rows: Vec<ReportRow> = sqlx::query_as(if resolved {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at,
-                u.id, COALESCE(u.email, '') AS email, u.username, u.is_active,
+                u.id, u.username, u.is_active,
                 (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
@@ -257,7 +255,7 @@ pub async fn list_reports(
     } else {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at,
-                u.id, COALESCE(u.email, '') AS email, u.username, u.is_active,
+                u.id, u.username, u.is_active,
                 (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
@@ -283,7 +281,6 @@ pub async fn list_reports(
                 share_created_at,
                 share_removed_at,
                 owner_user_id,
-                owner_email,
                 owner_username,
                 owner_is_active,
                 open_reports_on_link,
@@ -300,7 +297,6 @@ pub async fn list_reports(
                 share_created_at,
                 share_removed_at,
                 owner_user_id,
-                owner_email,
                 owner_username: owner_username.unwrap_or_default(),
                 owner_is_active,
                 open_reports_on_link,
@@ -314,7 +310,7 @@ pub async fn list_reports(
 async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, String)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT p.id, p.owner_user_id, COALESCE(u.email, '') AS email
+        "SELECT p.id, p.owner_user_id, COALESCE(u.username, '')
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
            JOIN users u ON u.id = p.owner_user_id
@@ -323,8 +319,8 @@ async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, St
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    let (share, owner, email) = row.ok_or_else(|| AppError::not_found("not found"))?;
-    Ok((id, share, owner, email))
+    let (share, owner, username) = row.ok_or_else(|| AppError::not_found("not found"))?;
+    Ok((id, share, owner, username))
 }
 
 fn admin_id(admin: &AdminUser) -> AppResult<Uuid> {
@@ -345,7 +341,7 @@ pub async fn dismiss_report(
     admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let (report, share, owner, email) = open_report(&state.pool, &id).await?;
+    let (report, share, owner, username) = open_report(&state.pool, &id).await?;
     sqlx::query(
         "UPDATE public_link_reports
             SET resolved_at = NOW(), resolved_by = $2, resolution = 'dismissed', link = NULL
@@ -360,7 +356,7 @@ pub async fn dismiss_report(
         &admin.user_id,
         "report.dismiss",
         Some(owner),
-        json!({ "email": email, "reportId": report, "shareId": share }),
+        json!({ "username": username, "reportId": report, "shareId": share }),
     )
     .await;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -381,7 +377,7 @@ pub async fn remove_reported_link(
     admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let (report, share, owner, email) = open_report(&state.pool, &id).await?;
+    let (report, share, owner, username) = open_report(&state.pool, &id).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE public_shares SET removed_at = COALESCE(removed_at, NOW()) WHERE id = $1")
         .bind(share)
@@ -402,7 +398,7 @@ pub async fn remove_reported_link(
         &admin.user_id,
         "share.remove",
         Some(owner),
-        json!({ "email": email, "reportId": report, "shareId": share }),
+        json!({ "username": username, "reportId": report, "shareId": share }),
     )
     .await;
     Ok(StatusCode::NO_CONTENT.into_response())

@@ -121,6 +121,10 @@ one (a vault file, a mail key, a folder), under the account's own keys.
 
 ### Everything else that reads `users.email`
 
+(Done: the clean-slate release dropped the `users.email` column, every
+`email` field in API answers and audit payloads, and renamed the lookup to
+`GET /api/users/by-address/:address`. A recovery email will get its own table.)
+
 - `/user/me` answers the Kutup address; `email` leaves the session.
 - By-email lookup (Drive sharing, federation): by Kutup address only (it
   already tries the address first); the fallback to sign-in emails goes.

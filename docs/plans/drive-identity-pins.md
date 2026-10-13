@@ -75,7 +75,7 @@ over these bytes, plus `incarnationId == hash(authority)`. Vectors in
   administrator's wipe clears it with the keys; the account's new setup signs
   it again. (The clean-slate release removed the later backfill,
   `PUT /api/user/drive-key-binding`.)
-- The person lookups (`GET /api/users/by-email/:account`, and the federated
+- The person lookups (`GET /api/users/by-address/:address`, and the federated
   `GET /api/drive/federation/users/:username`, whose remote server answers
   for its own account) hand out `accountAuthorityPublicKey` and
   `driveKeyBinding`. Share rows keep carrying only the keys they were made

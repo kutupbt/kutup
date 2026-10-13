@@ -111,7 +111,7 @@ impl ApiError {
     }
 }
 
-/// Percent-encodes one URL path segment (emails in paths may contain
+/// Percent-encodes one URL path segment (addresses in paths may contain
 /// reserved characters like `#`, `?`, or `%`).
 pub(crate) fn path_segment(s: &str) -> String {
     let mut u = reqwest::Url::parse("http://x/").expect("static base url");
@@ -238,7 +238,7 @@ impl Client {
     }
 
     pub fn login_preflight(&self, name: &str) -> Result<PreflightResponse> {
-        // .query() form-encodes the value — a raw `+` in an email would
+        // .query() form-encodes the value — a raw `+` in a name would
         // otherwise decode server-side as a space.
         let resp = self
             .request(Method::GET, "/auth/login/preflight")

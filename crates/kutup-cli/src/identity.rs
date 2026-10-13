@@ -114,7 +114,7 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
     let local = me.account.split_once('@').map(|(_, s)| s) == Some(server);
     let person = if local {
-        let user = ctx.client.get_user_by_email(account)?;
+        let user = ctx.client.get_user_by_address(account)?;
         Published {
             account: user.account,
             authority: user.account_authority_public_key,

@@ -135,7 +135,6 @@ pub struct FeedbackItem {
     created_at: OffsetDateTime,
     /// Absent when the account was deleted since.
     user_id: Option<Uuid>,
-    user_email: Option<String>,
     user_username: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     resolved_at: Option<OffsetDateTime>,
@@ -161,7 +160,6 @@ type FeedbackRow = (
     Option<Value>,
     OffsetDateTime,
     Option<Uuid>,
-    Option<String>,
     Option<String>,
     Option<OffsetDateTime>,
     Option<String>,
@@ -189,13 +187,13 @@ pub async fn list_feedback(
     };
     let rows: Vec<FeedbackRow> = sqlx::query_as(if resolved {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
-                u.id, COALESCE(u.email, '') AS email, u.username, f.resolved_at, f.resolution, f.github_url
+                u.id, u.username, f.resolved_at, f.resolution, f.github_url
            FROM feedback f LEFT JOIN users u ON u.id = f.user_id
           WHERE f.resolved_at IS NOT NULL
           ORDER BY f.resolved_at DESC LIMIT 100"
     } else {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
-                u.id, COALESCE(u.email, '') AS email, u.username, f.resolved_at, f.resolution, f.github_url
+                u.id, u.username, f.resolved_at, f.resolution, f.github_url
            FROM feedback f LEFT JOIN users u ON u.id = f.user_id
           WHERE f.resolved_at IS NULL
           ORDER BY f.created_at ASC LIMIT 500"
@@ -213,7 +211,6 @@ pub async fn list_feedback(
                 details,
                 created_at,
                 user_id,
-                user_email,
                 user_username,
                 resolved_at,
                 resolution,
@@ -226,7 +223,6 @@ pub async fn list_feedback(
                 details,
                 created_at,
                 user_id,
-                user_email,
                 user_username,
                 resolved_at,
                 resolution,

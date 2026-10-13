@@ -5,7 +5,7 @@ use reqwest::Method;
 
 use super::{
     Client, FedPubKeyResponse, FederatedShareRequest, FederatedShareResponse, PublicShareRequest,
-    PublicShareResponse, ShareRequest, UserByEmail,
+    PublicShareResponse, ShareRequest, UserByAddress,
 };
 
 impl Client {
@@ -46,12 +46,12 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Looks up a local user's id + public key by email. Mirrors `GetUserByEmail`.
-    pub fn get_user_by_email(&self, email: &str) -> Result<UserByEmail> {
+    /// Looks up a local account's id and Drive keys by its Kutup address.
+    pub fn get_user_by_address(&self, address: &str) -> Result<UserByAddress> {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/users/by-email/{}", super::path_segment(email)),
+                &format!("/users/by-address/{}", super::path_segment(address)),
             )
             .send()?;
         super::decode_json(resp)

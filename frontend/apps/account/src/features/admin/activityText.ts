@@ -40,12 +40,12 @@ function text(value: unknown): string {
 /**
  * One audit row as a sentence, naming accounts by username: the live one;
  * once the account is deleted, the at-action-time snapshot in the payload
- * (`username`, or `email` in rows written before accounts had none).
+ * (`username`).
  */
 export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
   const admin =
-    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? e.adminEmail ?? t('admin.activity.deletedUser'))
-  const target = e.targetUsername ?? (text(e.payload.username) || text(e.payload.email) || t('admin.activity.deletedUser'))
+    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedUser'))
+  const target = e.targetUsername ?? (text(e.payload.username) || t('admin.activity.deletedUser'))
   const key = ACTION_KEYS[e.action]
   const values = {
     admin,

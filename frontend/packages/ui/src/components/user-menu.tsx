@@ -26,14 +26,15 @@ function initials(name: string): string {
  */
 export function UserMenu({
   name,
-  email,
+  address,
   settingsHref,
   onSignOut,
   children,
 }: {
-  /** Username, or the email when there is none. */
+  /** The account's username. */
   name: string
-  email: string
+  /** Its Kutup address (`username@<server>`). */
+  address: string
   /** Absolute URL of the account app's settings for this product. */
   settingsHref: string
   onSignOut: () => void
@@ -53,8 +54,8 @@ export function UserMenu({
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuLabel>
           <span className="block truncate text-sm font-medium text-foreground">{name}</span>
-          {email !== name ? (
-            <span className="block truncate text-xs font-normal text-muted-foreground">{email}</span>
+          {address !== name ? (
+            <span className="block truncate text-xs font-normal text-muted-foreground">{address}</span>
           ) : null}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />

@@ -27,7 +27,7 @@ test('Drive and Chat pickers suggest contacts, and "Add to contacts" opens a fil
   await createFolder(drive, 'Trip')
   await itemAction(drive, 'Trip', 'Share')
   const share = drive.getByRole('dialog')
-  const recipient = share.getByRole('combobox', { name: 'Email or Kutup address' })
+  const recipient = share.getByRole('combobox', { name: 'Kutup address' })
   await recipient.fill('ay')
   const suggestion = share.getByRole('option', { name: /Ayşe Yılmaz/ })
   await expect(suggestion).toBeVisible({ timeout: 30_000 })

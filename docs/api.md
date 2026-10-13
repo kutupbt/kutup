@@ -424,13 +424,16 @@ Return the current user's profile (public key + storage stats). The encrypted ke
 ```json
 {
   "id": "<uuid>",
-  "email": "user@example.com",
+  "address": "alice@example.com",
+  "envelopeBinding": "<the account's key binding>",
   "username": "alice",
   "publicKey": "<base64>",
   "totpEnabled": false,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600,
-  "isAdmin": false
+  "isAdmin": false,
+  "color": "",
+  "versionRetentionDays": 30
 }
 ```
 
@@ -565,12 +568,12 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 ---
 
-### GET /api/users/by-email/:email
+### GET /api/users/by-address/:address
 
 Look up another local user's registered Drive identity (used when sharing a collection or a file).
 
 **Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
-**Param:** `:email` — the URL-encoded address a person would type: the account address on this server (`username@<server name>`) or the account's email. The account address is tried first, because usernames are unique and given by the server while an email is whatever its owner entered. `404` when neither matches.
+**Param:** `:address` — the URL-encoded Kutup address on this server (`username@<server name>`). `404` when no active account has it.
 
 **Response:**
 ```json
@@ -1007,7 +1010,7 @@ without a username has none.
 Add a key to one of the caller's addresses together with the next signed key
 list. The server checks: the public key is a v4 Ed25519 + Curve25519 key whose
 only user ID is this address, with valid self-signatures; the envelope has the
-mail-key purpose and this account's login email; the key list verifies against
+mail-key purpose and this account's key binding; the key list verifies against
 the account's authority key, names this account and address, follows the
 current list (sequence + 1, previous hash) or is sequence 1, and lists exactly
 the stored keys plus the new one. Primary and flags then follow the list. All
@@ -1228,7 +1231,7 @@ only seeds the stored value when the server starts without one.
 
 Admin only. The list: accounts that sent outside in the last week, or have
 their own limits, a pause or a flag, paused and flagged first:
-`[{ "userId", "email", "username", "sentDay", "sentWeek", "bouncesWeek",
+`[{ "userId", "username", "sentDay", "sentWeek", "bouncesWeek",
 "spamRefusedWeek", "perHour", "perDay", "pausedAt", "pausedReason",
 "flaggedAt", "flagReason" }]` (counts only, never content). `attention=true`
 keeps only paused and flagged ones. The update takes `{ "perHour"?, "perDay"?
@@ -1467,7 +1470,7 @@ record the account has.
 
 **Body:** `{envelope}`, canonical base64 of at most 4608 bytes. Stores or
 replaces the caller's secret for that vault. `400` unless the envelope is a
-`PassVaultSecret` envelope for the caller's login email; `404` for a vault
+`PassVaultSecret` envelope for the caller's key binding; `404` for a vault
 that does not exist, is in the trash, or the caller cannot open.
 **Response:** `204`.
 
@@ -2576,7 +2579,7 @@ the host cannot be reached.
 
 ### POST /api/chat/call-links
 
-`{ "roomId", "nonce", "accessTokenHash", "info" }` → `201` with
+`{ "roomId", "nonce", "accessTokenHash", "info", "hostTokenHash", "waitingRoom"? }` → `201` with
 `{ "roomId", "nonce", "info", "createdAt" }`: register a meeting
 ([`chat-calls.md`](chat-calls.md) "Meetings"). `roomId` and `nonce` are 32
 lowercase hex characters; `accessTokenHash` is the SHA-256 of the link's
@@ -2641,7 +2644,7 @@ or off ([`chat-calls.md`](chat-calls.md) "The waiting room"). `hostTokenHash`
 is the SHA-256 of the owner's host token (standard base64, 32 bytes).
 Turning it off lets in everyone still waiting. `404` when the account has no
 such meeting. `POST /api/chat/call-links` takes the same two fields
-(`hostTokenHash`, `waitingRoom`) when a meeting is made, the list returns
+(`hostTokenHash` required, `waitingRoom` optional) when a meeting is made, the list returns
 `waitingRoom`, and `POST /api/chat/call-links/info` returns it beside the
 sealed info.
 
@@ -3208,7 +3211,7 @@ before sending, never the page's address (it can name a file or a person).
 
 All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
-Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (emails, usernames) are snapshotted into the row's `payload` at action time.
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (usernames) are snapshotted into the row's `payload` at action time.
 
 ### GET /api/admin/reports
 
@@ -3217,7 +3220,7 @@ the latest 100 resolved (`?status=resolved`). Each carries the report
 (`id`, `reason`, `details`, `link` while open, `createdAt`, `resolvedAt`,
 `resolution`: `dismissed`, `removed` or `disabled`), its link (`shareId`,
 `shareType`, `shareCreatedAt`, `shareRemovedAt`), the account that made it
-(`ownerUserId`, `ownerEmail`, `ownerUsername`, `ownerIsActive`) and
+(`ownerUserId`, `ownerUsername`, `ownerIsActive`) and
 `openReportsOnLink`.
 
 ### POST /api/admin/reports/:id/dismiss
@@ -3236,7 +3239,7 @@ close every open report on it. `204`; `404` for no such open report. Logged as
 
 Feedback: open items oldest first (default, `?status=open`), or the latest 100
 resolved (`?status=resolved`). Each carries `id`, `kind`, `app`, `message`,
-`details`, `createdAt`, who sent it (`userId`, `userEmail`, `userUsername`;
+`details`, `createdAt`, who sent it (`userId`, `userUsername`;
 null once the account is deleted), `resolvedAt`, `resolution` (`done`,
 `dismissed` or `forwarded`) and `githubUrl`.
 
@@ -3264,7 +3267,6 @@ List all registered users.
 [
   {
     "id": "<uuid>",
-    "email": "alice@example.com",
     "username": "alice",
     "storageQuotaBytes": 10737418240,
     "storageUsedBytes": 524288000,
@@ -3362,7 +3364,7 @@ Replace the temporary password of an account still in first-login state (`isFirs
 
 ### POST /api/admin/users/:id/wipe
 
-Destructive account reset for a user who lost both their password and their recovery phrase (their data is cryptographically unreachable anyway). Purges every collection the user owns — files, versions, assets, S3 blobs, share links, trash — erases the key bundle, disables TOTP, revokes collab device keys and received shares, then resets the account to first-login with the supplied temp password. Email, username, and quota survive. **Irreversible.** Refused (`403`) for the break-glass admin.
+Destructive account reset for a user who lost both their password and their recovery phrase (their data is cryptographically unreachable anyway). Purges every collection the user owns — files, versions, assets, S3 blobs, share links, trash — erases the key bundle, disables TOTP, revokes collab device keys and received shares, then resets the account to first-login with the supplied temp password. Username and quota survive. **Irreversible.** Refused (`403`) for the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 
@@ -3415,11 +3417,10 @@ cursor remains stable.
       "id": 7,
       "action": "user.create",
       "adminUserId": "<uuid>",
-      "adminEmail": "admin@example.com",
       "adminUsername": "admin",
       "targetUserId": "<uuid>",
-      "targetEmail": "newuser@example.com",
-      "payload": { "email": "newuser@example.com", "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "targetUsername": "newuser",
+      "payload": { "username": "newuser", "storageQuotaBytes": 10737418240 },
       "occurredAt": "2026-06-11T11:22:33Z"
     }
   ],
@@ -3431,7 +3432,7 @@ Actions include user/settings changes plus `federation.policy.*`,
 `federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
 pin, authenticated rotation, quarantine, verification, and break-glass re-pin
 events retain full fingerprints, sequences, and reasons but never private
-signing keys or Drive capabilities. `adminEmail`/`targetEmail` are the live
+signing keys or Drive capabilities. `adminUsername`/`targetUsername` are the live
 identities and become `null` once the referenced account is deleted — the
 `payload` snapshot keeps the trail readable. `nextBefore` is non-null while
 older pages remain.

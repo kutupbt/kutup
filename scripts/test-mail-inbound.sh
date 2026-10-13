@@ -14,11 +14,10 @@ port="${KUTUP_MAIL_TEST_PORT:-39086}"
 smtp_port="${KUTUP_MAIL_SMTP_PORT:-39087}"
 keys_port="${KUTUP_MAIL_KEYS_PORT:-39088}"
 export KUTUP_MAIL_KEYS_PORT="$keys_port"
-test_admin_email="mail-admin@kutup.dev"
 test_admin_username="mailadmin"
 test_admin_password="MailIntegrationAdmin123!"
 export KUTUP_MAIL_TEST_PORT="$port"
-export ADMIN_ACCOUNT="$test_admin_email:$test_admin_username:$test_admin_password"
+export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 export POSTGRES_DB="kutup_mail_test"
 export POSTGRES_USER="kutup_mail_test"
 export POSTGRES_PASSWORD="MailIntegrationDatabase123!"
@@ -98,7 +97,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
   KUTUP_LIVE_KEYS="http://127.0.0.1:$keys_port" \
-  KUTUP_LIVE_ADMIN="$test_admin_email:$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_GPG_HOME="$gpg_home" \
   cargo test -p kutup-server --test mail_inbound_live -- --nocapture --test-threads 1 \
   | tee "$output"

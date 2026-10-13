@@ -236,7 +236,7 @@ pub async fn rate_limit_fed_users(
     .await
 }
 
-/// 30/min/IP — `/api/users/by-email/{email}`.
+/// 30/min/IP — `/api/users/by-address/{address}`.
 pub async fn rate_limit_user_lookup(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

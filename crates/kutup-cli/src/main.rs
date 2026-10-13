@@ -62,7 +62,7 @@ enum Commands {
         #[arg(long)]
         server: Option<String>,
         /// Username or Kutup address (non-interactive: password via KUTUP_PASSWORD env).
-        #[arg(long = "username", visible_alias = "email")]
+        #[arg(long = "username")]
         username: Option<String>,
     },
     /// Reset your password with the 24-word recovery phrase, then log in.
@@ -71,7 +71,7 @@ enum Commands {
         #[arg(long)]
         server: Option<String>,
         /// Username or Kutup address (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
-        #[arg(long = "username", visible_alias = "email")]
+        #[arg(long = "username")]
         username: Option<String>,
     },
     /// Clear stored session.

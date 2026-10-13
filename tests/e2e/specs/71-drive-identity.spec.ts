@@ -9,7 +9,7 @@ const NEW_PASSWORD = 'Deneme123*DriveIdentityAfterWipe'
 async function shareOpenNote(page: Page, address: string) {
   await page.getByRole('button', { name: 'Share', exact: true }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Email or Kutup address').fill(address)
+  await dialog.getByLabel('Kutup address').fill(address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   return dialog
 }

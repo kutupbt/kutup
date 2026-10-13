@@ -135,7 +135,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::auth::setup_totp,
         crate::handlers::auth::verify_totp,
         crate::handlers::auth::disable_totp,
-        crate::handlers::auth::get_user_by_email,
+        crate::handlers::auth::get_user_by_address,
         // --- collections ---
         crate::handlers::collections::list_collections,
         crate::handlers::collections::create_collection,
@@ -697,7 +697,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         models::CreateShareRequest,
         models::CreateShareResult,
         models::PublicShareResponse,
-        models::UserRow,
         models::CreateAdminUserRequest,
         models::UpdateAdminUserRequest,
         models::UpdateAdminSettingsRequest,

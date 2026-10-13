@@ -9,7 +9,6 @@ export const meKey = ['me'] as const
 
 export interface Me {
   id: string
-  email: string
   username: string
   totpEnabled: boolean
   storageQuotaBytes: number

@@ -279,7 +279,7 @@
   "share": {
     "title": "{{name}} albümünü paylaş",
     "description": "Paylaştığınız kişiler albümün fotoğraflarını görür. Fotoğraf ekleyebilir iznini verirseniz bu sunucudaki kişiler kendi fotoğraflarını koyar; bunlar onların depolama alanında kalır.",
-    "email": "E-posta veya başka bir sunucudaki biri için kullanıcı@sunucu",
+    "address": "Kutup adresi (kullanici@sunucu)",
     "canAdd": "Fotoğraf ekleyebilir",
     "submit": "Paylaş",
     "people": "Erişimi olan kişiler",

@@ -223,7 +223,7 @@ export function useShareFolder() {
     let local: LocalRecipient | null = null
     if (recipient.includes('@')) {
       try {
-        local = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(recipient)}`)).data
+        local = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
       } catch (error) {
         const status = (error as { response?: { status?: number } }).response?.status
         if (status !== 404) throw error

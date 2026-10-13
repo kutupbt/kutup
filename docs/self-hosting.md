@@ -130,8 +130,8 @@ CHAT_WEB_PUSH=true
 # CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
 # CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
 
-# Break-glass admin bootstrap: username:password (the older
-# email:username:password still reads; the email is not kept).
+# Break-glass admin bootstrap: username:password (the password may hold
+# colons; the old email:username:password form is no longer read).
 # Created on first start; the admin signs in with the username and
 # completes setup on first login.
 # This account is the protected break-glass admin — it can never be

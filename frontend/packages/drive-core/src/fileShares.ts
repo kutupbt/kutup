@@ -487,7 +487,7 @@ export function useShareFile() {
       if (!owner && !(input.folder.source === 'file' && input.file.fileKey)) throw new Error('file is not open')
       let recipient: LocalRecipient | null = null
       try {
-        recipient = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(address)}`)).data
+        recipient = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
       } catch (error) {
         if (!(isAxiosError(error) && error.response?.status === 404)) throw error
       }

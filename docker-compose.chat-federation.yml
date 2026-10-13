@@ -122,7 +122,7 @@ services:
       CHAT_SFU_API_KEY: federation-sfu-key
       CHAT_SFU_API_SECRET: federation-sfu-secret-at-least-32-characters
       ALLOWED_ORIGINS: http://127.0.0.1:39081
-      ADMIN_ACCOUNT: federation-admin-a@example.test:admina:federation-admin-temp
+      ADMIN_ACCOUNT: admina:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
       FEDERATION_SERVER_NAME: a.test
       FEDERATION_SIGNING_KEY: VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=
@@ -170,7 +170,7 @@ services:
       KUTUP_MAIL_URL: http://mail.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PASS_URL: http://pass.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
-      ADMIN_ACCOUNT: federation-admin-b@example.test:adminb:federation-admin-temp
+      ADMIN_ACCOUNT: adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
       FEDERATION_SERVER_NAME: b.test
       FEDERATION_SIGNING_KEY: ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=

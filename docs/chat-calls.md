@@ -373,9 +373,8 @@ SFU itself, as the room's administrator, through LiveKit's room service
   the knock they came in by as removed, and disconnects them at the SFU.
   Their page says a host removed them. They still hold the link, which is
   why the waiting room goes on: to come back they have to ask, and a host
-  decides. It stays on until the owner turns it off. A link made before
-  host tokens cannot have a waiting room (nobody could let anyone in), so
-  removing someone there locks the meeting instead. The database changes
+  decides. It stays on until the owner turns it off. (Every link has a
+  host token: `POST /api/chat/call-links` requires its hash.) The database changes
   are made together, before the SFU is asked: if it cannot be reached the
   host sees an error, the person stays out of the seat they had, and asking
   again disconnects them.

@@ -929,15 +929,9 @@ pub(crate) async fn remove_participant(
     )
     .await?;
     let mut tx = state.pool.begin().await?;
-    // The door first: once it is shut, disconnecting them is final. A link
-    // made before host tokens has no waiting room to turn on (nobody could
-    // let anyone in), so it is locked instead.
-    sqlx::query(
-        "UPDATE chat_call_links
-         SET waiting_room = waiting_room OR host_token_hash IS NOT NULL,
-             locked = locked OR host_token_hash IS NULL
-         WHERE room_id = $1",
-    )
+    // The door first: once it is shut (the waiting room on, so only the host
+    // lets anyone in), disconnecting them is final.
+    sqlx::query("UPDATE chat_call_links SET waiting_room = TRUE WHERE room_id = $1")
     .bind(room_id)
     .execute(&mut *tx)
     .await?;

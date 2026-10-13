@@ -72,7 +72,6 @@ pub async fn own_status(
 #[serde(rename_all = "camelCase")]
 pub struct MailSender {
     pub user_id: String,
-    pub email: String,
     pub username: String,
     /// Outside recipients in the last day and week.
     pub sent_day: i64,
@@ -100,7 +99,6 @@ pub struct MailSendersQuery {
 #[derive(sqlx::FromRow)]
 struct SenderRow {
     id: Uuid,
-    email: String,
     username: Option<String>,
     sent_day: i64,
     sent_week: i64,
@@ -138,7 +136,6 @@ impl From<SenderRow> for MailSender {
     fn from(row: SenderRow) -> Self {
         MailSender {
             user_id: row.id.to_string(),
-            email: row.email,
             username: row.username.unwrap_or_default(),
             sent_day: row.sent_day,
             sent_week: row.sent_week,
@@ -170,7 +167,7 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
                FROM mail_sending_events
               WHERE created_at > now() - interval '7 days'
               GROUP BY user_id)
-         SELECT u.id, COALESCE(u.email, '') AS email, u.username,
+         SELECT u.id, u.username,
                 COALESCE(s.day, 0) AS sent_day, COALESCE(s.week, 0) AS sent_week,
                 COALESCE(e.bounces, 0) AS bounces_week, COALESCE(e.spam, 0) AS spam_week,
                 p.per_hour, p.per_day, p.paused_at, p.paused_reason, p.flagged_at, p.flag_reason
@@ -182,7 +179,7 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
                      ELSE (s.user_id IS NOT NULL OR e.user_id IS NOT NULL OR p.user_id IS NOT NULL)
                           AND (NOT $1 OR p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) END
           ORDER BY (p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) DESC,
-                   COALESCE(s.week, 0) DESC, u.email
+                   COALESCE(s.week, 0) DESC, u.username
           LIMIT 500",
     )
     .bind(attention)

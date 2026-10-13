@@ -279,7 +279,7 @@
   "share": {
     "title": "Share {{name}}",
     "description": "People you share with see the album's photos. With Can add photos, people on this server put in their own, which stay in their storage.",
-    "email": "Email, or user@server for someone on another server",
+    "address": "Kutup address (user@server)",
     "canAdd": "Can add photos",
     "submit": "Share",
     "people": "People with access",

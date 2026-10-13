@@ -78,7 +78,7 @@ export function AccountShell() {
       headerEnd={
         <UserMenu
           name={session.username ?? session.address}
-          email={session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => navigate('/login', { replace: true }))

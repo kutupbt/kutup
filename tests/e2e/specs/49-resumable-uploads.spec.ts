@@ -282,7 +282,7 @@ test('an upload into a folder that moved to a new key is offered only to discard
   await page.getByRole('link', { name: 'My files', exact: true }).first().click()
   await itemAction(page, folder, 'Share')
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Email or Kutup address').fill(bob.address)
+  await dialog.getByLabel('Kutup address').fill(bob.address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog).toBeHidden({ timeout: 30_000 })
   await itemAction(page, folder, 'Share')

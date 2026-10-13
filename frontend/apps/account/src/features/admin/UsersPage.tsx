@@ -48,7 +48,7 @@ export function UsersPage() {
     const q = query.trim().toLowerCase()
     const all = users.data ?? []
     const at = (u: UserRow) => (server ? `${u.username}@${server}` : u.username)
-    return q ? all.filter((u) => at(u).includes(q) || (u.email ?? '').toLowerCase().includes(q)) : all
+    return q ? all.filter((u) => at(u).includes(q)) : all
   }, [users.data, query, server])
 
   const capacity = stats.data?.storageTotalBytes

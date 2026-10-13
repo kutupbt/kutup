@@ -11,8 +11,8 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_region: String,
     pub app_env: String,
-    /// The single bootstrap admin account, `username:password` (the older
-    /// `email:username:password` still reads). Created at first boot; this is the
+    /// The single bootstrap admin account, `username:password` (the password
+    /// may hold colons). Created at first boot; this is the
     /// protected "break-glass" admin. From `ADMIN_ACCOUNT`.
     pub admin_account: String,
     /// Username of the break-glass admin, from `admin_account`. Never demotable/
@@ -401,8 +401,8 @@ impl Config {
     }
 }
 
-/// Extracts the break-glass admin's email (the first field of `email:username:password`) —
-/// mirrors `breakGlassEmail`. Empty when the account is unset or malformed.
+/// The break-glass admin's username (the first field of `username:password`).
+/// Empty when the account is unset or malformed.
 fn break_glass_username(admin_account: &str) -> String {
     parse_admin_account(admin_account)
         .map(|(username, _)| username)
@@ -410,18 +410,11 @@ fn break_glass_username(admin_account: &str) -> String {
 }
 
 /// `ADMIN_ACCOUNT` as `(username, password)`: `username:password` (the
-/// password may hold colons), or the older `email:username:password`, told
-/// by the `@` of its first part. A username that is not one an account may
+/// password may hold colons). A username that is not one an account may
 /// have (lowercase letters, digits, `_` and `-`, 3 to 32) is refused, since
-/// it could never sign in.
+/// it could never sign in — so is the retired `email:username:password`.
 pub(crate) fn parse_admin_account(admin_account: &str) -> Option<(String, String)> {
-    let value = admin_account.trim();
-    let (first, rest) = value.split_once(':')?;
-    let (username, password) = if first.contains('@') {
-        rest.split_once(':')?
-    } else {
-        (first, rest)
-    };
+    let (username, password) = admin_account.trim().split_once(':')?;
     let username = username.trim();
     let valid = (3..=32).contains(&username.len())
         && username
@@ -492,17 +485,15 @@ mod tests {
         );
         // A password with colons stays whole.
         assert_eq!(read("admin:pa:ss"), Some(("admin".into(), "pa:ss".into())));
-        // The older form, told by the email's @.
-        assert_eq!(
-            read("a@b.c:admin:pa:ss"),
-            Some(("admin".into(), "pa:ss".into()))
-        );
+        // The retired `email:username:password` form is refused, not misread.
+        assert_eq!(read("a@b.c:admin:pa:ss"), None);
+        assert_eq!(break_glass_username("a@b.c:admin:x"), "");
         // A username no account may have, or no password: refused.
         assert_eq!(read("Admin:secret"), None);
         assert_eq!(read("ad:secret"), None);
         assert_eq!(read("admin:"), None);
         assert_eq!(read("admin"), None);
-        assert_eq!(break_glass_username("a@b.c:admin:x"), "admin");
+        assert_eq!(break_glass_username("admin:x"), "admin");
     }
     use std::collections::HashMap;
 

@@ -26,7 +26,7 @@ use crate::middleware::AdminUser;
 use crate::AppState;
 
 /// Best-effort audit-log write. The payload snapshots human-readable identities
-/// (emails, usernames) at action time so the trail stays meaningful after the
+/// (usernames) at action time so the trail stays meaningful after the
 /// referenced users are deleted.
 pub(crate) async fn audit(
     pool: &PgPool,
@@ -74,7 +74,6 @@ fn is_break_glass(state: &AppState, username: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 struct UserRow {
     id: Uuid,
-    email: String,
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
@@ -100,20 +99,9 @@ struct UserRow {
     responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
 )]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    type Row = (
-        Uuid,
-        String,
-        String,
-        i64,
-        i64,
-        bool,
-        bool,
-        bool,
-        bool,
-        OffsetDateTime,
-    );
+    type Row = (Uuid, String, i64, i64, bool, bool, bool, bool, OffsetDateTime);
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(email, '') AS email, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
+        r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, totp_enabled, is_first_login, created_at
            FROM users ORDER BY created_at DESC"#,
     )
@@ -124,11 +112,10 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
+            |(id, username, quota, used, is_admin, is_active, totp, first, created)| {
                 let is_protected = is_break_glass(&state, &username);
                 UserRow {
                     id,
-                    email,
                     username,
                     storage_quota_bytes: quota,
                     storage_used_bytes: used,
@@ -387,8 +374,8 @@ pub async fn delete_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Break-glass admin can never be deleted.
-    let (target_email, target_username): (String, Option<String>) =
-        sqlx::query_as("SELECT COALESCE(email, '') AS email, username FROM users WHERE id = $1")
+    let target_username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await
@@ -420,7 +407,6 @@ pub async fn delete_user(
                 "user.delete",
                 Some(target),
                 json!({
-                    "email": target_email,
                     "username": target_username.unwrap_or_default(),
                 }),
             )
@@ -611,14 +597,15 @@ pub async fn force_disable_2fa(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let email: Option<String> = sqlx::query_scalar(
-        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1 RETURNING email",
+    let username: Option<String> = sqlx::query_scalar(
+        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1
+         RETURNING COALESCE(username, '')",
     )
     .bind(target)
     .fetch_optional(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
-    let Some(email) = email else {
+    let Some(username) = username else {
         return Err(AppError::not_found("not found"));
     };
     audit(
@@ -626,7 +613,7 @@ pub async fn force_disable_2fa(
         &admin.user_id,
         "user.2fa_disable",
         Some(target),
-        json!({"email": email}),
+        json!({"username": username}),
     )
     .await;
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
@@ -1839,12 +1826,12 @@ pub async fn wipe_user(
     let hash = req.setup.checked_hash()?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT COALESCE(email, '') AS email, username FROM users WHERE id = $1")
+    let row: Option<Option<String>> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((email, username)) = row else {
+    let Some(username) = row else {
         return Err(AppError::not_found("not found"));
     };
     if is_break_glass(&state, username.as_deref().unwrap_or_default()) {
@@ -1952,7 +1939,7 @@ pub async fn wipe_user(
         &admin.user_id,
         "user.wipe",
         Some(target),
-        json!({"email": email, "username": username.unwrap_or_default()}),
+        json!({"username": username.unwrap_or_default()}),
     )
     .await;
     Ok(Json(json!({"message": "account wiped"})).into_response())
@@ -1977,14 +1964,11 @@ struct ActivityEntry {
     id: i64,
     action: String,
     admin_user_id: Uuid,
-    /// The acting admin's live identity — `null` once that account is deleted.
-    admin_email: Option<String>,
+    /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
     target_user_id: Option<Uuid>,
-    /// The target's live email — `null` once deleted; the payload keeps the
-    /// at-action-time snapshot.
-    target_email: Option<String>,
-    /// The target's live username — `null` once deleted.
+    /// The target's live username — `null` once deleted; the payload keeps
+    /// the at-action-time snapshot.
     target_username: Option<String>,
     payload: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
@@ -2055,7 +2039,7 @@ pub async fn activity_export(
     let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
     let entries = load_activity_entries(&state.pool, &q, limit).await?;
     let mut csv = String::from(
-        "id,occurred_at,action,admin_user_id,admin_email,admin_username,target_user_id,target_email,target_username,payload\n",
+        "id,occurred_at,action,admin_user_id,admin_username,target_user_id,target_username,payload\n",
     );
     for entry in entries {
         let values = [
@@ -2066,13 +2050,11 @@ pub async fn activity_export(
                 .map_err(|_| AppError::internal("could not format audit timestamp"))?,
             entry.action,
             entry.admin_user_id.to_string(),
-            entry.admin_email.unwrap_or_default(),
             entry.admin_username.unwrap_or_default(),
             entry
                 .target_user_id
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
-            entry.target_email.unwrap_or_default(),
             entry.target_username.unwrap_or_default(),
             serde_json::to_string(&entry.payload)
                 .map_err(|_| AppError::internal("could not serialize audit payload"))?,
@@ -2120,16 +2102,14 @@ async fn load_activity_entries(
         String,
         Uuid,
         Option<String>,
-        Option<String>,
         Option<Uuid>,
-        Option<String>,
         Option<String>,
         serde_json::Value,
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT l.id, l.action, l.admin_user_id, a.email, a.username,
-                  l.target_user_id, t.email, t.username, l.payload, l.occurred_at
+        r#"SELECT l.id, l.action, l.admin_user_id, a.username,
+                  l.target_user_id, t.username, l.payload, l.occurred_at
            FROM admin_audit_log l
            LEFT JOIN users a ON a.id = l.admin_user_id
            LEFT JOIN users t ON t.id = l.target_user_id
@@ -2163,10 +2143,8 @@ async fn load_activity_entries(
                 id,
                 action,
                 admin_id,
-                a_email,
                 a_username,
                 target_id,
-                t_email,
                 t_username,
                 payload,
                 at,
@@ -2175,10 +2153,8 @@ async fn load_activity_entries(
                     id,
                     action,
                     admin_user_id: admin_id,
-                    admin_email: a_email,
                     admin_username: a_username,
                     target_user_id: target_id,
-                    target_email: t_email,
                     target_username: t_username,
                     payload,
                     occurred_at: at,
@@ -2208,7 +2184,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
             if db.constraint().unwrap_or("").contains("username") {
                 return AppError::conflict("username already taken");
             }
-            return AppError::conflict("email already registered");
+            return AppError::conflict("already registered");
         }
     }
     AppError::internal("internal error")

@@ -377,7 +377,7 @@ pub async fn fetch_remote_user(
     let username = canonical_username(&username)?;
     let server = canonical_domain(&query.server)?;
     // An address on this server is not a remote one. Accounts here are found
-    // by the local lookup (`/api/users/by-email`), which a client tries
+    // by the local lookup (`/api/users/by-address`), which a client tries
     // first; reaching this with our own name means there is no such account.
     if server == state.config.chat_server_name {
         return Err(AppError::not_found("remote Drive user not found"));

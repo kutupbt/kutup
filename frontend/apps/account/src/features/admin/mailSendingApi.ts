@@ -10,7 +10,6 @@ import { adminKey } from './api'
 
 export interface MailSender {
   userId: string
-  email: string
   username: string
   sentDay: number
   sentWeek: number

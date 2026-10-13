@@ -260,7 +260,6 @@ export interface LinkReport {
   shareCreatedAt: string
   shareRemovedAt: string | null
   ownerUserId: string
-  ownerEmail: string
   ownerUsername: string
   ownerIsActive: boolean
   openReportsOnLink: number
@@ -277,7 +276,6 @@ export interface FeedbackItem {
   createdAt: string
   /** Null when the account was deleted since. */
   userId: string | null
-  userEmail: string | null
   userUsername: string | null
   resolvedAt: string | null
   resolution: 'done' | 'dismissed' | 'forwarded' | null

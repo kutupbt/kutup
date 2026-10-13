@@ -1,7 +1,7 @@
 //! Auth + user handlers — mirrors `backend/handlers/auth.go`.
 //!
 //! Registration, login (+ preflight, 2FA), recovery (+ preflight), token refresh,
-//! first-login setup, the `/user/*` profile + TOTP endpoints, and the by-email lookup.
+//! first-login setup, the `/user/*` profile + TOTP endpoints, and the lookup by address.
 //! Wire formats, status codes, and SQL match the Go handler exactly; the refresh token
 //! is set as the same HttpOnly cookie scoped to `/api/auth/refresh`.
 
@@ -655,7 +655,7 @@ pub async fn register(
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let res = sqlx::query(
         r#"INSERT INTO users (
-            email, username, master_key_envelope, recovery_key_envelope,
+            username, master_key_envelope, recovery_key_envelope,
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
@@ -663,7 +663,7 @@ pub async fn register(
             argon_memory_kib, argon_iterations, argon_parallelism,
             login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding
-        ) VALUES (NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)"#,
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)"#,
     )
     .bind(&req.key_binding)
     .bind(&req.username)
@@ -1398,24 +1398,21 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
     Some(username.to_ascii_lowercase())
 }
 
-/// `GET /api/users/by-email/:email` — an account here, by the address a
-/// person would type to share with it: its account address
-/// (`username@<this server>`) or its email. The account address is tried
-/// first: usernames are unique and given by this server, while an email is
-/// whatever its owner typed, so an email must not be able to stand in for
-/// someone else's account address.
+/// `GET /api/users/by-address/:address` — an account here, by the address a
+/// person would type to share with it: its Kutup address
+/// (`username@<this server>`).
 #[utoipa::path(
     get,
-    path = "/api/users/by-email/{email}",
+    path = "/api/users/by-address/{address}",
     tag = "auth",
     security(("BearerAuth" = [])),
-    params(("email" = String, Path, description = "Target user's account address or email")),
-    responses((status = 200, description = "User id + public key", body = UserLookupResponse))
+    params(("address" = String, Path, description = "Target account's Kutup address (username@server)")),
+    responses((status = 200, description = "User id + public key", body = UserLookupResponse), (status = 404, description = "No such account here"))
 )]
-pub async fn get_user_by_email(
+pub async fn get_user_by_address(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path(email): Path<String>,
+    Path(address): Path<String>,
 ) -> AppResult<Response> {
     type Row = (
         Uuid,
@@ -1426,10 +1423,9 @@ pub async fn get_user_by_email(
         String,
         Option<String>,
     );
-    // People are found by their Kutup address only; a sign-in email names no one
-    // (docs/plans/account-identity.md).
+    // People are found by their Kutup address (docs/plans/account-identity.md).
     let row: Option<Row> =
-        match local_account_username(&email, &state.config.chat_server_name) {
+        match local_account_username(&address, &state.config.chat_server_name) {
             Some(username) => sqlx::query_as(
                 "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
                         account_authority_public_key, drive_key_binding
@@ -1860,7 +1856,7 @@ fn parse_uuid(s: &str) -> AppResult<Uuid> {
 }
 
 /// Maps a duplicate-key INSERT error to the right 409 — mirrors `isDuplicateKeyError` +
-/// the username/email branch in `Register`.
+/// the username branch in `Register`.
 fn map_insert_conflict(err: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(db) = &err {
         if db.code().as_deref() == Some("23505") {
@@ -1871,7 +1867,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
             if constraint.contains("key_binding") {
                 return AppError::conflict("keyBinding is taken; draw another");
             }
-            return AppError::conflict("email already registered");
+            return AppError::conflict("already registered");
         }
     }
     AppError::internal(format!("register: {err}"))
@@ -1891,7 +1887,6 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
     bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Derives a stable base64 salt from email+purpose — mirrors `deterministicFakeSalt`.
 /// Bytes that stand in for a real account's, for a name that is not one:
 /// the same each time, and told from real ones by no one without the
 /// server's own key for them (an HMAC under a key derived from it).
@@ -1971,7 +1966,7 @@ mod tests {
     }
 
     #[test]
-    fn an_account_address_of_this_server_is_told_from_an_email() {
+    fn an_account_address_of_this_server_is_told_from_others() {
         let here = "kutup.example";
         assert_eq!(
             local_account_username("ada@kutup.example", here).as_deref(),
@@ -1981,7 +1976,7 @@ mod tests {
             local_account_username(" Ada@Kutup.Example ", here).as_deref(),
             Some("ada")
         );
-        // Another domain is an email address or another server's account.
+        // Another domain is another server's account or an outside address.
         assert_eq!(local_account_username("ada@mail.example", here), None);
         assert_eq!(local_account_username("ada@sub.kutup.example", here), None);
         assert_eq!(local_account_username("@kutup.example", here), None);

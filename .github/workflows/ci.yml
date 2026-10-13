@@ -283,7 +283,7 @@ jobs:
       # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
       # and outside sending on for spec 58's pause notice; spec 59 turns it
       # off in Administration and back on (tests/e2e/README.md).
-      ADMIN_ACCOUNT: "admin@kutup.dev:admin:Bootstrap*Temporary123"
+      ADMIN_ACCOUNT: "admin:Bootstrap*Temporary123"
       MAIL_OUTSIDE_SENDING: "on"
       # Sends go at once in the browser specs; spec 102 turns undo send on.
       MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"

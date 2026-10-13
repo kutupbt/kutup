@@ -60,9 +60,8 @@ pub struct CreateCallLinkRequest {
     /// (standard base64, 552 bytes).
     pub info: String,
     /// SHA-256 of the owner's host token (standard base64, 32 bytes), which
-    /// only the owner's account can derive. Needed for a waiting room.
-    #[serde(default)]
-    pub host_token_hash: Option<String>,
+    /// only the owner's account can derive: what lets the owner host.
+    pub host_token_hash: String,
     /// Joiners wait until the owner admits them.
     #[serde(default)]
     pub waiting_room: bool,
@@ -216,14 +215,7 @@ pub(crate) async fn create(
     hex32("nonce", &request.nonce)?;
     let hash = base64_exact("accessTokenHash", &request.access_token_hash, 32)?;
     let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
-    let host_token_hash = request
-        .host_token_hash
-        .as_deref()
-        .map(|hash| base64_exact("hostTokenHash", hash, 32))
-        .transpose()?;
-    if request.waiting_room && host_token_hash.is_none() {
-        return Err(AppError::bad_request("a waiting room needs hostTokenHash"));
-    }
+    let host_token_hash = base64_exact("hostTokenHash", &request.host_token_hash, 32)?;
     if let Some(replaces) = &request.replaces {
         hex32("replaces", replaces)?;
         if *replaces == request.room_id {
@@ -429,7 +421,7 @@ pub(super) struct Admitted {
     pub sitting: i64,
     /// Since when the meeting has been on without a host in it.
     pub hostless_since: Option<OffsetDateTime>,
-    host_token_hash: Option<Vec<u8>>,
+    host_token_hash: Vec<u8>,
 }
 
 impl Admitted {
@@ -441,11 +433,12 @@ impl Admitted {
         let presented: [u8; 32] = Sha256::digest(base64_exact("hostToken", token, 32)?).into();
         let stored: [u8; 32] = self
             .host_token_hash
-            .as_deref()
-            .and_then(|hash| hash.try_into().ok())
-            .unwrap_or([0u8; 32]);
-        Ok(self.host_token_hash.is_some()
-            && kutup_chat_proto::constant_time_capability_hash_eq(&presented, &stored))
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::internal("stored host token hash"))?;
+        Ok(kutup_chat_proto::constant_time_capability_hash_eq(
+            &presented, &stored,
+        ))
     }
 }
 
@@ -464,7 +457,7 @@ pub(super) async fn admitted(
         Vec<u8>,
         Vec<u8>,
         bool,
-        Option<Vec<u8>>,
+        Vec<u8>,
         bool,
         i64,
         Option<OffsetDateTime>,

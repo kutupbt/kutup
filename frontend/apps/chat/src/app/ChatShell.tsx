@@ -145,7 +145,7 @@ export function ChatShell() {
       headerEnd={
         <UserMenu
           name={session.username ?? session.address}
-          email={session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             // A signed-out browser is not woken for this account any more.

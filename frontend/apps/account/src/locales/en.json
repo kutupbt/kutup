@@ -35,15 +35,12 @@
   },
   "auth": {
     "fields": {
-      "email": "Email",
       "password": "Password",
       "username": "Username",
       "newPassword": "New password",
       "confirmPassword": "Repeat password"
     },
     "validation": {
-      "emailRequired": "Enter your email address.",
-      "emailInvalid": "Enter a valid email address.",
       "passwordRequired": "Enter a password.",
       "passwordsDiffer": "The passwords do not match.",
       "passwordTooWeak": "Choose a stronger password — longer, and not a common word or pattern.",
@@ -56,7 +53,6 @@
       "signInFailed": "Sign-in failed. Check your username and password.",
       "totpFailed": "That code did not work. Enter the current code from your authenticator app.",
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
-      "emailTaken": "That email already has an account. Sign in instead, or go back and use another email.",
       "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again."
     },
@@ -127,7 +123,7 @@
     "phraseInvalid": "That is not a valid recovery phrase — check each word.",
     "signsOutEverywhere": "Every device and app signed in to this account will be signed out.",
     "submit": "Set new password",
-    "failed": "Recovery failed. Check the email and the phrase.",
+    "failed": "Recovery failed. Check the username and the phrase.",
     "doneTitle": "Password changed",
     "doneDescription": "Sign in with your new password. Your files and messages are intact.",
     "signIn": "Sign in",
@@ -471,7 +467,7 @@
       "failed": "The user could not be created.",
       "createdTitle": "User created",
       "createdDescription": "Give {{name}} this temporary password. It works until their first sign-in.",
-      "handOver": "Share it privately — not in the same message as the email address. It is not shown again.",
+      "handOver": "Share it privately — not in the same message as the username. It is not shown again.",
       "done": "Done"
     },
     "user": {

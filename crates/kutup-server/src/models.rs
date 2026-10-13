@@ -152,7 +152,7 @@ pub struct TotpCodeRequest {
     pub code: String,
 }
 
-/// `GET /api/users/by-email/:email` — mirrors `handlers.UserLookupResponse`.
+/// `GET /api/users/by-address/:address` — mirrors `handlers.UserLookupResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UserLookupResponse {
@@ -438,22 +438,6 @@ pub struct PublicShareResponse {
     pub owner_user_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
-}
-
-/// Admin user row — mirrors `handlers.UserRow`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UserRow {
-    pub id: String,
-    pub email: String,
-    pub username: String,
-    pub storage_quota_bytes: i64,
-    pub storage_used_bytes: i64,
-    pub is_admin: bool,
-    pub is_active: bool,
-    pub totp_enabled: bool,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
 }
 
 /// `POST /api/admin/users` body — mirrors `handlers.CreateAdminUserRequest`.

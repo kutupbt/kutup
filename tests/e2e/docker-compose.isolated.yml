@@ -30,4 +30,4 @@ services:
       RATE_LIMIT_USER_LOOKUP_PER_MIN: 1000
       # The break-glass administrator for admin specs (fixtures/apps.ts,
       # signInAsAdmin); its first sign-in replaces this temporary password.
-      ADMIN_ACCOUNT: admin@kutup.dev:admin:Bootstrap*Temporary123
+      ADMIN_ACCOUNT: admin:Bootstrap*Temporary123

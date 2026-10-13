@@ -21,9 +21,6 @@ const DB_FILE: &str = "kutup.redb";
 
 /// `(key -> value)` blobs. `data` holds the encrypted session.
 const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
-/// Legacy v1 sync table — dropped on open (records were write-only: the old
-/// engine never compared them, so nothing of value is lost).
-const SYNC_V1: TableDefinition<&str, &[u8]> = TableDefinition::new("sync");
 /// Sync state v2, keyed `"{pair}|f|{rel_path}"` / `"{pair}|d|{rel_dir}"`
 /// where `pair` = sha256(collection_id ++ "\0" ++ canonical_local_root).
 const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_state");
@@ -101,7 +98,6 @@ impl Store {
             wtx.open_table(SESSION)?;
             wtx.open_table(SYNC_STATE)?;
             wtx.open_table(RESUME)?;
-            let _ = wtx.delete_table(SYNC_V1);
             wtx.commit()?;
         }
         let mut store = Store {

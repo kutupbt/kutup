@@ -47,8 +47,8 @@
   "fileShare": {
     "title": "“{{name}}” paylaş",
     "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
-    "recipient": "E-posta veya Kutup adresi",
-    "recipientHint": "Kutup adresi (kullanici@sunucu) ya da bu sunucudaki biri için e-postası. Başka sunucudaki biri davet bağlantısı alır; izin verirseniz kendi sunucusu üzerinden düzenleyebilir de.",
+    "recipient": "Kutup adresi",
+    "recipientHint": "Kutup adresi (kullanici@sunucu). Başka sunucudaki biri davet bağlantısı alır; izin verirseniz kendi sunucusu üzerinden düzenleyebilir de.",
     "canEdit": "Düzenleyebilir",
     "canEditHint": "Düzenleyenler dosyayı değiştirip sürüm kaydedebilir; görüntüleyenler yalnızca açabilir. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
     "canView": "Görüntüleyebilir",

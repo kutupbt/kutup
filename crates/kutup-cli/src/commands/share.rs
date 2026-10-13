@@ -24,10 +24,10 @@ use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 #[derive(Subcommand)]
 pub enum ShareCmd {
-    /// Share a folder with a Kutup user.
+    /// Share a folder with a Kutup user on this server (user@server).
     Folder {
         collection_id: String,
-        email: String,
+        address: String,
         #[arg(long)]
         upload: bool,
         #[arg(long)]
@@ -97,7 +97,7 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
     match cmd {
         ShareCmd::Folder {
             collection_id,
-            email,
+            address,
             upload,
             delete,
             share_anyway,
@@ -105,7 +105,7 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
             profile,
             json,
             collection_id,
-            email,
+            address,
             *upload,
             *delete,
             *share_anyway,
@@ -172,7 +172,7 @@ fn share_folder(
     profile: &str,
     json: bool,
     collection_id: &str,
-    email: &str,
+    address: &str,
     upload: bool,
     delete: bool,
     share_anyway: bool,
@@ -182,8 +182,8 @@ fn share_folder(
 
     let recipient = ctx
         .client
-        .get_user_by_email(email)
-        .with_context(|| format!("look up user {email}"))?;
+        .get_user_by_address(address)
+        .with_context(|| format!("look up user {address}"))?;
     confirm_recipient(
         &ctx,
         profile,
@@ -235,9 +235,9 @@ fn share_folder(
         .context("share")?;
 
     if json {
-        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": email }))?;
+        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": address }))?;
     } else {
-        println!("Shared folder with {email}");
+        println!("Shared folder with {address}");
     }
     Ok(())
 }

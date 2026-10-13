@@ -435,7 +435,7 @@ async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> any
     Ok(())
 }
 
-/// Seeds the single break-glass admin account from `ADMIN_ACCOUNT` (`email:username:password`).
+/// Seeds the single break-glass admin account from `ADMIN_ACCOUNT` (`username:password`).
 /// This account is the protected break-glass admin (never demotable/disableable/deletable; see
 /// the guards in `handlers/admin.rs`); other admins are promoted in-app. The admin must complete
 /// first-login setup to establish their E2EE key material — mirrors `main.bootstrapAdmin`.
@@ -444,8 +444,8 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         return;
     }
     let Some((username, password)) = crate::config::parse_admin_account(account_env) else {
-        tracing::warn!(
-            "bootstrapAdmin: ADMIN_ACCOUNT is not username:password (a username of 3 to 32 lowercase letters, digits, _ or -) — skipping"
+        tracing::error!(
+            "bootstrapAdmin: ADMIN_ACCOUNT is not username:password (a username of 3 to 32 lowercase letters, digits, _ or -; the old email:username:password form is no longer read) — no admin account is seeded"
         );
         return;
     };
@@ -879,8 +879,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
         .route(
-            "/api/users/by-email/:email",
-            get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+            "/api/users/by-address/:address",
+            get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
             "/api/users/drive-identities",

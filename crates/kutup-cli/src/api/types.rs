@@ -107,8 +107,8 @@ pub struct TotpRequest {
 }
 
 /// `GET /auth/recover/preflight` — encrypted recovery-key material. The
-/// server answers unknown emails with deterministic fake data, so a wrong
-/// phrase/email only ever fails client-side at unwrap time.
+/// server answers unknown names with deterministic fake data, so a wrong
+/// phrase/name only ever fails client-side at unwrap time.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
@@ -433,7 +433,7 @@ pub struct PublicShareResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserByEmail {
+pub struct UserByAddress {
     #[serde(default)]
     pub user_id: String,
     #[serde(default)]
