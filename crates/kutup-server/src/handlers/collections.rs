@@ -211,8 +211,7 @@ pub(crate) async fn collection_rows(
     .bind(user_id)
     .bind(kind)
     .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    .await?;
 
     for row in shared {
         // Compute this user's usage in the shared collection when an upload quota applies.
@@ -223,9 +222,7 @@ pub(crate) async fn collection_rows(
             .bind(row.id)
             .bind(user_id)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+            .await?;
             Some(used.unwrap_or(0))
         } else {
             None

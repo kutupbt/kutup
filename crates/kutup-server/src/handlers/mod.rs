@@ -71,7 +71,12 @@ pub(crate) fn trusted_uuid(s: &str) -> AppResult<Uuid> {
 
 /// Access check for a collection — owner or share recipient. Mirrors
 /// `FilesHandler.canAccessCollection`.
-pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id: Uuid) -> bool {
+/// A failed query is an error, never "no".
+pub(crate) async fn can_access_collection(
+    pool: &PgPool,
+    user_id: Uuid,
+    coll_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     // Trashed collections are invisible to normal access; only the trash endpoints see them.
     let owner: Option<i64> = sqlx::query_scalar(
         "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
@@ -79,11 +84,9 @@ pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id:
     .bind(coll_id)
     .bind(user_id)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     if owner.unwrap_or(0) > 0 {
-        return true;
+        return Ok(true);
     }
     let shared: Option<i64> = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM collection_shares cs
@@ -93,24 +96,14 @@ pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id:
     .bind(coll_id)
     .bind(user_id)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    shared.unwrap_or(0) > 0
+    .await?;
+    Ok(shared.unwrap_or(0) > 0)
 }
 
 /// Access check for a file — owner of its collection, a recipient of the
 /// folder, or a recipient of the file itself (docs/plans/drive-file-sharing.md).
-/// A failed query counts as no access; where acting on "no access" would
-/// destroy something, use [`try_can_access_file`].
-pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
-    try_can_access_file(pool, user_id, file_id)
-        .await
-        .unwrap_or(false)
-}
-
-/// [`can_access_file`], with a failed query an error rather than "no".
-pub(crate) async fn try_can_access_file(
+/// A failed query is an error, never "no".
+pub(crate) async fn can_access_file(
     pool: &PgPool,
     user_id: Uuid,
     file_id: Uuid,
@@ -160,4 +153,28 @@ pub(crate) fn octet_stream_response(
     builder
         .body(Body::from_stream(stream))
         .expect("valid octet-stream response")
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+
+    /// A pool whose every query fails (nothing listens there).
+    fn failing_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgres://nobody:nothing@127.0.0.1:9/none")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_is_an_error_never_no() {
+        let pool = failing_pool();
+        let (user, id) = (Uuid::new_v4(), Uuid::new_v4());
+        assert!(can_access_collection(&pool, user, id).await.is_err());
+        assert!(can_access_file(&pool, user, id).await.is_err());
+        assert!(crate::drive_writes::can_write_file(&pool, user, id)
+            .await
+            .is_err());
+    }
 }

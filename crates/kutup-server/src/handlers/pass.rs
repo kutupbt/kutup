@@ -22,7 +22,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::{can_access_file, trusted_uuid, try_can_access_file};
+use crate::handlers::{can_access_file, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -78,11 +78,10 @@ pub async fn list_vault_secrets(
             continue;
         }
         // Out of reach now (unshared, perhaps only for a moment): hidden,
-        // never deleted on a read; a failed check fails the request. The
-        // check sees a trashed file as out of reach, so trashed records skip
-        // it (a restore lists them again). A record goes only with the vault
-        // itself (purged: ON DELETE CASCADE) or when its owner forgets it.
-        if !trashed && !try_can_access_file(&state.pool, user_id, file_id).await? {
+        // never deleted on a read; a failed check fails the request. A record
+        // goes only with the vault (purged: ON DELETE CASCADE) or when its
+        // owner forgets it (the same fix as #171).
+        if !can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
         out.push(VaultSecretRow {
@@ -122,7 +121,7 @@ pub async fn put_vault_secret(
             .bind(file_id)
             .fetch_optional(&state.pool)
             .await?;
-    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await {
+    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
     // What the account's keys are bound to (docs/plans/account-identity.md).

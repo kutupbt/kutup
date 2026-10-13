@@ -385,15 +385,20 @@ pub async fn head_upload(
     let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
-    let row: Option<(i64, i64)> = sqlx::query_as(
+    let row: Option<(i64, i64)> = match sqlx::query_as(
         "SELECT total_bytes,received_bytes FROM chat_media_uploads WHERE id=$1 AND user_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
+    };
     let Some((total, received)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
@@ -450,7 +455,7 @@ pub async fn patch_upload(
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
-    let row: Option<UploadRow> = sqlx::query_as(
+    let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT attachment_id,suite,total_bytes,received_bytes,retrieval_token_hash,storage_path,s3_upload_id,s3_part_etags,pending_bytes
          FROM chat_media_uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
@@ -458,8 +463,13 @@ pub async fn patch_upload(
     .bind(user_id)
     .fetch_optional(&mut *transaction)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
+    };
     let Some((
         attachment_id,
         suite,
@@ -598,7 +608,7 @@ pub async fn patch_upload(
         let _ = state.storage.delete(&storage_path).await;
         return tus_text(StatusCode::CONFLICT, "attachment finalization conflict");
     }
-    let storage_reference_id: Option<Uuid> = sqlx::query_scalar(
+    let storage_reference_id: Option<Uuid> = match sqlx::query_scalar(
         "INSERT INTO chat_media_references(user_id,attachment_id,logical_bytes)
          VALUES ($1,$2,$3) RETURNING id",
     )
@@ -607,8 +617,15 @@ pub async fn patch_upload(
     .bind(total)
     .fetch_optional(&mut *transaction)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        // The object is already complete in storage: the cleanup below
+        // deletes it, so a failed finalize leaves nothing behind.
+        Err(error) => {
+            tracing::error!(%error, "chat media: finalizing an upload failed");
+            None
+        }
+    };
     if storage_reference_id.is_none()
         || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
             .bind(total)
@@ -655,15 +672,20 @@ pub async fn delete_upload(
     let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
-    let row: Option<(String, String)> = sqlx::query_as(
+    let row: Option<(String, String)> = match sqlx::query_as(
         "SELECT storage_path,s3_upload_id FROM chat_media_uploads WHERE id=$1 AND user_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "upload: a database read failed");
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
+        }
+    };
     let Some((storage_path, s3_upload_id)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };

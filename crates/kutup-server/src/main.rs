@@ -488,12 +488,20 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     };
     let (username, password) = (username.as_str(), password.as_str());
 
-    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE username = $1")
-        .bind(username)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    // A failed check is not "no admin yet": nothing is created on an error.
+    let exists: Option<i64> = match sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users WHERE username = $1",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(exists) => exists,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not check for the account; not creating it");
+            return;
+        }
+    };
     if exists.unwrap_or(0) > 0 {
         return;
     }
@@ -523,9 +531,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         }
     };
 
-    let storage_quota_bytes = crate::storage_pool::default_quota(pool)
-        .await
-        .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
+    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
+            return;
+        }
+    };
     let res = sqlx::query(
         r#"INSERT INTO users (
             username, login_key_hash,

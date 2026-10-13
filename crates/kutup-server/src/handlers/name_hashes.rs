@@ -58,7 +58,7 @@ pub async fn set_content_hash(
     let Some(folder) = folder else {
         return Err(AppError::not_found("not found"));
     };
-    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await {
+    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await? {
         writable_folder(&mut tx, user_id, folder).await?;
     }
     sqlx::query("UPDATE files SET content_hash = $2 WHERE id = $1")

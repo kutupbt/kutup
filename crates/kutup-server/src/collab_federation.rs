@@ -1654,8 +1654,13 @@ async fn bridge_connection(
         tokio::select! {
             _ = peer.close.notified() => break,
             _ = recheck.tick() => {
-                let live = crate::sessions::live(&state.pool, session_id, user_uuid).await.is_ok();
-                if !live || target_for(&state, user_uuid, &route).await.is_err() {
+                // The session: closed when it has ended, retried on another
+                // error. The target: any failure closes (fails closed).
+                let session_ended = matches!(
+                    crate::sessions::live(&state.pool, session_id, user_uuid).await,
+                    Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
+                );
+                if session_ended || target_for(&state, user_uuid, &route).await.is_err() {
                     break;
                 }
             }

@@ -66,7 +66,7 @@ pub async fn upload(
     if !valid_asset_id(&asset_id) {
         return Err(AppError::bad_request("invalid assetId"));
     }
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -261,7 +261,7 @@ pub async fn download(
     if !valid_asset_id(&asset_id) {
         return Err(AppError::bad_request("invalid assetId"));
     }
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     asset_response(&state, fid, &asset_id).await

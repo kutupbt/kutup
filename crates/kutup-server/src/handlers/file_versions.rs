@@ -128,7 +128,7 @@ pub async fn list(
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let rows: Vec<VersionTuple> = sqlx::query_as(&format!(
@@ -161,7 +161,7 @@ pub async fn download(
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -214,7 +214,7 @@ pub async fn patch(
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     // Naming or pinning a version changes what retention keeps: an editor's call.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let label = req.label.map(|l| l.trim().to_string());
@@ -304,7 +304,7 @@ pub async fn delete(
         return Err(AppError::not_found("not found"));
     };
     if user_id != author && user_id != owner {
-        if can_access_file(&state.pool, user_id, fid).await {
+        if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
                 "only the file's owner or whoever saved this version can delete it",
             ));
@@ -356,7 +356,7 @@ pub async fn create(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
