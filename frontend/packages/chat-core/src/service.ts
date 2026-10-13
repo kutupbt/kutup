@@ -1824,7 +1824,7 @@ export class ChatService {
       }
       for (const [pendingKey, message] of [...this.pendingAttachments]) {
         const descriptor = message.content.attachment!
-        const messageId = message.content.messageId!
+        const messageId = message.content.messageId
         if (this.attachmentLedger!.hasAttachment(messageId, descriptor.attachmentId)) {
           this.pendingAttachments.delete(pendingKey)
           continue
