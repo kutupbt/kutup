@@ -334,3 +334,75 @@ fn upload_rows_are_a_file_or_a_version() {
         );
     }
 }
+
+/// A Replace stands at the collaboration log's head: an office document
+/// opened afterwards replays none of the edits made to what it replaced.
+#[test]
+fn a_version_over_tus_stands_at_the_log_head() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let c = Client::new();
+    let owner = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    let file = seal_file(&folder, &uuid(), b"report");
+    assert!(upload(&c, &base, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+    // Edits were made in the editor up to position 7.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    runtime
+        .block_on(
+            sqlx::query("UPDATE files SET collab_log_floor = 7 WHERE id = $1::uuid")
+                .bind(&file.id)
+                .execute(&pool),
+        )
+        .unwrap();
+
+    let blob = drive_object::encrypt_file_blob(
+        b"replaced",
+        &file.key,
+        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
+    )
+    .unwrap();
+    let next = metadata(&file, 2, 8);
+    let r = create_version(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        blob.len(),
+        &[
+            ("metadataEnvelope", next.as_str()),
+            ("metadataRevision", "2"),
+        ],
+    );
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let at = location(&r);
+    assert_eq!(
+        patch(&c, &base, &owner.token, &at, 0, &blob).status(),
+        StatusCode::NO_CONTENT
+    );
+    let versions: Value = bearer(
+        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        &owner.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let rows = versions
+        .get("versions")
+        .unwrap_or(&versions)
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(rows.iter().any(|v| v["seqAtSnapshot"] == 7), "{versions}");
+}

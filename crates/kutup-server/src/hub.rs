@@ -173,6 +173,18 @@ impl Hub {
         })
     }
 
+    /// A new version replaced the file's content (a Replace): it becomes the
+    /// room's session base, and every peer there is returned, to be told to
+    /// reopen. Empty when nobody has the file open.
+    pub fn replace_base(&self, file_id: &str, base: SessionBase) -> Vec<Arc<Peer>> {
+        let mut rooms = self.rooms.lock().unwrap();
+        let Some(room) = rooms.get_mut(file_id) else {
+            return Vec::new();
+        };
+        room.base = Some(base);
+        room.peers.values().cloned().collect()
+    }
+
     /// Snapshot of the connections currently in a file's room — mirrors `Peers`.
     pub fn peers(&self, file_id: &str) -> Vec<Arc<Peer>> {
         let rooms = self.rooms.lock().unwrap();

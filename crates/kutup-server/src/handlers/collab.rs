@@ -652,6 +652,27 @@ pub(crate) async fn frame_binding(state: &AppState, file_uuid: Uuid, f: &Frame) 
     Some(binding.2 == binding.3)
 }
 
+/// A new version replaced a file's content outside the editor (a Replace in
+/// Drive): the room's session base moves to it, and every tab with the file
+/// open is told to reopen from it, as after a restore.
+pub(crate) async fn replace_base(state: &AppState, file_uuid: Uuid, version_id: &str, seq: i64) {
+    let base = hub::SessionBase {
+        version_id: Some(version_id.to_owned()),
+        seq,
+    };
+    let message = serde_json::json!({
+        "type": "base",
+        "versionId": version_id,
+        "seq": seq,
+        "yours": false,
+        "reset": true,
+    })
+    .to_string();
+    for peer in state.hub.replace_base(&file_uuid.to_string(), base) {
+        let _ = peer.write(WsOut::Text(message.clone())).await;
+    }
+}
+
 /// Who sent a kept frame: a device here, or one on another server.
 pub(crate) enum Sender<'a> {
     Device(i64),

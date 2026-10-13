@@ -302,16 +302,26 @@ pub(super) async fn finish(
             .into_response();
     }
     match record(&mut tx, &landing).await {
-        Ok(()) if tx.commit().await.is_ok() => (
-            StatusCode::NO_CONTENT,
-            [
-                ("Tus-Resumable", TUS_VERSION.to_string()),
-                ("Upload-Offset", landing.total_bytes.to_string()),
-                ("X-Kutup-File-Id", landing.file_id.to_string()),
-                ("X-Kutup-Version-Id", landing.upload_id.to_string()),
-            ],
-        )
-            .into_response(),
+        Ok(seq) if tx.commit().await.is_ok() => {
+            // Tabs editing the file reopen from the new content.
+            super::collab::replace_base(
+                state,
+                landing.file_id,
+                &landing.upload_id.to_string(),
+                seq,
+            )
+            .await;
+            (
+                StatusCode::NO_CONTENT,
+                [
+                    ("Tus-Resumable", TUS_VERSION.to_string()),
+                    ("Upload-Offset", landing.total_bytes.to_string()),
+                    ("X-Kutup-File-Id", landing.file_id.to_string()),
+                    ("X-Kutup-Version-Id", landing.upload_id.to_string()),
+                ],
+            )
+                .into_response()
+        }
         _ => {
             let _ = state.storage.delete(&landing.storage_path).await;
             tus_error(AppError::internal("db store version"))
@@ -319,14 +329,28 @@ pub(super) async fn finish(
     }
 }
 
-async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppResult<()> {
+/// Stores the version and returns its position in the collaboration log.
+async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppResult<i64> {
     let parent = current_whole_version(tx, landing.file_id).await?;
+    // The new content replaces everything edited so far: it stands at the
+    // log's head, so whoever opens it next replays nothing older (as a
+    // restore from the editor does). Under the relay's per-file lock, so no
+    // edit lands in between.
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(super::collab::log_lock_key(landing.file_id))
+        .execute(&mut **tx)
+        .await?;
+    let seq = super::collab::log_head(&mut **tx, landing.file_id).await?;
+    let doc_key_id: i64 = sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
+        .bind(landing.file_id)
+        .fetch_one(&mut **tx)
+        .await?;
     // Stamped when stored, as a multipart save (`file_versions::store_version`).
     sqlx::query(
         r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot, doc_key_id,
                                       author_user_id, size_bytes, keep_forever, kind,
                                       key_generation, parent_version_id, created_at)
-           VALUES ($1, $2, $3, 0, 0, $4, $5, false, 'file', $6, $7, clock_timestamp())"#,
+           VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp())"#,
     )
     .bind(landing.upload_id)
     .bind(landing.file_id)
@@ -335,6 +359,8 @@ async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppRes
     .bind(landing.total_bytes)
     .bind(landing.key_generation)
     .bind(parent)
+    .bind(seq)
+    .bind(doc_key_id)
     .execute(&mut **tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
@@ -357,5 +383,5 @@ async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppRes
         .bind(landing.upload_id)
         .execute(&mut **tx)
         .await?;
-    Ok(())
+    Ok(seq)
 }
