@@ -195,15 +195,15 @@
     "envelope": "S1VUUExMMQAAAAAAAAAAB8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zksqYjw55WEGJeMzizhV2kY1MX+p5srEee+Gg/jvp44PAtsismAeBj6xAxWXKKKPw=="
   },
   "fileMetadata": {
-    "description": "A Drive file's metadata plaintext (kutup-crypto/src/file_metadata.rs): canonical JSON; decoding refuses unknown fields and out-of-range values.",
+    "description": "A Drive file's metadata plaintext (kutup-crypto/src/file_metadata.rs): canonical JSON; decoding refuses unknown fields and out-of-range values. sha256 is the canonical base64 SHA-256 of the content (32 bytes, no other spelling).",
     "canonical": [
       {
         "input": "{\"size\":0,\"mimeType\":\"text/plain\",\"name\":\"a.txt\"}",
         "output": "{\"name\":\"a.txt\",\"mimeType\":\"text/plain\",\"size\":0}"
       },
       {
-        "input": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"media\":{\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"camera\":\"Apple iPhone 15\",\"height\":3024,\"width\":4032,\"lon\":28.9784,\"lat\":41.0082,\"takenFrom\":\"exif\",\"takenOffset\":180,\"takenAt\":1719835200000}}",
-        "output": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"media\":{\"takenAt\":1719835200000,\"takenOffset\":180,\"takenFrom\":\"exif\",\"lat\":41.0082,\"lon\":28.9784,\"width\":4032,\"height\":3024,\"camera\":\"Apple iPhone 15\",\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
+        "input": "{\"media\":{\"camera\":\"Apple iPhone 15\",\"height\":3024,\"width\":4032,\"lon\":28.9784,\"lat\":41.0082,\"takenFrom\":\"exif\",\"takenOffset\":180,\"takenAt\":1719835200000},\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"size\":2345678,\"mimeType\":\"image/jpeg\",\"name\":\"IMG_0001.jpg\"}",
+        "output": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"media\":{\"takenAt\":1719835200000,\"takenOffset\":180,\"takenFrom\":\"exif\",\"lat\":41.0082,\"lon\":28.9784,\"width\":4032,\"height\":3024,\"camera\":\"Apple iPhone 15\"}}"
       },
       {
         "input": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"durationMs\":61500,\"width\":1920,\"height\":1080,\"caption\":\"Doğum günü\"}}",
@@ -222,7 +222,9 @@
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"lat\":0,\"lon\":0}}",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"takenAt\":1}}",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"width\":10}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"AAAA\"}}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"AAAA\"}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd=\"}",
+      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"liveOf\":\"not-a-uuid\"}}"
     ],
     "contentHash": {

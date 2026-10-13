@@ -594,6 +594,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         name: name.clone(),
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as u64,
+        sha256: None,
         media: None,
     };
     let record = crate::file_crypto::create(

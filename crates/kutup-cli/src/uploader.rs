@@ -203,6 +203,7 @@ pub fn upload_streaming(
         name: name.clone(),
         mime_type: guess_mime(local_path),
         size: plain_size as u64,
+        sha256: None,
         media: None,
     };
     let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;

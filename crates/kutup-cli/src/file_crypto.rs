@@ -293,6 +293,7 @@ mod tests {
             name: "notes.md".into(),
             mime_type: "text/markdown".into(),
             size: 42,
+            sha256: None,
             media: None,
         }
     }
