@@ -145,7 +145,8 @@ export function useUploadActions() {
                 onWaiting: waiting,
                 signal,
               })
-              await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
+              // A new version's content hash landed with it.
+              if (!uploaded.version) await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
               thumbnailAfterUpload(uploaded, file)
             },
           },

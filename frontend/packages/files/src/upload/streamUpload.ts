@@ -100,10 +100,14 @@ export class VersionConflict extends Error {
 
 /**
  * Another upload of a new version of this file is open: this account's
- * (`uploadId`, to go on with or cancel), or someone else's (null).
+ * (`uploadId`, to go on with or cancel), or someone else's (null), with
+ * the seconds since its last part arrived (null when not said).
  */
 export class VersionUploading extends Error {
-  constructor(readonly uploadId: string | null) {
+  constructor(
+    readonly uploadId: string | null,
+    readonly idleSeconds: number | null = null,
+  ) {
     super('a new version of this file is being uploaded')
   }
 }
@@ -439,7 +443,7 @@ function nameTakenOf(error: unknown): UploadNameTaken | null {
 export function versionRefusalOf(error: unknown): VersionConflict | VersionUploading | null {
   const response = (error as { originalResponse?: { getStatus(): number; getBody(): string } | null }).originalResponse
   if (!response || response.getStatus() !== 409) return null
-  let body: { code?: unknown; error?: unknown; uploadId?: unknown }
+  let body: { code?: unknown; error?: unknown; uploadId?: unknown; idleSeconds?: unknown }
   try {
     body = JSON.parse(response.getBody()) as typeof body
   } catch {
@@ -447,7 +451,12 @@ export function versionRefusalOf(error: unknown): VersionConflict | VersionUploa
   }
   if (body.code === 'version_conflict') return new VersionConflict('version')
   if (body.code === 'revision_conflict') return new VersionConflict('revision')
-  if (body.code === 'versionUploading') return new VersionUploading(typeof body.uploadId === 'string' ? body.uploadId : null)
+  if (body.code === 'versionUploading') {
+    return new VersionUploading(
+      typeof body.uploadId === 'string' ? body.uploadId : null,
+      typeof body.idleSeconds === 'number' ? body.idleSeconds : null,
+    )
+  }
   if (body.error === 'file key changed' || body.error === 'file needs a re-key') return new VersionConflict('key')
   return null
 }

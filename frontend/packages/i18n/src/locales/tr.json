@@ -194,12 +194,12 @@
         "description": "{{folder}} içindeki dosya bu dosya gönderilirken değişti, bu yüzden hiçbir şey değiştirilmedi."
       },
       "ownUpload": {
-        "title": "“{{name}}” hâlâ değiştiriliyor",
-        "description": "{{folder}} içindeki bu dosyanın önceki değiştirilmesi bitmedi. İptal edip yeniden başlatın, ikisini de tutun ya da atlayın."
+        "title": "“{{name}}” için bitmemiş bir değiştirme var",
+        "description": "{{folder}} içindeki bu dosyanın önceki değiştirilmesi bir saatten uzun süre önce durdu. İptal edip yeniden başlatın, ikisini de tutun ya da atlayın."
       },
       "othersUpload": {
-        "title": "“{{name}}” başka biri tarafından değiştiriliyor",
-        "description": "{{folder}} içindeki bu dosyanın yeni bir sürümü şu anda yükleniyor."
+        "title": "“{{name}}” şu anda değiştiriliyor",
+        "description": "{{folder}} içindeki bu dosyanın yeni bir sürümü şu anda, belki başka bir cihazdan yükleniyor. İkisini de tutun ya da atlayın."
       },
       "restart": "İptal et ve yeniden başlat"
     }

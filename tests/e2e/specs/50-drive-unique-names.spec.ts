@@ -31,11 +31,14 @@ async function uploadFolder(page: Page, dir: string) {
 const panel = (page: Page) => page.getByRole('region', { name: 'Uploads' })
 const conflict = (page: Page) => page.getByRole('dialog').filter({ hasText: 'is already here' })
 
-/** Uploads created on the server (tus `POST /api/uploads`). */
-function countUploads(page: Page): { count: number } {
-  const seen = { count: 0 }
+/** Uploads created on the server (tus `POST /api/uploads`); `versions`: those of a new version (`versionOf`). */
+function countUploads(page: Page): { count: number; versions: number } {
+  const seen = { count: 0, versions: 0 }
   page.on('request', (r) => {
-    if (r.method() === 'POST' && /\/api\/uploads\/?$/.test(new URL(r.url()).pathname)) seen.count++
+    if (r.method() !== 'POST' || !/\/api\/uploads\/?$/.test(new URL(r.url()).pathname)) return
+    seen.count++
+    const meta = r.headers()['upload-metadata'] ?? ''
+    if (meta.split(',').some((pair) => pair.startsWith('versionOf '))) seen.versions++
   })
   return seen
 }
@@ -82,12 +85,14 @@ test('the same file again is skipped; a different one under a taken name asks', 
   await expect(item(page, 'report.txt')).toBeVisible()
 
   // Replace: the new content becomes the newest version of the file there
-  // (Proton's Replace) — no new file, nothing in the trash.
+  // (Proton's Replace), uploaded over tus as a version (`versionOf`) — no
+  // new file, nothing in the trash.
   const beforeReplace = uploads.count
   await upload(page, `${dir}/third/report.txt`)
   await conflict(page).getByRole('button', { name: 'Replace' }).click()
   await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
-  expect(uploads.count).toBe(beforeReplace)
+  expect(uploads.count).toBe(beforeReplace + 1)
+  expect(uploads.versions).toBe(1)
   await page.reload()
   await expect(item(page, 'report.txt')).toHaveCount(1, { timeout: 60_000 })
   await expect(item(page, 'report (2).txt')).toHaveCount(0)

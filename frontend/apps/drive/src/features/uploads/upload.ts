@@ -1,4 +1,4 @@
-import { createFileRecordV1, renameFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
+import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { readMedia } from '@kutup/files/media'
 import { newFileBlobStreamEncryptorV1, type FileBlobContextV1 } from '@kutup/crypto/fileBlob'
@@ -7,8 +7,7 @@ import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUploa
 import api, { freshAccessToken } from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { loadFolderFiles } from '@kutup/drive-core/files'
-import { opensInOffice } from '@kutup/drive-core/editorKind'
-import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import {
   asNameTaken,
   findAvailableName,
@@ -20,8 +19,8 @@ import {
   recordContentHash,
   type FolderListing,
 } from '@kutup/drive-core/names'
-import { rekeyFile } from '@kutup/drive-core/rekey'
-import type { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
+import { askNameConflict, type ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
+import { cancelVersionUpload, canReplace, replaceContent } from './replace'
 import type { UploadOutcome } from '@kutup/drive-ui/uploadStore'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
 import type { CreatedFile } from '@kutup/editors/files/embedded'
@@ -148,64 +147,45 @@ function renamed(file: File, name: string): File {
 }
 
 /**
- * The most a Replace sends: the new content goes up as a version of the
- * file there, in one request the server caps at 2 GiB sealed. Larger files
- * are kept both or skipped (resumable versions: docs/roadmap.md).
+ * Replace, asking again when it cannot go ahead: the file changed
+ * meanwhile, or another replacement of it is open (Keep both or Skip — or
+ * cancel this account's own and start again). Never a blind retry.
  */
-export const REPLACE_LIMIT_BYTES = 2 * 1024 ** 3 - 64 * 1024 ** 2
-
-/** Whether `holder` can be replaced by `file`'s content here. */
-export function canReplace(folder: Folder, holder: DriveFile, file: File): boolean {
-  return (
-    folder.canUpload &&
-    folderLocation(folder).kind === 'local' &&
-    holder.fileKey !== null &&
-    holder.name !== null &&
-    // What opens in Office keeps its own history (a collaboration log, a
-    // note's state): new content comes in through its editor.
-    !opensInOffice(holder.name) &&
-    file.size <= REPLACE_LIMIT_BYTES
-  )
-}
-
-/**
- * Replace (Proton's "Replace"): `file`'s content becomes the newest
- * version of `listed`, which keeps its id, name, sharing and history. Its
- * metadata takes the new size, SHA-256 and photo details, and the folder's
- * content hash is recorded for the new content.
- */
-async function replaceContent(
-  folder: Folder,
-  listed: DriveFile,
-  file: File,
-  signal: AbortSignal,
-  progress?: (s: number, t: number) => void,
-  sha256?: string,
-): Promise<void> {
-  // New content is never sealed under a key the folder has left.
-  const holder = await rekeyFile(folder, listed)
-  if (!holder.fileKey) throw new Error('file is not open')
-  const digest = sha256 ?? (await hashBlob(file, signal))
-  const media = await readMedia(file, signal)
-  const sealed = await sealToBlob(file, { fileId: holder.id, generation: holder.keyGeneration }, holder.fileKey, signal)
-  const form = new FormData()
-  form.append('kind', 'file')
-  form.append('seqAtSnapshot', '0')
-  form.append('docKeyId', '1')
-  form.append('keepForever', 'false')
-  form.append('file', sealed, 'version')
-  await api.post(`/files/${holder.id}/versions`, form, {
-    signal,
-    onUploadProgress: (e) => progress?.(Math.round((e.progress ?? 0) * file.size), file.size),
-  })
-  // The name stays as it is: no nameHash.
-  const next = await renameFileRecordV1(
-    { id: holder.id, keyGeneration: holder.keyGeneration, metadataRevision: holder.metadataRevision },
-    holder.fileKey,
-    fileMetadataOf(holder, { size: file.size, mimeType: file.type || holder.mimeType, sha256: digest, media }),
-  )
-  await api.put(`/files/${holder.id}`, next)
-  await recordContentHash(folder, holder.id, digest)
+async function replaceWithChoices(
+  opts: PlaceFileOptions,
+  holder: DriveFile,
+  keptAs: string,
+  sha256: string | undefined,
+): Promise<'done' | 'keepBoth' | 'skip'> {
+  for (let round = 0; ; round++) {
+    const outcome = await replaceContent(opts.folder, holder, opts.file, {
+      signal: opts.signal,
+      progress: opts.progress,
+      waiting: opts.waiting,
+      sha256,
+    })
+    if ('done' in outcome) {
+      thumbnailAfterUpload(outcome.done, opts.file)
+      return 'done'
+    }
+    const answer = await askNameConflict(
+      {
+        name: opts.file.name,
+        folderName: opts.folderName,
+        holder: 'file',
+        keptAs,
+        canReplace: false,
+        more: false,
+        problem: outcome.problem,
+      },
+      opts.signal,
+    )
+    if (answer.choice === 'restart' && outcome.uploadId && round < 2) {
+      await cancelVersionUpload(holder.id, outcome.uploadId)
+      continue
+    }
+    return answer.choice === 'keepBoth' ? 'keepBoth' : 'skip'
+  }
 }
 
 /** A folder's listing, read once for a batch and again when the server says it changed. */
@@ -268,24 +248,24 @@ export async function placeFile(opts: PlaceFileOptions): Promise<UploadOutcome> 
         folderLocation(folder).kind === 'local'
           ? await findAvailableName(inFolder(folder), file.name, { skipName: true })
           : { name: freeName(file.name, namesIn(listing.files, listing.subfolders)), hash: undefined }
-      const replaceable = plan.holder.kind === 'file' && canReplace(folder, plan.holder.file, file)
-      const choice = await opts.policy.choose(
-        {
-          name: file.name,
-          folderName: opts.folderName,
-          holder: plan.holder.kind,
-          keptAs: kept.name,
-          canReplace: replaceable,
-          replaceTooLarge: plan.holder.kind === 'file' && file.size > REPLACE_LIMIT_BYTES,
-        },
+      const replaceable = plan.holder.kind === 'file' && canReplace(folder, plan.holder.file)
+      let choice = await opts.policy.choose(
+        { name: file.name, folderName: opts.folderName, holder: plan.holder.kind, keptAs: kept.name, canReplace: replaceable },
         opts.signal,
       )
-      if (choice === 'skip') return { skipped: 'chosen' }
       if (choice === 'replace' && plan.holder.kind === 'file' && replaceable) {
-        await replaceContent(folder, plan.holder.file, file, opts.signal, opts.progress, sha256)
-        opts.listing.stale()
-        return
+        const replaced = await replaceWithChoices(opts, plan.holder.file, kept.name, sha256)
+        if (replaced === 'done') {
+          opts.listing.stale()
+          return
+        }
+        choice = replaced
+        // Time has passed: the free name is asked again.
+        if (choice === 'keepBoth' && folderLocation(folder).kind === 'local') {
+          Object.assign(kept, await findAvailableName(inFolder(folder), file.name, { skipName: true }))
+        }
       }
+      if (choice === 'skip') return { skipped: 'chosen' }
       upload = renamed(file, kept.name)
       nameHash = kept.hash
     }

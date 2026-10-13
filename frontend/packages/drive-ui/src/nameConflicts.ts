@@ -11,8 +11,9 @@ export type ConflictChoice = 'replace' | 'keepBoth' | 'skip' | 'restart'
 /**
  * Why a Replace could not go ahead: the file there changed while this one
  * was chosen or sent (`changed`); an earlier replacement of it from this
- * account is still open (`ownUpload`, which may be cancelled and started
- * again); or someone else is replacing it (`othersUpload`).
+ * account stopped long ago (`ownUpload`, which may be cancelled and started
+ * again); or a replacement of it is running right now, this account's on
+ * another device or someone else's (`othersUpload`, never cancelled).
  */
 export type ReplaceProblem = 'changed' | 'ownUpload' | 'othersUpload'
 

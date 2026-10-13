@@ -194,12 +194,12 @@
         "description": "The file in {{folder}} changed while this one was being sent, so nothing was replaced."
       },
       "ownUpload": {
-        "title": "“{{name}}” is still being replaced",
-        "description": "An earlier replacement of this file in {{folder}} did not finish. Cancel it and start again, keep both, or skip."
+        "title": "“{{name}}” has an unfinished replacement",
+        "description": "An earlier replacement of this file in {{folder}} stopped over an hour ago. Cancel it and start again, keep both, or skip."
       },
       "othersUpload": {
-        "title": "Someone is replacing “{{name}}”",
-        "description": "Another upload of a new version of this file in {{folder}} is in progress."
+        "title": "“{{name}}” is being replaced right now",
+        "description": "A new version of this file in {{folder}} is being uploaded right now, maybe from another device. Keep both, or skip."
       },
       "restart": "Cancel it and start again"
     }
