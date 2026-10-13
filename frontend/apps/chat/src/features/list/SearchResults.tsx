@@ -89,7 +89,7 @@ export function SearchResults({ query }: { query: string }) {
               const title = summary
                 ? conversationTitle(summary.conversation, summary.address, summary.profile, self.address, t, summary.groupInfo)
                 : conversationTitle(message.conversation, null, null, self.address, t)
-              const author = message.direction === 'outgoing' ? self.address : message.peer
+              const author = message.sender
               return (
                 <li key={message.id}>
                   <Link

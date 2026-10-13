@@ -446,6 +446,7 @@ fn worker_main(
 }
 
 async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
+    let me = engine.session().user().to_owned();
     let incoming = engine.session().history().await?;
     let outgoing = engine.session().sent_history().await?;
     let mut history = Vec::with_capacity(incoming.len() + outgoing.len());
@@ -454,7 +455,8 @@ async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
             .map_err(|error| ChatError::Content(error.to_string()))?;
         history.push(ChatHistoryEntry {
             id: message.id,
-            peer: message.peer,
+            conversation: message.peer.clone(),
+            sender: message.peer,
             direction: ChatDirection::Incoming,
             sender_device_id: Some(message.sender_device_id),
             cursor: Some(message.cursor),
@@ -469,7 +471,8 @@ async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
             .map_err(|error| ChatError::Content(error.to_string()))?;
         history.push(ChatHistoryEntry {
             id: message.send_id,
-            peer: message.peer,
+            conversation: message.peer,
+            sender: me.clone(),
             direction: ChatDirection::Outgoing,
             sender_device_id: None,
             cursor: None,

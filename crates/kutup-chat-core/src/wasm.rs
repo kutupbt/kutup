@@ -121,8 +121,8 @@ export type KutupChatConversationId =
 export interface KutupChatHistoryEntry {
   id: string;
   conversation: KutupChatConversationId;
-  /** Direct: the other account. Group: the sender's account for an incoming entry, the group id for an outgoing one. */
-  peer: string;
+  /** Who wrote it: an account's canonical `username@server` (this account's own when outgoing). Which chat: `conversation`. */
+  sender: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
   cursor?: string;
@@ -718,17 +718,18 @@ impl WasmChatClient {
             return Ok(None);
         }
         let db = self.engine.session().db().as_ref();
+        let me = self.engine.session().user();
         let built = match entry.source {
             Source::Inbox => match db.load_message(&entry.id).await? {
                 Some(message) => Some(HistoryEntry::incoming(message)?),
                 None => None,
             },
             Source::Sent => match db.load_sent_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::outgoing(message)?),
+                Some(message) => Some(HistoryEntry::outgoing(message, me)?),
                 None => None,
             },
             Source::Mls => match db.load_mls_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::mls(message)?),
+                Some(message) => Some(HistoryEntry::mls(message, me)?),
                 None => None,
             },
         };
@@ -753,6 +754,7 @@ impl WasmChatClient {
         if newest && key.starts_with("group:") {
             let delivered: std::collections::HashSet<String> =
                 entries.iter().map(|entry| entry.id.clone()).collect();
+            let me = self.engine.session().user().to_owned();
             let mut pending = Vec::new();
             for outgoing in self.mls_client().pending_application_messages().await? {
                 let group = uuid::Uuid::from_bytes(outgoing.conversation_id).to_string();
@@ -763,7 +765,7 @@ impl WasmChatClient {
                 {
                     continue;
                 }
-                let mut entry = HistoryEntry::mls_pending(outgoing)?;
+                let mut entry = HistoryEntry::mls_pending(outgoing, &me)?;
                 entry.apply_disappearing_deadline(&starts);
                 pending.push(entry);
             }
@@ -3140,6 +3142,7 @@ impl WasmChatClient {
             .disappearing_expiry_starts()
             .await
             .map_err(chat_error)?;
+        let me = self.engine.session().user().to_owned();
         let mut history = Vec::with_capacity(incoming.len() + outgoing.len() + mls.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
@@ -3153,7 +3156,7 @@ impl WasmChatClient {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::outgoing(message).map_err(chat_error)?;
+            let mut entry = HistoryEntry::outgoing(message, &me).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -3161,7 +3164,7 @@ impl WasmChatClient {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::mls(message).map_err(chat_error)?;
+            let mut entry = HistoryEntry::mls(message, &me).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -3181,7 +3184,7 @@ impl WasmChatClient {
             {
                 continue;
             }
-            let mut pending = HistoryEntry::mls_pending(entry).map_err(chat_error)?;
+            let mut pending = HistoryEntry::mls_pending(entry, &me).map_err(chat_error)?;
             pending.apply_disappearing_deadline(&expiry_starts);
             history.push(pending);
         }
@@ -3981,10 +3984,10 @@ fn parse_receipt_state(
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
-    /// Direct: the other account. Group: the sender's account for an
-    /// incoming entry, the group id for an outgoing one (the author the UI
-    /// shows; `conversation` alone does not name a group message's sender).
-    peer: String,
+    /// Who wrote it: an account's canonical `username@server`, this
+    /// account's own for an outgoing entry. Which chat it belongs to is
+    /// `conversation`.
+    sender: String,
     direction: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     sender_device_id: Option<u32>,
@@ -4023,7 +4026,7 @@ impl HistoryEntry {
         Ok(Self {
             id,
             conversation,
-            peer: message.peer,
+            sender: message.peer,
             direction: "incoming",
             sender_device_id: Some(message.sender_device_id),
             cursor: Some(message.cursor.to_string()),
@@ -4034,7 +4037,7 @@ impl HistoryEntry {
         })
     }
 
-    fn outgoing(message: crate::SentMessage) -> Result<Self> {
+    fn outgoing(message: crate::SentMessage, me: &str) -> Result<Self> {
         let content = crate::timeline::content_or_unsupported(
             &message.content,
             &message.send_id,
@@ -4044,7 +4047,7 @@ impl HistoryEntry {
         Ok(Self {
             id: message.send_id,
             conversation,
-            peer: message.peer,
+            sender: me.to_owned(),
             direction: "outgoing",
             sender_device_id: (message.sender_device_id != 0).then_some(message.sender_device_id),
             cursor: None,
@@ -4056,16 +4059,14 @@ impl HistoryEntry {
     }
 
     /// A group message this device is still delivering.
-    fn mls_pending(entry: crate::MlsOutboxEntry) -> Result<Self> {
+    fn mls_pending(entry: crate::MlsOutboxEntry, me: &str) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&entry.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
         let group_id = uuid::Uuid::from_bytes(entry.conversation_id).to_string();
         Ok(Self {
             id: entry.send_id,
-            conversation: ConversationId::Group {
-                group_id: group_id.clone(),
-            },
-            peer: group_id,
+            conversation: ConversationId::Group { group_id },
+            sender: me.to_owned(),
             direction: "outgoing",
             sender_device_id: None,
             cursor: None,
@@ -4076,7 +4077,7 @@ impl HistoryEntry {
         })
     }
 
-    fn mls(message: crate::MlsHistoryMessage) -> Result<Self> {
+    fn mls(message: crate::MlsHistoryMessage, me: &str) -> Result<Self> {
         let content = crate::timeline::content_or_unsupported(
             &message.content,
             &message.message_id,
@@ -4085,11 +4086,9 @@ impl HistoryEntry {
         let group_id = uuid::Uuid::from_bytes(message.conversation_id).to_string();
         Ok(Self {
             id: message.message_id,
-            conversation: ConversationId::Group {
-                group_id: group_id.clone(),
-            },
-            peer: if message.outgoing {
-                group_id
+            conversation: ConversationId::Group { group_id },
+            sender: if message.outgoing {
+                me.to_owned()
             } else {
                 message.sender
             },

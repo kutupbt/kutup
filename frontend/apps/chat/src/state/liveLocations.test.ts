@@ -13,7 +13,7 @@ function entry(id: string, peer: string, content: Record<string, unknown>, times
   return {
     id,
     conversation,
-    peer,
+    sender: peer,
     direction: 'incoming',
     timestampMs,
     delivered: true,
@@ -22,7 +22,7 @@ function entry(id: string, peer: string, content: Record<string, unknown>, times
   } as unknown as ChatHistoryEntry
 }
 
-const actor = (m: ChatHistoryEntry) => m.peer
+const actor = (m: ChatHistoryEntry) => m.sender
 
 describe('foldLiveLocations', () => {
   it('follows the sharer’s newer streams and stop, not anyone else’s', () => {

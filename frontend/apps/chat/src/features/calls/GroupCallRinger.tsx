@@ -52,7 +52,7 @@ export function GroupCallRinger() {
       if (Date.now() - entry.timestampMs > RING_MS || inCall || !callController()?.ringsHere) continue
       const group = snapshot.groups.find((g) => g.request.genesis.conversationId === (entry.conversation as { groupId: string }).groupId)
       if (!group || group.currentRoster.length > RING_GROUP_SIZE) continue
-      setRinging({ groupId: group.request.genesis.conversationId, call, starter: entry.peer, atMs: entry.timestampMs })
+      setRinging({ groupId: group.request.genesis.conversationId, call, starter: entry.sender, atMs: entry.timestampMs })
     }
   }, [snapshot.history, snapshot.groups, loaded, inCall])
 

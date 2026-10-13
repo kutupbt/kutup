@@ -133,7 +133,8 @@ fn encrypted_install_registers_once_and_reopens() {
     assert_eq!(note.attempts, 0);
     let history = futures_executor::block_on(first.history()).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].peer, "alice@chat.test");
+    assert_eq!(history[0].conversation, "alice@chat.test");
+    assert_eq!(history[0].sender, "alice@chat.test");
     assert_eq!(
         history[0].content.text.as_deref(),
         Some("remember on mobile")

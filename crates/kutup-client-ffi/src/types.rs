@@ -126,7 +126,11 @@ impl From<ChatContent> for ChatContentRecord {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChatHistoryEntry {
     pub id: String,
-    pub peer: String,
+    /// The chat: the other account's canonical `username@server` (direct
+    /// chats only here).
+    pub conversation: String,
+    /// Who wrote it: the other account, or this account's own when outgoing.
+    pub sender: String,
     pub direction: ChatDirection,
     pub sender_device_id: Option<u32>,
     pub cursor: Option<u64>,

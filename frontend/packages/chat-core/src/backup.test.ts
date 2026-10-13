@@ -182,7 +182,7 @@ function historyEntry(): ChatHistoryEntry {
   return {
     id: '33333333-3333-4333-8333-333333333333',
     conversation: { kind: 'direct', address: { username: 'user', server: 'kutup.dev' } },
-    peer: 'user@kutup.dev',
+    sender: 'user@kutup.dev',
     direction: 'outgoing',
     senderDeviceId: 9,
     timestampMs: 1_700_000_000_000,
@@ -847,7 +847,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       ...entry,
       id: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
       conversation: { kind: 'group', groupId: conversation },
-      peer: '',
+      sender: '',
       timestampMs: 1_700_000_000_000 + id,
       content: { ...entry.content, messageId: `10000000-0000-4000-8000-${String(id).padStart(12, '0')}`, body: { text }, text, ...extra },
     }
