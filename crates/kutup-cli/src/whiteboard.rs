@@ -18,6 +18,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::api::versions::NewVersion;
 use crate::api::Client;
@@ -30,11 +31,14 @@ pub fn is_excalidraw(name: &str) -> bool {
 
 /// Upload-side: extract inline images from the freshly-uploaded whiteboard at
 /// `local_path`, upload them as encrypted assets, and re-snapshot the scene.
+/// `folder` is the file's folder and its names' hash key: the metadata's
+/// size and SHA-256 follow the new snapshot.
 pub fn extract_and_upload(
     client: &Client,
     file_id: &str,
-    file_key: &[u8],
+    file_key: &[u8; 32],
     generation: u32,
+    folder: (&str, &[u8; 32]),
     local_path: &std::path::Path,
 ) -> Result<()> {
     let raw = std::fs::read(local_path).context("re-read excalidraw")?;
@@ -71,6 +75,22 @@ pub fn extract_and_upload(
             },
         )
         .context("store version")?;
+    let (collection_id, hash_key) = folder;
+    let file = client
+        .list_files(collection_id)?
+        .into_iter()
+        .find(|f| f.id == file_id)
+        .context("the whiteboard is not listed in its folder")?;
+    let sha256: [u8; 32] = Sha256::digest(&out).into();
+    crate::uploader::follow_new_content(
+        client,
+        &file,
+        file_key,
+        hash_key,
+        out.len() as u64,
+        &sha256,
+    )
+    .context("update whiteboard details")?;
     eprintln!("  + uploaded {uploaded} image asset(s) and re-snapshotted");
     Ok(())
 }

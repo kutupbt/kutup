@@ -8,7 +8,7 @@ use clap::Subcommand;
 use serde::Serialize;
 
 use crate::api::trash::{RestoreRequest, TrashFile, TrashFolder};
-use crate::api::{ApiError, FileMetadata, NameHolder};
+use crate::api::{ApiError, FileMetadata};
 use crate::commands::confirm;
 use crate::context::require_session;
 use crate::cryptohelpers::decrypt_collection_key;
@@ -100,7 +100,7 @@ fn folder_collection(f: &TrashFolder) -> crate::api::Collection {
         owner_incarnation_id: None,
         owner_drive_signing_public_key: None,
         owner_authority_public_key: None,
-        parent_collection_id: None,
+        parent_collection_id: f.parent_collection_id.clone(),
         color: f.color.clone(),
         is_shared: false,
         is_remote: false,
@@ -248,7 +248,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
 fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()> {
     let ctx = require_session(profile)?;
     let renamed = match name {
-        Some(name) => Some(restore_renamed(&ctx, id, Some(name), None)?),
+        Some(name) => Some(restore_renamed(&ctx, id, Some(name))?),
         None => match ctx.client.restore_trash(id, None) {
             Ok(()) => None,
             Err(err) => {
@@ -266,10 +266,7 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
                         _ => err.context("restore"),
                     });
                 }
-                let holder = err
-                    .downcast_ref::<ApiError>()
-                    .and_then(|e| e.name_taken.clone());
-                Some(restore_renamed(&ctx, id, None, holder.as_ref())?)
+                Some(restore_renamed(&ctx, id, None)?)
             }
         },
     };
@@ -284,15 +281,9 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
 }
 
 /// Restores `id` under `wanted`, or the first numbered name free where it
-/// lands; `holder` holds its own name there (none: a folder landing at the
-/// top level, or a name the caller chose). Returns the name it came back
-/// under (docs/plans/drive-unique-names.md).
-fn restore_renamed(
-    ctx: &crate::context::Ctx,
-    id: &str,
-    wanted: Option<&str>,
-    holder: Option<&NameHolder>,
-) -> Result<String> {
+/// lands. Returns the name it came back under
+/// (docs/plans/drive-unique-names.md).
+fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) -> Result<String> {
     let master_key = ctx.session.master_key_bytes()?;
     let trash = ctx.client.list_trash()?;
     let cols = ctx.client.list_collections()?;
@@ -328,11 +319,8 @@ fn restore_renamed(
     let collection = folder_collection(f);
     let col_key = crate::collection_crypto::open_key(&collection, &master_key, &ctx.session)?;
     let own = crate::collection_crypto::open_name(&collection, &col_key)?;
-    // Where it lands: beside what holds its name, or the top level.
-    let place = match holder {
-        Some(holder) => place_of(ctx, &cols, holder)?,
-        None => None,
-    };
+    // Where it lands, as the trash listing says.
+    let place = f.parent_collection_id.clone();
     let hash_key = match &place {
         Some(parent) => {
             let parent = cols
@@ -378,32 +366,6 @@ fn pick_name(
             |_| false,
         ),
     }
-}
-
-/// The folder an item that holds a name is in (`None`: the top level).
-fn place_of(
-    ctx: &crate::context::Ctx,
-    cols: &[crate::api::Collection],
-    holder: &NameHolder,
-) -> Result<Option<String>> {
-    if holder.kind == "folder" {
-        let folder = cols
-            .iter()
-            .find(|c| c.id == holder.id)
-            .context("the folder holding the name is not listed")?;
-        return Ok(folder.parent_collection_id.clone());
-    }
-    for col in cols.iter().filter(|c| !c.is_shared && !c.is_remote) {
-        if ctx
-            .client
-            .list_files(&col.id)?
-            .iter()
-            .any(|f| f.id == holder.id)
-        {
-            return Ok(Some(col.id.clone()));
-        }
-    }
-    anyhow::bail!("the file holding the name is not listed")
 }
 
 fn rm(profile: &str, json: bool, id: &str, yes: bool) -> Result<()> {

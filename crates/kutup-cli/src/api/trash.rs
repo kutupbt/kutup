@@ -37,6 +37,10 @@ pub struct TrashFolder {
     pub epoch_statement_hash: String,
     #[serde(default)]
     pub color: Option<String>,
+    /// Where it comes back to: its parent while that folder is live, else
+    /// none (the top level).
+    #[serde(default)]
+    pub parent_collection_id: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     #[serde(default)]
     pub items: i64,
