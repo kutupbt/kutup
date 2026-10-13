@@ -102,9 +102,37 @@ one (a vault file, a mail key, a folder), under the account's own keys.
   tell which names exist.
 - Login, recovery and reauth take `name` the same way; an email never signs
   in.
-- The sign-in lockout (`LOGIN_LOCKOUT`) is keyed by the account id once the
-  name resolves (by the name otherwise), so sign-in, reauth and the Pass PIN
-  keep sharing one counter.
+
+### Sign-in checks
+
+One check (`auth_check.rs`) serves sign-in, reauth (and with it the Pass
+PIN's set and remove) and recovery:
+
+- The secret is decoded before the name is looked up; the hash is checked
+  next, at full cost when there is none (a name that is no account, a voided
+  temporary password); only after a right secret does the answer say
+  anything about the account (disabled, awaiting setup, 2FA). Every wrong
+  secret is the same 401.
+- **Lockout per account and client IP:** five misses in a row from one IP
+  lock that account for that IP (`LOGIN_LOCKOUT_THRESHOLD`,
+  `LOGIN_LOCKOUT_MINUTES`). A stranger elsewhere cannot lock a person out.
+- **Ceiling per account for unknown clients:** misses from every client the
+  account does not know, together, are capped at `LOGIN_ACCOUNT_CEILING`
+  (100) in the same window, against guessing spread over many addresses.
+- **Known clients:** a successful sign-in sets `kutup_known`, an HttpOnly
+  cookie (`Path=/api`, `SameSite=Strict`, 90 days) holding the user id, the
+  time and an HMAC under a key derived from the server's stored sign-in key.
+  It is host-only, set on the account app's origin at sign-in and on each
+  app's origin when it takes its session (fork consume), so reauth and the
+  PIN from any app carry it; a parent-domain cookie was rejected because
+  development hosts (`*.localhost`) cannot share one. A client with a valid
+  cookie for the account is not held by the ceiling (still by its own
+  per-IP lockout), so a distributed attack does not lock out the account's
+  own devices. The CLI has no cookie and stays under the ceiling.
+- Names that are no account meet the same lockout and ceiling on their
+  canonical name, so a 429 says nothing about existence.
+- The Pass PIN keeps its own limit (three per sign-in) and is checked at
+  full cost even when malformed.
 
 ### Recovery email (slice 3, not in PR #167)
 
@@ -191,13 +219,15 @@ one 401 for every refusal; `ADMIN_ACCOUNT` is read in one place (a password
 may hold colons, a bad username is refused); more suite-2 vectors.
 
 Follow-ups:
-- The sign-in lockout per account lets anyone lock a known username out
-  (key it per account and address, or slow down instead).
+- ~~The sign-in lockout per account lets anyone lock a known username out~~:
+  per account and client IP, with a ceiling for unknown clients ("Sign-in
+  checks").
 - The web client takes the key binding from `/user/me` without checking it
   against anything it holds; a bad server could hand out another one (the
   seals would then fail to open, not leak). Pin it next to the keys.
-- Some refusals answer before the bcrypt check (a disabled account, a
-  malformed login key), so their timing differs from a wrong password.
+- ~~Some refusals answer before the bcrypt check~~: the login key is decoded
+  before the lookup and a disabled account is said only after the password
+  ("Sign-in checks").
 - The server could also require the object id where a purpose has one.
 
 ## Slices

@@ -151,7 +151,7 @@ Fetch the complete account-protection suite and parameters before submitting cre
 
 ### POST /api/auth/login
 
-Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one account lock it out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown names too, so a `429` does not reveal whether the account exists.
+Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, 5 wrong passwords in a row for one account from one client IP (`LOGIN_LOCKOUT_THRESHOLD`) lock that account for that IP: further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). Wrong passwords from clients the account does not know are also capped per account, all together (`LOGIN_ACCOUNT_CEILING`, 100 in the same window); a client that signed in to the account before carries the HttpOnly `kutup_known` cookie (set here and by `POST /api/auth/forks/consume`) and is not held by that cap. Both apply to unknown names too, so a `429` does not reveal whether the account exists. A malformed `loginKey` is a `400` before the name is looked up; a disabled account is said only after a right password.
 
 **Auth:** None · **Header:** `X-Kutup-Client: web-account` or `cli` (required; `400` otherwise)
 

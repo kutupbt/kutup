@@ -102,26 +102,23 @@ fn bearer_token(parts: &Parts) -> Option<String> {
 /// Trust note: these headers are only meaningful because the backend is not directly
 /// reachable; nginx overwrites them on every request (see `nginx/nginx.conf`).
 fn client_ip(addr: SocketAddr, req: &Request) -> String {
-    if let Some(ip) = req
-        .headers()
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
+    client_ip_from_headers(req.headers()).unwrap_or_else(|| addr.ip().to_string())
+}
+
+/// The client IP from the proxy's headers (`X-Real-IP`, then the first
+/// `X-Forwarded-For` hop), as the rate limiters key it.
+pub(crate) fn client_ip_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    header("x-real-ip")
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        return ip.to_string();
-    }
-    if let Some(ip) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return ip.to_string();
-    }
-    addr.ip().to_string()
+        .or_else(|| {
+            header("x-forwarded-for")
+                .and_then(|v| v.split(',').next())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_owned)
 }
 
 async fn limit(

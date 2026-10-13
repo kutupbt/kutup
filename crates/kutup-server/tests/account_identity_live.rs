@@ -230,3 +230,75 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
         .unwrap();
     assert!(r.status().is_success(), "delete: {}", r.status());
 }
+
+#[test]
+fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let user = register(&c, &base);
+    let wrong = b64(&[0u8; 32]);
+    let attempt = |ip: &str, login_key: &str, cookie: Option<&str>| {
+        let mut request = c
+            .post(format!("{base}/api/auth/login"))
+            .header("x-kutup-client", "web-account")
+            .header("x-real-ip", ip)
+            .json(&json!({ "name": user.username, "loginKey": login_key }));
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request.send().unwrap()
+    };
+    // A right sign-in marks the client as known (an HttpOnly cookie).
+    let signed_in = attempt("192.0.2.10", &user.login_key, None);
+    assert_eq!(signed_in.status(), 200);
+    let known = signed_in
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("kutup_known="))
+        .expect("known-client cookie")
+        .to_owned();
+    assert!(
+        known.contains("HttpOnly") && known.contains("Path=/api"),
+        "{known}"
+    );
+    let known = known.split(';').next().unwrap().to_owned();
+
+    // Five misses lock that client only; another address still gets in.
+    for _ in 0..5 {
+        assert_eq!(attempt("198.51.100.20", &wrong, None).status(), 401);
+    }
+    assert_eq!(
+        attempt("198.51.100.20", &user.login_key, None).status(),
+        429
+    );
+    assert_eq!(
+        attempt("198.51.100.21", &user.login_key, None).status(),
+        200
+    );
+
+    // Misses spread over many unknown addresses meet the account's ceiling
+    // (LOGIN_ACCOUNT_CEILING, 100)...
+    let mut held = false;
+    for i in 0..110u32 {
+        let ip = format!("10.77.{}.{}", i / 250, i % 250 + 1);
+        if attempt(&ip, &wrong, None).status() == 429 {
+            held = true;
+            break;
+        }
+    }
+    assert!(held, "the ceiling never came");
+    assert_eq!(attempt("203.0.113.30", &user.login_key, None).status(), 429);
+    // ...while the account's own known client still signs in.
+    assert_eq!(
+        attempt("203.0.113.31", &user.login_key, Some(&known)).status(),
+        200
+    );
+    // A malformed login key is refused before the name is looked up.
+    assert_eq!(attempt("203.0.113.32", "not base64!", None).status(), 400);
+}

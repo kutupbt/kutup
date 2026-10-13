@@ -4,10 +4,10 @@
 //!  - **Per-IP sliding-window limiters** — login, login preflight, register, recovery,
 //!    federation user-lookup, and the admin API. Defaults are env-overridable (`LIMITS`
 //!    below, read and checked at boot); `RATE_LIMITS_RELAXED` raises them on test stacks.
-//!  - **Per-account login lockout** — N failed password attempts for an email lock that
-//!    email out for a cooldown (defaults 5 / 15 min; `LOGIN_LOCKOUT_THRESHOLD`,
-//!    `LOGIN_LOCKOUT_MINUTES`). Keyed by a hash of the lowercased email and applied to
-//!    unknown emails too, so the lockout is not an account-existence oracle.
+//!  - **Sign-in lockout and ceiling** — N wrong secrets for one account from one client
+//!    IP lock that pair out (defaults 5 / 15 min; `LOGIN_LOCKOUT_THRESHOLD`,
+//!    `LOGIN_LOCKOUT_MINUTES`), and wrong secrets from clients the account does not
+//!    know are capped per account (`LOGIN_ACCOUNT_CEILING`); see `auth_check`.
 //!  - **Per-pre-auth-token TOTP tracker** — blocks a token for 15 min after 5 failures.
 //!
 //! `spawn_cleanup` runs the periodic pruning for all of the above.
@@ -39,6 +39,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
+    ("LOGIN_ACCOUNT_CEILING", 100),
 ];
 
 /// What a rate limit's default becomes on a test stack (`RATE_LIMITS_RELAXED`):
@@ -107,6 +108,28 @@ impl RateLimiter {
         }
         times.push(now);
         true
+    }
+
+    /// Whether `key` has used its allowance in the window (records nothing).
+    pub fn is_full(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let mut map = self.requests.lock().unwrap();
+        match map.get_mut(key) {
+            Some(times) => {
+                times.retain(|t| now.duration_since(*t) < self.window);
+                times.len() >= self.limit
+            }
+            None => false,
+        }
+    }
+
+    /// Records one event for `key`.
+    pub fn push(&self, key: &str) {
+        let now = Instant::now();
+        let mut map = self.requests.lock().unwrap();
+        let times = map.entry(key.to_string()).or_default();
+        times.retain(|t| now.duration_since(*t) < self.window);
+        times.push(now);
     }
 
     /// Drops empty/expired entries — mirrors the Go `cleanup` goroutine body.
@@ -339,6 +362,16 @@ pub static LOGIN_LOCKOUT: LazyLock<LoginLockout> = LazyLock::new(|| {
     )
 });
 
+/// Wrong secrets for one account from clients it does not know, all of them
+/// together, in the lockout's window (`LOGIN_ACCOUNT_CEILING`, 100): the cap
+/// on guessing spread over many addresses (`auth_check`).
+pub static LOGIN_CEILING: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("LOGIN_ACCOUNT_CEILING", 100) as usize,
+        Duration::from_secs(env_limit("LOGIN_LOCKOUT_MINUTES", 15) * 60),
+    )
+});
+
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
 const MAX_TOTP_ATTEMPTS: u32 = 5;
@@ -427,6 +460,7 @@ pub fn spawn_cleanup() {
             CHAT_KEYS_ACCOUNT.cleanup();
             CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
+            LOGIN_CEILING.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();

@@ -205,11 +205,15 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://collector.example.com:4317
 # OTEL_SERVICE_NAME=kutup-server
 
-# Per-account login lockout: this many failed password attempts lock the
-# email out for the cooldown. Locked attempts return 429; the lock clears
-# on its own. Defaults shown.
+# Sign-in lockout: this many wrong passwords in a row for one account from
+# one client IP lock that pair out for the cooldown. Wrong passwords from
+# clients the account has never signed in from are also capped per account
+# (all of them together, in the same window); its own devices are not held
+# by that cap. Locked attempts return 429 and clear on their own. Defaults
+# shown.
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
+# LOGIN_ACCOUNT_CEILING=100
 ```
 
 `.env.example` is the complete checked-in variable template. Keep
