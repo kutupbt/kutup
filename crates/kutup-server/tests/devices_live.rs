@@ -131,13 +131,36 @@ fn only_the_accounts_own_statement_registers_a_device() {
 
     // A revoked device is not trusted on the collaboration routes.
     let device = created["deviceId"].as_i64().unwrap();
-    let r = bearer(
-        c.delete(format!("{base}/api/devices/{device}")),
-        &alice.token,
-    )
-    .send()
-    .unwrap();
-    assert!(r.status().is_success());
+    // Revoking takes the account's signed revocation: a session alone, or
+    // another account's statement, cannot revoke.
+    let revoke = |body: Value| {
+        bearer(
+            c.delete(format!("{base}/api/devices/{device}")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(
+        revoke(json!({ "revokedAtMs": 1, "signature": "" })),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        revoke(device_revocation_body(&c, &base, &mallory, &key)),
+        StatusCode::FORBIDDEN
+    );
+    assert!(revoke(device_revocation_body(&c, &base, &alice, &key)).is_success());
+    // Its key never registers again.
+    let challenge = device_challenge(&c, &base, &alice);
+    let (status, _) = post_device(
+        &c,
+        &base,
+        &alice,
+        &device_registration_body(&c, &base, &alice, &alice, &key, &challenge),
+    );
+    assert_eq!(status, StatusCode::CONFLICT);
     let folder = create_folder(&c, &base, &alice);
     let file = seal_file(&folder, &uuid(), b"x");
     assert!(upload(&c, &base, &alice.token, &folder, &file)
