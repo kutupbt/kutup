@@ -233,6 +233,7 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
 
 #[test]
 fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
+fn answers_carry_the_session_version_and_errors_a_code() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");
         return;
@@ -301,4 +302,27 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     );
     // A malformed login key is refused before the name is looked up.
     assert_eq!(attempt("203.0.113.32", "not base64!", None).status(), 400);
+    let version = |token: &str| {
+        let response = bearer(c.get(format!("{base}/api/user/me")), token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        response
+            .headers()
+            .get("x-kutup-session-version")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .expect("session version header")
+    };
+    let first = version(&user.token);
+    assert_eq!(first.len(), 16);
+    assert_eq!(version(&user.token), first, "stable while nothing changes");
+    // A client error names a code, the status's default here.
+    let refused: Value = c
+        .get(format!("{base}/api/user/me"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(refused["code"], "unauthorized");
 }

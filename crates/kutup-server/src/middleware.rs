@@ -57,8 +57,59 @@ impl FromRequestParts<AppState> for AuthUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
-        authenticate_access_token(state, &token).await
+        let user = authenticate_access_token(state, &token).await?;
+        if let Some(slot) = parts.extensions.get::<SessionVersionSlot>() {
+            *slot.0.lock().unwrap() = Some(session_version(state, &user.session.version).await?);
+        }
+        Ok(user)
     }
+}
+
+static SESSION_VERSION_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
+
+/// The header's value: an HMAC of the account's state digest under a key
+/// only this server holds (derived, under its own label, from its stored
+/// sign-in key), 16 hex digits. It changes when the state does, and tells
+/// nothing else to anyone who sees headers: not the password hash, not
+/// which of 2FA or role changed, and nothing linkable across servers.
+async fn session_version(state: &AppState, digest: &str) -> Result<String, AppError> {
+    use hmac::{Hmac, Mac};
+    let key = SESSION_VERSION_KEY
+        .get_or_try_init(|| async {
+            let root = crate::handlers::auth::fake_accounts_key(state).await?;
+            let mut mac =
+                <Hmac<sha2::Sha256> as Mac>::new_from_slice(&root).expect("any key length");
+            mac.update(b"kutup/session-version/v1\0");
+            Ok::<_, AppError>(mac.finalize().into_bytes().into())
+        })
+        .await?;
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
+    mac.update(digest.as_bytes());
+    Ok(hex::encode(&mac.finalize().into_bytes()[..8]))
+}
+
+/// Where an authenticated request leaves its account's session version for
+/// [`session_version_header`] to send back.
+#[derive(Clone, Default)]
+pub struct SessionVersionSlot(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+pub const SESSION_VERSION_HEADER: &str = "x-kutup-session-version";
+
+/// Stamps `X-Kutup-Session-Version` on every authenticated answer, so each
+/// app (on its own origin) notices a password, 2FA, role or key binding
+/// change made anywhere and re-reads its account (docs/api.md, "Session
+/// version"). Read in the same query that checks the session, so it is as
+/// fresh as the request's own authority.
+pub async fn session_version_header(mut req: Request, next: Next) -> Response {
+    let slot = SessionVersionSlot::default();
+    req.extensions_mut().insert(slot.clone());
+    let mut response = next.run(req).await;
+    if let Some(version) = slot.0.lock().unwrap().take() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&version) {
+            response.headers_mut().insert(SESSION_VERSION_HEADER, value);
+        }
+    }
+    response
 }
 
 /// An authenticated admin — mirrors `Required()` + `AdminRequired()`.

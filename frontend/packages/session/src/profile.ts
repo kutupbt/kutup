@@ -2,7 +2,9 @@
 
 import api from './client'
 import type { SessionKeys } from './keys'
-import { clearSession, setAccessToken, setSession } from './store'
+import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
+import { signOut } from './signOut'
+import { clearSession, getSession, setAccessToken, setSession, updateSession } from './store'
 
 export interface MeResponse {
   id: string
@@ -48,6 +50,7 @@ export async function activateSession(
   prefetched?: MeResponse,
 ): Promise<void> {
   setAccessToken(accessToken)
+  resetSessionVersion()
   const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
   if (me.id !== keys.userId) {
     throw new Error('the session belongs to a different account than its keys')
@@ -81,3 +84,32 @@ export async function activateSession(
     accessToken,
   )
 }
+
+/**
+ * The account's security state changed somewhere (docs/api.md, "Session
+ * version"): read it again. Another key binding than this session's ends
+ * it; otherwise the profile this app shows catches up (role, 2FA, name).
+ */
+export async function recheckAccount(): Promise<void> {
+  const session = getSession()
+  if (!session) return
+  const { data: me } = await api.get<MeResponse>('/user/me')
+  if (me.id !== session.userId || me.envelopeBinding !== session.envelopeBinding) {
+    // As a refused session (KeyBindingMismatchError): ended on the server,
+    // the keys dropped here; the app's boot shows "this account's keys
+    // changed" on the way back.
+    const { masterKey, privateKey } = session
+    await signOut()
+    masterKey.fill(0)
+    privateKey.fill(0)
+    return
+  }
+  updateSession({
+    address: me.address,
+    username: me.username || null,
+    isAdmin: me.isAdmin,
+    totpEnabled: me.totpEnabled,
+  })
+}
+
+setSessionVersionHandler(recheckAccount)

@@ -3,6 +3,7 @@ import { broadcastLogout } from './sessionSync'
 import { resolveApiBase } from './apiBase'
 import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
+import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
 export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass'
@@ -113,8 +114,12 @@ const processQueue = (error: unknown, token: string | null) => {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    noteSessionVersion(res.headers?.[SESSION_VERSION_HEADER])
+    return res
+  },
   async (error) => {
+    noteSessionVersion(error.response?.headers?.[SESSION_VERSION_HEADER])
     const originalRequest = error.config
     const status = error.response?.status
     // If axios couldn't even attach the request config (some network-layer
@@ -124,9 +129,11 @@ api.interceptors.response.use(
     // Transient failures (503 from rate limiter, 429 from anywhere, or
     // network-level disconnects). Retry up to 3 times with 0.5/1/2 s backoff
     // before bubbling the error to the caller.
+    // The account's lockout is not transient: asking again only waits it out.
+    const lockedOut = status === 429 && error.response?.data?.code === 'accountLocked'
     const isTransient =
       status === 503 ||
-      status === 429 ||
+      (status === 429 && !lockedOut) ||
       (error.code === 'ECONNABORTED') ||
       (error.message === 'Network Error')
     if (originalRequest && isTransient) {

@@ -12,6 +12,62 @@ upload routes raise it (whole-file upload 10 GiB, a version 2 GiB, a tus
 chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
 10 GiB, streamed to disk). A larger body gets `413`.
 
+## Errors
+
+A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
+plus fields a code names. **Apps act on `code`, never on the text**, which
+is for logs and people reading the API. A `5xx` answers only
+`{"error": "internal server error"}`.
+
+Without a specific code, a client error carries its status's default:
+
+| Status | Code |
+|---|---|
+| 400, 422 | `invalid` |
+| 401 | `unauthorized` |
+| 403 | `forbidden` |
+| 404 | `notFound` |
+| 409 | `conflict` |
+| 413 | `tooLarge` |
+| 429 | `tooManyRequests` |
+
+Specific codes, where an app does something particular (a test in
+`kutup-server` fails when the source uses a code this list lacks):
+
+| Code | Status | Meaning |
+|---|---|---|
+| `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
+| `rateLimited` | 429 | This address asked too often (a minute); nginx's own 429 too |
+| `peerUnsupported` | 503 | The recipient's server lacks this Chat wire; the message waits |
+| `peerRefused` | 502 | The recipient's server refused this message for good |
+| `version_conflict` | 409 | A newer version exists (Drive, collab) |
+| `revision_conflict` | 409 | A newer revision exists |
+| `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
+| `link_removed` | 404/410 | The shared link was removed |
+| `keyChanged` | 409 | A recipient's key changed since it was checked |
+| `newKeyNeeded` | 409 | A new key must be made first |
+| `noAddressKey` | 409 | The address has no key yet |
+| `sharesNeeded` | 409 | Shares must be updated first |
+| `groupChanged`, `group` | 409 | The group changed; read it again |
+| `notAllowed`, `notAllowedToSendAs` | 403 | Not permitted for this account or address |
+| `invalidAddress`, `unknownRecipient` | 400/404 | An address that is not one, or no such recipient |
+| `sending`, `sendingPaused`, `outsideSendingOff` | 409/403 | Mail sending is busy, paused, or off for outside |
+| `sendLimit`, `scheduledLimit` | 429 | A sending or scheduling limit was reached |
+| `spam`, `refused` | 403 | The message was refused |
+| `expiringOutside` | 400 | Expiring messages cannot go outside Kutup |
+
+## Session version
+
+Every authenticated answer carries `X-Kutup-Session-Version`: 16 hex
+digits, an HMAC under a key only the server holds of the account's security
+state (its password, 2FA, role, username and key binding), read in the same
+query that checks the session. It reveals nothing about that state, only
+whether it changed. It changes when
+any of them changes, from any app or device. Each app (each on its own
+origin) remembers the last one it saw; on a change it reads `/user/me`
+again and, when the key binding is no longer the one its keys carry, ends
+its session. The header is exposed to cross-origin callers.
+
 ---
 
 ## Authentication

@@ -2033,6 +2033,7 @@ fn build_router(state: AppState) -> Router {
         // panic recovery turns a handler panic into a 500 (mirrors Fiber's `recover.New()`).
         // NOTE: trailing-slash normalization is applied *outside* the Router in `main` (a
         // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
+        .layer(from_fn(middleware::session_version_header))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
@@ -2213,6 +2214,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("upload-length"),
             HeaderName::from_static("x-kutup-key-generation"),
             HeaderName::from_static("x-kutup-version"),
+            HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             axum::http::header::LOCATION,
         ])
 }

@@ -90,17 +90,29 @@ impl IntoResponse for AppError {
             )
                 .into_response();
         }
-        if let Some(mut details) = self.details {
-            details.insert("error".into(), serde_json::Value::String(self.message));
-            return (self.status, Json(serde_json::Value::Object(details))).into_response();
-        }
-        (
-            self.status,
-            Json(ErrorResponse {
-                error: self.message,
-            }),
-        )
-            .into_response()
+        // Every client error names a `code` apps act on, never the English
+        // `error` text: one a handler set, or the status's default
+        // (docs/api.md, "Error codes").
+        let mut details = self.details.unwrap_or_default();
+        details
+            .entry("code")
+            .or_insert_with(|| serde_json::Value::String(default_code(self.status).into()));
+        details.insert("error".into(), serde_json::Value::String(self.message));
+        (self.status, Json(serde_json::Value::Object(details))).into_response()
+    }
+}
+
+/// The `code` a client error carries when its handler set none.
+pub(crate) fn default_code(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => "invalid",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        StatusCode::FORBIDDEN => "forbidden",
+        StatusCode::NOT_FOUND => "notFound",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::PAYLOAD_TOO_LARGE => "tooLarge",
+        StatusCode::TOO_MANY_REQUESTS => "tooManyRequests",
+        _ => "error",
     }
 }
 
@@ -137,7 +149,53 @@ mod tests {
     async fn client_error_passes_message_through() {
         let (status, body) = body_string(AppError::bad_request("bad input")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, r#"{"error":"bad input"}"#);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "bad input");
+        // Every client error carries a code: here the status's default.
+        assert_eq!(body["code"], "invalid");
+    }
+
+    #[test]
+    fn every_code_the_server_uses_is_documented() {
+        let api = include_str!("../../../docs/api.md");
+        let documented = |code: &str| api.contains(&format!("`{code}`"));
+        for status in [400u16, 401, 403, 404, 409, 413, 422, 429] {
+            let code = default_code(StatusCode::from_u16(status).unwrap());
+            assert!(
+                documented(code),
+                "default code {code} is not in docs/api.md"
+            );
+        }
+        let mut missing = Vec::new();
+        let mut stack = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src"
+        ))];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    let mut rest = source.as_str();
+                    while let Some(at) = rest.find("\"code\": \"") {
+                        rest = &rest[at + 9..];
+                        let code: String = rest
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect();
+                        if !code.is_empty() && !documented(&code) {
+                            missing.push(format!("{code} ({})", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "codes missing from docs/api.md: {missing:?}"
+        );
     }
 
     #[tokio::test]
