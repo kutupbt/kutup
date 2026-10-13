@@ -142,13 +142,16 @@ export interface MovedPin {
  * - `formerAddressTaken`: not pinned; someone the user knew had this address
  *   and is elsewhere now (`pins`): this is another person ("changed");
  * - `knownElsewhere`: not pinned again; the same account is pinned under
- *   another of its names (`pin`); follow its rename chain to move it.
+ *   another of its names (`pin`); follow its rename chain to move it;
+ * - `replacedIdentity`: not pinned; an identity the user replaced (its trust
+ *   revoked) turning up again: a change, accepted only explicitly.
  */
 export type Recorded =
   | { kind: 'pinned' }
   | { kind: 'unchanged' }
   | { kind: 'formerAddressTaken'; pins: MovedPin[] }
   | { kind: 'knownElsewhere'; pin: IdentityPin }
+  | { kind: 'replacedIdentity'; pin: IdentityPin }
 
 /**
  * What the list says about `address`, given the authority published there
@@ -160,6 +163,8 @@ export type Recorded =
  *   (`recordIdentityPin` re-attaches it with its trust);
  * - `moved`: pinned accounts had the address before (`now`: where they are,
  *   or `null` if detached); whoever is there now is someone else;
+ * - `replaced`: an identity the user replaced (its trust revoked), here or at
+ *   another address;
  * - `new`: nothing known.
  */
 export type PinMatch =
@@ -167,6 +172,7 @@ export type PinMatch =
   | { kind: 'renamed'; pin: IdentityPin }
   | { kind: 'returned'; pin: IdentityPin }
   | { kind: 'moved'; pins: MovedPin[] }
+  | { kind: 'replaced'; pin: IdentityPin }
   | { kind: 'new' }
 
 export async function lookupIdentityPin(pins: PinsText, address: string, publishedAuthority: string | null): Promise<PinMatch> {

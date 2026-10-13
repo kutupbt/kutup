@@ -291,6 +291,9 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
             // Someone the user knew had this address and is elsewhere now: this
             // is another person (accept with `kutup identity trust`).
             Recorded::FormerAddressTaken { .. } => Ok(Status::Changed),
+            // An identity the user replaced, turning up again: its trust is
+            // revoked (accept it with `kutup identity trust`, or verify it).
+            Recorded::ReplacedIdentity { .. } => Ok(Status::Changed),
             // The same account, pinned under another of its names.
             Recorded::KnownElsewhere { pin } => Ok(Status::Ok {
                 verified: pin.state == PinState::Verified,

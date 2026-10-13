@@ -61,6 +61,10 @@ struct RenameVectors {
     rollback: Vec<AccountRenameV1>,
     /// `lookup` against `after`.
     lookups: Vec<LookupCase>,
+    /// A list where the user replaced Frank's identity, and `lookup` of it
+    /// at its old address and another: replaced, both.
+    replaced_list: String,
+    replaced_lookups: Vec<LookupCase>,
     records: Vec<RecordCase>,
     /// Lists the format refuses.
     refused_lists: Vec<RefusedList>,
@@ -343,9 +347,16 @@ fn renames() -> RenameVectors {
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "an identity the user replaced, met at its address again: warned",
+            "an identity the user replaced, met at its address again: replacedIdentity",
             &frank_replaced,
             "frank@example.org",
+            &frank,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "an identity the user replaced, met at another address: replacedIdentity",
+            &frank_replaced,
+            "frank2@example.org",
             &frank,
             PinUpdate::FirstSeen,
         ),
@@ -393,10 +404,6 @@ fn renames() -> RenameVectors {
         RefusedList {
             case: "former addresses without an anchor".into(),
             pins: anchored(&["dave@kutup.dev"], None),
-        },
-        RefusedList {
-            case: "an anchor without former addresses".into(),
-            pins: anchored(&[], Some((1, digest()))),
         },
         RefusedList {
             case: "anchor sequence 0".into(),
@@ -457,7 +464,22 @@ fn renames() -> RenameVectors {
             pins: preserved.replace("\":", "\": "),
         },
     ];
+    let replaced_lookups = ["frank@example.org", "frank2@example.org"]
+        .into_iter()
+        .map(|address| LookupCase {
+            address: address.into(),
+            result: serde_json::to_value(identity_pins::lookup(
+                &frank_replaced,
+                address,
+                Some(&b64(&frank)),
+            ))
+            .unwrap(),
+            published: Some(b64(&frank)),
+        })
+        .collect();
     RenameVectors {
+        replaced_list: json(&frank_replaced),
+        replaced_lookups,
         authority_public_key: b64(&dave),
         rollback: chain[..1].to_vec(),
         chain,
@@ -638,6 +660,17 @@ fn check_renames(r: &RenameVectors) {
     assert!(!again.changed);
     assert_eq!(json(&list), r.after);
     assert!(identity_pins::apply_rename(&mut list, &authority, &r.rollback).is_err());
+    let replaced = identity_pins::decode(r.replaced_list.as_bytes()).unwrap();
+    for case in &r.replaced_lookups {
+        let found = identity_pins::lookup(&replaced, &case.address, case.published.as_deref());
+        assert_eq!(
+            serde_json::to_value(&found).unwrap(),
+            case.result,
+            "{}",
+            case.address
+        );
+        assert!(matches!(found, identity_pins::PinMatch::Replaced { .. }));
+    }
     for case in &r.lookups {
         let found = identity_pins::lookup(&list, &case.address, case.published.as_deref());
         assert_eq!(

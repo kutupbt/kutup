@@ -262,6 +262,13 @@ describe('checkIdentity', () => {
     expect(server.pins).toBeNull()
   })
 
+  it('warns about an identity the user replaced, wherever it turns up', async () => {
+    publish('carol@kutup.dev', 'A')
+    recordOverride.next = { kind: 'replacedIdentity', pin: { account: 'bob@kutup.dev', authorityPublicKey: 'A', state: 'seen', detachedBy: 'replaced' } }
+    expect(await checkIdentity(me, 'carol@kutup.dev')).toEqual({ kind: 'changed' })
+    expect(server.pins).toBeNull()
+  })
+
   it('recognises an account pinned under another of its names', async () => {
     publish('alicia@kutup.dev', 'A')
     recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'verified' } }

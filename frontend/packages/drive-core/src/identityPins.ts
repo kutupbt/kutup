@@ -291,6 +291,8 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   const recorded = await recordPin(me, account, person.accountAuthorityPublicKey, 'firstSeen').catch((): Recorded => ({ kind: 'unchanged' }))
   // Someone the user knew had this address and is elsewhere now: another person.
   if (recorded.kind === 'formerAddressTaken') return { kind: 'changed' }
+  // An identity the user replaced (its trust revoked), turning up again.
+  if (recorded.kind === 'replacedIdentity') return { kind: 'changed' }
   // The same account, pinned under another of its names.
   if (recorded.kind === 'knownElsewhere') return { kind: 'ok', verified: recorded.pin.state === 'verified' }
   return { kind: 'ok', verified: false }

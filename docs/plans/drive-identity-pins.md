@@ -106,8 +106,9 @@ an older list; a device with no history trusts the first list it reads.
 `formerly` (the addresses the same incarnation had before `account`, oldest
 first, at most 32, all on its server; when full the oldest goes, and that
 address loses its "moved" warning) and `renames: { sequence, digest }`, the
-head of the account's rename chain this list has verified. Both are absent for
-an account that was never renamed. The anchor is the rollback guard on every
+head of the account's rename chain this list has verified. Former addresses
+need the anchor; the anchor may stand alone (an account accepted back at a
+name it had). Both are absent for an account that was never renamed. The anchor is the rollback guard on every
 device of the account: a later chain is followed only if it holds that
 statement at that sequence.
 
@@ -118,10 +119,15 @@ user accepting another authority there. Their `account` is the last address
 they were known at, and `detachedBy` says why they left it:
 - **`rename`:** their own rename chain, or their return to that address,
   re-attaches them as they were.
-- **`replaced`:** the user put another identity there. They come back only
-  through their own rename chain. Met at that address again, they are a former
-  holder: `formerAddressTaken` on first sight, and only `seen` if accepted
-  again. A server replaying an old identity cannot get it trusted back silently.
+- **`replaced`:** the user put another identity there. Replacing revokes its
+  trust for good, because the usual reason is a reset or a lost key, which is
+  the key an attacker may hold. Its state drops to `seen`. Wherever that
+  authority turns up again (the same address, another one, or a rename chain
+  it signs), it is `replacedIdentity` (record) or `replaced` (lookup): Drive
+  and the CLI say `changed`, and Chat quarantines it. A chain moves its last
+  known address but it stays `replaced`, and it never takes an address from a
+  live pin. Only the user's explicit accept (`seen`) or in-person verification
+  (`verified`) pins it again.
 
 `detachedBy` is set on detached pins and only on them. At most 256 are kept;
 past that, the oldest unverified go first, then the oldest.

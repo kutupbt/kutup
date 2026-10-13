@@ -98,8 +98,8 @@ pub struct IdentityPinV1 {
     pub formerly: Vec<String>,
     /// The newest rename statement verified for this incarnation: a later
     /// chain is accepted only if it holds this one at `sequence`, so no server
-    /// can roll a rename back, on any device of the account. Present exactly
-    /// when `formerly` is not empty.
+    /// can roll a rename back, on any device of the account. Present whenever
+    /// `formerly` is not empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renames: Option<RenameAnchorV1>,
     /// Why a pin in [`IdentityPinsV1::detached`] left its address; absent on a
@@ -117,9 +117,10 @@ pub enum DetachReason {
     /// A verified rename landed on its address: it left on its own, and comes
     /// back with its trust when met there again.
     Rename,
-    /// The user accepted (or verified) another authority at its address: met
-    /// there again, it is a former holder, warned about, never trusted back
-    /// silently.
+    /// The user accepted (or verified) another authority at its address. Its
+    /// trust is revoked for good: wherever it turns up (any address, a rename
+    /// chain of its own), it is warned about, and only the user's explicit
+    /// accept (`seen`) or in-person verification brings it back.
     Replaced,
 }
 
@@ -180,11 +181,12 @@ impl IdentityPinV1 {
         {
             return Err(invalid("former addresses are invalid"));
         }
+        // Former addresses come from a verified chain, so they need its anchor;
+        // an anchor may stand alone (back at a name it had, accepted there).
         match &self.renames {
             None if self.formerly.is_empty() => {}
             Some(anchor)
-                if !self.formerly.is_empty()
-                    && (1..=account_rename::MAX_CHAIN as u64).contains(&anchor.sequence)
+                if (1..=account_rename::MAX_CHAIN as u64).contains(&anchor.sequence)
                     && is_lower_hex_32(&anchor.digest) => {}
             _ => return Err(invalid("the rename anchor is invalid")),
         }
@@ -335,6 +337,11 @@ impl IdentityPinsV1 {
     /// the oldest unverified detached pins (then the oldest) past the cap.
     fn detach(&mut self, mut pin: IdentityPinV1, reason: DetachReason) {
         pin.detached_by = Some(reason);
+        // Replacing an identity revokes its trust for good: the usual reason
+        // is a reset or a lost key, which is the key an attacker may hold.
+        if reason == DetachReason::Replaced {
+            pin.state = PinState::Seen;
+        }
         let key = |p: &IdentityPinV1| (p.account.clone(), p.authority_public_key.clone());
         let at = self
             .detached
@@ -450,6 +457,10 @@ pub enum Recorded {
     /// ([`apply_rename`]) to move it; an account is never pinned twice. A
     /// `verified` update still marks that pin verified (the list changes).
     KnownElsewhere { pin: IdentityPinV1 },
+    /// Not pinned: an identity the user replaced (its trust revoked), turning
+    /// up again, at this address or another. Warned about like a change; the
+    /// user may accept it (`seen`) or verify it in person.
+    ReplacedIdentity { pin: IdentityPinV1 },
 }
 
 /// Records `update` about `account` at `authority` (canonical base64) at time
@@ -489,20 +500,20 @@ pub fn record(
     let known = list.find_authority(authority);
     let mut trusted_back = true;
     match known {
-        // The same account, pushed off this very address before, is met there
-        // again. Back as it was if a rename moved it; if the user replaced it,
-        // it is a former holder: warned about on first sight, and only `seen`
-        // when accepted again.
-        Some((true, j)) if list.detached[j].account == account => {
-            if list.detached[j].detached_by == Some(DetachReason::Replaced) {
-                if update == PinUpdate::FirstSeen {
-                    return Ok(Recorded::FormerAddressTaken {
-                        pins: moved_from(list, account),
-                    });
-                }
-                trusted_back = false;
+        // An identity the user replaced, wherever it turns up: warned about;
+        // only the user's explicit accept or verification pins it again, and
+        // then only as that act says.
+        Some((true, j)) if list.detached[j].detached_by == Some(DetachReason::Replaced) => {
+            if update == PinUpdate::FirstSeen {
+                return Ok(Recorded::ReplacedIdentity {
+                    pin: list.detached[j].clone(),
+                });
             }
+            trusted_back = false;
         }
+        // The same account, pushed off this very address by a rename, is met
+        // there again: back as it was.
+        Some((true, j)) if list.detached[j].account == account => {}
         Some((detached, j)) => {
             let pin = if detached {
                 &mut list.detached[j]
@@ -546,6 +557,9 @@ fn pin_now(
         Some(entry) => list.take(entry),
         None => candidate,
     };
+    // Pinned where it was met (a replaced identity accepted at a new address).
+    pin.account = account.to_owned();
+    pin.formerly.retain(|former| former != account);
     if state == PinState::Verified || !trusted_back {
         pin.state = state;
         pin.since = since.to_owned();
@@ -621,6 +635,9 @@ pub enum PinMatch {
     /// No pin for the address, but pinned accounts had it before; whoever is
     /// there now is someone else: "this is not the person you verified".
     Moved { pins: Vec<MovedPin> },
+    /// The authority published there is one the user replaced (its trust
+    /// revoked), at this address or another: warned about like a change.
+    Replaced { pin: IdentityPinV1 },
     /// Nothing known.
     New,
 }
@@ -635,6 +652,11 @@ pub fn lookup(list: &IdentityPinsV1, address: &str, published: Option<&str>) -> 
     }
     if let Some(entry) = published.and_then(|published| list.find_authority(published)) {
         return match entry {
+            (true, j) if list.detached[j].detached_by == Some(DetachReason::Replaced) => {
+                PinMatch::Replaced {
+                    pin: list.detached[j].clone(),
+                }
+            }
             (true, j)
                 if list.detached[j].account == address
                     && list.detached[j].detached_by == Some(DetachReason::Rename) =>
@@ -738,6 +760,8 @@ pub fn apply_rename(
     };
 
     let before = list.clone();
+    let replaced_identity =
+        entry.0 && list.detached[entry.1].detached_by == Some(DetachReason::Replaced);
     let mut moved = list.take(entry);
     let restore = |list: &mut IdentityPinsV1, error| {
         *list = before.clone();
@@ -751,6 +775,21 @@ pub fn apply_rename(
     // one, whose history is its previous holder's, if it had one.
     if changed_address && from != view.current {
         moved.replaced = Vec::new();
+    }
+    if replaced_identity {
+        // A chain moves its address, never its revoked trust: it stays
+        // detached as replaced, and takes no address from a live pin.
+        list.detach(moved, DetachReason::Replaced);
+        if let Err(error) = list.validate() {
+            *list = before;
+            return Err(error);
+        }
+        return Ok(RenameApplied {
+            from,
+            to: view.current,
+            changed: *list != before,
+            displaced: None,
+        });
     }
     let mut displaced = None;
     if let Some(i) = list.pins.iter().position(|p| p.account == view.current) {
@@ -1070,7 +1109,11 @@ mod tests {
         assert_eq!(pin.replaced, [identity(2).incarnation_id()]);
         assert!(pin.formerly.is_empty() && pin.renames.is_none());
         assert_eq!(list.detached.len(), 1);
-        assert_eq!(list.detached[0].state, PinState::Verified);
+        assert_eq!(
+            list.detached[0].state,
+            PinState::Seen,
+            "replacing revokes its trust"
+        );
         assert_eq!(list.detached[0].formerly, ["robert@kutup.dev"]);
         // Inserted in order; a bad authority or time is refused, the list kept.
         rec(&mut list, "alice@kutup.dev", 1, PinUpdate::FirstSeen);
@@ -1317,26 +1360,94 @@ mod tests {
         let mut list = IdentityPinsV1::default();
         rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified);
         rec(&mut list, "bob@kutup.dev", 3, PinUpdate::Accepted);
-        assert_eq!(list.detached[0].detached_by, Some(DetachReason::Replaced));
-        // B leaves; the server shows A's old identity at bob@ again.
-        list.pins.clear();
-        match lookup(&list, "bob@kutup.dev", Some(&authority(2))) {
-            PinMatch::Moved { pins } => assert_eq!(pins[0].now, None),
-            other => panic!("{other:?}"),
-        }
-        let before = list.clone();
-        assert!(matches!(
-            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::FirstSeen),
-            Recorded::FormerAddressTaken { .. }
-        ));
-        assert_eq!(list, before, "not re-attached");
-        // Accepting it again makes it `seen`, not the old `verified`.
+        let detached = &list.detached[0];
+        assert_eq!(detached.detached_by, Some(DetachReason::Replaced));
         assert_eq!(
-            rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Accepted),
-            Recorded::Pinned
+            detached.state,
+            PinState::Seen,
+            "its trust is revoked at once"
         );
-        assert_eq!(list.pins[0].state, PinState::Seen);
-        assert!(list.detached.is_empty() && list.pins[0].detached_by.is_none());
+        // A's old identity turns up again: at bob@ (B gone) or anywhere else.
+        let mut gone = list.clone();
+        gone.pins.clear();
+        for (list, address) in [(&gone, "bob@kutup.dev"), (&list, "carol@kutup.dev")] {
+            assert!(
+                matches!(
+                    lookup(list, address, Some(&authority(2))),
+                    PinMatch::Replaced { .. }
+                ),
+                "{address}"
+            );
+            let mut next = list.clone();
+            assert!(
+                matches!(
+                    rec(&mut next, address, 2, PinUpdate::FirstSeen),
+                    Recorded::ReplacedIdentity { .. }
+                ),
+                "{address}"
+            );
+            assert_eq!(&next, list, "not pinned at {address}");
+            // Accepted explicitly: only seen. Verified in person: verified.
+            assert_eq!(
+                rec(&mut next, address, 2, PinUpdate::Accepted),
+                Recorded::Pinned
+            );
+            let pin = next.pins.iter().find(|p| p.account == address).unwrap();
+            assert_eq!((pin.state, pin.detached_by), (PinState::Seen, None));
+            let mut verified = list.clone();
+            rec(&mut verified, address, 2, PinUpdate::Verified);
+            let pin = verified.pins.iter().find(|p| p.account == address).unwrap();
+            assert_eq!(pin.state, PinState::Verified);
+            assert!(encode(&next).is_ok() && encode(&verified).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_chain_never_brings_back_a_replaced_identity() {
+        let mut list = IdentityPinsV1::default();
+        rec(&mut list, "bob@kutup.dev", 2, PinUpdate::Verified);
+        rec(&mut list, "bob@kutup.dev", 3, PinUpdate::Accepted);
+        // A's key signs a chain bob@ -> carol@: the pin's address follows it,
+        // its revoked trust does not.
+        let away = renames(2, &["bob@kutup.dev", "carol@kutup.dev"]);
+        apply_rename(&mut list, &key(2), &away).unwrap();
+        assert!(list
+            .pins
+            .iter()
+            .all(|p| p.authority_public_key != authority(2)));
+        let detached = &list.detached[0];
+        assert_eq!(
+            (
+                detached.account.as_str(),
+                detached.detached_by,
+                detached.state
+            ),
+            (
+                "carol@kutup.dev",
+                Some(DetachReason::Replaced),
+                PinState::Seen
+            )
+        );
+        assert!(matches!(
+            lookup(&list, "carol@kutup.dev", Some(&authority(2))),
+            PinMatch::Replaced { .. }
+        ));
+        // A chain back to bob@ (renames may return to a name) takes nothing
+        // from B, who is pinned there.
+        let back = renames(2, &["bob@kutup.dev", "carol@kutup.dev", "bob@kutup.dev"]);
+        assert!(
+            account_rename::verify_chain(&key(2), &back).is_ok(),
+            "a chain may return to a name"
+        );
+        apply_rename(&mut list, &key(2), &back).unwrap();
+        let b = list
+            .pins
+            .iter()
+            .find(|p| p.account == "bob@kutup.dev")
+            .unwrap();
+        assert_eq!(b.authority_public_key, authority(3));
+        assert_eq!(list.detached[0].detached_by, Some(DetachReason::Replaced));
+        assert!(encode(&list).is_ok());
     }
 
     #[test]
@@ -1484,6 +1595,8 @@ mod tests {
             }
         };
         assert!(encode(&anchored(vec!["alice@kutup.dev"], 1)).is_ok());
+        // An anchor alone: back at a name it had, accepted there.
+        assert!(encode(&anchored(vec![], 1)).is_ok());
         for (case, list) in [
             ("its own address", anchored(vec!["alicia@kutup.dev"], 1)),
             (
@@ -1493,7 +1606,6 @@ mod tests {
             ("another server", anchored(vec!["alice@other.dev"], 1)),
             ("not canonical", anchored(vec!["Alice@kutup.dev"], 1)),
             ("sequence 0", anchored(vec!["alice@kutup.dev"], 0)),
-            ("no former address", anchored(vec![], 1)),
         ] {
             assert!(encode(&list).is_err(), "{case}");
         }

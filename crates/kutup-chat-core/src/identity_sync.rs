@@ -129,6 +129,11 @@ impl IdentityPinsSync {
             // Someone the user knew had this address and is elsewhere now:
             // whoever is here is another person, unless verified here.
             PinMatch::Moved { .. } if !verified_here => Reconcile::Quarantine,
+            // An identity the user replaced (its trust revoked), wherever it
+            // turns up: never verified from the list, quarantined unless
+            // verified here.
+            PinMatch::Replaced { .. } if !verified_here => Reconcile::Quarantine,
+            PinMatch::Replaced { .. } => Reconcile::Nothing,
             // The same account (pinned here, or under another of its names).
             PinMatch::Pinned { pin, .. }
             | PinMatch::Renamed { pin }
@@ -469,6 +474,47 @@ mod tests {
         assert_eq!(
             block_on(sync().reconcile(&server, &renamed)).unwrap(),
             Reconcile::MarkVerified
+        );
+    }
+
+    #[test]
+    fn an_identity_replaced_elsewhere_is_quarantined_wherever_it_turns_up() {
+        // Bob verified, then replaced by a new identity the user accepted.
+        let server = Server::default();
+        block_on(sync().record(
+            &server,
+            &trust("bob@kutup.dev", 2, AuthorityTrust::Verified),
+            0,
+        ))
+        .unwrap();
+        let mut list = identity_pins::open(
+            &identity_pins::derive_key(&MASTER).unwrap(),
+            OWNER,
+            &STANDARD
+                .decode(server.stored.borrow().clone().unwrap().envelope)
+                .unwrap(),
+        )
+        .unwrap()
+        .0;
+        identity_pins::record(
+            &mut list,
+            "bob@kutup.dev",
+            &authority(3),
+            PinUpdate::Accepted,
+            "2026-10-11T12:00:00Z",
+        )
+        .unwrap();
+        let key = identity_pins::derive_key(&MASTER).unwrap();
+        *server.stored.borrow_mut() = Some(IdentityPinsRecord {
+            revision: 2_000_000_000_000,
+            envelope: STANDARD
+                .encode(identity_pins::seal(&key, OWNER, 2_000_000_000_000, &list).unwrap()),
+        });
+        // The old identity shows up as carol@: never verified from the list.
+        let old = trust("carol@kutup.dev", 2, AuthorityTrust::Tofu);
+        assert_eq!(
+            block_on(sync().reconcile(&server, &old)).unwrap(),
+            Reconcile::Quarantine
         );
     }
 }

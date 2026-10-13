@@ -887,6 +887,9 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.equal(again.changed, false)
   assert.equal(again.pins, r.after)
   assert.throws(() => crypto.applyAccountRenameToPins(r.after, r.authorityPublicKey, JSON.stringify(r.rollback)))
+  for (const lookup of r.replacedLookups) {
+    assert.deepEqual(crypto.lookupIdentityPin(r.replacedList, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
+  }
   for (const lookup of r.lookups) {
     assert.deepEqual(crypto.lookupIdentityPin(r.after, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
   }
