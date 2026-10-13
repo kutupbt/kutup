@@ -473,6 +473,15 @@ pub(crate) async fn store_version(
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
+    // A save that claims a log position takes the relay's per-file lock
+    // first, before the file's row: the one lock order the relay uses too
+    // (`collab::trim_log`), so the two never deadlock.
+    if seq_at_snapshot > 0 {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(super::collab::log_lock_key(fid))
+            .execute(&mut *tx)
+            .await?;
+    }
     // One whole-file save at a time per file, so the content it replaces is
     // the content current when it lands. Taken before the key check's shared
     // lock: upgrading a shared lock would deadlock two saves.
@@ -498,10 +507,6 @@ pub(crate) async fn store_version(
     // the log's head (a made-up position must not trim edits it lacks). Under
     // the relay's per-file lock, so no frame lands in between.
     let seq_at_snapshot = if seq_at_snapshot > 0 {
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(super::collab::log_lock_key(fid))
-            .execute(&mut *tx)
-            .await?;
         seq_at_snapshot.min(super::collab::log_head(&mut *tx, fid).await?)
     } else {
         0

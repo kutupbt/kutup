@@ -101,9 +101,10 @@ async fn check(
 
 /// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
-/// new version of this file is open (with its `uploadId` when it is the
-/// caller's, to go on with or cancel, and `idleSeconds` since its last part:
-/// one idle a while was left by a crash, one active belongs to another device).
+/// new version of this file is open, with `idleSeconds` since its last part
+/// (one idle a while was left by a crash, one active is still running), and
+/// its `uploadId` when the caller uploads it (`yours: true`: go on with it or
+/// cancel it) or owns the folder (`yours: false`: may cancel it).
 pub(super) async fn create(
     state: &AppState,
     user_id: Uuid,
@@ -168,13 +169,22 @@ async fn open(
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((upload_id, owner, idle_seconds)) = open {
+    let owns_folder: bool =
+        sqlx::query_scalar("SELECT owner_user_id = $2 FROM collections WHERE id = $1")
+            .bind(collection_id)
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if let Some((upload_id, uploader, idle_seconds)) = open {
         // How long since its last part tells a crashed upload (cancel it)
         // from one still running on another device (wait for it).
         let mut details =
             serde_json::json!({ "code": "versionUploading", "idleSeconds": idle_seconds.max(0) });
-        if owner == user_id {
+        // Its uploader may go on with it or cancel it; the folder's owner may
+        // cancel it (tus DELETE), so nobody can hold their file's slot.
+        if uploader == user_id || owns_folder {
             details["uploadId"] = upload_id.to_string().into();
+            details["yours"] = (uploader == user_id).into();
         }
         return Err(
             AppError::conflict("a new version of this file is being uploaded")
@@ -245,6 +255,9 @@ pub(super) struct Landing {
     pub user_id: Uuid,
     pub upload_id: Uuid,
     pub file_id: Uuid,
+    /// The folder the file was in when the upload started (its content hash
+    /// is keyed for that folder).
+    pub collection_id: Uuid,
     pub total_bytes: i64,
     pub metadata_envelope: String,
     pub metadata_revision: i64,
@@ -264,6 +277,16 @@ pub(super) async fn finish(
     landing: Landing,
     parts: &[CompletedPart],
 ) -> Response {
+    // One lock order with the collaboration relay (`collab::trim_log`): the
+    // file's log lock first, then its row (taken in `check`).
+    if sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(super::collab::log_lock_key(landing.file_id))
+        .execute(&mut *tx)
+        .await
+        .is_err()
+    {
+        return tus_error(AppError::internal("db lock"));
+    }
     let checked = check(
         state,
         &mut tx,
@@ -277,18 +300,18 @@ pub(super) async fn finish(
         Some(landing.upload_id),
     )
     .await;
-    if let Err(error) = checked {
-        drop(tx);
-        let _ = state
-            .storage
-            .abort_multipart(&landing.storage_path, &landing.s3_upload_id)
-            .await;
-        let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
-            .bind(landing.upload_id)
-            .execute(&state.pool)
-            .await;
-        return tus_error(error);
-    }
+    let collection_now = match checked {
+        Ok((collection, _)) => collection,
+        // A refusal (no longer allowed, gone, changed meanwhile, too large)
+        // discards the upload at once; anything else (the database failing)
+        // keeps it, so the last part can be sent again.
+        Err(error) if refuses(&error) => {
+            drop(tx);
+            discard(state, &landing).await;
+            return tus_error(error);
+        }
+        Err(error) => return tus_error(error),
+    };
     if let Err(error) = state
         .storage
         .complete_multipart(&landing.storage_path, &landing.s3_upload_id, parts)
@@ -301,9 +324,24 @@ pub(super) async fn finish(
         )
             .into_response();
     }
-    match record(&mut tx, &landing).await {
-        Ok(seq) if tx.commit().await.is_ok() => {
-            // Tabs editing the file reopen from the new content.
+    // Moved meanwhile: the content hash was keyed for the folder it left.
+    let content_hash = landing
+        .content_hash
+        .clone()
+        .filter(|_| collection_now == landing.collection_id);
+    let stored = match record(&mut tx, &landing, content_hash.as_deref()).await {
+        Ok(seq) => tx.commit().await.map(|()| seq).map_err(AppError::from),
+        Err(error) => {
+            // Released before the row is deleted below: it holds the row's lock.
+            drop(tx);
+            Err(error)
+        }
+    };
+    match stored {
+        Ok(seq) => {
+            // Editors on other servers hold the old base: they reconnect.
+            state.collab_federation.close_file(state, landing.file_id);
+            // Tabs editing the file here reopen from the new content.
             super::collab::replace_base(
                 state,
                 landing.file_id,
@@ -323,23 +361,54 @@ pub(super) async fn finish(
                 .into_response()
         }
         _ => {
+            // The parts are already stitched: the upload cannot go on. Its
+            // object and row go, so the file's one upload slot frees.
             let _ = state.storage.delete(&landing.storage_path).await;
+            let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+                .bind(landing.upload_id)
+                .execute(&state.pool)
+                .await;
             tus_error(AppError::internal("db store version"))
         }
     }
 }
 
+/// Whether a check's error refuses the upload for good (rather than failing
+/// to look).
+fn refuses(error: &AppError) -> bool {
+    matches!(
+        error.status,
+        StatusCode::FORBIDDEN
+            | StatusCode::NOT_FOUND
+            | StatusCode::CONFLICT
+            | StatusCode::PAYLOAD_TOO_LARGE
+            | StatusCode::BAD_REQUEST
+    )
+}
+
+/// Drops a version upload: its stored parts and its row.
+pub(super) async fn discard(state: &AppState, landing: &Landing) {
+    let _ = state
+        .storage
+        .abort_multipart(&landing.storage_path, &landing.s3_upload_id)
+        .await;
+    let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+        .bind(landing.upload_id)
+        .execute(&state.pool)
+        .await;
+}
+
 /// Stores the version and returns its position in the collaboration log.
-async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppResult<i64> {
+async fn record(
+    tx: &mut Transaction<'_, Postgres>,
+    landing: &Landing,
+    content_hash: Option<&str>,
+) -> AppResult<i64> {
     let parent = current_whole_version(tx, landing.file_id).await?;
     // The new content replaces everything edited so far: it stands at the
     // log's head, so whoever opens it next replays nothing older (as a
-    // restore from the editor does). Under the relay's per-file lock, so no
-    // edit lands in between.
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(super::collab::log_lock_key(landing.file_id))
-        .execute(&mut **tx)
-        .await?;
+    // restore from the editor does). Under the relay's per-file lock (taken
+    // in `finish`), so no edit lands in between.
     let seq = super::collab::log_head(&mut **tx, landing.file_id).await?;
     let doc_key_id: i64 = sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
         .bind(landing.file_id)
@@ -376,7 +445,7 @@ async fn record(tx: &mut Transaction<'_, Postgres>, landing: &Landing) -> AppRes
     .bind(landing.file_id)
     .bind(&landing.metadata_envelope)
     .bind(landing.metadata_revision)
-    .bind(&landing.content_hash)
+    .bind(content_hash)
     .execute(&mut **tx)
     .await?;
     sqlx::query("DELETE FROM uploads WHERE id = $1")
