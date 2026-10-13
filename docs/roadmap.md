@@ -691,14 +691,11 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 ### Chat app (web) follow-ups
 
 - **Live tests for sealed federation edge cases (owner: second session).**
-  The two-server gate does not exercise them: a sealed send to a peer
-  without `chat.v2` that then gains it; a refused send followed by the next
-  sequence; a backlog of over 100 sealed rows for one peer not starving
-  another.
-
-Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
-(required before deployment).
-
+  The backlog case is covered (the backup gate runs
+  `live_sealed_backlog_does_not_starve_other_destinations`: 150 rows for one
+  server, a parked head). Still wanted, on the two-server harness: a sealed
+  send to a peer without `chat.v2` that then gains it, and a refused send
+  followed by the next sequence.
 - **Groups are to be rebuilt.** Group chats (MLS with a federated ordering
   service) proved fragile on the first live server when devices changed, and
   the plan is to rebuild them on an architecture that heals by itself in a
