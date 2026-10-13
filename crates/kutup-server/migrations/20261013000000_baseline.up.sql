@@ -3311,7 +3311,7 @@ CREATE TABLE public.uploads (
     total_bytes bigint NOT NULL,
     received_bytes bigint DEFAULT 0 NOT NULL,
     metadata_envelope text NOT NULL,
-    file_key_envelope text NOT NULL,
+    file_key_envelope text,
     key_epoch integer NOT NULL,
     metadata_revision bigint DEFAULT 1 NOT NULL,
     storage_path text NOT NULL,
@@ -3320,8 +3320,14 @@ CREATE TABLE public.uploads (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     pending_bytes bytea DEFAULT '\x'::bytea NOT NULL,
-    name_hash text NOT NULL,
+    name_hash text,
+    kind text DEFAULT 'file'::text NOT NULL,
+    key_generation integer,
+    content_hash text,
+    based_on text,
     CONSTRAINT uploads_key_epoch_check CHECK ((key_epoch > 0)),
+    CONSTRAINT uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
+    CONSTRAINT uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (content_hash ~ '^[0-9a-f]{64}$'::text))))),
     CONSTRAINT uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
     CONSTRAINT uploads_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text))
 );
@@ -8366,8 +8372,8 @@ ALTER TABLE ONLY public.user_ui_preferences
 -- Data for Name: federation_feature_policies; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.federation_feature_policies VALUES ('chat', 'allowlist', 'verified', '2026-10-13 11:12:06.789699+00');
-INSERT INTO public.federation_feature_policies VALUES ('drive', 'allowlist', 'verified', '2026-10-13 11:12:06.789699+00');
+INSERT INTO public.federation_feature_policies VALUES ('chat', 'allowlist', 'verified', '2026-10-13 12:07:28.277676+00');
+INSERT INTO public.federation_feature_policies VALUES ('drive', 'allowlist', 'verified', '2026-10-13 12:07:28.277676+00');
 
 
 --
@@ -8410,7 +8416,7 @@ INSERT INTO public.federation_feature_policies VALUES ('drive', 'allowlist', 've
 -- Data for Name: federation_policy; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 11:12:06.787563+00');
+INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.276512+00');
 
 
 --
