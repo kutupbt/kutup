@@ -341,6 +341,12 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(code);
     }
 
+    // A new database takes its registration mode from REGISTRATION_MODE; after
+    // that only administrators change it. A failure leaves registration closed.
+    if let Err(error) = registration::seed_mode(&pool, config.registration_mode).await {
+        tracing::error!(%error, "could not seed the registration mode; registration stays closed");
+    }
+
     // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
     bootstrap_admin(&pool, &config.admin_account, &config.chat_server_name).await;
 

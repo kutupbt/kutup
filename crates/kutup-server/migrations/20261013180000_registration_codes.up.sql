@@ -28,7 +28,12 @@ CREATE TABLE registration_code_uses (
     PRIMARY KEY (code_id, user_id)
 );
 
--- The open/closed switch becomes the registration mode (on, code, off).
+-- The open/closed switch becomes the registration mode (on, code, off):
+-- closed stays closed (off), anything else stays open (on).
+INSERT INTO site_settings (key, value)
+SELECT 'registration_mode', CASE WHEN value = 'false' THEN 'off' ELSE 'on' END
+  FROM site_settings WHERE key = 'registration_enabled'
+ON CONFLICT (key) DO NOTHING;
 DELETE FROM site_settings WHERE key = 'registration_enabled';
 
 -- The server's own key for code hashes (server_keys::GeneratedKey).

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
     pub chat: ChatSettings,
+    /// `on`, `code` or `off`.
+    pub registration_mode: String,
 }
 
 #[derive(Debug, Deserialize)]

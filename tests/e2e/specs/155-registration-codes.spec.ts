@@ -48,6 +48,10 @@ test('registration codes: closed to codes, a code made once, a sign-up through i
     // Without a code: the field is required. A wrong one: the one message.
     const visitor = await browser.newContext()
     const signup = await visitor.newPage()
+    let checks = 0
+    signup.on('request', (request) => {
+      if (request.url().includes('/api/auth/registration-code/check')) checks += 1
+    })
     await signup.goto(appUrl('account', '/register'))
     const account = newAccount('ref155', PASSWORD)
     await signup.getByLabel('Username', { exact: true }).fill(account.username)
@@ -56,10 +60,14 @@ test('registration codes: closed to codes, a code made once, a sign-up through i
     await signup.getByLabel('Repeat password', { exact: true }).fill(PASSWORD)
     await signup.getByRole('button', { name: 'Continue' }).click()
     await expect(signup.getByText('This referral code cannot be used.')).toBeVisible({ timeout: 30_000 })
+    // Leaving the field checked it; Continue reused that answer (checks are rate-limited).
+    expect(checks).toBe(1)
 
     // Through the link: the code is filled in, and the account is made.
     await signup.goto(link)
     await expect(signup.getByLabel('Referral code')).toHaveValue(code)
+    // The code leaves the address bar once read.
+    await expect(signup).not.toHaveURL(/code=/)
     await signup.getByLabel('Username', { exact: true }).fill(account.username)
     await finishNewKeys(signup, PASSWORD)
     await visitor.close()

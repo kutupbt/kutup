@@ -21,7 +21,13 @@ A single site setting, `registration_mode`, replaces `registration_enabled`:
   `code` and creates codes. With no row in the database, the mode is `off`.
 - **Typed config:** an optional `REGISTRATION_MODE` env var sets the mode a fresh
   database starts in, so self-hosters can bootstrap `on`. It is validated in the
-  boot-time Config (second session's).
+  boot-time Config, and written once at startup into a database that has no mode
+  (`INSERT … ON CONFLICT DO NOTHING`); after that the stored mode is the only
+  source, and a missing row reads as `off`.
+- **The old switch:** the migration carries `registration_enabled` over
+  (`false` → `off`, else `on`); its down restores the switch as open only when the
+  mode was `on`. At the re-squash the baseline seeds neither, so a new database
+  takes `REGISTRATION_MODE` (default `off`).
 - **Public settings:** `GET /api/auth/settings` returns `registrationMode`
   (`on|code|off`) in place of `registrationEnabled`.
 - **Admin:** a three-way choice on Server settings, replacing the switch.
@@ -103,7 +109,10 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
     relaxed in test mode);
   - every call of the check endpoint per IP, valid or not, under a limit of its own;
   - the existing per-IP register limit stays.
-- **CLI:** `kutup register --code …` (or `KUTUP_REGISTRATION_CODE`).
+- **CLI:** `kutup register` reads the server's mode first: `off` stops at once; `code`
+  takes `KUTUP_REGISTRATION_CODE`, else asks for the code with a hidden prompt (no
+  argument, which shell history and `ps` keep), and checks it before any key work;
+  `on` sends `KUTUP_REGISTRATION_CODE` when set.
 
 ## 5. Admin
 
@@ -164,7 +173,7 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
 - **Unit:** code generation, canonical decoding (case, dashes, I/L/O), the HMAC.
 - **Browser spec:** the admin creates a code, a new user signs up with the link
   (`#code=`), and the code shows 1 use. A wrong code shows the generic message.
-- **CLI:** `register --code` against the live stack.
+- **CLI:** `register` with `KUTUP_REGISTRATION_CODE` against the live stack.
 
 ## 9. Who builds what (proposal)
 

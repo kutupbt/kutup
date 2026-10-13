@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -49,13 +49,22 @@ export function RegisterPage() {
   // In `on` mode the code field stays folded until asked for (or a link brought one).
   const [codeOpen, setCodeOpen] = useState(linked !== '')
   const [codeError, setCodeError] = useState<string | null>(null)
-  // A sign-up link opened while the page is up brings its code too.
+  // The server's answer for the code last checked, so leaving the field and
+  // pressing Continue do not each spend a check (they are rate-limited).
+  // The pending check counts too, so both at once still make one request.
+  const checked = useRef<{ value: string; answer: Promise<string | null> } | null>(null)
+  // The field's value now, for an answer that arrives after it changed.
+  const current = useRef(code)
+  current.current = code
+  // A sign-up link (also one opened while the page is up) fills the field;
+  // the code then leaves the address bar, its history entry and bookmarks.
   useEffect(() => {
     if (!linked) return
     setCode(linked)
     setCodeOpen(true)
     setCodeError(null)
-  }, [linked])
+    void navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: location.state as unknown })
+  }, [linked, navigate, location.pathname, location.search, location.state])
   const mode = settings.data?.registrationMode
 
   const schema = z.object({
@@ -83,15 +92,26 @@ export function RegisterPage() {
       }
       return true
     }
-    try {
-      await api.post('/auth/registration-code/check', { code: value })
-      setCodeError(null)
-      return true
-    } catch (error) {
-      const problem = codeProblem(error)
-      setCodeError(problem === 'rateLimited' ? t('register.codeRateLimited') : problem ? t('register.codeInvalid') : t('register.codeCheckFailed'))
-      return false
+    if (checked.current?.value !== value) {
+      const entry = {
+        value,
+        answer: api.post('/auth/registration-code/check', { code: value }).then(
+          () => null,
+          (error: unknown) => {
+            const problem = codeProblem(error)
+            // Only the server's verdict on the code is kept; a limit or a
+            // network failure is asked again next time.
+            if ((!problem || problem === 'rateLimited') && checked.current === entry) checked.current = null
+            return problem === 'rateLimited' ? t('register.codeRateLimited') : problem ? t('register.codeInvalid') : t('register.codeCheckFailed')
+          },
+        ),
+      }
+      checked.current = entry
     }
+    const message = await checked.current.answer
+    // The field may have changed while the server answered.
+    if (current.current.trim() === value) setCodeError(message)
+    return message === null
   }
 
   if (settings.data && mode === 'off') {
@@ -154,6 +174,7 @@ export function RegisterPage() {
         } catch (error) {
           // The code was taken or revoked meanwhile: say so on its field.
           const problem = codeProblem(error)
+          checked.current = null
           if (problem && problem !== 'registrationClosed') setCodeError(problem === 'rateLimited' ? t('register.codeRateLimited') : t('register.codeInvalid'))
           throw error
         }

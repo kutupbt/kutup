@@ -55,8 +55,9 @@ impl RegistrationMode {
     }
 }
 
-/// The mode now: the one an administrator set, else `REGISTRATION_MODE`
-/// (which only seeds a database with no setting yet), else `off`.
+/// The mode now. The database is the only source: [`seed_mode`] writes
+/// `REGISTRATION_MODE` there once, at startup, if no mode is stored yet. A
+/// missing row (which seeding prevents) reads as `off`, never as open.
 pub async fn mode(state: &AppState) -> AppResult<RegistrationMode> {
     let stored: Option<String> =
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key = $1")
@@ -66,7 +67,22 @@ pub async fn mode(state: &AppState) -> AppResult<RegistrationMode> {
     Ok(stored
         .as_deref()
         .and_then(RegistrationMode::parse)
-        .unwrap_or(state.config.registration_mode))
+        .unwrap_or(RegistrationMode::Off))
+}
+
+/// Writes `configured` (`REGISTRATION_MODE`, default `off`) as the mode when
+/// the database has none: a new database. A stored mode is never changed, so
+/// after the first start only an administrator changes it.
+pub async fn seed_mode(pool: &PgPool, configured: RegistrationMode) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO site_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO NOTHING",
+    )
+    .bind(MODE_SETTING)
+    .bind(configured.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Stores `mode` as the administrators' choice.

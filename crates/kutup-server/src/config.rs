@@ -106,9 +106,10 @@ pub struct Config {
     /// Test stacks: every rate limit's default raised (`RATE_LIMITS_RELAXED`;
     /// APP_ENV=test only).
     pub rate_limits_relaxed: bool,
-    /// Who may register on a database with no setting yet
-    /// (`REGISTRATION_MODE`: on, code or off; default off). The
-    /// administrators' choice wins from then on (docs/plans/registration-codes.md).
+    /// The registration mode written once, at startup, into a database that
+    /// has none (`REGISTRATION_MODE`: on, code or off; default off). Never
+    /// read after that: the stored mode is the only source
+    /// (docs/plans/registration-codes.md).
     pub registration_mode: crate::registration::RegistrationMode,
     /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
     /// the server reports no groups, refuses the group routes, and the apps

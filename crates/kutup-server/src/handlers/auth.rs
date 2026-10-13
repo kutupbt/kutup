@@ -475,11 +475,13 @@ async fn admitted(
 async fn check_code(state: &AppState, client: &str, code: &str) -> AppResult<[u8; 32]> {
     crate::registration::attempt(client)?;
     let key = crate::registration::codes_key(&state.pool).await?;
-    // Something that is no code is looked up as a hash of nothing: the same
-    // work, and the same answer, as an unknown code.
-    let canonical = crate::registration::canonical(code).unwrap_or_default();
+    // Something that is not shaped like a code is refused without a lookup,
+    // with the same answer as an unknown code (and counted the same way).
+    let Some(canonical) = crate::registration::canonical(code) else {
+        return Err(crate::registration::invalid());
+    };
     let hash = crate::registration::hash(&key, &canonical);
-    if canonical.is_empty() || !crate::registration::redeemable(&state.pool, &hash).await? {
+    if !crate::registration::redeemable(&state.pool, &hash).await? {
         return Err(crate::registration::invalid());
     }
     crate::registration::attempt_succeeded(client);
