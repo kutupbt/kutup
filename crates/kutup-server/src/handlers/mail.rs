@@ -581,15 +581,14 @@ pub struct SearchChanges {
     pub resync: bool,
 }
 
-/// Where the change feed is: a transaction, then a message id after it.
 /// Body search's feed: an account's own mail (docs/sync-feeds.md).
-pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Feed {
-    rows: "mail_messages",
-    rows_filter: "user_id = $1",
-    owner_column: "owner",
-    tombstones: "mail_message_tombstones",
-    floors: "mail_change_floors",
-};
+pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Feed::new(
+    "mail_messages",
+    "user_id = $1",
+    "owner",
+    "mail_message_tombstones",
+    "mail_change_floors",
+);
 
 /// `GET /api/mail/search-index/changes?since=` — what changed in your own
 /// mailbox since `since`, for body search to keep the list rows it holds
@@ -668,7 +667,15 @@ pub async fn search_index_changes(
 /// Forgets body search's tombstones after 30 days; an index that has not
 /// caught up since then builds again (its cursor is at or below the floor).
 pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u64> {
-    crate::change_feed::forget_tombstones(pool, &SEARCH_FEED, 30).await
+    let forgotten = crate::change_feed::forget_tombstones(pool, &SEARCH_FEED, 30).await?;
+    // A deleted account's floor goes too (a mailbox owner is an account).
+    sqlx::query(
+        "DELETE FROM mail_change_floors f
+          WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = f.owner)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(forgotten)
 }
 
 /// A page of a place.

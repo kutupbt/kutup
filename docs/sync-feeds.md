@@ -30,7 +30,8 @@ copies (docs/roadmap.md).
     client takes it before building its copy, so nothing changed during the
     build is missed.
 - **Floor:** tombstones are kept for a retention period (Mail: 30 days), then
-  forgotten. Each owner's floor records the highest forgotten `change_xid`.
+  forgotten. Each owner's floor records the highest forgotten `change_xid`;
+  the retention job also removes the floors of owners that no longer exist.
 - **Resync:** a cursor at or below the floor, or above the current xmin, can
   no longer be answered. The page says `resync` with a fresh `next`, and the
   client builds its copy again from scratch.
@@ -46,10 +47,13 @@ copies (docs/roadmap.md).
 1. Add `change_xid` and the trigger to the table, an index on
    `(owner, change_xid, id)`, a tombstone table and a floors table
    (migration 163 is the template).
-2. Declare a `change_feed::Feed` with the fixed table names and the owner
-   column (plus a row filter if only some rows belong to the feed).
+2. Declare a `change_feed::Feed::new(…)` constant with the fixed table names
+   and the owner column, plus a literal row filter if only some rows belong
+   to the feed. The names are checked when the server is built.
 3. The handler calls `change_feed::page` inside a transaction and loads the
-   changed rows in that same transaction, so rows and keys agree.
+   changed rows in it. Under READ COMMITTED that read may see a version
+   newer than the page's keys; that is harmless, because any change after
+   the page's xmin is answered again on a later page.
 4. The retention job calls `change_feed::forget_tombstones`.
 
 ## Client side
@@ -57,5 +61,6 @@ copies (docs/roadmap.md).
 - Store the cursor with the copy, in the same encrypted record.
 - Apply a page atomically (rows upserted, tombstones removed), then store
   `next`.
-- On `resync`, discard the copy and build again; on 4xx, do the same; on
-  network errors, retry later with the same cursor.
+- On `resync`, or a `400` for the cursor itself, discard the copy and build
+  again. On anything else (`401`, `429`, `5xx`, network errors) keep the copy
+  and retry later with the same cursor.
