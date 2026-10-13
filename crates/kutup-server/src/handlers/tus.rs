@@ -205,12 +205,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     let name_hash =
         match crate::drive_names::require_name_hash(meta.get("nameHash").map(String::as_str)) {
             Ok(hash) => hash,
-            Err(_) => {
-                return tus_text(
-                    StatusCode::BAD_REQUEST,
-                    "nameHash is required: 64 lowercase hex digits",
-                )
-            }
+            // Its JSON body carries the code (`nameNeeded` when missing).
+            Err(error) => return tus_error(error),
         };
     if meta.len() != 5
         || file_id_text.is_empty()

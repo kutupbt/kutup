@@ -46,7 +46,7 @@ Specific codes, where an app does something particular (a test in
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
-| `nameNeeded` | 409 | A folder restored at the top level needs a name there |
+| `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
@@ -1900,7 +1900,7 @@ already there.
   return `nameHash` (files and folders) and `contentHash` (files) when
   known.
 - Every write that names something or puts it somewhere requires `nameHash`
-  (`400` without it):
+  (`400` with code `nameNeeded` without it):
   `POST /api/collections`, `PUT /api/collections/:id`,
   `POST /api/collections/:id/move`, `POST /api/files/upload`, tus
   `POST /api/uploads` (`nameHash` in `Upload-Metadata`; checked again when

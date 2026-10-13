@@ -266,6 +266,13 @@ pub async fn restore(
             .execute(&mut *tx)
             .await?;
         }
+        // A new hash is a new name: it comes with that name, sealed.
+        if req.metadata_envelope.is_none() && given_hash.as_ref().is_some_and(|h| *h != stored_hash)
+        {
+            return Err(AppError::bad_request(
+                "a new name hash comes with its metadataEnvelope",
+            ));
+        }
         let name_hash = given_hash.clone().unwrap_or(stored_hash);
         crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
         sqlx::query(

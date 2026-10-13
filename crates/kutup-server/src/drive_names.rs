@@ -43,7 +43,8 @@ pub fn require_name_hash(value: Option<&str>) -> AppResult<String> {
     match value {
         Some(hash) if is_hash(hash) => Ok(hash.to_owned()),
         Some(_) => Err(AppError::bad_request("invalid name hash")),
-        None => Err(AppError::bad_request("nameHash is required")),
+        None => Err(AppError::bad_request("nameHash is required")
+            .with_details(serde_json::json!({ "code": "nameNeeded" }))),
     }
 }
 

@@ -21,7 +21,12 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
   (or a folder of that name): the person chooses **Replace** (the upload
   becomes a new version of the file there, as Proton's revisions, so the
   old content stays in its versions; resumable at any size over tus, with
-  the new size, SHA-256 and content hash landing together with it),
+  the new size, SHA-256 and content hash landing together with it; an
+  office document's version stands at its collaboration log's head and open
+  tabs, here and on other servers, reopen from it; edits a tab sent in the
+  moment between the version landing and the tab hearing of it are replayed
+  onto the new content, as after a restore from the editor; notes, code and
+  place lists are not replaced: their content is the editor's state),
   **Keep both** (the first free `name (n)`, asked of the server ten at a
   time, as Proton's `findAvailableName`) or **Skip**, with "apply to all" for
   the rest of the batch. A dropped folder goes into the folder of its name
@@ -43,9 +48,10 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
   the new one, so a clash with an edited document asks.
 - Someone who edits a file shared by itself, without its folder's key,
   cannot hash the name in that folder: a rename then stores a random hash.
-  The name stays unique for everyone else, but its owner may see two items
-  of the same name in the folder (as in Proton, where a hash is only as
-  good as the client that wrote it).
+  A random hash clashes with nothing, so that item is not kept unique until
+  someone with the folder's key renames or moves it, and its owner may see
+  two items of the same name meanwhile (as in Proton, where a hash is only as
+  good as the client that wrote it). Nothing repairs it in the background.
 
 ## The hashes (`crates/kutup-crypto/src/drive_names.rs`)
 
