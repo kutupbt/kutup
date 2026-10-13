@@ -400,4 +400,32 @@ mod tests {
         let accounts: Vec<_> = pins(&server).into_iter().map(|p| p.account).collect();
         assert_eq!(accounts, ["bob@kutup.dev", "carol@kutup.dev"]);
     }
+
+    #[test]
+    fn a_list_the_server_drops_after_one_was_seen_is_refused() {
+        let server = Server::default();
+        let mut engine = sync();
+        block_on(engine.record(&server, &trust("bob@kutup.dev", 2, AuthorityTrust::Tofu), 0))
+            .unwrap();
+        assert_eq!(pins(&server).len(), 1);
+        // The server forgets the list: writing from nothing would erase Bob.
+        *server.stored.borrow_mut() = None;
+        engine.cache = None;
+        assert!(matches!(
+            block_on(engine.record(
+                &server,
+                &trust("carol@kutup.dev", 5, AuthorityTrust::Tofu),
+                0
+            )),
+            Err(ChatError::Trust(_))
+        ));
+        assert!(server.stored.borrow().is_none());
+        // A fresh engine (no history) trusts the empty answer, as documented.
+        assert!(block_on(sync().record(
+            &server,
+            &trust("carol@kutup.dev", 5, AuthorityTrust::Tofu),
+            0
+        ))
+        .is_ok());
+    }
 }

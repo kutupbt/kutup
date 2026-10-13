@@ -89,7 +89,13 @@ pub fn run(
 
     match up.file(Path::new(local_path), &target, Progress::Bar)? {
         Placed::Uploaded(done) => {
-            extract_whiteboard_assets(&ctx.client, &done, Path::new(local_path), &mut Vec::new());
+            extract_whiteboard_assets(
+                &ctx.client,
+                &done,
+                &target,
+                Path::new(local_path),
+                &mut Vec::new(),
+            );
             if json {
                 crate::output::print_json(
                     &serde_json::json!({ "id": done.file_id, "name": done.name }),
@@ -283,7 +289,13 @@ impl Uploads<'_> {
             match self.file(&path, &target, Progress::Bar) {
                 Ok(Placed::Uploaded(up)) => {
                     eprintln!("  ↑ {}", path.display());
-                    extract_whiteboard_assets(self.client, &up, &path, &mut stats.warnings);
+                    extract_whiteboard_assets(
+                        self.client,
+                        &up,
+                        &target,
+                        &path,
+                        &mut stats.warnings,
+                    );
                     stats.uploaded.push(serde_json::json!({
                         "id": up.file_id,
                         "name": up.name,
@@ -331,6 +343,7 @@ struct DirUpload {
 fn extract_whiteboard_assets(
     client: &Client,
     up: &crate::uploader::Uploaded,
+    target: &Target,
     path: &Path,
     warnings: &mut Vec<String>,
 ) {
@@ -342,6 +355,7 @@ fn extract_whiteboard_assets(
         &up.file_id,
         &up.file_key,
         up.key_generation,
+        (&target.id, &target.hash_key),
         path,
     ) {
         let w = format!("asset extraction {}: {e:#}", path.display());
