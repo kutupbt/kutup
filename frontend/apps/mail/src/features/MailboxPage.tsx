@@ -177,12 +177,13 @@ export function MailboxPage() {
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
   const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
   const pageSize = settings.data?.pageSize ?? DEFAULT_PAGE_SIZE
-  // Body search, when on: a keyword is answered from this browser's index.
+  // Body search, when on and built: a keyword in your own mailbox is answered
+  // from this browser's index, found, filtered and paged here.
   const contentSearch = useContentSearch()
   const contentState = useContentSearchState(contentSearch)
-  const byContent = !!q.trim() && !!contentSearch?.active && contentState.status !== 'off'
+  const byContent = !!q.trim() && !group && (contentState.status === 'ready' || contentState.status === 'limited')
   const serverList = useFolder(place, { q, criteria, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending && !byContent)
-  const contentList = useContentSearchList(contentSearch, place, { q, criteria, group, conversations, filter, page: page - 1, pageSize }, byContent)
+  const contentList = useContentSearchList(contentSearch, place, { q, criteria, conversations, filter, sort, page: page - 1, pageSize }, byContent)
   const list = byContent ? contentList : serverList
   const total = list.data?.pages[0]?.total ?? null
   const pages = pageCount(total ?? 0, pageSize)

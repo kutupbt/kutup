@@ -1,7 +1,8 @@
 // Mail's search index WASM module end to end (docs/plans/mail-body-search.md):
 // index messages over sealed records kept in a plain Map (as IndexedDB keeps
-// them), search them, reopen from the directory, remove one; nothing stored
-// shows a word or a record's name.
+// them), search them with their list rows, reopen from the directory and the
+// wrapped store key, update a row, remove one; nothing stored shows a word or
+// a record's name, and a new store key opens nothing of the old one.
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -17,39 +18,67 @@ const keep = (sealed) => sealed.forEach(({ id, sealed }) => store.set(id, sealed
 
 const day = 24 * 60 * 60 * 1000
 const t0 = Date.UTC(2026, 9, 1)
-const index = new wasm.MailSearch(masterKey)
+const index = new wasm.MailSearch(masterKey, undefined)
+const wrapped = index.wrappedStoreKey()
+assert.equal(wrapped.length, 82)
 assert.equal(index.openDirectory(undefined), false)
+const row = (id, folder) => JSON.stringify({ id, folder })
 const docs = [
-  { id: 'm1', timeMs: t0, text: 'Ekim faturası ektedir' },
-  { id: 'm2', timeMs: t0 + 40 * day, text: 'Fatura ödendi, teşekkürler' },
-  { id: 'm3', timeMs: t0 + 80 * day, text: 'İstanbul toplantısı' },
+  { id: 'm1', timeMs: t0, text: 'Ekim faturası ektedir', meta: row('m1', 'inbox') },
+  { id: 'm2', timeMs: t0 + 40 * day, text: 'Fatura ödendi, teşekkürler', meta: row('m2', 'inbox') },
+  { id: 'm3', timeMs: t0 + 80 * day, text: 'İstanbul toplantısı', meta: row('m3', 'archive') },
 ]
 keep(index.add(docs, load(index.planAdd(docs))))
 assert.equal(index.size(), 3)
 
-const search = (target, query) => {
+const hits = (target, query) => {
   const periods = target.nextPeriods(undefined, 100)
-  return target.search(query, periods, load(target.planSearch(query, periods))).map((hit) => hit.id)
+  return target.search(query, periods, load(target.planSearch(query, periods)))
 }
+const search = (target, query) => hits(target, query).map((hit) => hit.id)
 assert.deepEqual(search(index, 'fatura'), ['m2', 'm1'])
 assert.deepEqual(search(index, 'istanbul'), ['m3'])
 assert.deepEqual(search(index, 'TESEKKUR'), ['m2'])
 assert.deepEqual(search(index, 'yok'), [])
 
-// Reopened from the stored directory alone.
-const again = new wasm.MailSearch(masterKey)
+assert.deepEqual(hits(index, 'istanbul')[0].meta, row('m3', 'archive'))
+
+// Reopened from the wrapped store key and the stored directory alone.
+const again = new wasm.MailSearch(masterKey, wrapped)
 assert.equal(again.openDirectory(store.get(again.directoryId())), true)
 assert.deepEqual(search(again, 'fatura ekim'), ['m1'])
+
+// A row changes (moved to the trash) without indexing the text again.
+const updated = again.updateMeta(
+  [
+    { id: 'm2', timeMs: t0 + 40 * day, meta: row('m2', 'trash') },
+    { id: 'm9', timeMs: t0 + 40 * day, meta: row('m9', 'inbox') },
+  ],
+  load(again.planUpdateMeta([t0 + 40 * day])),
+)
+keep(updated.stored)
+assert.deepEqual(updated.missing, ['m9'])
+assert.deepEqual(hits(again, 'odendi')[0].meta, row('m2', 'trash'))
 
 // Removed: never found again.
 const gone = [{ id: 'm1', timeMs: t0 }]
 keep(again.remove(gone, load(again.planRemove([t0]))))
 assert.deepEqual(search(again, 'fatura'), ['m2'])
 
-// Another account (another master key) opens nothing, and its database has another name.
-assert.notEqual(new wasm.MailSearch(new Uint8Array(32).fill(0x5b)).storeName(), index.storeName())
-const other = new wasm.MailSearch(new Uint8Array(32).fill(0x5b))
-assert.equal(other.openDirectory(store.get(index.directoryId())), false)
+// Another account (another master key) cannot unwrap the store key, and its database has another name.
+const otherKey = new Uint8Array(32).fill(0x5b)
+assert.notEqual(wasm.MailSearch.storeName(otherKey), wasm.MailSearch.storeName(masterKey))
+assert.match(wasm.MailSearch.storeName(masterKey), /^[0-9a-f]{32}$/)
+assert.throws(() => new wasm.MailSearch(otherKey, wrapped))
+
+// A new store key (the index deleted and made again) opens nothing of the old
+// one: the directory reads as empty, and records that do not open mark it damaged.
+const fresh = new wasm.MailSearch(masterKey, undefined)
+assert.equal(fresh.openDirectory(store.get(index.directoryId())), false)
+assert.equal(fresh.damaged(), false)
+const stale = [...store].map(([, sealed]) => ({ name: 'docs/0', sealed }))
+fresh.search('fatura', [0], stale.slice(0, 1))
+assert.equal(fresh.damaged(), true)
 
 // Nothing stored shows a word or a name.
 const decoder = new TextDecoder('utf-8', { fatal: false })
@@ -60,7 +89,7 @@ for (const [id, sealed] of store) {
 }
 
 // A larger mailbox stays quick.
-const many = Array.from({ length: 5000 }, (_, i) => ({ id: `n${i}`, timeMs: t0 + Math.floor(i / 10) * day, text: `ileti ${i} toplantı rapor kelime${i % 50}` }))
+const many = Array.from({ length: 5000 }, (_, i) => ({ id: `n${i}`, timeMs: t0 + Math.floor(i / 10) * day, text: `ileti ${i} toplantı rapor kelime${i % 50}`, meta: row(`n${i}`, 'inbox') }))
 const started = performance.now()
 for (let i = 0; i < many.length; i += 50) {
   const batch = many.slice(i, i + 50)

@@ -21,20 +21,25 @@ export interface SealedRecord {
   sealed: Uint8Array
 }
 
-export interface SearchHit {
+/** A message held: its id and time, which find its period. */
+export interface DocRef {
   id: string
   timeMs: number
 }
 
-export interface IndexDoc {
-  id: string
-  timeMs: number
+/** A message found, or new data for one held: `meta` is its list row (JSON). */
+export interface SearchHit extends DocRef {
+  meta: string
+}
+
+export interface IndexDoc extends SearchHit {
   text: string
 }
 
 /** The generated `MailSearch` class's surface. */
 export interface MailSearchIndex {
-  storeName(): string
+  wrappedStoreKey(): Uint8Array
+  damaged(): boolean
   directoryId(): string
   openDirectory(sealed: Uint8Array | undefined): boolean
   size(): number
@@ -45,7 +50,9 @@ export interface MailSearchIndex {
   planAdd(docs: IndexDoc[]): NeededRecord[]
   add(docs: IndexDoc[], loaded: { name: string; sealed: Uint8Array }[]): SealedRecord[]
   planRemove(timesMs: number[]): NeededRecord[]
-  remove(gone: SearchHit[], loaded: { name: string; sealed: Uint8Array }[]): SealedRecord[]
+  remove(gone: DocRef[], loaded: { name: string; sealed: Uint8Array }[]): SealedRecord[]
+  planUpdateMeta(timesMs: number[]): NeededRecord[]
+  updateMeta(docs: SearchHit[], loaded: { name: string; sealed: Uint8Array }[]): { stored: SealedRecord[]; missing: string[] }
   nextPeriods(before: number | undefined, count: number): number[]
   planSearch(query: string, periods: number[]): NeededRecord[]
   search(query: string, periods: number[], loaded: { name: string; sealed: Uint8Array }[]): SearchHit[]
@@ -54,7 +61,10 @@ export interface MailSearchIndex {
 
 interface MailSearchModule {
   default(input?: unknown): Promise<unknown>
-  MailSearch: new (masterKey: Uint8Array) => MailSearchIndex
+  MailSearch: {
+    new (masterKey: Uint8Array, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
+    storeName(masterKey: Uint8Array): string
+  }
 }
 
 let modulePromise: Promise<MailSearchModule> | null = null
@@ -74,8 +84,18 @@ async function getModule(): Promise<MailSearchModule> {
   return modulePromise
 }
 
-/** An account's index, its keys derived from the master key (bound to no name). */
-export async function createMailSearch(masterKey: Uint8Array): Promise<MailSearchIndex> {
+/** The browser database's name for an account: an HMAC under a key from its master key. */
+export async function mailSearchStoreName(masterKey: Uint8Array): Promise<string> {
   const module = await getModule()
-  return new module.MailSearch(masterKey)
+  return module.MailSearch.storeName(masterKey)
+}
+
+/**
+ * An account's index under the store key the database keeps (`wrapped`), or
+ * under a new one when there is none (then kept from `wrappedStoreKey()`).
+ * Throws when `wrapped` does not open under this master key.
+ */
+export async function createMailSearch(masterKey: Uint8Array, wrapped: Uint8Array | undefined): Promise<MailSearchIndex> {
+  const module = await getModule()
+  return new module.MailSearch(masterKey, wrapped)
 }

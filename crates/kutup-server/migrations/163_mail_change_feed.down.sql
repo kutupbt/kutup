@@ -1,0 +1,11 @@
+DROP TRIGGER IF EXISTS mail_message_labels_changed ON mail_message_labels;
+DROP FUNCTION IF EXISTS mail_message_labels_mark_change();
+DROP TRIGGER IF EXISTS mail_messages_deleted ON mail_messages;
+DROP FUNCTION IF EXISTS mail_messages_tombstone();
+DROP TABLE IF EXISTS mail_change_floors;
+DROP TABLE IF EXISTS mail_message_tombstones;
+DROP TRIGGER IF EXISTS mail_messages_updated ON mail_messages;
+DROP TRIGGER IF EXISTS mail_messages_inserted ON mail_messages;
+DROP FUNCTION IF EXISTS mail_messages_mark_change();
+DROP INDEX IF EXISTS idx_mail_messages_changes;
+ALTER TABLE mail_messages DROP COLUMN IF EXISTS change_xid;

@@ -675,8 +675,8 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/mail/search-index", get(handlers::mail::search_index))
         .route(
-            "/api/mail/messages/lookup",
-            post(handlers::mail::lookup_messages),
+            "/api/mail/search-index/changes",
+            get(handlers::mail::search_index_changes),
         )
         .route(
             "/api/mail/notifications",

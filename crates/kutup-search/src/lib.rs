@@ -20,7 +20,7 @@
 mod index;
 
 pub use index::{
-    Hit, Index, NewDoc, Records, SearchError, BUCKET_MS, DIRECTORY_KEY, INDEX_VERSION,
+    DocRef, Hit, Index, NewDoc, Records, SearchError, BUCKET_MS, DIRECTORY_KEY, INDEX_VERSION,
 };
 
 use std::collections::BTreeSet;

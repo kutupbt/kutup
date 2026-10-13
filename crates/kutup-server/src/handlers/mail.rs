@@ -441,7 +441,7 @@ pub async fn list_messages(
     user: AuthUser,
     Query(query): Query<MailListQuery>,
 ) -> AppResult<Json<MailMessagePage>> {
-    list_page(&state, &user, query, None).await
+    list_page(&state, &user, query).await
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -525,90 +525,194 @@ pub async fn search_index(
     }))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MailLookup {
-    /// The messages to check (at most 200), as body search found them.
-    pub ids: Vec<String>,
-    /// The place and criteria, as the list's (`page` and `limit` are set here).
-    #[serde(flatten)]
-    #[schema(inline)]
-    pub query: MailListQueryBody,
-}
-
-/// [`MailListQuery`] as a JSON body.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MailListQueryBody {
-    pub folder: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct SearchChangesQuery {
+    /// The `next` of the previous answer; none for where the feed is now.
     pub since: Option<String>,
-    pub until: Option<String>,
-    pub address: Option<String>,
-    pub group: Option<String>,
-    #[serde(default)]
-    pub conversations: bool,
-    pub unread: Option<bool>,
-    #[serde(default)]
-    pub attachments: bool,
+    /// At most 500 (the default).
+    pub limit: Option<i64>,
 }
 
-/// `POST /api/mail/messages/lookup` — which of body search's hits are still
-/// in the place and match the other criteria, in the list's shape, newest
-/// first (docs/plans/mail-body-search.md). The hits come from the browser's
-/// own index; the server only checks them.
+/// A message gone for good.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GoneMessage {
+    pub id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub received_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchChanges {
+    /// Messages added or changed since (Drafts among them: body search
+    /// leaves those out), their rows as now.
+    pub changed: Vec<MailMessage>,
+    pub gone: Vec<GoneMessage>,
+    /// Where to ask from next.
+    pub next: String,
+    /// Whether more follow at once.
+    pub more: bool,
+    /// Changes since then are no longer kept: build the index again.
+    pub resync: bool,
+}
+
+/// Where the change feed is: a transaction, then a message id after it.
+fn change_cursor(xid: i64, id: Uuid) -> String {
+    format!("{xid}.{id}")
+}
+
+fn parse_change_cursor(value: &str) -> AppResult<(i64, Uuid)> {
+    let bad = || AppError::bad_request("since is not a cursor");
+    let (xid, id) = value.split_once('.').ok_or_else(bad)?;
+    let xid: i64 = xid.parse().map_err(|_| bad())?;
+    if xid < 0 {
+        return Err(bad());
+    }
+    Ok((xid, Uuid::parse_str(id).map_err(|_| bad())?))
+}
+
+/// `GET /api/mail/search-index/changes?since=` — what changed in your own
+/// mailbox since `since`, for body search to keep the list rows it holds
+/// current (docs/plans/mail-body-search.md; Proton's event loop). Only
+/// changes made by transactions that have all finished are answered, so
+/// none committed late is ever skipped; without `since`, only where the
+/// feed is now.
 #[utoipa::path(
-    post,
-    path = "/api/mail/messages/lookup",
+    get,
+    path = "/api/mail/search-index/changes",
     tag = "mail",
     security(("BearerAuth" = [])),
-    request_body = MailLookup,
+    params(SearchChangesQuery),
     responses(
-        (status = 200, description = "The hits still here", body = MailMessagePage),
-        (status = 400, description = "More than 200 ids, an id that is not one, or an unknown place"),
+        (status = 200, description = "Changes in order", body = SearchChanges),
+        (status = 400, description = "A cursor that is not one"),
     )
 )]
-pub async fn lookup_messages(
+pub async fn search_index_changes(
     State(state): State<AppState>,
     user: AuthUser,
-    Json(request): Json<MailLookup>,
-) -> AppResult<Json<MailMessagePage>> {
-    if request.ids.is_empty() || request.ids.len() > 200 {
-        return Err(AppError::bad_request("1 to 200 messages at a time"));
-    }
-    let ids = request
-        .ids
-        .iter()
-        .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("not a message id")))
-        .collect::<AppResult<Vec<Uuid>>>()?;
-    let body = request.query;
-    let query = MailListQuery {
-        folder: body.folder,
-        q: None,
-        from: body.from,
-        to: body.to,
-        since: body.since,
-        until: body.until,
-        address: body.address,
-        before: None,
-        page: Some(0),
-        limit: Some(ids.len() as i64),
-        group: body.group,
-        conversations: body.conversations,
-        unread: body.unread,
-        attachments: body.attachments,
-        sort: None,
+    Query(query): Query<SearchChangesQuery>,
+) -> AppResult<Json<SearchChanges>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let limit = query.limit.unwrap_or(500).clamp(1, 500);
+    let since = query
+        .since
+        .as_deref()
+        .map(parse_change_cursor)
+        .transpose()?;
+    let mut tx = state.pool.begin().await?;
+    // Every transaction below this one has finished.
+    let upper: i64 =
+        sqlx::query_scalar("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
+            .fetch_one(&mut *tx)
+            .await?;
+    let now = || SearchChanges {
+        changed: Vec::new(),
+        gone: Vec::new(),
+        next: change_cursor(upper, Uuid::nil()),
+        more: false,
+        resync: false,
     };
-    list_page(&state, &user, query, Some(ids)).await
+    let Some((since_xid, since_id)) = since else {
+        return Ok(Json(now()));
+    };
+    let floor: Option<i64> =
+        sqlx::query_scalar("SELECT floor_xid FROM mail_change_floors WHERE owner = $1")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if floor.is_some_and(|floor| floor >= since_xid) {
+        return Ok(Json(SearchChanges {
+            resync: true,
+            ..now()
+        }));
+    }
+    // Both kinds in one order, (transaction, id), after the cursor and
+    // below `upper`.
+    let keys: Vec<(i64, Uuid, bool)> = sqlx::query_as(
+        "SELECT change_xid, id, false FROM mail_messages
+          WHERE owner = $1 AND user_id = $1
+            AND (change_xid, id) > ($2, $3) AND change_xid < $4
+         UNION ALL
+         SELECT change_xid, id, true FROM mail_message_tombstones
+          WHERE owner = $1
+            AND (change_xid, id) > ($2, $3) AND change_xid < $4
+         ORDER BY 1, 2
+         LIMIT $5",
+    )
+    .bind(user_id)
+    .bind(since_xid)
+    .bind(since_id)
+    .bind(upper)
+    .bind(limit + 1)
+    .fetch_all(&mut *tx)
+    .await?;
+    let more = keys.len() as i64 > limit;
+    let keys = &keys[..keys.len().min(limit as usize)];
+    let next = match keys.last() {
+        Some((xid, id, _)) if more => change_cursor(*xid, *id),
+        _ => change_cursor(upper, Uuid::nil()),
+    };
+    let changed_ids: Vec<Uuid> = keys.iter().filter(|k| !k.2).map(|k| k.1).collect();
+    let gone_ids: Vec<Uuid> = keys.iter().filter(|k| k.2).map(|k| k.1).collect();
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {ROW_COLUMNS} FROM mail_messages
+          WHERE owner = $1 AND user_id = $1 AND id = ANY($2)
+          ORDER BY received_at DESC, id DESC"
+    ))
+    .bind(user_id)
+    .bind(&changed_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    let gone: Vec<(Uuid, OffsetDateTime)> = sqlx::query_as(
+        "SELECT DISTINCT ON (id) id, received_at FROM mail_message_tombstones
+          WHERE owner = $1 AND id = ANY($2)",
+    )
+    .bind(user_id)
+    .bind(&gone_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(SearchChanges {
+        changed: rows.into_iter().map(MailMessage::from).collect(),
+        gone: gone
+            .into_iter()
+            .map(|(id, received_at)| GoneMessage {
+                id: id.to_string(),
+                received_at,
+            })
+            .collect(),
+        next,
+        more,
+        resync: false,
+    }))
 }
 
-/// A page of a place, optionally only `ids`.
+/// Forgets body search's tombstones after 30 days; an index that has not
+/// caught up since then builds again (its cursor is at or below the floor).
+pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u64> {
+    let forgotten = sqlx::query(
+        "WITH gone AS (
+             DELETE FROM mail_message_tombstones
+              WHERE deleted_at < now() - interval '30 days'
+             RETURNING owner, change_xid)
+         INSERT INTO mail_change_floors (owner, floor_xid)
+         SELECT owner, max(change_xid) FROM gone GROUP BY owner
+         ON CONFLICT (owner) DO UPDATE
+            SET floor_xid = GREATEST(mail_change_floors.floor_xid, EXCLUDED.floor_xid)",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(forgotten)
+}
+
+/// A page of a place.
 async fn list_page(
     state: &AppState,
     user: &AuthUser,
     query: MailListQuery,
-    ids: Option<Vec<Uuid>>,
 ) -> AppResult<Json<MailMessagePage>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let owner = mailbox(state, user_id, query.group.as_deref())
@@ -624,8 +728,7 @@ async fn list_page(
         _ if FOLDERS.contains(&folder) || folder == "starred" || folder == "all" => (folder, None),
         _ => return Err(AppError::bad_request("unknown folder")),
     };
-    let mut criteria = Criteria::parse(&query)?;
-    criteria.ids = ids;
+    let criteria = Criteria::parse(&query)?;
     // All mail leaves out Spam and Trash only when the account asks
     // (Proton's "Exclude Spam/Trash from All mail"); a search always does.
     let almost_all = query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
@@ -718,8 +821,6 @@ struct Criteria {
     since: Option<OffsetDateTime>,
     until: Option<OffsetDateTime>,
     address: Option<String>,
-    /// Only these messages (body search's hits, checked against the rest).
-    ids: Option<Vec<Uuid>>,
 }
 
 impl Criteria {
@@ -744,7 +845,6 @@ impl Criteria {
                 .as_deref()
                 .map(|a| a.trim().to_lowercase())
                 .filter(|a| !a.is_empty()),
-            ids: None,
         };
         if let (Some(since), Some(until)) = (criteria.since, criteria.until) {
             if until <= since {
@@ -760,14 +860,12 @@ impl Criteria {
             || self.since.is_some()
             || self.until.is_some()
             || self.address.is_some()
-            || self.ids.is_some()
     }
 }
 
 /// The advanced search over `mail_messages`: $13 sender, $14 recipient,
 /// $15 since, $16 until, $17 the address it came to or went from (one of
-/// the mailbox's own, or a distribution list it came through), $18 only
-/// these messages.
+/// the mailbox's own, or a distribution list it came through).
 const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR from_name ILIKE $13)
         AND ($14::text IS NULL OR to_list::text ILIKE $14 OR cc_list::text ILIKE $14
              OR bcc_list::text ILIKE $14)
@@ -776,8 +874,7 @@ const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR fr
         AND ($17::text IS NULL OR EXISTS (
             SELECT 1 FROM mail_addresses a
              WHERE a.address = $17
-               AND (a.id = mail_messages.address_id OR a.group_id = mail_messages.group_id)))
-        AND ($18::uuid[] IS NULL OR id = ANY($18))";
+               AND (a.id = mail_messages.address_id OR a.group_id = mail_messages.group_id)))";
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchAddressesQuery {
@@ -885,7 +982,6 @@ async fn message_rows(
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
-    .bind(listing.criteria.ids.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = rows.first().map_or(0, |r| r.full_count);
@@ -1059,7 +1155,6 @@ async fn conversation_rows(
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
-    .bind(listing.criteria.ids.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let total = threads.first().map_or(0, |t| t.8);

@@ -9,7 +9,7 @@ use crate::words;
 
 /// Raised whenever what is indexed or how changes: a directory of another
 /// version is not read, and the caller builds the index again.
-pub const INDEX_VERSION: u32 = 1;
+pub const INDEX_VERSION: u32 = 2;
 /// The period a document table and its shards cover (30 days).
 pub const BUCKET_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Characters of a word that name its shard.
@@ -28,19 +28,31 @@ pub enum SearchError {
     Encode(String),
 }
 
-/// A document to index: an id (a message), its time and its text.
+/// A document to index: an id (a message), its time, its text and the
+/// caller's own data about it (`meta`, kept as given and returned with every
+/// hit: Mail keeps a message's list row there, to filter and show hits
+/// without asking the server).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NewDoc {
     pub id: String,
     pub time_ms: i64,
     pub text: String,
+    pub meta: String,
 }
 
-/// A document a query found.
+/// A document held: its id and time, which find its period.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DocRef {
+    pub id: String,
+    pub time_ms: i64,
+}
+
+/// A document a query found, or new data for one held.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Hit {
     pub id: String,
     pub time_ms: i64,
+    pub meta: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -67,6 +79,7 @@ struct DocEntry {
     id: String,
     time_ms: i64,
     live: bool,
+    meta: String,
 }
 
 /// Words of one start in one period, each with the ascending numbers of the
@@ -195,6 +208,7 @@ impl Index {
                 id: doc.id.clone(),
                 time_ms: doc.time_ms,
                 live: true,
+                meta: doc.meta.clone(),
             });
             let info = self.directory.periods.entry(period).or_default();
             info.docs += 1;
@@ -239,7 +253,7 @@ impl Index {
 
     /// Marks documents gone (a deleted message); their words stay in the
     /// shards until the index is built again, and are never found.
-    pub fn remove(&mut self, docs: &[Hit], records: &Records) -> Result<Records, SearchError> {
+    pub fn remove(&mut self, docs: &[DocRef], records: &Records) -> Result<Records, SearchError> {
         let mut changed = Records::new();
         let mut by_period: BTreeMap<i64, HashSet<&str>> = BTreeMap::new();
         for doc in docs {
@@ -266,6 +280,59 @@ impl Index {
             }
         }
         Ok(changed)
+    }
+
+    /// The records [`Index::update_meta`] needs for documents of these times.
+    pub fn plan_update_meta(&self, times_ms: &[i64]) -> Vec<String> {
+        self.plan_remove(times_ms)
+    }
+
+    /// Replaces the data of documents held (a message moved, read or
+    /// labelled); returns the records changed and the ids of `docs` not
+    /// held (new mail, for the caller to index).
+    pub fn update_meta(
+        &mut self,
+        docs: &[Hit],
+        records: &Records,
+    ) -> Result<(Records, Vec<String>), SearchError> {
+        let mut changed = Records::new();
+        let mut held: HashSet<&str> = HashSet::new();
+        let mut by_period: BTreeMap<i64, BTreeMap<&str, &str>> = BTreeMap::new();
+        for doc in docs {
+            by_period
+                .entry(period_of(doc.time_ms))
+                .or_default()
+                .insert(doc.id.as_str(), doc.meta.as_str());
+        }
+        for (period, metas) in by_period {
+            if !self.directory.periods.contains_key(&period) {
+                continue;
+            }
+            let key = docs_key(period);
+            let mut table: DocTable = decode(records, &key)?;
+            let mut any = false;
+            for entry in &mut table.docs {
+                if let Some((id, meta)) = metas
+                    .get_key_value(entry.id.as_str())
+                    .filter(|_| entry.live)
+                {
+                    held.insert(id);
+                    if entry.meta != *meta {
+                        entry.meta = (*meta).to_owned();
+                        any = true;
+                    }
+                }
+            }
+            if any {
+                changed.insert(key, encode(&table)?);
+            }
+        }
+        let missing = docs
+            .iter()
+            .filter(|d| !held.contains(d.id.as_str()))
+            .map(|d| d.id.clone())
+            .collect();
+        Ok((changed, missing))
     }
 
     /// The periods a query reads next: up to `count` held periods older than
@@ -349,6 +416,7 @@ impl Index {
                     hits.push(Hit {
                         id: entry.id.clone(),
                         time_ms: entry.time_ms,
+                        meta: entry.meta.clone(),
                     });
                 }
             }
@@ -425,6 +493,7 @@ mod tests {
             id: id.into(),
             time_ms: 1_760_000_000_000 + day * DAY,
             text: text.into(),
+            meta: format!("row:{id}"),
         }
     }
 
@@ -466,7 +535,7 @@ mod tests {
         kept.add(&[doc("a", 0, "rapor")]);
         assert_eq!(kept.index.len(), 1);
         kept.add(&[doc("b", 2, "rapor")]);
-        let gone = [Hit {
+        let gone = [DocRef {
             id: "a".into(),
             time_ms: doc("a", 0, "").time_ms,
         }];
@@ -474,6 +543,44 @@ mod tests {
         let changed = kept.index.remove(&gone, &needed).unwrap();
         kept.records.extend(changed);
         assert_eq!(kept.search("rapor"), ["b"]);
+    }
+
+    #[test]
+    fn hits_carry_their_data_and_it_can_change() {
+        let mut kept = Kept::new();
+        kept.add(&[doc("a", 0, "rapor"), doc("b", 40, "rapor")]);
+        let periods = kept.index.next_periods(None, usize::MAX);
+        let found = |kept: &Kept| {
+            let needed = kept.load(&kept.index.plan_search("rapor", &periods));
+            kept.index
+                .search("rapor", &periods, &needed)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.meta)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(found(&kept), ["row:b", "row:a"]);
+        let a = doc("a", 0, "");
+        let moved = [
+            Hit {
+                id: "a".into(),
+                time_ms: a.time_ms,
+                meta: "row:a moved".into(),
+            },
+            // Not held: left out.
+            Hit {
+                id: "z".into(),
+                time_ms: a.time_ms,
+                meta: "row:z".into(),
+            },
+        ];
+        let needed = kept.load(&kept.index.plan_update_meta(&[a.time_ms]));
+        let (changed, missing) = kept.index.update_meta(&moved, &needed).unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(missing, ["z"]);
+        kept.records.extend(changed);
+        assert_eq!(found(&kept), ["row:b", "row:a moved"]);
+        assert_eq!(kept.index.len(), 2);
     }
 
     #[test]

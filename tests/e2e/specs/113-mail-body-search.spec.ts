@@ -5,8 +5,8 @@ import { openWhenArrived } from '../fixtures/mail'
 // Body search in the browser (docs/plans/mail-body-search.md), as Proton's
 // "Search message content": a word only in a message's text is not found by
 // the server's search; once the reader turns it on, the browser indexes the
-// mailbox (encrypted, in IndexedDB) and finds it; deleting the local search
-// data takes it away.
+// mailbox (encrypted, in IndexedDB) and finds it, its row kept current as
+// the mailbox changes; deleting the local search data takes it away.
 
 const PASSWORD = 'Deneme123*MailBodySearchPassword'
 
@@ -90,6 +90,17 @@ test('body search: off, then on and built, then deleted', async ({ browser, requ
     return names.length === 0
   }, folded)
   expect(plain).toBe(false)
+
+  // Kept current by the change feed: archived, its row in the results
+  // (made here from the index; the server never learns what matched) says so.
+  const hit = mail.getByRole('link', { name: new RegExp(subject) })
+  await expect(hit.getByText('Inbox', { exact: true })).toBeVisible()
+  await hit.click({ button: 'right' })
+  await mail.getByRole('menu').getByRole('menuitem', { name: /^Archive/ }).click()
+  await expect(mail.getByText('Archived.', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await search(mail, folded.toUpperCase())
+  await expect(hit.getByText('Archive', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(mail.getByText('Results include message text, searched in this browser.')).toBeVisible()
 
   // Deleted: the server's search again.
   await mail.goto(appUrl('mail', '/settings/general'))
