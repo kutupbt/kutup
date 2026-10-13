@@ -690,15 +690,6 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ### Chat app (web) follow-ups
 
-- **Federated send states in the app (before the wipe release if possible;
-  owner: second session).** The server answers a send to a server without
-  `chat.v2` with `503 code: peerUnsupported` (the message waits, in order,
-  until that server upgrades) and a final refusal with `502 code:
-  peerRefused` (docs/federation-protocol.md). The chat engine keeps both
-  queued and only logs them. Wanted: chat-core reads the codes, marks the
-  message (waiting for the other server / refused), and the thread shows it
-  (en, tr); background refusals found by the retry worker reach the app
-  through the outbox state.
 - **Live tests for sealed federation edge cases (owner: second session).**
   The two-server gate does not exercise them: a sealed send to a peer
   without `chat.v2` that then gains it; a refused send followed by the next

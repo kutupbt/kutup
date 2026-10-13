@@ -1,7 +1,7 @@
 import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
-import { ApiChatTransport } from './transport'
+import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 import type {
   AccountAddress,
   ChatCapabilities,
@@ -205,6 +205,9 @@ export class ChatService {
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private reconcileAgain = false
   private readonly reportedSendFailures = new Set<string>()
+  /** Peers whose server does not speak this Chat wire yet: messages to them wait. */
+  private readonly waitingPeers = new Set<string>()
+  private readonly waitingPeerListeners = new Set<() => void>()
   private readonly mls: MlsConversationService | null
   private readonly invites: InviteLinkService | null
   private inviteTimer: ReturnType<typeof setInterval> | null = null
@@ -437,6 +440,27 @@ export class ChatService {
   subscribeConnection(listener: (status: ChatConnectionStatus) => void): () => void {
     this.connectionListeners.add(listener)
     return () => this.connectionListeners.delete(listener)
+  }
+
+  /**
+   * Whether messages to `peer` wait because their server does not support
+   * this Chat version yet (they go once it does).
+   */
+  isPeerWaiting(peer: string): boolean {
+    return this.waitingPeers.has(canonicalPeer(peer))
+  }
+
+  subscribeWaitingPeers(listener: () => void): () => void {
+    this.waitingPeerListeners.add(listener)
+    return () => this.waitingPeerListeners.delete(listener)
+  }
+
+  private setWaitingPeers(next: Set<string>): void {
+    const same = next.size === this.waitingPeers.size && [...next].every((peer) => this.waitingPeers.has(peer))
+    if (same) return
+    this.waitingPeers.clear()
+    for (const peer of next) this.waitingPeers.add(peer)
+    for (const listener of this.waitingPeerListeners) listener()
   }
 
   subscribeTyping(listener: TypingListener): () => void {
@@ -1338,11 +1362,14 @@ export class ChatService {
         })
         // A queued message the server would not take stays queued, behind
         // nothing but its own conversation; it is tried again on every pass.
+        const waiting = new Set<string>()
         for (const failure of report.sendFailures ?? []) {
+          if (failure.error.includes(PEER_UNSUPPORTED)) waiting.add(canonicalPeer(failure.peer))
           if (this.reportedSendFailures.has(failure.sendId)) continue
           this.reportedSendFailures.add(failure.sendId)
           console.warn('chat: a queued message could not be sent yet', failure.error)
         }
+        this.setWaitingPeers(waiting)
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
@@ -2320,4 +2347,8 @@ function nextDeadline(entries: readonly ChatHistoryEntry[]): number {
     if (at !== undefined && at > now && at < next) next = at
   }
   return next
+}
+
+function canonicalPeer(peer: string): string {
+  return peer.trim().toLowerCase()
 }

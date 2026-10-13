@@ -388,7 +388,7 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
       }
-      throw error
+      throw peerSendError(error)
     }
   }
 
@@ -416,7 +416,12 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 404 && isSealedRefusal(error.response.data)) {
         return { kind: 'refused' }
       }
-      throw error
+      // The recipient's server refused this message for good
+      // (docs/federation-protocol.md): it leaves the queue as a refusal does.
+      if (axios.isAxiosError(error) && error.response?.status === 502 && errorCode(error) === 'peerRefused') {
+        return { kind: 'refused' }
+      }
+      throw peerSendError(error)
     }
   }
 
@@ -455,4 +460,24 @@ export class ApiChatTransport implements ChatTransportPort {
 
 function isSealedRefusal(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'sealed delivery unavailable'
+}
+
+function errorCode(error: unknown): string | undefined {
+  return axios.isAxiosError(error)
+    ? (error.response?.data as { code?: unknown } | undefined)?.code as string | undefined
+    : undefined
+}
+
+/**
+ * The recipient's server does not speak this Chat wire yet (503
+ * `peerUnsupported`): the message waits, in order, until it does. The error
+ * names the code so the queue's failure report says why.
+ */
+export const PEER_UNSUPPORTED = 'peerUnsupported'
+
+function peerSendError(error: unknown): unknown {
+  if (axios.isAxiosError(error) && error.response?.status === 503 && errorCode(error) === PEER_UNSUPPORTED) {
+    return new Error(`${PEER_UNSUPPORTED}: the recipient's server does not support this Chat version yet`)
+  }
+  return error
 }
