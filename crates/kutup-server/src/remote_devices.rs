@@ -791,7 +791,9 @@ mod tests {
         let alice = identity(61);
         let incarnation = alice.incarnation_id();
         clean(&pool, &incarnation).await;
-        // A local account (the bridge's side) with 65 revoked devices.
+        // A local account (the bridge's side) with 65 revoked devices. Their
+        // keys (130..195) are none the other test uses: revoked keys are
+        // refused whoever announces them, and the tests run at once.
         let user_id = uuid::Uuid::new_v4();
         let username = format!("paging{}", &user_id.simple().to_string()[..12]);
         sqlx::query(
@@ -812,7 +814,7 @@ mod tests {
         .unwrap();
         let now = now_ms();
         for i in 0..65_i64 {
-            let key = ed25519_dalek::SigningKey::from_bytes(&[i as u8 + 1; 32])
+            let key = ed25519_dalek::SigningKey::from_bytes(&[130 + i as u8; 32])
                 .verifying_key()
                 .to_bytes();
             let at = now + i / 2; // pairs share a millisecond
