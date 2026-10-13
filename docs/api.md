@@ -1463,8 +1463,6 @@ The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
 updatedAt}]` (`envelope` base64). A vault in the trash keeps its secret,
 unlisted, until it is restored; a secret for a vault the caller can no longer
 open is deleted as it is listed. Purging a vault deletes every secret for it.
-With `?all=true` the trashed ones are listed too (`inTrash: true`): every
-record the account has.
 
 ### PUT /api/pass/vault-secrets/:fileId
 
