@@ -351,7 +351,7 @@ fn the_session_version_changes_when_the_account_does() {
     let (admin_name, admin_password) = admin
         .split_once(':')
         .expect("KUTUP_LIVE_ADMIN is username:password");
-    let admin_token = common::admin_token(&c, &base, "", admin_password, admin_name);
+    let admin_token = common::admin_token(&c, &base, admin_password, admin_name);
     let user = register(&c, &base);
     let version = || {
         bearer(c.get(format!("{base}/api/user/me")), &user.token)
@@ -391,4 +391,105 @@ fn the_session_version_changes_when_the_account_does() {
     .send()
     .unwrap();
     assert!(demoted.status().is_success());
+}
+
+#[test]
+fn every_new_account_has_its_mail_address() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let addresses = |token: &str| -> Vec<Value> {
+        bearer(c.get(format!("{base}/api/mail/addresses")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    // Registered: the address came with the account, the GET only reads it
+    // (and reads the same row again).
+    let user = register(&c, &base);
+    let first = addresses(&user.token);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["address"], user.account.as_str());
+    assert_eq!(addresses(&user.token)[0]["id"], first[0]["id"]);
+    // The bootstrap administrator: made at start, with its address.
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let admin_token = common::admin_token(&c, &base, admin_password, admin_name);
+    let admin_addresses = addresses(&admin_token);
+    assert_eq!(admin_addresses.len(), 1, "{admin_addresses:?}");
+    assert!(admin_addresses[0]["address"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{admin_name}@")));
+}
+
+/// A taken address refuses the username and leaves no account behind; the
+/// address list never creates a row. Needs the database:
+/// `KUTUP_LIVE_DATABASE_URL`.
+#[test]
+fn a_taken_address_refuses_the_username_and_reads_never_write() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let someone = register(&c, &base);
+    let server = someone.account.split_once('@').unwrap().1.to_owned();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    let count = |sql: &str, value: &str| -> i64 {
+        runtime
+            .block_on(sqlx::query_scalar(sql).bind(value).fetch_one(&pool))
+            .unwrap()
+    };
+
+    // An address another account holds: its name is not free.
+    let taken = format!("taken{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+    runtime
+        .block_on(
+            sqlx::query("INSERT INTO mail_addresses (user_id, address) VALUES ($1::uuid, $2)")
+                .bind(&someone.id)
+                .bind(format!("{taken}@{server}"))
+                .execute(&pool),
+        )
+        .unwrap();
+    assert_eq!(common::register_named(&c, &base, &taken).as_u16(), 409);
+    assert_eq!(
+        count("SELECT count(*) FROM users WHERE username = $1", &taken),
+        0
+    );
+
+    // The list only reads: with the row gone it answers none, and makes none.
+    runtime
+        .block_on(
+            sqlx::query("DELETE FROM mail_addresses WHERE address = $1")
+                .bind(&someone.account)
+                .execute(&pool),
+        )
+        .unwrap();
+    let listed: Vec<Value> = bearer(c.get(format!("{base}/api/mail/addresses")), &someone.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(listed.is_empty(), "{listed:?}");
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM mail_addresses WHERE address = $1",
+            &someone.account
+        ),
+        0
+    );
 }

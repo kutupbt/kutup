@@ -264,16 +264,22 @@ pub(crate) fn spawn_invitation_expiry(state: AppState) {
 }
 
 async fn expire_due_invitations(state: &AppState, local_domain: &str) -> AppResult<()> {
+    // The longest-expired first, so one account that fails cannot keep
+    // every other account's expiry (and its notices) waiting.
     let users: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT DISTINCT user_id FROM chat_mls_local_members
+        "SELECT user_id FROM chat_mls_local_members
           WHERE membership_status = 'pending' AND removed_epoch IS NULL
             AND invitation_expires_at <= now()
+          GROUP BY user_id
+          ORDER BY min(invitation_expires_at)
           LIMIT 500",
     )
     .fetch_all(&state.pool)
     .await?;
     for user_id in users {
-        expire_invitations(state, user_id, local_domain).await?;
+        if let Err(error) = expire_invitations(state, user_id, local_domain).await {
+            tracing::warn!(%user_id, error = %error.message, "expiring this account's MLS invitations failed");
+        }
     }
     Ok(())
 }

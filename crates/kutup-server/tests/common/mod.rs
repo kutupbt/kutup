@@ -88,11 +88,28 @@ pub fn register_without_binding(c: &Client, base: &str) -> StatusCode {
     }
 }
 
+/// Registers `username`, answering the registration's status.
+#[allow(dead_code)]
+pub fn register_named(c: &Client, base: &str, username: &str) -> StatusCode {
+    match register_attempt(c, base, true, username.to_owned()) {
+        Ok(_) => StatusCode::CREATED,
+        Err(status) => status,
+    }
+}
+
 fn register_with(c: &Client, base: &str, binding: bool) -> Result<User, StatusCode> {
+    let tag = rand::thread_rng().next_u64() % 1_000_000_000;
+    register_attempt(c, base, binding, format!("int{tag}"))
+}
+
+fn register_attempt(
+    c: &Client,
+    base: &str,
+    binding: bool,
+    username: String,
+) -> Result<User, StatusCode> {
     let mut rng = rand::thread_rng();
-    let tag = rng.next_u64() % 1_000_000_000;
     let key_binding = uuid::Uuid::new_v4().to_string();
-    let username = format!("int{tag}");
     let password = "integrity-pw-123456";
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
