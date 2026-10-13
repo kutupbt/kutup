@@ -52,6 +52,25 @@
     "choose": "Anahtar dosyası seç",
     "remove": "Anahtar dosyasını kaldır"
   },
+  "vaultKey": {
+    "choice": "Kasa anahtarı",
+    "random": "Rastgele bir anahtar, Kutup hesabımda saklanır (önerilen)",
+    "randomDescription": "Seçecek ya da hatırlayacak bir şey yok: kasa Kutup girişinizle açılır. Bir bilgisayarda KeePassXC ile açmak için anahtarı kasanın menüsünden gösterin.",
+    "chosen": "Kendi seçtiğim bir parola",
+    "chosenDescription": "Parolasını yazarak KeePass uygulamalarında da açtığınız bir kasa için.",
+    "label": "Kasa anahtarı",
+    "show": "Kasa anahtarını göster…",
+    "title": "{{name}} anahtarı",
+    "description": "Bu anahtarı kasa için Kasa oluşturdu. Kasayı KeePassXC ya da başka bir KeePass uygulamasında açmak için bunu, Drive'daki kasa dosyasıyla birlikte kullanın. Görmek için Kutup parolanızı girin.",
+    "reveal": "Anahtarı göster",
+    "copy": "Kasa anahtarını kopyala",
+    "copied": "Kasa anahtarı kopyalandı",
+    "none": "Bu kasanın anahtarını Kasa oluşturmadı: kasa, onun için seçilen parolayla açılır.",
+    "notKept": "Anahtar hesabınızda saklanamadı",
+    "notKeptDescription": "Kasa oluşturuldu, ancak anahtarı Kutup hesabınızda saklanamadı. Anahtarı şimdi kopyalayıp güvenle saklayın: o olmadan kasa açılamaz.",
+    "forgetTitle": "Bu kasanın anahtarı unutulsun mu?",
+    "forgetDescription": "Bu kasanın anahtarını Kasa oluşturdu ve kendiniz kaydetmediyseniz tek saklandığı yer hesabınızdır. Önce kasa anahtarını gösterip kaydedin; o olmadan kasa bir daha açılamaz."
+  },
   "unlock": {
     "title": "{{name}} kasasını aç",
     "description": "Kasanın parolasını ya da anahtar dosyasını girin.",

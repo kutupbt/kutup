@@ -16,24 +16,7 @@ import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
 import { bytesToBase64 } from '../lib/bytes'
-
-/** A copied secret is cleared from the clipboard after this, if it is still there. */
-const CLEAR_CLIPBOARD_MS = 30_000
-
-async function copySecret(value: string, done: string, cleared: string, notCleared: string) {
-  await copyText(value)
-  toast.success(done)
-  setTimeout(() => {
-    // Only what this copied is cleared: reading the clipboard needs the
-    // browser's permission, and without it the person is told to clear it.
-    void navigator.clipboard
-      .readText()
-      .then((now) => {
-        if (now === value) return navigator.clipboard.writeText('').then(() => toast(cleared))
-      })
-      .catch(() => toast.warning(notCleared))
-  }, CLEAR_CLIPBOARD_MS)
-}
+import { copySecret } from '../lib/copySecret'
 
 function Row({ label, children, actions }: { label: string; children: ReactNode; actions?: ReactNode }) {
   return (

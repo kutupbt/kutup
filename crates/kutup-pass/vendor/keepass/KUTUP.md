@@ -6,7 +6,10 @@ MIT licence, see `LICENSE`). Crate archive SHA-256: `83630a8882d1f2a8c03ee00911b
 Kutup carries one patch, applied by `scripts/patch-vendored-keepass.py`: it
 makes the database model's internal fields and two id constructors public, so
 `crates/kutup-pass` can read and write a vault completely (custom icons keep
-their UUIDs, history items keep their attachments), points the README's relative examples link at upstream (the README is the
+their UUIDs, history items keep their attachments), adds one constructor,
+`DatabaseKey::with_password_hash` (the password's part of the composite key,
+SHA-256 of the password, given instead of the password, so a vault opens with
+what Kutup Pass keeps; docs/plans/pass.md, "Vault secrets"), points the README's relative examples link at upstream (the README is the
 crate's rustdoc), then formats the crate
 with the workspace's rustfmt settings so `cargo fmt --all -- --check` passes
 (upstream's own formatting is not consistent). Neither changes behaviour.

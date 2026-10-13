@@ -308,7 +308,7 @@ one database, plus a report of what happened.
   Drive), 77 (two devices: disjoint edits merge, one field on both is marked
   for review), 78 (offline outbox, also across a closed tab), 79 (unlock,
   wrong key, kept and forgotten keys, lock), 150 (CSV import), 151 (PIN),
-  152 (site icons), 153 (custom icons).
+  152 (site icons), 153 (custom icons), 154 (vault keys).
 - **Security report** (the vault's Security button): weak passwords,
   passwords shared by several entries, and expired entries, worked out on
   the device from the open vault; nothing is sent anywhere, so there is no
@@ -362,21 +362,39 @@ one database, plus a report of what happened.
   exists (research 19 §5.6).
 - **Vault secrets** (built in K2a): a per-user, per-vault record sealed
   under the account master key: `kutup_crypto::pass_vault`, an
-  `account_envelope` with the new purpose `PassVaultSecret = 6` (bound to the
-  login email) whose payload binds the vault's file id, holding the vault
-  password and/or the key file. Key files over 2048 bytes are kept as their
-  SHA-256, which KeePass treats as the same key; what is kept is checked to
-  open the vault first. Stored by the server (`pass_vault_secrets`,
-  `/api/pass/vault-secrets`), unreadable to it. Creating or opening a vault
-  offers to remember it; a removed member's record is deleted when it is
-  next listed, and purging the vault deletes them all. `kutup sync` tries the
-  kept secret before the environment and the prompt, offers to keep a typed
-  password, and `kutup pass keep|ls|forget` manages them headless.
+  `account_envelope` with the purpose `PassVaultSecret = 6` whose payload
+  (`kutup/pass-vault-secret/v2`) binds the vault's file id. What it holds
+  opens the vault without telling a password the person chose: such a
+  password is kept only as its SHA-256, which is KeePass's password part of
+  the composite key (the vendored library opens and saves with it,
+  `DatabaseKey::with_password_hash`; checked against KeePassXC's test
+  vaults), so a vault password used elsewhere too is not given away with the
+  master key. A password Kutup Pass generated (below) is kept as it is, so it
+  can be shown. Key files are kept as they are, those over 2048 bytes as
+  their SHA-256, which KeePass treats as the same key; what is kept is
+  checked to open the vault first. Stored by the server
+  (`pass_vault_secrets`, `/api/pass/vault-secrets`), unreadable to it.
+  Creating or opening a vault offers to remember it; a removed member's
+  record is deleted when it is next listed, and purging the vault deletes
+  them all. `kutup sync` tries the kept secret before the environment and the
+  prompt, offers to keep a typed password, and `kutup pass keep|ls|forget`
+  manages them headless.
 - **Vault secrets and the account's binding** (docs/plans/account-identity.md):
   a vault secret is an account envelope (suite 2) whose header names the
   account's permanent random key binding and, as its object, the vault's file
   id; its AEAD key is derived for that binding and vault alone. The server
   refuses one bound to another binding or vault.
+- **Vault keys** (as Proton Pass, whose vaults have no password to choose):
+  a vault made in Kutup Pass gets by default a random key kept in the
+  account: 25 characters of Crockford's base32 in groups of five (125 bits,
+  `randomVaultKey`), used as the KeePass password. Nothing to choose or
+  remember; the vault opens with the sign-in. For KeePassXC on a computer,
+  the vault's menu → "Show vault key…" shows it after the account password is
+  given again (`/api/user/reauth`), with copy (cleared from the clipboard
+  after 30 seconds); `kutup pass show-key <file-id>` prints it. "A password I
+  choose" stays offered for vaults opened by typing in KeePass apps. If the
+  new key cannot be kept, the dialog shows it at once, as it is kept nowhere
+  else; forgetting a generated key asks first, pointing to "Show vault key".
 - Entry editing covers the KeePassXC fields (research 19 §4): standard fields,
   custom fields (protected or not), tags, attachments, TOTP (`otp`), URLs
   (`URL`, `KP2A_URL*`), expiry, history, groups, recycle bin; passkeys and SSH

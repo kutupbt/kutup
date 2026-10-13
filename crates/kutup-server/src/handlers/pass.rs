@@ -459,15 +459,12 @@ pub async fn verify_pin(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kutup_crypto::pass_vault::{seal_vault_secret, VaultSecretV1};
+    use kutup_crypto::pass_vault::{seal_vault_secret, VaultSecret};
 
     const ID: &str = "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90";
 
     fn sealed(binding: &str) -> String {
-        let secret = VaultSecretV1 {
-            password: Some(zeroize::Zeroizing::new("kasa".to_owned())),
-            key_file: None,
-        };
+        let secret = VaultSecret::chosen(Some("kasa"), None);
         STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], &secret).unwrap())
     }
 

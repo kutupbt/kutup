@@ -59,7 +59,7 @@ export class VaultHandle {
 
   /** Opens a vault's file contents; a wrong key or a file that is no vault throws {@link VaultError}. */
   static async open(contents: Uint8Array, key: VaultKeyInput): Promise<VaultHandle> {
-    return new VaultHandle(await call<number>({ call: 'open', contents, password: key.password, keyFile: key.keyFile }))
+    return new VaultHandle(await call<number>({ call: 'open', contents, password: key.password, passwordHash: key.passwordHash ?? null, keyFile: key.keyFile }))
   }
 
   view(): Promise<VaultView> {

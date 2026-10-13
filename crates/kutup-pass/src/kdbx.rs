@@ -3,7 +3,8 @@
 //! Every KDBX version in use today (3.1, 4.0, 4.1) opens; vaults are always
 //! saved as KDBX 4.1, the only version the library writes, as KeePassXC
 //! upgrades older files on save. A vault's key is the KeePass composite key:
-//! a password, a key file, or both.
+//! a password (or its SHA-256, the password's part of the composite key,
+//! which is what Kutup Pass keeps), a key file, or both.
 
 use keepass::config::{DatabaseVersion, InnerCipherConfig};
 use keepass::error::{DatabaseKeyError, DatabaseOpenError, DatabaseSaveError};
@@ -14,6 +15,7 @@ use zeroize::Zeroizing;
 #[derive(Clone, Default)]
 pub struct VaultKey {
     password: Option<Zeroizing<String>>,
+    password_hash: Option<Zeroizing<[u8; 32]>>,
     key_file: Option<Zeroizing<Vec<u8>>>,
 }
 
@@ -21,6 +23,10 @@ impl std::fmt::Debug for VaultKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VaultKey")
             .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .field(
+                "password_hash",
+                &self.password_hash.as_ref().map(|_| "[redacted]"),
+            )
             .field("key_file", &self.key_file.as_ref().map(|_| "[redacted]"))
             .finish()
     }
@@ -38,6 +44,13 @@ impl VaultKey {
         self
     }
 
+    /// Adds the vault password as its SHA-256 (the password's part of the
+    /// composite key), which opens and saves the vault as the password does.
+    pub fn with_password_hash(mut self, hash: [u8; 32]) -> Self {
+        self.password_hash = Some(Zeroizing::new(hash));
+        self
+    }
+
     /// Adds the contents of a key file (any of KeePass's key file kinds).
     pub fn with_key_file(mut self, contents: &[u8]) -> Self {
         self.key_file = Some(Zeroizing::new(contents.to_vec()));
@@ -45,12 +58,14 @@ impl VaultKey {
     }
 
     fn database_key(&self) -> Result<DatabaseKey, KdbxError> {
-        if self.password.is_none() && self.key_file.is_none() {
+        if self.password.is_none() && self.password_hash.is_none() && self.key_file.is_none() {
             return Err(KdbxError::EmptyKey);
         }
         let mut key = DatabaseKey::new();
         if let Some(password) = &self.password {
             key = key.with_password(password);
+        } else if let Some(hash) = &self.password_hash {
+            key = key.with_password_hash(**hash);
         }
         if let Some(contents) = &self.key_file {
             key = key
@@ -152,6 +167,35 @@ mod tests {
         let entry = root.entries().next().unwrap();
         assert_eq!(entry.get_password(), Some("çok-gizli-1"));
         assert!(entry.fields["Password"].is_protected());
+    }
+
+    #[test]
+    fn the_passwords_hash_opens_and_saves_as_the_password_does() {
+        use sha2::{Digest, Sha256};
+        let hash: [u8; 32] = Sha256::digest("parola-çğ".as_bytes()).into();
+        let file = b"a key file".to_vec();
+        for (by_password, by_hash) in [
+            (
+                VaultKey::new().with_password("parola-çğ"),
+                VaultKey::new().with_password_hash(hash),
+            ),
+            (
+                VaultKey::new()
+                    .with_password("parola-çğ")
+                    .with_key_file(&file),
+                VaultKey::new()
+                    .with_password_hash(hash)
+                    .with_key_file(&file),
+            ),
+        ] {
+            let saved = save(&sample(), &by_password).unwrap();
+            assert!(open(&saved, &by_hash).is_ok());
+            let saved = save(&sample(), &by_hash).unwrap();
+            assert!(open(&saved, &by_password).is_ok());
+        }
+        let wrong: [u8; 32] = Sha256::digest(b"other").into();
+        let saved = save(&sample(), &VaultKey::new().with_password("parola-çğ")).unwrap();
+        assert!(open(&saved, &VaultKey::new().with_password_hash(wrong)).is_err());
     }
 
     #[test]

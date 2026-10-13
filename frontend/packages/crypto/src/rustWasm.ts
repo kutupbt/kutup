@@ -84,6 +84,7 @@ export interface CryptoWasmModule {
     fileId: string,
     password: string | null | undefined,
     keyFileBase64: string | null | undefined,
+    generated: boolean,
   ): string
   openPassVaultSecret(
     envelopeBase64: string,

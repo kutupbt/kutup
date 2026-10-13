@@ -31,7 +31,7 @@ interface PassWasm {
   default(input?: unknown): Promise<unknown>
   Vault: {
     create(name: string, password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): WasmVault
-    open(contents: Uint8Array, password: string | null | undefined, keyFile: Uint8Array | null | undefined): WasmVault
+    open(contents: Uint8Array, password: string | null | undefined, passwordHash: Uint8Array | null | undefined, keyFile: Uint8Array | null | undefined): WasmVault
   }
   keyFileSecret(contents: Uint8Array): Uint8Array
   importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
@@ -74,7 +74,7 @@ async function run(request: Request): Promise<unknown> {
     case 'create':
       return keep(module.Vault.create(request.name, request.password, request.keyFile, request.now))
     case 'open':
-      return keep(module.Vault.open(request.contents, request.password, request.keyFile))
+      return keep(module.Vault.open(request.contents, request.password, request.passwordHash, request.keyFile))
     case 'view':
       return vault(request.handle).view()
     case 'apply':
