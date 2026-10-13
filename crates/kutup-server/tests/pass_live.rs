@@ -364,14 +364,20 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
     assert_eq!(verify("246802").0, StatusCode::NO_CONTENT);
     let (code, body) = verify("111111");
     assert_eq!(code, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "wrongPin", "attemptsLeft": 2 }));
+    assert_eq!(
+        body,
+        json!({ "error": "wrongPin", "code": "wrongPin", "attemptsLeft": 2 })
+    );
     // A right PIN starts the count again.
     assert_eq!(verify("246802").0, StatusCode::NO_CONTENT);
     assert_eq!(verify("111111").1["attemptsLeft"], 2);
     assert_eq!(verify("222222").1["attemptsLeft"], 1);
     let (code, body) = verify("333333");
     assert_eq!(code, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "signedOut", "attemptsLeft": 0 }));
+    assert_eq!(
+        body,
+        json!({ "error": "signedOut", "code": "signedOut", "attemptsLeft": 0 })
+    );
     // The sign-in has ended: the session is refused.
     assert_eq!(
         bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
