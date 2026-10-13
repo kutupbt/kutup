@@ -1,7 +1,8 @@
 //! Checked-in vectors for mail address keys (docs/plans/mail-address-keys.md):
 //! a fixed key, its fingerprints, its sealed envelope, and a signed key-list
 //! chain. Regenerate only for a deliberate format change:
-//! `KUTUP_WRITE_MAIL_VECTORS=1 cargo test -p kutup-crypto --test mail_key_vectors -- --ignored`.
+//! `KUTUP_WRITE_MAIL_VECTORS=1 cargo test -p kutup-crypto --features mail --test mail_key_vectors -- --ignored`
+//! (`=reseal` re-seals the envelope only, keeping the keys).
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -95,6 +96,22 @@ fn lists(
 #[test]
 #[ignore = "writes the vectors file"]
 fn write_vectors() {
+    // `reseal`: only the envelope again, the keys kept (an envelope format
+    // change); `1`: everything new.
+    if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() == Ok("reseal") {
+        let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
+        let sealed = seal_address_key_with_nonce(
+            &b64(&v.master_key),
+            &v.binding,
+            &v.address,
+            &b64(&v.secret_key),
+            &b64(&v.envelope_nonce),
+        )
+        .unwrap();
+        v.envelope = STANDARD.encode(sealed);
+        std::fs::write(PATH, serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
+        return;
+    }
     if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() != Ok("1") {
         return;
     }

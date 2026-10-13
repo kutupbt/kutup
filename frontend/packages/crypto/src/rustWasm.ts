@@ -66,18 +66,20 @@ export interface CryptoWasmModule {
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
   sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pinsJson: string): string
-  openIdentityPins(masterKeyBase64: string, binding: string, revision: number, sealedBase64: string): string
-  signContactSummary(masterKeyBase64: string, binding: string, summaryJson: string): { summary: string; signature: string }
+  openIdentityPins(masterKeyBase64: string, binding: string, sealedBase64: string): { value: string; revision: number }
+  signContactSummary(masterKeyBase64: string, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
     signatureBase64: string,
     binding: string,
+    revision: number,
     authorityPublicKeyBase64: string,
   ): import('./contactCard').ContactSummary
-  sealContactCard(masterKeyBase64: string, binding: string, uid: string, vcard: string): string
-  openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): string
-  sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, name: string): string
-  openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): string
+  sealContactCard(masterKeyBase64: string, binding: string, uid: string, revision: number, vcard: string): string
+  openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
+  sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
+  openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
+  inspectAccountEnvelope(envelopeBase64: string): number
   generateMailGroupKey(
     groupAddress: string,
     createdAtSecs: number,

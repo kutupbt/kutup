@@ -373,6 +373,7 @@ fn account_envelope_vector() {
         purpose,
         &vector.binding,
         &object,
+        None,
         &b64(&vector.nonce),
     )
     .unwrap();

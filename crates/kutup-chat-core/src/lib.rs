@@ -98,6 +98,6 @@ pub use mls_policy::{
 };
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
-pub use transport::{ChatTransport, IdentityPinsRecord, SendOutcome};
+pub use transport::{ChatTransport, IdentityPinsRecord, IdentityPinsWrite, SendOutcome};
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm::WasmChatClient;

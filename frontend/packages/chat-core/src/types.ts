@@ -1364,8 +1364,8 @@ export interface ChatTransportPort {
   publishManifest(manifest: unknown): Promise<unknown>
   /** The account's synced identity pins (docs/plans/drive-identity-pins.md); null before the first. */
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>
-  /** Store the next revision; false when another app stored it first. */
-  storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean>
+  /** Stores a new list if the server still holds `baseRevision` (0: none yet); false when another app wrote first. */
+  storeIdentityPins(write: { baseRevision: number; envelope: string }): Promise<boolean>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>

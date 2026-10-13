@@ -5,8 +5,6 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -39,11 +37,7 @@ pub struct MailFilter {
 }
 
 fn check_sealed(name: &str) -> AppResult<()> {
-    let bytes = STANDARD
-        .decode(name)
-        .map_err(|_| AppError::bad_request("name is not base64"))?;
-    kutup_crypto::mail_names::inspect_name(&bytes)
-        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))
+    crate::revisions::mail_name(name).map(drop)
 }
 
 /// The folder and labels a filter names are the account's own.
@@ -230,6 +224,8 @@ pub async fn create(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailFilter {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub enabled: Option<bool>,
     #[serde(rename = "match")]
     pub rule: Option<Match>,
@@ -260,16 +256,17 @@ pub async fn update(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
-    let current: Option<(serde_json::Value, serde_json::Value)> = sqlx::query_as(
-        "SELECT conditions, actions FROM mail_filters WHERE user_id = $1 AND id = $2",
+    let current: Option<(serde_json::Value, serde_json::Value, String)> = sqlx::query_as(
+        "SELECT conditions, actions, name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
-    let (conditions, actions) = current.ok_or_else(|| AppError::not_found("no such filter"))?;
+    let (conditions, actions, stored_name) =
+        current.ok_or_else(|| AppError::not_found("no such filter"))?;
     if let Some(name) = &request.name {
-        check_sealed(name)?;
+        crate::revisions::check_rename(&stored_name, name, request.base_name_revision)?;
     }
     let conditions: Vec<Condition> = match request.conditions {
         Some(conditions) => conditions,
@@ -286,14 +283,14 @@ pub async fn update(
     if request.enabled == Some(true) {
         check_enabled_limit(&state, user_id, Some(id)).await?;
     }
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE mail_filters SET
              name_sealed = COALESCE($3, name_sealed),
              enabled = COALESCE($4, enabled),
              match = COALESCE($5, match),
              conditions = $6,
              actions = $7
-          WHERE user_id = $1 AND id = $2",
+          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $8)",
     )
     .bind(user_id)
     .bind(id)
@@ -306,8 +303,13 @@ pub async fn update(
     )
     .bind(serde_json::to_value(&conditions).expect("serialisable"))
     .bind(serde_json::to_value(&actions).expect("serialisable"))
+    .bind(&stored_name)
     .execute(&state.pool)
     .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::conflict("this filter was changed elsewhere")
+            .with_details(serde_json::json!({ "code": "revision_conflict" })));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

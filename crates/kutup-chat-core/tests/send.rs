@@ -145,17 +145,24 @@ impl ChatTransport for MockServer {
 
     async fn store_identity_pins(
         &self,
-        record: &kutup_chat_core::IdentityPinsRecord,
+        write: &kutup_chat_core::IdentityPinsWrite,
     ) -> Result<bool> {
         let current = self
             .identity_pins
             .borrow()
             .as_ref()
             .map_or(0, |r| r.revision);
-        if record.revision != current + 1 {
+        let sealed =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &write.envelope)
+                .unwrap();
+        let revision = kutup_crypto::identity_pins::inspect(&sealed).unwrap();
+        if write.base_revision != current || revision <= current {
             return Ok(false);
         }
-        *self.identity_pins.borrow_mut() = Some(record.clone());
+        *self.identity_pins.borrow_mut() = Some(kutup_chat_core::IdentityPinsRecord {
+            revision,
+            envelope: write.envelope.clone(),
+        });
         Ok(true)
     }
 
@@ -2488,7 +2495,7 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     let (mut alice, server) = open(None);
     let safety = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Tofu);
-    assert_eq!(server.identity_pins.borrow().as_ref().unwrap().revision, 1);
+    assert!(server.identity_pins.borrow().as_ref().unwrap().revision >= 1);
 
     // Verified in Drive (or on another device): verified in Chat at first sight.
     let (mut alice, _) = open(Some(synced_pins(

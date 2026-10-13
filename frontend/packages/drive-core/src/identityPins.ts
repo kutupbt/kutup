@@ -23,7 +23,7 @@ import {
   type IdentityPin,
   type IdentityPins,
 } from '@kutup/crypto/identityPins'
-import { toBase64 } from '@kutup/crypto'
+import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from './identity'
 
@@ -141,24 +141,9 @@ interface PinStore {
 let store: { userId: string; loaded: Promise<PinStore> } | null = null
 let writes: Promise<unknown> = Promise.resolve()
 
-const highestKey = (userId: string) => `kutup-identity-pins-revision:${userId}`
-
 /** The highest revision this browser has seen: a server cannot quietly hand back an older list. */
-function highestSeen(userId: string): number {
-  try {
-    return Number(localStorage.getItem(highestKey(userId)) ?? '0') || 0
-  } catch {
-    return 0
-  }
-}
-
-function remember(userId: string, revision: number) {
-  try {
-    if (revision > highestSeen(userId)) localStorage.setItem(highestKey(userId), String(revision))
-  } catch {
-    // Without storage, only the server's word: still sealed and authenticated.
-  }
-}
+const PINS_SCOPE = 'identity-pins'
+const PINS_ID = 'list'
 
 export class PinsRolledBack extends Error {
   constructor() {
@@ -173,10 +158,20 @@ async function fetchPins(me: DriveIdentity): Promise<PinStore> {
   } catch (error) {
     if (!(isAxiosError(error) && error.response?.status === 404)) throw error
   }
-  const revision = data?.revision ?? 0
-  if (revision < highestSeen(me.userId)) throw new PinsRolledBack()
-  const list: IdentityPins = data ? await openIdentityPins(toBase64(me.masterKey), me.binding, data.revision, data.envelope) : { pins: [] }
-  remember(me.userId, revision)
+  const guard = revisionGuard(me.userId)
+  if (!data) {
+    // None stored, though this browser has seen one: held back by the server.
+    if ((await guard.seen(PINS_SCOPE, PINS_ID)) > 0) throw new PinsRolledBack()
+    return { revision: 0, pins: new Map() }
+  }
+  // The revision is the one sealed in the list's header, not the server's word.
+  const { list, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
+  try {
+    await guard.accept(PINS_SCOPE, PINS_ID, revision)
+  } catch (error) {
+    if (error instanceof OlderThanSeenError) throw new PinsRolledBack()
+    throw error
+  }
   return { revision, pins: new Map(list.pins.map((pin) => [pin.account, pin])) }
 }
 
@@ -192,8 +187,9 @@ function pinStore(me: DriveIdentity): Promise<PinStore> {
 }
 
 /**
- * Applies `change` to the list and stores it as the next revision; when
- * another app stored one first, starts again from that one. One write at a
+ * Applies `change` to the list and stores it on top of the revision it read
+ * (a newer one in its header); when another app stored one first, starts
+ * again from that one. One write at a
  * time from this page.
  */
 function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) => boolean | Promise<boolean>): Promise<void> {
@@ -202,12 +198,13 @@ function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) 
       const current = await pinStore(me)
       const next = new Map(current.pins)
       if (!(await change(next))) return
-      const revision = current.revision + 1
+      const guard = revisionGuard(me.userId)
+      const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
       const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
       const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
       try {
-        await api.put('/user/identity-pins', { revision, envelope })
-        remember(me.userId, revision)
+        await api.put('/user/identity-pins', { baseRevision: current.revision, envelope })
+        await guard.accept(PINS_SCOPE, PINS_ID, revision)
         store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: next }) }
         return
       } catch (error) {

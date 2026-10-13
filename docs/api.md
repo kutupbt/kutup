@@ -677,13 +677,18 @@ server, shared by every app of the account.
 
 **Auth:** Bearer JWT
 
-**Body (PUT) and response:** `{ "revision": 3, "envelope": "<canonical base64>" }`
+**Response (GET):** `{ "revision": 1791633600000, "envelope": "<canonical base64>" }`
+(the revision is the one in the envelope's header).
+**Body (PUT):** `{ "baseRevision": 1791633600000, "envelope": "<canonical base64>" }`
 
-`GET` answers `404` before the first list. A `PUT` must carry the stored
-revision plus one (the first is 1), else `409` with
+`GET` answers `404` before the first list. The revision is sealed in the
+envelope's authenticated header (a time in unix milliseconds, above every
+revision the writer has seen; docs/plans/sealed-revisions.md). A `PUT` is
+stored only if the stored list is still `baseRevision` (0 before the first)
+and the envelope's revision is above it (`400` if not), else `409` with
 `{ "code": "revision_conflict", "revision": <stored> }`: the client merges with
-the stored list and tries again. The revision is authenticated inside the
-envelope, and clients remember the highest they have seen.
+the stored list and tries again. Clients refuse a list older than one they
+have seen.
 
 
 ### GET /api/account/ui-preferences · PUT /api/account/ui-preferences
@@ -1410,6 +1415,11 @@ The caller's contacts by name, at most 1000 per page.
 Clients verify `summary` with `signature` against their own authority before
 using a contact.
 
+Each contact's `revision` is its card's: a time in unix milliseconds in the
+card's authenticated header, which the summary's signature binds too
+(docs/plans/sealed-revisions.md); clients refuse a contact older than one they
+have seen.
+
 ### POST /api/contacts
 
 **Body:** `{ "summary": "canonical JSON", "signature": "base64", "card": "base64" }`.
@@ -1419,9 +1429,11 @@ UID is already in the address book.
 
 ### PUT /api/contacts/:id
 
-**Body:** the same plus `revision` (the one the edit started from). The UID
-cannot change. **Response:** the contact with the next revision; `409` when it
-changed elsewhere.
+**Body:** the same plus `baseRevision` (the revision the edit started from);
+the new card's revision must be above it (`400` if not). The UID cannot
+change. **Response:** the contact at its new revision; `409` with
+`{ "code": "revision_conflict", "revision": <stored> }` when it changed
+elsewhere.
 
 ### DELETE /api/contacts/:id · POST /api/contacts/delete
 

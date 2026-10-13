@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { openMailName, sealMailName, toBase64 } from '@kutup/crypto'
+import { revisionGuard } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { mailKey, useMailAccount } from './api'
+import { isRevisionConflict, MAIL_NAME_SCOPE, openGuardedName, sealGuardedName } from './places'
 
 // Mail filters (docs/plans/mail-filters.md, F2), as Proton's simple
 // filters. The server runs them as mail arrives, so conditions and actions
-// are readable to it; the name is sealed here like folder names.
+// are readable to it; the name is sealed here like folder names, with its
+// revision, and a rename names the revision it started from.
 
 export type FilterField = 'sender' | 'recipient' | 'subject' | 'attachments'
 export type FilterOp = 'contains' | 'is' | 'begins' | 'ends' | 'matches'
@@ -29,6 +31,8 @@ export interface FilterActions {
 export interface MailFilter {
   id: string
   name: string
+  /** The revision of the sealed name (0 when it did not open). */
+  nameRevision: number
   enabled: boolean
   position: number
   match: 'all' | 'any'
@@ -57,19 +61,24 @@ export function useFilters() {
     queryKey: [...filtersKey, address],
     enabled: !!address,
     queryFn: async (): Promise<MailFilter[]> => {
-      const { data } = await api.get<MailFilter[]>('/mail/filters')
-      const masterKey = toBase64(session.masterKey)
+      const { data } = await api.get<Omit<MailFilter, 'nameRevision'>[]>('/mail/filters')
       return Promise.all(
-        data.map(async (filter) => ({
-          ...filter,
-          name: await openMailName(masterKey, session.envelopeBinding, 'filter', filter.id, filter.name).catch(() => '…'),
-        })),
+        data.map(async (filter) => {
+          const opened = await openGuardedName(session, 'filter', filter.id, filter.name)
+          return { ...filter, name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
+        }),
       )
     },
   })
 }
 
-function useFilterMutation<T, R>(fn: (input: T, seal: (id: string, name: string) => Promise<string>) => Promise<R>) {
+interface FilterTools {
+  seal: (id: string, name: string) => Promise<string>
+  /** Renames on top of the name it started from; once more over a newer one if another device renamed first. */
+  rename: (id: string, name: string, patch: (body: { name: string; baseNameRevision: number }) => Promise<unknown>) => Promise<void>
+}
+
+function useFilterMutation<T, R>(fn: (input: T, tools: FilterTools) => Promise<R>) {
   const session = useRequiredSession()
   const account = useMailAccount()
   const queryClient = useQueryClient()
@@ -77,8 +86,25 @@ function useFilterMutation<T, R>(fn: (input: T, seal: (id: string, name: string)
     mutationFn: async (input: T) => {
       const address = account.data?.address
       if (!address) throw new Error('mail is not ready')
-      const masterKey = toBase64(session.masterKey)
-      return fn(input, (id, name) => sealMailName(masterKey, session.envelopeBinding, 'filter', id, name))
+      const key = [...filtersKey, address]
+      const baseOf = (id: string) => queryClient.getQueryData<MailFilter[]>(key)?.find((f) => f.id === id)?.nameRevision ?? 0
+      return fn(input, {
+        seal: async (id, name) => (await sealGuardedName(session, 'filter', id, name)).sealed,
+        rename: async (id, name, patch) => {
+          for (let attempt = 0; ; attempt++) {
+            const base = baseOf(id)
+            const { sealed, revision } = await sealGuardedName(session, 'filter', id, name, base)
+            try {
+              await patch({ name: sealed, baseNameRevision: base })
+              await revisionGuard(session.userId).accept(MAIL_NAME_SCOPE, `filter:${id}`, revision)
+              return
+            } catch (error) {
+              if (attempt > 0 || !isRevisionConflict(error)) throw error
+              await queryClient.invalidateQueries({ queryKey: key })
+            }
+          }
+        },
+      })
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: filtersKey }),
   })
@@ -92,7 +118,7 @@ export type FilterDraft = Pick<MailFilter, 'name' | 'match' | 'conditions' | 'ac
 }
 
 export function useCreateFilter() {
-  return useFilterMutation(async (draft: FilterDraft, seal) => {
+  return useFilterMutation(async (draft: FilterDraft, { seal }) => {
     const { id = crypto.randomUUID(), name, ...rest } = draft
     await api.post('/mail/filters', { id, name: await seal(id, name.trim()), ...rest })
     return id
@@ -100,10 +126,12 @@ export function useCreateFilter() {
 }
 
 export function useUpdateFilter() {
-  return useFilterMutation(async (input: Partial<FilterDraft> & { id: string }, seal) => {
+  return useFilterMutation(async (input: Partial<FilterDraft> & { id: string }, { rename }) => {
     // The source is fixed when a filter is made.
     const { id, name, enabled, match, conditions, actions } = input
-    await api.patch(`/mail/filters/${id}`, { enabled, match, conditions, actions, ...(name !== undefined ? { name: await seal(id, name.trim()) } : {}) })
+    const rest = { enabled, match, conditions, actions }
+    if (name === undefined) await api.patch(`/mail/filters/${id}`, rest)
+    else await rename(id, name.trim(), (body) => api.patch(`/mail/filters/${id}`, { ...rest, ...body }))
   })
 }
 

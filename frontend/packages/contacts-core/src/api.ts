@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 import { useCallback, useMemo } from 'react'
 import {
   deriveAccountIdentityKeys,
   describeExternalMailKey,
   fromBase64,
   openContactCard,
+  revisionGuard,
   sealContactCard,
   signContactSummary,
   toBase64,
@@ -19,7 +21,13 @@ import { parseVCards, toVCard } from './vcard'
 // The account's address book (docs/plans/contacts.md): summaries verified
 // against the account's own authority, cards opened with the contacts key,
 // both bound to the account's key binding (`session.envelopeBinding`), never
-// to its address.
+// to its address. Both carry the contact's revision: a contact older than
+// this browser has seen is refused (`RevisionGuard`), and an edit is stored
+// only on top of the revision it started from (`baseRevision`; a 409 means
+// another device saved first).
+
+/** What the guard calls a contact: its UID, which a re-import keeps. */
+const CONTACT_SCOPE = 'contact'
 
 interface ContactRow {
   id: string
@@ -48,10 +56,15 @@ export function useAccountAddress() {
   })
 }
 
-async function openRow(row: ContactRow, binding: string, masterKey: string, authority: string): Promise<Contact | null> {
+async function openRow(session: Session, row: ContactRow, masterKey: string, authority: string): Promise<Contact | null> {
+  const binding = session.envelopeBinding
   try {
-    const summary = await verifyContactSummary(row.summary, row.signature, binding, authority)
-    const vcard = await openContactCard(masterKey, binding, summary.uid, row.card)
+    // The server says which revision the card is; the summary's signature
+    // and the card's header must both agree with it.
+    const summary = await verifyContactSummary(row.summary, row.signature, binding, row.revision, authority)
+    const { value: vcard, revision } = await openContactCard(masterKey, binding, summary.uid, row.card)
+    if (revision !== row.revision) throw new Error('the card is not the revision its summary was signed for')
+    await revisionGuard(session.userId).accept(CONTACT_SCOPE, summary.uid, revision)
     const [card] = parseVCards(vcard)
     if (!card) return null
     // The signed summary is authoritative for what it holds: a trusted key
@@ -89,7 +102,7 @@ async function loadContacts(session: Session): Promise<{ contacts: Contact[]; un
     offset += data.contacts.length
     if (data.contacts.length === 0 || offset >= data.total) break
   }
-  const opened = await Promise.all(rows.map((row) => openRow(row, session.envelopeBinding, masterKey, authorityPublicKey)))
+  const opened = await Promise.all(rows.map((row) => openRow(session, row, masterKey, authorityPublicKey)))
   const contacts = opened.filter((contact): contact is Contact => contact !== null)
   return { contacts, unreadable: rows.length - contacts.length }
 }
@@ -129,8 +142,12 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
   return { uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
 }
 
-/** The request body for a contact: signed summary and sealed card. */
-async function prepare(session: Session, uid: string, input: ContactDraft) {
+/**
+ * The request body for a contact: signed summary and sealed card, at a
+ * revision above every one seen and above `base` (the revision an edit
+ * started from; 0 for a new contact).
+ */
+async function prepare(session: Session, uid: string, input: ContactDraft, base = 0) {
   const masterKey = toBase64(session.masterKey)
   // Keys of addresses still among the emails, each once, in order, as many as the summary holds.
   const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
@@ -139,9 +156,47 @@ async function prepare(session: Session, uid: string, input: ContactDraft) {
     .slice(0, MAX_PINNED_KEYS)
   const draft = { ...input, keys }
   const summary = summaryOf(uid, draft)
-  const signed = await signContactSummary(masterKey, session.envelopeBinding, summary)
-  const card = await sealContactCard(masterKey, session.envelopeBinding, uid, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
+  const revision = await revisionGuard(session.userId).next(CONTACT_SCOPE, uid, base)
+  const signed = await signContactSummary(masterKey, session.envelopeBinding, revision, summary)
+  const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
   return { summary: signed.summary, signature: signed.signature, card }
+}
+
+/** Another device saved the contact first (the server's `revision_conflict`). */
+export function isRevisionConflict(error: unknown): boolean {
+  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
+}
+
+/** Saves an edit of `existing` made from its revision. */
+async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<ContactRow> {
+  const body = await prepare(session, existing.uid, draft, existing.revision)
+  const { data } = await api.put<ContactRow>(`/contacts/${existing.id}`, { ...body, baseRevision: existing.revision })
+  await revisionGuard(session.userId).accept(CONTACT_SCOPE, existing.uid, data.revision)
+  return data
+}
+
+/**
+ * Applies `edit` to the contact as it is now; when another device saved it
+ * meanwhile, reads it again and applies the edit once more.
+ */
+async function editFresh(
+  session: Session,
+  read: () => Promise<Contact[]>,
+  find: (contacts: Contact[]) => Contact | undefined,
+  edit: (contact: Contact) => ContactDraft | null,
+): Promise<Contact | undefined> {
+  for (let attempt = 0; ; attempt++) {
+    const existing = find(await read())
+    if (!existing) return undefined
+    const draft = edit(existing)
+    if (!draft) return existing
+    try {
+      await putContact(session, existing, draft)
+      return existing
+    } catch (error) {
+      if (attempt > 0 || !isRevisionConflict(error)) throw error
+    }
+  }
 }
 
 function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>) {
@@ -163,17 +218,16 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
   })
 }
 
-/** Creates a contact, or saves an edit made from `revision`. */
+/** Creates a contact, or saves an edit made from its `revision`. */
 export function useSaveContact() {
   return useContactMutation(
     async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'> }, session) => {
-      const uid = input.existing?.uid ?? newUid()
-      const body = await prepare(session, uid, input.draft)
-      if (input.existing) {
-        const { data } = await api.put<ContactRow>(`/contacts/${input.existing.id}`, { ...body, revision: input.existing.revision })
-        return data.id
-      }
-      const { data } = await api.post<ContactRow>('/contacts', body)
+      // An edit made on an older revision fails with a revision conflict:
+      // the person's form is not laid over another device's change.
+      if (input.existing) return (await putContact(session, input.existing, input.draft)).id
+      const uid = newUid()
+      const { data } = await api.post<ContactRow>('/contacts', await prepare(session, uid, input.draft))
+      await revisionGuard(session.userId).accept(CONTACT_SCOPE, uid, data.revision)
       return data.id
     },
   )
@@ -255,14 +309,14 @@ export function usePinKey() {
       if (!described) throw new Error('the key does not read')
       const key: ContactKey = described
       // Fresh, so the key lands on the contact as it is now.
-      const { contacts } = await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session) })
-      const existing = contacts.find((c) => c.draft.emails.some((e) => e.address.trim().toLowerCase() === address))
-      if (existing) {
-        const draft = { ...existing.draft, keys: [key, ...existing.draft.keys.filter((k) => !(k.address === address && k.fingerprint === key.fingerprint))] }
-        const body = await prepare(session, existing.uid, draft)
-        await api.put(`/contacts/${existing.id}`, { ...body, revision: existing.revision })
-        return
-      }
+      const read = async () => (await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session), staleTime: 0 })).contacts
+      const existing = await editFresh(
+        session,
+        read,
+        (contacts) => contacts.find((c) => c.draft.emails.some((e) => e.address.trim().toLowerCase() === address)),
+        (contact) => ({ ...contact.draft, keys: [key, ...contact.draft.keys.filter((k) => !(k.address === address && k.fingerprint === key.fingerprint))] }),
+      )
+      if (existing) return
       const draft: ContactDraft = { ...emptyDraft(), name: input.name?.trim() ?? '', emails: [{ address }], keys: [key] }
       await api.post('/contacts', await prepare(session, newUid(), draft))
     },
@@ -299,17 +353,21 @@ export function useAddEmailToContact() {
   const queryClient = useQueryClient()
   return useContactMutation(async (input: { contactId: string; address: string; name?: string }, session) => {
     const address = input.address.trim().toLowerCase()
-    const { contacts } = await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session) })
-    const existing = contacts.find((c) => c.id === input.contactId)
+    const read = async () => (await queryClient.fetchQuery({ queryKey: contactsKey, queryFn: () => loadContacts(session), staleTime: 0 })).contacts
+    const existing = await editFresh(
+      session,
+      read,
+      (contacts) => contacts.find((c) => c.id === input.contactId),
+      (contact) =>
+        contact.draft.emails.some((e) => e.address.trim().toLowerCase() === address)
+          ? null
+          : {
+              ...contact.draft,
+              name: contact.draft.name.trim() || contact.draft.givenName || contact.draft.familyName ? contact.draft.name : (input.name?.trim() ?? ''),
+              emails: [...contact.draft.emails, { address }],
+            },
+    )
     if (!existing) throw new Error('this contact no longer exists')
-    if (existing.draft.emails.some((e) => e.address.trim().toLowerCase() === address)) return existing.id
-    const draft: ContactDraft = {
-      ...existing.draft,
-      name: existing.draft.name.trim() || existing.draft.givenName || existing.draft.familyName ? existing.draft.name : (input.name?.trim() ?? ''),
-      emails: [...existing.draft.emails, { address }],
-    }
-    const body = await prepare(session, existing.uid, draft)
-    await api.put(`/contacts/${existing.id}`, { ...body, revision: existing.revision })
     return existing.id
   })
 }

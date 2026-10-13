@@ -93,10 +93,14 @@ with XChaCha20-Poly1305 under a key derived from the master key
 (`KUTIP1`, bound to the owner's address) is not read. The vectors list the
 values that must be refused (another binding, the address, a changed header,
 another revision, the suite-1 value).
-Stored by the server, opaque, at `GET / PUT /api/user/identity-pins`
-with a compare-and-swap on the revision (two apps writing at once merge and
-retry). Each browser remembers the highest revision it has seen, so the
-server cannot quietly hand back an older list.
+The revision is in the list's authenticated header: a time in unix
+milliseconds above every revision the writer has seen
+(docs/plans/sealed-revisions.md). Stored by the server, opaque, at
+`GET / PUT /api/user/identity-pins` with a compare-and-swap on the revision
+the write started from (`baseRevision`; two apps writing at once merge and
+retry). Each browser (`RevisionGuard`), the CLI and the Chat core remember
+the highest revision they have seen, so the server cannot quietly hand back
+an older list; a device with no history trusts the first list it reads.
 
 ### 4. Checking a person (web)
 

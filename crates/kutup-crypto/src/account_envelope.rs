@@ -22,11 +22,13 @@ use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
+pub use crate::padding::Length;
 
 const MAGIC: &[u8; 8] = b"KUTPAE1\0";
 const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 1 + 1 + 2;
 const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
+const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
 const MAX_CONTEXT_LEN: usize = 320;
 /// The longest object id a suite-2 envelope names.
@@ -76,10 +78,68 @@ pub enum AccountEnvelopePurpose {
     PassVaultSecret = 6,
 }
 
+/// Whether a purpose's envelopes name an object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectPolicy {
+    /// One secret of the purpose per account: no object id.
+    None,
+    /// One secret per object: an object id of exactly this many bytes.
+    Required(usize),
+}
+
+/// What every envelope of a purpose must be: checked on seal, on open and by
+/// the server ([`validate_for`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PurposePolicy {
+    pub object: ObjectPolicy,
+    /// How much of the plaintext's length the envelope shows (padded once,
+    /// here).
+    pub length: Length,
+    /// A secret that is replaced over time: its envelopes carry a revision
+    /// in the authenticated header, so an older one cannot pass as newer.
+    pub mutable: bool,
+}
+
 impl AccountEnvelopePurpose {
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
+
+    pub const fn policy(self) -> PurposePolicy {
+        const KEY: PurposePolicy = PurposePolicy {
+            object: ObjectPolicy::None,
+            length: Length::Exact(32),
+            mutable: false,
+        };
+        match self {
+            Self::PasswordMasterKey
+            | Self::RecoveryMasterKey
+            | Self::DriveHpkePrivateKey
+            | Self::ChatBackupRoot => KEY,
+            // The address and the key's algorithm decide its length.
+            Self::MailAddressPrivateKey => PurposePolicy {
+                object: ObjectPolicy::None,
+                length: Length::Bucket(256),
+                mutable: false,
+            },
+            // One per vault (its Drive file id).
+            Self::PassVaultSecret => PurposePolicy {
+                object: ObjectPolicy::Required(16),
+                length: Length::Bucket(256),
+                mutable: false,
+            },
+        }
+    }
+
+    /// Every purpose, for tests and vectors.
+    pub const ALL: [Self; 6] = [
+        Self::PasswordMasterKey,
+        Self::RecoveryMasterKey,
+        Self::DriveHpkePrivateKey,
+        Self::ChatBackupRoot,
+        Self::MailAddressPrivateKey,
+        Self::PassVaultSecret,
+    ];
 }
 
 impl TryFrom<u8> for AccountEnvelopePurpose {
@@ -109,6 +169,8 @@ pub struct AccountEnvelopeHeader {
     /// The object the secret belongs to (empty when the purpose has one
     /// secret per account).
     pub object_id: Vec<u8>,
+    /// The secret's revision, for a mutable purpose (never 0).
+    pub revision: Option<u64>,
     pub ciphertext_len: u32,
 }
 
@@ -128,18 +190,50 @@ pub fn canonical_binding(value: &str) -> Result<String> {
         .map_err(|_| CryptoError::InvalidInput("account-envelope binding is invalid".into()))
 }
 
+/// Refuses an object id or revision the purpose does not take.
+fn check_shape(
+    purpose: AccountEnvelopePurpose,
+    object_id: &[u8],
+    revision: Option<u64>,
+) -> Result<()> {
+    let policy = purpose.policy();
+    let object_ok = match policy.object {
+        ObjectPolicy::None => object_id.is_empty(),
+        ObjectPolicy::Required(len) => object_id.len() == len,
+    };
+    if !object_ok || object_id.len() > MAX_OBJECT_LEN {
+        return Err(CryptoError::InvalidInput(
+            "account-envelope object id does not fit its purpose".into(),
+        ));
+    }
+    match (policy.mutable, revision) {
+        (true, Some(revision)) if revision > 0 => Ok(()),
+        (false, None) => Ok(()),
+        _ => Err(CryptoError::InvalidInput(
+            "account-envelope revision does not fit its purpose".into(),
+        )),
+    }
+}
+
 fn build_header(
     suite: AccountEnvelopeSuiteId,
     purpose: AccountEnvelopePurpose,
     binding: &str,
     object_id: &[u8],
+    revision: Option<u64>,
     nonce: &[u8; NONCE_LEN],
     ciphertext_len: u32,
 ) -> Result<Vec<u8>> {
     let context_len = u16::try_from(binding.len())
         .map_err(|_| CryptoError::InvalidInput("account-envelope context is too long".into()))?;
     let mut header = Vec::with_capacity(
-        FIXED_PREFIX_LEN + binding.len() + 1 + object_id.len() + NONCE_LEN + LENGTH_LEN,
+        FIXED_PREFIX_LEN
+            + binding.len()
+            + 1
+            + object_id.len()
+            + REVISION_LEN
+            + NONCE_LEN
+            + LENGTH_LEN,
     );
     header.extend_from_slice(MAGIC);
     header.extend_from_slice(&suite.as_u16().to_be_bytes());
@@ -149,6 +243,9 @@ fn build_header(
     header.extend_from_slice(binding.as_bytes());
     header.push(u8::try_from(object_id.len()).expect("checked object length"));
     header.extend_from_slice(object_id);
+    if let Some(revision) = revision {
+        header.extend_from_slice(&revision.to_be_bytes());
+    }
     header.extend_from_slice(nonce);
     header.extend_from_slice(&ciphertext_len.to_be_bytes());
     Ok(header)
@@ -211,8 +308,14 @@ fn check_key(key: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Seals a secret of `purpose` for the account bound by `binding` (suite 2,
-/// no object).
+fn random_nonce() -> [u8; NONCE_LEN] {
+    let mut nonce = [0u8; NONCE_LEN];
+    copy_randombytes(&mut nonce);
+    nonce
+}
+
+/// Seals a secret of `purpose` (one per account) for the account bound by
+/// `binding`.
 pub fn seal(
     plaintext: &[u8],
     key: &[u8],
@@ -222,7 +325,7 @@ pub fn seal(
     seal_object(plaintext, key, purpose, binding, &[])
 }
 
-/// Seals a secret of `purpose` belonging to `object_id` (suite 2).
+/// Seals a secret of `purpose` belonging to `object_id`.
 pub fn seal_object(
     plaintext: &[u8],
     key: &[u8],
@@ -230,8 +333,6 @@ pub fn seal_object(
     binding: &str,
     object_id: &[u8],
 ) -> Result<Vec<u8>> {
-    let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
     seal_suite(
         AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
         plaintext,
@@ -239,7 +340,30 @@ pub fn seal_object(
         purpose,
         binding,
         object_id,
-        &nonce,
+        None,
+        &random_nonce(),
+    )
+}
+
+/// Seals revision `revision` of a mutable secret of `purpose` (with
+/// `object_id` if the purpose names one).
+pub fn seal_revision(
+    plaintext: &[u8],
+    key: &[u8],
+    purpose: AccountEnvelopePurpose,
+    binding: &str,
+    object_id: &[u8],
+    revision: u64,
+) -> Result<Vec<u8>> {
+    seal_suite(
+        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+        plaintext,
+        key,
+        purpose,
+        binding,
+        object_id,
+        Some(revision),
+        &random_nonce(),
     )
 }
 
@@ -258,11 +382,13 @@ pub fn seal_with_nonce(
         purpose,
         binding,
         &[],
+        None,
         nonce,
     )
 }
 
-/// Any suite, object and nonce: for checked-in vectors only.
+/// Any suite, object, revision and nonce: for checked-in vectors only.
+#[allow(clippy::too_many_arguments)]
 pub fn seal_suite(
     suite: AccountEnvelopeSuiteId,
     plaintext: &[u8],
@@ -270,17 +396,15 @@ pub fn seal_suite(
     purpose: AccountEnvelopePurpose,
     binding: &str,
     object_id: &[u8],
+    revision: Option<u64>,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     check_key(key)?;
-    if plaintext.is_empty() || plaintext.len() > MAX_PLAINTEXT_LEN {
+    check_shape(purpose, object_id, revision)?;
+    let padded = Zeroizing::new(purpose.policy().length.pad(plaintext)?);
+    if padded.is_empty() || padded.len() > MAX_PLAINTEXT_LEN {
         return Err(CryptoError::InvalidInput(
             "account-envelope plaintext length is invalid".into(),
-        ));
-    }
-    if object_id.len() > MAX_OBJECT_LEN {
-        return Err(CryptoError::InvalidInput(
-            "account-envelope object id is invalid".into(),
         ));
     }
     let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::InvalidLength {
@@ -288,20 +412,69 @@ pub fn seal_suite(
         got: nonce.len(),
     })?;
     let binding = canonical_binding(binding)?;
-    let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
+    let ciphertext_len = u32::try_from(padded.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("account-envelope plaintext is too long".into()))?;
-    let header = build_header(suite, purpose, &binding, object_id, &nonce, ciphertext_len)?;
+    let header = build_header(
+        suite,
+        purpose,
+        &binding,
+        object_id,
+        revision,
+        &nonce,
+        ciphertext_len,
+    )?;
     let aead = aead_key(suite, key, purpose, &binding, object_id)?;
     let ciphertext = XChaCha20Poly1305::new(aead.as_slice().into())
         .encrypt(
             XNonce::from_slice(&nonce),
+            Payload {
+                msg: &padded,
+                aad: &header,
+            },
+        )
+        .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
+    debug_assert_eq!(ciphertext.len(), ciphertext_len as usize);
+    let mut envelope = header;
+    envelope.extend_from_slice(&ciphertext);
+    Ok(envelope)
+}
+
+/// An envelope built without the purpose's checks or padding (the plaintext
+/// is sealed as given): for negative vectors only, which need well-encrypted
+/// envelopes of the wrong shape.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_unchecked_for_vectors(
+    plaintext: &[u8],
+    key: &[u8],
+    purpose: AccountEnvelopePurpose,
+    binding: &str,
+    object_id: &[u8],
+    revision: Option<u64>,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    let suite = AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2;
+    let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
+        .map_err(|_| CryptoError::InvalidInput("too long".into()))?;
+    let header = build_header(
+        suite,
+        purpose,
+        binding,
+        object_id,
+        revision,
+        nonce,
+        ciphertext_len,
+    )?;
+    let aead = aead_key(suite, key, purpose, binding, object_id)?;
+    let ciphertext = XChaCha20Poly1305::new(aead.as_slice().into())
+        .encrypt(
+            XNonce::from_slice(nonce),
             Payload {
                 msg: plaintext,
                 aad: &header,
             },
         )
         .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
-    debug_assert_eq!(ciphertext.len(), ciphertext_len as usize);
     let mut envelope = header;
     envelope.extend_from_slice(&ciphertext);
     Ok(envelope)
@@ -356,11 +529,27 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
     let after_object = (after_context + 1)
         .checked_add(object_len)
         .ok_or(CryptoError::TooShort)?;
-    if after_object > envelope.len() {
+    let revision_len = if purpose.policy().mutable {
+        REVISION_LEN
+    } else {
+        0
+    };
+    let after_revision = after_object
+        .checked_add(revision_len)
+        .ok_or(CryptoError::TooShort)?;
+    if after_revision > envelope.len() {
         return Err(CryptoError::TooShort);
     }
     let object_id = envelope[after_context + 1..after_object].to_vec();
-    let after_nonce = after_object
+    let revision = (revision_len > 0).then(|| {
+        u64::from_be_bytes(
+            envelope[after_object..after_revision]
+                .try_into()
+                .expect("eight-byte slice"),
+        )
+    });
+    check_shape(purpose, &object_id, revision)?;
+    let after_nonce = after_revision
         .checked_add(NONCE_LEN)
         .ok_or(CryptoError::TooShort)?;
     let after_length = after_nonce
@@ -377,6 +566,10 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
     let ciphertext_len_usize = usize::try_from(ciphertext_len)
         .map_err(|_| CryptoError::InvalidInput("account-envelope ciphertext is too long".into()))?;
     if !(TAG_LEN + 1..=MAX_PLAINTEXT_LEN + TAG_LEN).contains(&ciphertext_len_usize)
+        || !purpose
+            .policy()
+            .length
+            .allows_padded_len(ciphertext_len_usize - TAG_LEN)
         || after_length.checked_add(ciphertext_len_usize) != Some(envelope.len())
     {
         return Err(CryptoError::InvalidInput(
@@ -389,38 +582,45 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             purpose,
             canonical_binding: canonical,
             object_id,
+            revision,
             ciphertext_len,
         },
         aad: &envelope[..after_length],
-        nonce: &envelope[after_object..after_nonce],
+        nonce: &envelope[after_revision..after_nonce],
         ciphertext: &envelope[after_length..],
     })
 }
 
+/// The header of a well-formed envelope (its purpose's object, revision and
+/// length rules hold), without opening it.
 pub fn inspect(envelope: &[u8]) -> Result<AccountEnvelopeHeader> {
     Ok(parse(envelope)?.header)
 }
 
-/// Checks an envelope's header without opening it.
-pub fn validate(
+/// What a server checks before it stores an envelope: well formed, of
+/// `expected_purpose`, for the account bound by `expected_binding` and the
+/// object `expected_object` (empty when the purpose names none). Suite 1 and
+/// any unknown suite never parse. Returns the header (its revision, for a
+/// mutable purpose).
+pub fn validate_for(
     envelope: &[u8],
     expected_purpose: AccountEnvelopePurpose,
     expected_binding: &str,
-    expected_plaintext_len: usize,
-) -> Result<()> {
-    let parsed = parse(envelope)?;
-    if parsed.header.purpose != expected_purpose
-        || parsed.header.canonical_binding != canonical_binding(expected_binding)?
-        || parsed.ciphertext.len() != expected_plaintext_len.saturating_add(TAG_LEN)
+    expected_object: &[u8],
+) -> Result<AccountEnvelopeHeader> {
+    let header = parse(envelope)?.header;
+    if header.purpose != expected_purpose
+        || header.canonical_binding != canonical_binding(expected_binding)?
+        || header.object_id != expected_object
     {
         return Err(CryptoError::InvalidInput(
             "account-envelope binding does not match".into(),
         ));
     }
-    Ok(())
+    Ok(header)
 }
 
-/// Opens an envelope with no object.
+/// Opens an envelope of a purpose with no object and no revision.
 pub fn open(
     envelope: &[u8],
     key: &[u8],
@@ -430,7 +630,7 @@ pub fn open(
     open_object(envelope, key, expected_purpose, expected_binding, &[])
 }
 
-/// Opens an envelope sealed for `object_id`.
+/// Opens an envelope sealed for `object_id` (a purpose with no revision).
 pub fn open_object(
     envelope: &[u8],
     key: &[u8],
@@ -438,6 +638,37 @@ pub fn open_object(
     expected_binding: &str,
     object_id: &[u8],
 ) -> Result<Vec<u8>> {
+    if expected_purpose.policy().mutable {
+        return Err(CryptoError::InvalidInput(
+            "a mutable secret opens with its revision".into(),
+        ));
+    }
+    Ok(open_any(envelope, key, expected_purpose, expected_binding, object_id)?.0)
+}
+
+/// Opens a mutable secret: its plaintext and the revision it was sealed at
+/// (the caller refuses one older than it has seen).
+pub fn open_revision(
+    envelope: &[u8],
+    key: &[u8],
+    expected_purpose: AccountEnvelopePurpose,
+    expected_binding: &str,
+    object_id: &[u8],
+) -> Result<(Vec<u8>, u64)> {
+    let (plain, revision) = open_any(envelope, key, expected_purpose, expected_binding, object_id)?;
+    let revision = revision.ok_or_else(|| {
+        CryptoError::InvalidInput("this purpose's secrets have no revision".into())
+    })?;
+    Ok((plain, revision))
+}
+
+fn open_any(
+    envelope: &[u8],
+    key: &[u8],
+    expected_purpose: AccountEnvelopePurpose,
+    expected_binding: &str,
+    object_id: &[u8],
+) -> Result<(Vec<u8>, Option<u64>)> {
     check_key(key)?;
     let parsed = parse(envelope)?;
     let suite = parsed.header.suite;
@@ -454,7 +685,7 @@ pub fn open_object(
         &parsed.header.canonical_binding,
         &parsed.header.object_id,
     )?;
-    XChaCha20Poly1305::new(aead.as_slice().into())
+    let padded = XChaCha20Poly1305::new(aead.as_slice().into())
         .decrypt(
             XNonce::from_slice(parsed.nonce),
             Payload {
@@ -462,7 +693,9 @@ pub fn open_object(
                 aad: parsed.aad,
             },
         )
-        .map_err(|_| CryptoError::AuthFailed)
+        .map_err(|_| CryptoError::AuthFailed)?;
+    let plain = expected_purpose.policy().length.unpad(padded)?;
+    Ok((plain, parsed.header.revision))
 }
 
 pub fn seal_b64(
@@ -526,11 +759,11 @@ mod tests {
         assert_eq!(header.canonical_binding, BINDING);
         assert!(header.object_id.is_empty());
         assert_eq!(header.ciphertext_len, 48);
-        validate(
+        validate_for(
             &envelope,
             AccountEnvelopePurpose::PasswordMasterKey,
             BINDING,
-            32,
+            &[],
         )
         .unwrap();
         // Only the exact key binding: not uppercased, padded, or an address.
@@ -540,11 +773,11 @@ mod tests {
             "ada@kutup.dev".to_owned(),
         ] {
             assert!(
-                validate(
+                validate_for(
                     &envelope,
                     AccountEnvelopePurpose::PasswordMasterKey,
                     &other,
-                    32
+                    &[]
                 )
                 .is_err(),
                 "{other}"

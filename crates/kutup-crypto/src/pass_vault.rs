@@ -198,6 +198,7 @@ pub fn seal_vault_secret_with_nonce(
         AccountEnvelopePurpose::PassVaultSecret,
         binding,
         file_id,
+        None,
         nonce,
     )
 }

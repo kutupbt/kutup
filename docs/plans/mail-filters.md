@@ -104,7 +104,10 @@ with the account's master key**, as Drive file names are: the server
 stores ids, colours, order and the tree, never "Lawyer — divorce" or
 "Job search". The server needs no names: filters point at ids, and the
 sidebar opens names in the browser. Uniqueness among siblings is checked
-in the browser (the server cannot). Proton stores names readable.
+in the browser (the server cannot). Proton stores names readable. Each
+sealed name carries its revision in its header and is padded to a multiple
+of 256 bytes, so the server can neither hand back an older name nor tell a
+name's length (docs/plans/sealed-revisions.md).
 
 What stays readable is what the server must match: a filter's conditions
 (the sender address, the words in the subject), as Proton's Sieve is; its
@@ -208,6 +211,11 @@ labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
 - `GET/POST /api/mail/folders`, `PATCH/DELETE /api/mail/folders/{id}`
   (rename, recolour, move, reorder, expanded).
 - `GET/POST /api/mail/labels`, `PATCH/DELETE /api/mail/labels/{id}`.
+- A rename (of a folder, label or filter) sends the new sealed `name` with
+  `baseNameRevision`, the revision of the name it started from; the new
+  name's revision must be above it, and a rename that started from another
+  name gets `409` with `code: "revision_conflict"` (the browser reads again
+  and renames once more; docs/plans/sealed-revisions.md).
 - `PATCH /api/mail/messages` takes `folder: {custom: id}`, `addLabels`,
   `removeLabels`; the list and counts take a folder or a label.
 - `GET/POST /api/mail/filters`, `PATCH/DELETE /api/mail/filters/{id}`,

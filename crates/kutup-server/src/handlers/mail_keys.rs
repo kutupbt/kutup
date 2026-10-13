@@ -392,13 +392,8 @@ pub async fn add_key(
     let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let header = account_envelope::inspect(&envelope)
+    account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
-    if header.purpose != AccountEnvelopePurpose::MailAddressPrivateKey {
-        return Err(AppError::bad_request(
-            "privateKeyEnvelope is not this account's mail key",
-        ));
-    }
 
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
     // The account's key binding: a key sealed for any other is refused.
@@ -407,7 +402,14 @@ pub async fn add_key(
             .bind(user_id)
             .fetch_one(&mut *change.tx)
             .await?;
-    if header.canonical_binding != binding {
+    if account_envelope::validate_for(
+        &envelope,
+        AccountEnvelopePurpose::MailAddressPrivateKey,
+        &binding,
+        &[],
+    )
+    .is_err()
+    {
         return Err(AppError::bad_request(
             "privateKeyEnvelope is not this account's mail key",
         ));

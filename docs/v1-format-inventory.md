@@ -39,13 +39,36 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 `AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID
 (2; suite 1 is retired and not read), purpose byte, zero reserved byte,
 big-endian context length, the context (the account's key binding, a UUID v4,
-never an email, username or address: docs/plans/account-identity.md), a NUL,
-the object id where the purpose has one secret per object, 24-byte nonce,
-big-endian ciphertext length, and XChaCha20-Poly1305 ciphertext/tag. The bytes
-preceding the ciphertext are the complete AAD, and the AEAD key is derived per
-envelope with HKDF-SHA256 over the purpose, the binding and the object. The
-server rejects noncanonical base64, unknown suites/purposes, noncanonical
-context, wrong purpose/binding, wrong plaintext size and trailing data.
+never an email, username or address: docs/plans/account-identity.md), the
+object id's length byte and the object id where the purpose has one secret
+per object, an 8-byte big-endian revision for a mutable purpose, 24-byte
+nonce, big-endian ciphertext length, and XChaCha20-Poly1305 ciphertext/tag.
+The bytes preceding the ciphertext are the complete AAD, and the AEAD key is
+derived per envelope with HKDF-SHA256 over the purpose, the binding and the
+object. Each purpose has one policy (`AccountEnvelopePurpose::policy`),
+checked on seal, open and by the server: whether it names an object (and its
+length), how its plaintext's length shows (`Exact` for keys; `Fixed` or
+`Bucket` padding, `0x80` then zeros, applied once by the envelope and checked
+canonically on open) and whether it carries a revision:
+
+| Purpose | Object | Length | Revision |
+|---|---|---|---|
+| PasswordMasterKey, RecoveryMasterKey, DriveHpkePrivateKey, ChatBackupRoot | none | exactly 32 bytes | no |
+| MailAddressPrivateKey | none | padded to a multiple of 256 bytes | no |
+| PassVaultSecret | the vault's file id (16 bytes) | padded to a multiple of 256 bytes | no |
+
+Every server write path checks an envelope with
+`account_envelope::validate_for(purpose, binding, object)` before storing it,
+and so rejects noncanonical base64, unknown or retired suites and purposes,
+noncanonical context, the wrong purpose, binding or object, a missing or
+extra object or revision, a length its policy never gives, and trailing data.
+`account-envelope-v2.json` holds one envelope per purpose and, for each, the
+envelopes that must be refused, read by the Rust and the WASM tests.
+
+Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
+(`KUTIP2`) carry their revision in clear after the suite, covered by the AAD
+(docs/plans/sealed-revisions.md); cards and names are padded to a multiple of
+256 bytes.
 
 The account's own at-rest formats bind the key binding, never a name, and a
 format that bound a name was replaced by a new version with no reader for the

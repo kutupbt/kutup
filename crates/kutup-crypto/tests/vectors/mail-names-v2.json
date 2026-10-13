@@ -4,65 +4,73 @@
   "namesKey": "S87ck8bG4jUA8+qtxzgZo36kS2iXtAsQayPdpNnrGaQ=",
   "kind": "folder",
   "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+  "revision": 1791633600000,
   "name": "İş başvuruları",
   "nonce": "RERERERERERERERERERERERERERERERE",
-  "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU=",
+  "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40=",
   "refused": [
     {
       "case": "another account's key binding",
       "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "the account's address instead of its binding",
       "binding": "alice@kutup.dev",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "another kind",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "label",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "another id",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "folder",
       "id": "00000000-0000-4000-8000-000000000000",
-      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "magic changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4xAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4xAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "suite changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAQAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
+    },
+    {
+      "case": "revision changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4BREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "nonce changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAkVERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4ARUREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr40="
     },
     {
       "case": "ciphertext changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "kind": "folder",
       "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPQ="
+      "sealed": "S1VUTU4yAAAAAgAAAaElry4AREREREREREREREREREREREREREREREREw3HWqJFZ+ltC24dmRiBmIjg34J8e1IQR0mAjmZO+Ga1DQMMOuwlMrkutyCI6TzmulI8OqVnkdDHq1H50cNNAdHqwxAmI2ki/aW+EK9Yc/03gqtu/rir1KoKaFFfhBKXxbzy3IA108XJ0DqwOr/gfssntQadhVWJaaqUn0WT5Yrwu6SMaI+tWnVaOqVtpBkgoBvDW6kg7Xfh82dTrVLJf0q78Bz7xqV8cfSdacuzM2InfcCkWr0IY+AVd9/4OIdAF5t32yfK8n/YL3sSmIq3+Pk7Eht3JTDG2UFiv67JeSHY2i2f4W9JqhzyA9eSUFtki6DqNkSgyT1nIUBhb/l2B147oXA8EYrv9JlXondbWr4w="
     },
     {
       "case": "suite 1, bound to the address",

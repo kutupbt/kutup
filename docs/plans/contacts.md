@@ -81,8 +81,11 @@ own.
 - `POST /api/contacts`: create `{ summary, signature, card }`; the server
   verifies the signature with the account authority, checks the canonical
   summary and its limits, and writes the emails index.
-- `PUT /api/contacts/{id}`: replace, with the expected revision (409 on
-  conflict, as Drive's edits are).
+- `PUT /api/contacts/{id}`: replace, with `baseRevision`, the revision the
+  edit started from (409 `revision_conflict` when another device saved
+  first). A contact's revision is a time in its card's authenticated header,
+  which the summary's signature binds; cards are padded to a multiple of 256
+  bytes (docs/plans/sealed-revisions.md).
 - `DELETE /api/contacts/{id}`; `POST /api/contacts/delete` for many.
 - `POST /api/contacts/import`: up to 500 at once, all or nothing.
 - `GET /api/contacts/emails?q=&limit=`: autocomplete over name and address,

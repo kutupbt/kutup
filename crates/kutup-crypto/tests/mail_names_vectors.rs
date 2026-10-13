@@ -23,6 +23,8 @@ struct Vectors {
     names_key: String,
     kind: String,
     id: String,
+    /// The name's revision, in its header and bound.
+    revision: u64,
     name: String,
     nonce: String,
     sealed: String,
@@ -45,6 +47,8 @@ const OTHER_ID: &str = "00000000-0000-4000-8000-000000000000";
 const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
 const OTHER_BINDING: &str = "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0";
 const ADDRESS: &str = "alice@kutup.dev";
+/// 2026-10-10T12:00:00Z in unix milliseconds.
+const REVISION: u64 = 1_791_633_600_000;
 /// The same name as suite 1 sealed it (bound to `alice@kutup.dev`).
 const SUITE_1_SEALED: &str =
     "S1VUTU4xAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N2US+HHd4Zhsmta6A6Z/LTk=";
@@ -61,8 +65,10 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
     magic[5] = b'1';
     let mut suite = sealed.to_vec();
     suite[9] = 1;
+    let mut revision = sealed.to_vec();
+    revision[17] ^= 1;
     let mut nonce = sealed.to_vec();
-    nonce[10] ^= 1;
+    nonce[18] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
     let old = STANDARD.decode(SUITE_1_SEALED).unwrap();
@@ -85,6 +91,7 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         case("another id", BINDING, "folder", OTHER_ID, sealed),
         case("magic changed", BINDING, "folder", ID, &magic),
         case("suite changed", BINDING, "folder", ID, &suite),
+        case("revision changed", BINDING, "folder", ID, &revision),
         case("nonce changed", BINDING, "folder", ID, &nonce),
         case("ciphertext changed", BINDING, "folder", ID, &tag),
         case("suite 1, bound to the address", BINDING, "folder", ID, &old),
@@ -126,6 +133,7 @@ fn write_vectors() {
         BINDING,
         MailNameKind::Folder,
         &id_bytes(),
+        REVISION,
         name,
         &nonce,
     )
@@ -136,6 +144,7 @@ fn write_vectors() {
         names_key: STANDARD.encode(*key),
         kind: "folder".into(),
         id: ID.into(),
+        revision: REVISION,
         name: name.into(),
         nonce: STANDARD.encode(nonce),
         refused: refused(&sealed),
@@ -161,6 +170,7 @@ fn vectors_hold() {
         &vectors.binding,
         kind,
         &id_bytes(),
+        vectors.revision,
         &vectors.name,
         &nonce,
     )
@@ -168,7 +178,7 @@ fn vectors_hold() {
     assert_eq!(STANDARD.encode(&sealed), vectors.sealed);
     assert_eq!(
         open_name(&key, &vectors.binding, kind, &id_bytes(), &sealed).unwrap(),
-        vectors.name
+        (vectors.name.clone(), vectors.revision)
     );
     let expected = refused(&sealed);
     assert_eq!(vectors.refused.len(), expected.len());
@@ -203,5 +213,14 @@ fn vectors_hold() {
         );
     }
     // The address is not a key binding: nothing seals to it.
-    assert!(seal_name_with_nonce(&key, ADDRESS, kind, &id_bytes(), &vectors.name, &nonce).is_err());
+    assert!(seal_name_with_nonce(
+        &key,
+        ADDRESS,
+        kind,
+        &id_bytes(),
+        vectors.revision,
+        &vectors.name,
+        &nonce
+    )
+    .is_err());
 }

@@ -5,7 +5,7 @@ use anyhow::Result;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::Method;
 
-use super::types::IdentityPinsRecord;
+use super::types::{IdentityPinsRecord, IdentityPinsWrite};
 use super::Client;
 
 impl Client {
@@ -18,13 +18,13 @@ impl Client {
         super::decode_json(resp).map(Some)
     }
 
-    /// Stores `record` (its revision follows the stored one); `false` when
-    /// another app stored that revision first.
-    pub fn put_identity_pins(&self, record: &IdentityPinsRecord) -> Result<bool> {
+    /// Stores `write` if the server still holds its base revision; `false`
+    /// when another app stored a list first.
+    pub fn put_identity_pins(&self, write: &IdentityPinsWrite) -> Result<bool> {
         let resp = self
             .request(Method::PUT, "/user/identity-pins")
             .header(CONTENT_TYPE, "application/json")
-            .json(record)
+            .json(write)
             .send()?;
         if resp.status().as_u16() == 409 {
             return Ok(false);

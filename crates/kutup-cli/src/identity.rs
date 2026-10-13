@@ -13,7 +13,7 @@ use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdenti
 use kutup_crypto::identity_pins::{self, IdentityPinV1, IdentityPinsV1, PinState};
 use kutup_crypto::safety_number;
 
-use crate::api::types::IdentityPinsRecord;
+use crate::api::types::IdentityPinsWrite;
 use crate::config;
 use crate::context::Ctx;
 
@@ -195,10 +195,8 @@ pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
             let sealed = STANDARD
                 .decode(&record.envelope)
                 .context("identity pins are not base64")?;
-            (
-                record.revision,
-                identity_pins::open(&key, &me.binding, record.revision, &sealed)?,
-            )
+            let (list, revision) = identity_pins::open(&key, &me.binding, &sealed)?;
+            (revision, list)
         }
     };
     if revision < highest_seen(me) {
@@ -206,6 +204,13 @@ pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
     }
     remember(me, revision);
     Ok((revision, list))
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn now_seconds() -> u64 {
@@ -246,10 +251,11 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, state: PinState) -> R
             replaced,
         });
         list.pins.sort_by(|a, b| a.account.cmp(&b.account));
-        let next = revision + 1;
+        // A time, above every revision seen (docs/plans/drive-identity-pins.md).
+        let next = now_millis().max(revision + 1).max(highest_seen(me) + 1);
         let sealed = identity_pins::seal(&key, &me.binding, next, &list)?;
-        if ctx.client.put_identity_pins(&IdentityPinsRecord {
-            revision: next,
+        if ctx.client.put_identity_pins(&IdentityPinsWrite {
+            base_revision: revision,
             envelope: STANDARD.encode(sealed),
         })? {
             remember(me, next);

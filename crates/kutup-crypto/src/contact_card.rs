@@ -10,6 +10,13 @@
 //! - The contact card: the full vCard 4.0 text, sealed with XChaCha20-Poly1305
 //!   under the account's contacts key and bound to the account and UID.
 //!
+//! A contact is replaced over time, so both carry its revision (a time in
+//! unix milliseconds, above every revision seen: `RevisionGuard` on the web):
+//! the card in its header, under the AAD, and the summary in its signature,
+//! so the server can neither pass an older card off as the newest nor pair a
+//! summary with another card. A card's vCard is padded to a multiple of 256
+//! bytes, so its length says little of what it holds.
+//!
 //! Both bind the account by its key binding (docs/plans/account-identity.md),
 //! never by its address, which may change: summary signatures under the
 //! `kutup/contact-summary/v2` domain and cards of suite 2 (`KUTCC2`). The
@@ -28,6 +35,7 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
 use crate::key_binding;
+use crate::padding::Length;
 
 const CONTACTS_KEY_SALT: &[u8] = b"kutup/contacts/v1\0";
 const CONTACTS_KEY_INFO: &[u8] = b"kutup/contacts/card-key/v1\0";
@@ -36,6 +44,11 @@ const CARD_MAGIC: &[u8; 8] = b"KUTCC2\0\0";
 const CARD_AAD_DOMAIN: &[u8] = b"kutup/contact-card/v2\0";
 const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
+const REVISION_LEN: usize = 8;
+const CARD_HEADER_LEN: usize = 8 + 2 + REVISION_LEN + NONCE_LEN;
+const TAG_LEN: usize = 16;
+/// How a vCard is padded before it is sealed.
+const CARD_PADDING: Length = Length::Bucket(256);
 
 /// The largest summary accepted, encoded.
 pub const MAX_SUMMARY_BYTES: usize = 32 * 1024;
@@ -211,14 +224,17 @@ pub fn decode_summary(bytes: &[u8]) -> Result<ContactSummaryV1> {
 
 fn summary_signing_bytes(
     binding: &str,
+    revision: u64,
     authority_public: &[u8; 32],
     summary: &[u8],
 ) -> Result<Vec<u8>> {
     let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
-    let mut out = Vec::with_capacity(SUMMARY_DOMAIN.len() + binding.len() + 140 + summary.len());
+    check_revision(revision)?;
+    let mut out = Vec::with_capacity(SUMMARY_DOMAIN.len() + binding.len() + 148 + summary.len());
     out.extend_from_slice(SUMMARY_DOMAIN);
     out.extend_from_slice(&(binding.len() as u16).to_be_bytes());
     out.extend_from_slice(binding.as_bytes());
+    out.extend_from_slice(&revision.to_be_bytes());
     out.extend_from_slice(
         &hex::decode(incarnation_id_from_authority_public(authority_public)).expect("hex"),
     );
@@ -230,24 +246,40 @@ fn summary_signing_bytes(
     Ok(out)
 }
 
-/// Encodes and signs a summary with the authority of the account whose key
-/// binding is `binding`. Returns the canonical bytes and the signature.
+fn check_revision(revision: u64) -> Result<()> {
+    if revision == 0 {
+        return Err(invalid("revisions start at 1"));
+    }
+    Ok(())
+}
+
+/// Encodes and signs revision `revision` of a summary with the authority of
+/// the account whose key binding is `binding`. Returns the canonical bytes
+/// and the signature.
 pub fn sign_summary(
     summary: &ContactSummaryV1,
     binding: &str,
+    revision: u64,
     authority: &SigningKey,
 ) -> Result<(Vec<u8>, [u8; 64])> {
     let bytes = encode_summary(summary)?;
-    let signing = summary_signing_bytes(binding, &authority.verifying_key().to_bytes(), &bytes)?;
+    let signing = summary_signing_bytes(
+        binding,
+        revision,
+        &authority.verifying_key().to_bytes(),
+        &bytes,
+    )?;
     Ok((bytes, authority.sign(&signing).to_bytes()))
 }
 
 /// Checks a stored summary's signature against the authority of the account
-/// whose key binding is `binding`, and returns it.
+/// whose key binding is `binding`, for revision `revision` (its card's), and
+/// returns it.
 pub fn verify_summary(
     summary: &[u8],
     signature: &[u8],
     binding: &str,
+    revision: u64,
     authority_public: &[u8; 32],
 ) -> Result<ContactSummaryV1> {
     let parsed = decode_summary(summary)?;
@@ -257,7 +289,7 @@ pub fn verify_summary(
             expected: 64,
             got: signature.len(),
         })?;
-    let signing = summary_signing_bytes(binding, authority_public, summary)?;
+    let signing = summary_signing_bytes(binding, revision, authority_public, summary)?;
     VerifyingKey::from_bytes(authority_public)
         .map_err(|_| invalid("authority key is invalid"))?
         .verify_strict(&signing, &Signature::from_bytes(&signature))
@@ -274,13 +306,14 @@ pub fn derive_contacts_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>>
     Ok(key)
 }
 
-fn card_aad(binding: &str, uid: &str) -> Result<Vec<u8>> {
+fn card_aad(binding: &str, uid: &str, revision: u64) -> Result<Vec<u8>> {
     let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
     if !plain_text(uid, MAX_UID_CHARS) {
         return Err(invalid("uid is invalid"));
     }
+    check_revision(revision)?;
     let mut aad = Vec::with_capacity(
-        CARD_MAGIC.len() + 2 + CARD_AAD_DOMAIN.len() + binding.len() + uid.len() + 4,
+        CARD_MAGIC.len() + 2 + CARD_AAD_DOMAIN.len() + binding.len() + uid.len() + 12,
     );
     aad.extend_from_slice(CARD_MAGIC);
     aad.extend_from_slice(&SUITE.to_be_bytes());
@@ -289,20 +322,23 @@ fn card_aad(binding: &str, uid: &str) -> Result<Vec<u8>> {
     aad.extend_from_slice(binding.as_bytes());
     aad.extend_from_slice(&(uid.len() as u16).to_be_bytes());
     aad.extend_from_slice(uid.as_bytes());
+    aad.extend_from_slice(&revision.to_be_bytes());
     Ok(aad)
 }
 
-/// Seals a contact's vCard text: `magic ‖ suite ‖ nonce ‖ ciphertext`, bound
-/// to the account's key binding and the contact's UID.
+/// Seals revision `revision` of a contact's vCard text:
+/// `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`, bound to the account's
+/// key binding, the contact's UID and the revision.
 pub fn seal_card(
     contacts_key: &[u8; 32],
     binding: &str,
     uid: &str,
+    revision: u64,
     vcard: &[u8],
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     copy_randombytes(&mut nonce);
-    seal_card_with_nonce(contacts_key, binding, uid, vcard, &nonce)
+    seal_card_with_nonce(contacts_key, binding, uid, revision, vcard, &nonce)
 }
 
 /// [`seal_card`] with a fixed nonce, for checked-in vectors only.
@@ -310,68 +346,80 @@ pub fn seal_card_with_nonce(
     contacts_key: &[u8; 32],
     binding: &str,
     uid: &str,
+    revision: u64,
     vcard: &[u8],
     nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));
     }
-    let aad = card_aad(binding, uid)?;
+    let aad = card_aad(binding, uid, revision)?;
+    let padded = Zeroizing::new(CARD_PADDING.pad(vcard)?);
     let ciphertext = XChaCha20Poly1305::new(contacts_key.into())
         .encrypt(
             XNonce::from_slice(nonce),
             Payload {
-                msg: vcard,
+                msg: &padded,
                 aad: &aad,
             },
         )
         .map_err(|_| CryptoError::Backend("contact card seal".into()))?;
-    let mut out = Vec::with_capacity(CARD_MAGIC.len() + 2 + NONCE_LEN + ciphertext.len());
+    let mut out = Vec::with_capacity(CARD_HEADER_LEN + ciphertext.len());
     out.extend_from_slice(CARD_MAGIC);
     out.extend_from_slice(&SUITE.to_be_bytes());
+    out.extend_from_slice(&revision.to_be_bytes());
     out.extend_from_slice(nonce);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Opens a sealed card of the account whose key binding is `binding`, for `uid`.
+/// Opens a sealed card of the account whose key binding is `binding`, for
+/// `uid`: the vCard and the revision it was sealed at (refuse one older than
+/// seen).
 pub fn open_card(
     contacts_key: &[u8; 32],
     binding: &str,
     uid: &str,
     sealed: &[u8],
-) -> Result<Zeroizing<Vec<u8>>> {
-    let header = CARD_MAGIC.len() + 2 + NONCE_LEN;
-    if sealed.len() <= header + 16 || sealed.len() > header + MAX_CARD_BYTES + 16 {
-        return Err(CryptoError::TooShort);
-    }
-    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
-        return Err(invalid("not a contact card"));
-    }
-    let aad = card_aad(binding, uid)?;
-    let nonce = &sealed[10..header];
-    XChaCha20Poly1305::new(contacts_key.into())
+) -> Result<(Zeroizing<Vec<u8>>, u64)> {
+    let revision = inspect_card(sealed)?;
+    let aad = card_aad(binding, uid, revision)?;
+    let nonce = &sealed[10 + REVISION_LEN..CARD_HEADER_LEN];
+    let padded = XChaCha20Poly1305::new(contacts_key.into())
         .decrypt(
             XNonce::from_slice(nonce),
             Payload {
-                msg: &sealed[header..],
+                msg: &sealed[CARD_HEADER_LEN..],
                 aad: &aad,
             },
         )
-        .map(Zeroizing::new)
-        .map_err(|_| CryptoError::AuthFailed)
+        .map_err(|_| CryptoError::AuthFailed)?;
+    let vcard = Zeroizing::new(CARD_PADDING.unpad(padded)?);
+    if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
+        return Err(invalid("card size is invalid"));
+    }
+    Ok((vcard, revision))
 }
 
-/// Checks a sealed card's framing and size without opening it (the server's view).
-pub fn inspect_card(sealed: &[u8]) -> Result<()> {
-    let header = CARD_MAGIC.len() + 2 + NONCE_LEN;
-    if sealed.len() <= header + 16 || sealed.len() > header + MAX_CARD_BYTES + 16 {
+/// Checks a sealed card's framing, padded size and revision without opening
+/// it (the server's view), and returns the revision.
+pub fn inspect_card(sealed: &[u8]) -> Result<u64> {
+    let max = CARD_PADDING
+        .padded_len(MAX_CARD_BYTES)
+        .expect("fits")
+        .saturating_add(CARD_HEADER_LEN + TAG_LEN);
+    if sealed.len() <= CARD_HEADER_LEN + TAG_LEN
+        || sealed.len() > max
+        || !CARD_PADDING.allows_padded_len(sealed.len() - CARD_HEADER_LEN - TAG_LEN)
+    {
         return Err(invalid("card size is invalid"));
     }
     if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
         return Err(invalid("not a contact card"));
     }
-    Ok(())
+    let revision = u64::from_be_bytes(sealed[10..10 + REVISION_LEN].try_into().expect("8"));
+    check_revision(revision)?;
+    Ok(revision)
 }
 
 #[cfg(test)]
@@ -412,20 +460,27 @@ mod tests {
         let other = AccountIdentityKeysV1::derive(&[6u8; 32]).unwrap();
         let authority = identity.authority_public_key();
         let (bytes, signature) =
-            sign_summary(&summary(), ACCOUNT, identity.authority_signing_key()).unwrap();
+            sign_summary(&summary(), ACCOUNT, 7, identity.authority_signing_key()).unwrap();
         assert_eq!(
-            verify_summary(&bytes, &signature, ACCOUNT, &authority).unwrap(),
+            verify_summary(&bytes, &signature, ACCOUNT, 7, &authority).unwrap(),
             summary()
         );
-        assert!(verify_summary(&bytes, &signature, OTHER, &authority).is_err());
-        assert!(verify_summary(&bytes, &signature, "alice@kutup.dev", &authority).is_err());
-        assert!(
-            verify_summary(&bytes, &signature, ACCOUNT, &other.authority_public_key()).is_err()
-        );
+        // Another revision's card cannot be paired with it.
+        assert!(verify_summary(&bytes, &signature, ACCOUNT, 8, &authority).is_err());
+        assert!(verify_summary(&bytes, &signature, OTHER, 7, &authority).is_err());
+        assert!(verify_summary(&bytes, &signature, "alice@kutup.dev", 7, &authority).is_err());
+        assert!(verify_summary(
+            &bytes,
+            &signature,
+            ACCOUNT,
+            7,
+            &other.authority_public_key()
+        )
+        .is_err());
         let swapped = String::from_utf8(bytes.clone())
             .unwrap()
             .replace("ayse@example.com", "evil@example.com");
-        assert!(verify_summary(swapped.as_bytes(), &signature, ACCOUNT, &authority).is_err());
+        assert!(verify_summary(swapped.as_bytes(), &signature, ACCOUNT, 7, &authority).is_err());
         // Non-canonical bytes are refused even with a matching meaning.
         let spaced = String::from_utf8(bytes).unwrap().replacen('{', "{ ", 1);
         assert!(decode_summary(spaced.as_bytes()).is_err());
@@ -460,12 +515,23 @@ mod tests {
     fn cards_seal_and_open_only_for_their_contact() {
         let key = derive_contacts_key(&[5u8; 32]).unwrap();
         let vcard = b"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ay\xc5\x9fe\r\nTEL:+90 555 000 00 00\r\nEND:VCARD\r\n";
-        let sealed = seal_card(&key, ACCOUNT, "uid-1", vcard).unwrap();
-        inspect_card(&sealed).unwrap();
-        assert_eq!(
-            &open_card(&key, ACCOUNT, "uid-1", &sealed).unwrap()[..],
-            vcard
-        );
+        let sealed = seal_card(&key, ACCOUNT, "uid-1", 42, vcard).unwrap();
+        assert_eq!(inspect_card(&sealed).unwrap(), 42);
+        // Padded to a multiple of 256 bytes.
+        assert_eq!(sealed.len(), CARD_HEADER_LEN + 256 + TAG_LEN);
+        let (opened, revision) = open_card(&key, ACCOUNT, "uid-1", &sealed).unwrap();
+        assert_eq!((&opened[..], revision), (&vcard[..], 42));
+        // The revision is authenticated: relabelled newer, it does not open.
+        let mut relabelled = sealed.clone();
+        relabelled[10..18].copy_from_slice(&43u64.to_be_bytes());
+        assert!(open_card(&key, ACCOUNT, "uid-1", &relabelled).is_err());
+        let mut zero = sealed.clone();
+        zero[10..18].copy_from_slice(&0u64.to_be_bytes());
+        assert!(inspect_card(&zero).is_err());
+        assert!(seal_card(&key, ACCOUNT, "uid-1", 0, vcard).is_err());
+        let mut short = sealed.clone();
+        short.pop();
+        assert!(inspect_card(&short).is_err());
         assert!(open_card(&key, ACCOUNT, "uid-2", &sealed).is_err());
         assert!(open_card(&key, OTHER, "uid-1", &sealed).is_err());
         assert!(open_card(&key, "alice@kutup.dev", "uid-1", &sealed).is_err());

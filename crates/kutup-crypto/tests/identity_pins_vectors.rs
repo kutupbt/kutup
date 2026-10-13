@@ -64,8 +64,10 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
     magic[5] = b'1';
     let mut suite = sealed.to_vec();
     suite[9] = 1;
+    let mut relabelled = sealed.to_vec();
+    relabelled[17] = 8;
     let mut nonce = sealed.to_vec();
-    nonce[10] ^= 1;
+    nonce[18] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
     let old = STANDARD.decode(SUITE_1_SEALED).unwrap();
@@ -77,7 +79,7 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
             7,
             sealed,
         ),
-        case("another revision", BINDING, 8, sealed),
+        case("relabelled as another revision", BINDING, 8, &relabelled),
         case("magic changed", BINDING, 7, &magic),
         case("suite changed", BINDING, 7, &suite),
         case("nonce changed", BINDING, 7, &nonce),
@@ -191,9 +193,10 @@ fn checked_in_vectors_hold() {
     let sealed =
         identity_pins::seal_with_nonce(&key, &v.binding, v.revision, &pins(), &nonce).unwrap();
     assert_eq!(STANDARD.encode(&sealed), v.sealed);
+    assert_eq!(identity_pins::inspect(&sealed).unwrap(), v.revision);
     assert_eq!(
-        identity_pins::open(&key, &v.binding, v.revision, &sealed).unwrap(),
-        pins()
+        identity_pins::open(&key, &v.binding, &sealed).unwrap(),
+        (pins(), v.revision)
     );
     let expected = refused(&sealed);
     assert_eq!(v.refused.len(), expected.len());
@@ -204,7 +207,7 @@ fn checked_in_vectors_hold() {
         );
         let bytes = STANDARD.decode(&case.sealed).unwrap();
         assert!(
-            identity_pins::open(&key, &case.binding, case.revision, &bytes).is_err(),
+            identity_pins::open(&key, &case.binding, &bytes).is_err(),
             "{} opened",
             case.case
         );

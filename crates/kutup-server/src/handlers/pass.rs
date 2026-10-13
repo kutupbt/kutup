@@ -157,21 +157,17 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8
     if envelope.len() > MAX_ENVELOPE_BYTES {
         return Err(AppError::bad_request("envelope is too large"));
     }
-    let header = account_envelope::inspect(&envelope)
+    account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
-    if header.purpose != AccountEnvelopePurpose::PassVaultSecret {
-        return Err(AppError::bad_request(
-            "envelope is not this account's vault secret",
-        ));
-    }
-    if Some(header.canonical_binding) != account_envelope::canonical_binding(binding).ok() {
-        return Err(AppError::bad_request(
-            "envelope is not this account's vault secret",
-        ));
-    }
-    if header.object_id != file_id.as_bytes() {
-        return Err(AppError::bad_request("envelope is not this vault's secret"));
-    }
+    // The one check every stored account envelope passes: its purpose, this
+    // account's key binding, this vault.
+    account_envelope::validate_for(
+        &envelope,
+        AccountEnvelopePurpose::PassVaultSecret,
+        binding,
+        file_id.as_bytes(),
+    )
+    .map_err(|_| AppError::bad_request("envelope is not this account's vault secret"))?;
     Ok(envelope)
 }
 
@@ -478,8 +474,13 @@ mod tests {
         // Sealed for another vault.
         assert!(checked_envelope(&sealed(ID), ID, Uuid::from_bytes([2u8; 16])).is_err());
         let other_purpose = STANDARD.encode(
-            account_envelope::seal(b"x", &[7u8; 32], AccountEnvelopePurpose::ChatBackupRoot, ID)
-                .unwrap(),
+            account_envelope::seal(
+                &[1u8; 32],
+                &[7u8; 32],
+                AccountEnvelopePurpose::ChatBackupRoot,
+                ID,
+            )
+            .unwrap(),
         );
         assert!(checked_envelope(&other_purpose, ID, VAULT).is_err());
         let padded = format!("{}\n", sealed(ID));

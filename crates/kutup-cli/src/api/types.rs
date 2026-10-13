@@ -474,7 +474,17 @@ pub struct FedPubKeyResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPinsRecord {
+    /// The revision in the sealed list's header, as the server read it.
     pub revision: u64,
+    pub envelope: String,
+}
+
+/// A new sealed list, stored only if the server still holds `base_revision`
+/// (0: none yet); its own revision is in the envelope's header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPinsWrite {
+    pub base_revision: u64,
     pub envelope: String,
 }
 

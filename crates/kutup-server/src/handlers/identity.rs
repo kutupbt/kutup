@@ -15,21 +15,31 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
-use crate::AppState;
+use crate::{revisions, AppState};
 
 /// The account's sealed pin list.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPinsBody {
-    /// Authenticated inside the envelope; starts at 1.
+    /// The revision in the envelope's header (authenticated there).
     revision: i64,
     /// Base64 of the sealed list (`kutup_crypto::identity_pins`).
+    envelope: String,
+}
+
+/// A new sealed list, stored on top of `baseRevision`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityPinsWrite {
+    /// The revision the change started from; 0 before the first list.
+    base_revision: i64,
+    /// Base64 of the sealed list; its header's revision must be above
+    /// `baseRevision`.
     envelope: String,
 }
 
@@ -58,24 +68,25 @@ pub async fn get_identity_pins(
     .into_response())
 }
 
-/// `PUT /api/user/identity-pins` — store `revision`, which must follow the
-/// stored one by exactly one (the first is 1). `409` with the current
-/// revision when another app wrote first.
+/// `PUT /api/user/identity-pins` — store a new list if the stored one is
+/// still `baseRevision` (none yet: 0) and the new list's revision is above
+/// it. `409` with `code: "revision_conflict"` and the current revision when
+/// another app wrote first.
 #[utoipa::path(
     put,
     path = "/api/user/identity-pins",
     tag = "auth",
     security(("BearerAuth" = [])),
-    request_body = IdentityPinsBody,
+    request_body = IdentityPinsWrite,
     responses(
         (status = 204, description = "Stored"),
-        (status = 409, description = "Another revision was stored first")
+        (status = 409, description = "Another list was stored first")
     )
 )]
 pub async fn put_identity_pins(
     State(state): State<AppState>,
     user: AuthUser,
-    Json(req): Json<IdentityPinsBody>,
+    Json(req): Json<IdentityPinsWrite>,
 ) -> AppResult<Response> {
     let id = trusted_uuid(&user.user_id)?;
     let envelope = STANDARD
@@ -83,28 +94,28 @@ pub async fn put_identity_pins(
         .ok()
         .filter(|bytes| STANDARD.encode(bytes) == req.envelope)
         .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    kutup_crypto::identity_pins::inspect(&envelope)
+    let revision = kutup_crypto::identity_pins::inspect(&envelope)
         .map_err(|_| AppError::bad_request("not an identity pin list"))?;
-    if req.revision < 1 {
-        return Err(AppError::bad_request("revisions start at 1"));
-    }
-    let stored = if req.revision == 1 {
+    let revision = revisions::check_follows(revision, req.base_revision)?;
+    let stored = if req.base_revision == 0 {
         sqlx::query(
-            "INSERT INTO identity_pins (user_id, revision, envelope) VALUES ($1, 1, $2)
+            "INSERT INTO identity_pins (user_id, revision, envelope) VALUES ($1, $2, $3)
              ON CONFLICT (user_id) DO NOTHING",
         )
         .bind(id)
+        .bind(revision)
         .bind(&envelope)
         .execute(&state.pool)
         .await?
     } else {
         sqlx::query(
             "UPDATE identity_pins SET revision = $2, envelope = $3, updated_at = NOW()
-              WHERE user_id = $1 AND revision = $2 - 1",
+              WHERE user_id = $1 AND revision = $4",
         )
         .bind(id)
-        .bind(req.revision)
+        .bind(revision)
         .bind(&envelope)
+        .bind(req.base_revision)
         .execute(&state.pool)
         .await?
     };
@@ -116,8 +127,10 @@ pub async fn put_identity_pins(
             .bind(id)
             .fetch_optional(&state.pool)
             .await?;
-    Err(AppError::conflict("another revision was stored first")
-        .with_details(json!({ "code": "revision_conflict", "revision": current.unwrap_or(0) })))
+    Err(revisions::conflict(
+        "another list was stored first",
+        current.unwrap_or(0),
+    ))
 }
 
 /// The most accounts one identity lookup answers.
