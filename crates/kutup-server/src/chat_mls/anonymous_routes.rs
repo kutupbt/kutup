@@ -52,7 +52,7 @@ pub(crate) async fn get_anonymous_key_packages(
             .send(
                 destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/anonymous/key-packages".into(),
                     query: None,
@@ -231,7 +231,7 @@ pub(crate) async fn submit_anonymous_message(
             .send(
                 destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/anonymous/messages".into(),
                     query: None,

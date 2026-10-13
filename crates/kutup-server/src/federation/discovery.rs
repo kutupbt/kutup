@@ -112,7 +112,7 @@ async fn enabled_capabilities(
     }
     let mut capabilities = vec![FederationCapabilityId::identity_v1()];
     if chat {
-        capabilities.push(FederationCapabilityId::chat_v1());
+        capabilities.push(FederationCapabilityId::chat_v2());
     }
     if drive {
         capabilities.push(FederationCapabilityId::drive_v1());

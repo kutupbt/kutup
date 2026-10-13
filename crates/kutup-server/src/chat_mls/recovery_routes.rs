@@ -128,7 +128,7 @@ pub(crate) async fn federated_recover_conversation(
             "/api/fed/chat/mls/control/recoveries",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {

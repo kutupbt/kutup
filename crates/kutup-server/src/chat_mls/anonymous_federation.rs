@@ -33,7 +33,7 @@ pub(crate) async fn federated_get_anonymous_key_packages(
             "/api/fed/chat/mls/anonymous/key-packages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {
@@ -88,7 +88,7 @@ pub(crate) async fn federated_submit_anonymous_message(
             "/api/fed/chat/mls/anonymous/messages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {

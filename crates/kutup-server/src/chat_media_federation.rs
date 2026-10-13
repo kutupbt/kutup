@@ -135,7 +135,7 @@ fn offer_spec(transaction: &FederatedChatMediaTransactionV1) -> AppResult<Federa
     let body = serde_json::to_vec(transaction)
         .map_err(|error| AppError::internal(format!("serialize Chat-media offer: {error}")))?;
     Ok(FederationRequestSpec {
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         method: Method::POST,
         path: OFFER_PATH.into(),
         query: None,
@@ -407,7 +407,7 @@ pub(crate) async fn receive_offer(
             OFFER_PATH,
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let result = receive_offer_inner(&state, &authenticated, &body).await;
@@ -861,7 +861,7 @@ async fn process_reserved_offer_inner(
             .send_streamed(
                 &transaction.origin_domain,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: OBJECT_PATH.into(),
                     query: None,
@@ -1159,7 +1159,7 @@ pub(crate) async fn serve_object(
             OBJECT_PATH,
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let result = serve_object_inner(&state, &authenticated, &body).await;

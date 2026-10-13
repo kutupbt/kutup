@@ -11,7 +11,7 @@ use crate::{DeviceListMismatch, SendMessagesRequest};
 
 /// Common-stack feature identifier for every transaction in this module.
 pub const FEDERATED_CHAT_FEATURE: kutup_federation_proto::FederationFeature =
-    kutup_federation_proto::FederationFeature::ChatV1;
+    kutup_federation_proto::FederationFeature::ChatV2;
 
 /// One in-order ciphertext delivery from an origin mailbox server to a
 /// destination mailbox server. No room state is replicated.

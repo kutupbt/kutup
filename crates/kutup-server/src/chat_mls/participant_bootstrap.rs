@@ -147,7 +147,7 @@ async fn send_participant_bootstrap_pages(
             .send(
                 destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/control/participant-bootstrap".into(),
                     query: None,
@@ -206,7 +206,7 @@ pub(crate) async fn federated_stage_participant_bootstrap(
             "/api/fed/chat/mls/control/participant-bootstrap",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     if let Err(error) = active_policy(&state).await {

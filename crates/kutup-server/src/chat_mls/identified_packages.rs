@@ -125,7 +125,7 @@ pub(crate) async fn get_identified_key_packages(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path: "/api/fed/chat/mls/key-packages/identified".into(),
                 query: None,
@@ -189,7 +189,7 @@ pub(crate) async fn federated_get_identified_key_packages(
             "/api/fed/chat/mls/key-packages/identified",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {

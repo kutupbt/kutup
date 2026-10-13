@@ -2225,7 +2225,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .as_array()
         .unwrap()
         .iter()
-        .any(|capability| capability == "chat.v1"));
+        .any(|capability| capability == "chat.v2"));
     assert_eq!(
         c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
             .send()

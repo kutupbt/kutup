@@ -192,6 +192,9 @@ impl FederationStack {
                 self.transport.negative.lock().await.remove(domain);
                 Ok(peer)
             }
+            // Not a broken peer, only one without this feature: nothing to
+            // forget or hold against its other features.
+            Err(error) if lacks_capability(&error) => Err(error),
             Err(error) => {
                 let message = format!("{error:#}");
                 self.transport.positive.lock().await.remove(domain);
@@ -222,11 +225,14 @@ impl FederationStack {
         let Some(cached) = cached else {
             return Ok(None);
         };
-        if cached.discovery.expires_at <= now.unix_timestamp()
-            || !has_feature(&cached.discovery, feature)
-        {
+        if cached.discovery.expires_at <= now.unix_timestamp() {
             self.transport.positive.lock().await.remove(domain);
             return Ok(None);
+        }
+        // A verified discovery without the feature stays cached until it
+        // expires (an upgrade shows then); nothing is fetched meanwhile.
+        if !has_feature(&cached.discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
         }
         let Some(pinned) = self.trust.pinned_peer(domain).await? else {
             self.transport.positive.lock().await.remove(domain);
@@ -277,13 +283,6 @@ impl FederationStack {
         if discovery.identity.sequence > MAX_IDENTITY_SEQUENCE {
             anyhow::bail!("federation identity sequence exceeds the supported history bound");
         }
-        if !has_feature(&discovery, feature) {
-            anyhow::bail!(
-                "peer does not advertise the required {} capability",
-                feature.as_str()
-            );
-        }
-
         let mut chain = Vec::with_capacity(discovery.identity.sequence as usize + 1);
         for sequence in 0..discovery.identity.sequence {
             let url = Url::parse(&format!("{origin}{IDENTITY_PATH_PREFIX}{sequence}.json"))?;
@@ -328,6 +327,12 @@ impl FederationStack {
                 discovery: discovery.clone(),
             },
         );
+        // Checked once the discovery is verified and cached: a peer that
+        // lacks one feature keeps its others (Drive with a chat.v1 peer), and
+        // asking again until the discovery expires costs nothing.
+        if !has_feature(&discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
+        }
         Ok(resolved_peer(discovery, pinned))
     }
 
@@ -900,6 +905,32 @@ async fn enforce_final_policy(
     }
 }
 
+/// The peer's signed discovery does not list the feature protocol a request
+/// needs (an older Kutup, say `chat.v1` against this server's `chat.v2`).
+/// Callers tell it apart from a transport failure: retrying soon cannot help,
+/// only the peer upgrading can.
+#[derive(Debug)]
+pub(crate) struct PeerLacksCapability {
+    pub(crate) feature: FederationFeature,
+}
+
+impl std::fmt::Display for PeerLacksCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "peer does not advertise the required {} capability",
+            self.feature.as_str()
+        )
+    }
+}
+
+impl std::error::Error for PeerLacksCapability {}
+
+/// Whether `error` is a [`PeerLacksCapability`].
+pub(crate) fn lacks_capability(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<PeerLacksCapability>().is_some()
+}
+
 fn resolved_peer(
     discovery: FederationDiscoveryV2,
     pinned: PinnedFederationPeer,
@@ -912,14 +943,14 @@ fn resolved_peer(
 
 fn policy_feature(feature: FederationFeature) -> FederationPolicyFeature {
     match feature {
-        FederationFeature::ChatV1 => FederationPolicyFeature::Chat,
+        FederationFeature::ChatV2 => FederationPolicyFeature::Chat,
         FederationFeature::DriveV1 => FederationPolicyFeature::Drive,
     }
 }
 
 fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) -> bool {
     let required = match feature {
-        FederationFeature::ChatV1 => FederationCapabilityId::chat_v1(),
+        FederationFeature::ChatV2 => FederationCapabilityId::chat_v2(),
         FederationFeature::DriveV1 => FederationCapabilityId::drive_v1(),
     };
     discovery.capabilities.binary_search(&required).is_ok()
@@ -927,7 +958,7 @@ fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) ->
 
 fn validate_request_spec(spec: &FederationRequestSpec) -> anyhow::Result<()> {
     let valid_namespace = match spec.feature {
-        FederationFeature::ChatV1 => {
+        FederationFeature::ChatV2 => {
             spec.path.starts_with("/api/fed/chat/")
                 || matches!(
                     spec.path.as_str(),
@@ -1105,9 +1136,47 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn a_peer_on_the_retired_chat_wire_lacks_chat_v2() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let identity =
+            kutup_federation_proto::FederationIdentityDocumentV1::genesis("old.example", 100, &key)
+                .unwrap();
+        let discovery = |capabilities: Vec<FederationCapabilityId>| {
+            FederationDiscoveryV2::sign(
+                "old.example",
+                "https://old.example",
+                capabilities,
+                identity.clone(),
+                100,
+                200,
+                &key,
+            )
+            .unwrap()
+        };
+        let old = discovery(vec![
+            FederationCapabilityId::identity_v1(),
+            FederationCapabilityId::try_from("chat.v1".to_owned()).unwrap(),
+        ]);
+        assert!(!has_feature(&old, FederationFeature::ChatV2));
+        let current = discovery(vec![
+            FederationCapabilityId::identity_v1(),
+            FederationCapabilityId::chat_v2(),
+        ]);
+        assert!(has_feature(&current, FederationFeature::ChatV2));
+        // Told apart from a transport failure, which is retried soon.
+        let error: anyhow::Error = PeerLacksCapability {
+            feature: FederationFeature::ChatV2,
+        }
+        .into();
+        assert!(lacks_capability(&error));
+        assert!(error.to_string().contains("chat.v2"));
+        assert!(!lacks_capability(&anyhow::anyhow!("connection refused")));
+    }
+
+    #[test]
     fn feature_paths_cannot_cross_protocol_namespaces() {
         let mut spec = FederationRequestSpec {
-            feature: FederationFeature::ChatV1,
+            feature: FederationFeature::ChatV2,
             method: Method::GET,
             path: "/api/fed/chat/users/alice/keys".into(),
             query: None,

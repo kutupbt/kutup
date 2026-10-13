@@ -1897,6 +1897,9 @@ pub async fn send_messages(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "federated send is durably queued for retry",
             )),
+            crate::chat_federation::FederatedSendOutcome::PeerUnsupported => {
+                Err(crate::chat_federation::peer_unsupported_error())
+            }
         };
     }
     let recipient: Option<(Uuid,)> =
@@ -1941,6 +1944,9 @@ pub async fn send_sealed_messages(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "sealed federation delivery is durably queued",
             )),
+            crate::chat_federation::FederatedSealedOutcome::PeerUnsupported => {
+                Err(crate::chat_federation::peer_unsupported_error())
+            }
         };
     }
 

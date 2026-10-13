@@ -112,7 +112,7 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         .signed_discovery(
             vec![
                 FederationCapabilityId::identity_v1(),
-                FederationCapabilityId::chat_v1(),
+                FederationCapabilityId::chat_v2(),
             ],
             now + Duration::seconds(3),
         )
@@ -528,7 +528,7 @@ fn discovery(
         format!("https://{}", identity.server),
         vec![
             FederationCapabilityId::identity_v1(),
-            FederationCapabilityId::chat_v1(),
+            FederationCapabilityId::chat_v2(),
         ],
         identity.clone(),
         now.unix_timestamp(),
@@ -548,12 +548,12 @@ fn replay_metadata(
         FederationHttpRequest {
             method: "POST".into(),
             authority: "local.example".into(),
-            path: "/api/fed/chat/v1/transactions".into(),
+            path: "/api/fed/chat/messages".into(),
             query: "?".into(),
             content_type: "application/json".into(),
             body: body.to_vec(),
             federation_version: FederationProtocolVersion::V2,
-            feature: FederationFeature::ChatV1,
+            feature: FederationFeature::ChatV2,
             origin: "peer.example".into(),
             destination: "local.example".into(),
         },

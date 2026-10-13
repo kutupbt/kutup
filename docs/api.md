@@ -3525,7 +3525,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
   "fingerprint": "64-lowercase-hex-characters",
   "fingerprintDisplay": "grouped full fingerprint",
   "identitySequence": 0,
-  "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
+  "capabilities": ["chat.v2", "drive.v1", "identity.v1"],
   "globalEnabled": true,
   "features": [
     { "feature": "chat", "mode": "allowlist", "minimumTrust": "verified" },
@@ -3550,7 +3550,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
       "fingerprint": "64-lowercase-hex-characters",
       "fingerprintDisplay": "grouped full fingerprint",
       "apiBase": "https://friend.example",
-      "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
+      "capabilities": ["chat.v2", "drive.v1", "identity.v1"],
       "firstSeenAt": "2026-07-20T10:00:00Z",
       "lastSeenAt": "2026-07-20T10:00:00Z",
       "verifiedAt": null,
