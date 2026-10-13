@@ -17,11 +17,14 @@ import {
   deriveSafetyNumber,
   incarnationIdOfAuthority,
   openIdentityPins,
+  EMPTY_PINS,
+  recordIdentityPin,
   safetyQrMatches,
   sealIdentityPins,
   verifyDriveKeyBinding,
-  type IdentityPin,
-  type IdentityPins,
+  type PinsText,
+  type PinUpdate,
+  type Recorded,
 } from '@kutup/crypto/identityPins'
 import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -135,7 +138,8 @@ async function flush(): Promise<void> {
 
 interface PinStore {
   revision: number
-  pins: Map<string, IdentityPin>
+  /** The whole list as Rust wrote it: what this app does not know (detached pins, later fields) goes back as it is. */
+  pins: PinsText
 }
 
 let store: { userId: string; loaded: Promise<PinStore> } | null = null
@@ -162,17 +166,17 @@ async function fetchPins(me: DriveIdentity): Promise<PinStore> {
   if (!data) {
     // None stored, though this browser has seen one: held back by the server.
     if ((await guard.seen(PINS_SCOPE, PINS_ID)) > 0) throw new PinsRolledBack()
-    return { revision: 0, pins: new Map() }
+    return { revision: 0, pins: EMPTY_PINS }
   }
   // The revision is the one sealed in the list's header, not the server's word.
-  const { list, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
+  const { pins, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
   try {
     await guard.accept(PINS_SCOPE, PINS_ID, revision)
   } catch (error) {
     if (error instanceof OlderThanSeenError) throw new PinsRolledBack()
     throw error
   }
-  return { revision, pins: new Map(list.pins.map((pin) => [pin.account, pin])) }
+  return { revision, pins }
 }
 
 function pinStore(me: DriveIdentity): Promise<PinStore> {
@@ -192,20 +196,19 @@ function pinStore(me: DriveIdentity): Promise<PinStore> {
  * again from that one. One write at a
  * time from this page.
  */
-function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) => boolean | Promise<boolean>): Promise<void> {
+function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsText | null>): Promise<void> {
   const run = async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = await pinStore(me)
-      const next = new Map(current.pins)
-      if (!(await change(next))) return
+      const list = await change(current.pins)
+      if (!list) return
       const guard = revisionGuard(me)
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
-      const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
       const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
       try {
         await api.put('/user/identity-pins', { baseRevision: current.revision, envelope })
         await guard.accept(PINS_SCOPE, PINS_ID, revision)
-        store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: next }) }
+        store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: list }) }
         return
       } catch (error) {
         if (!(isAxiosError(error) && error.response?.status === 409)) throw error
@@ -221,6 +224,21 @@ function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) 
 
 function now(): string {
   return new Date().toISOString()
+}
+
+/**
+ * Records `update` about `account` by the rules every app shares (Rust
+ * `identity_pins::record`) and stores the list if it changed; what was
+ * decided, from the last attempt.
+ */
+async function recordPin(me: DriveIdentity, account: string, authority: string, update: PinUpdate): Promise<Recorded> {
+  let outcome: Recorded = { kind: 'unchanged' }
+  await updatePins(me, async (pins) => {
+    const result = await recordIdentityPin(pins, account, authority, update, now())
+    outcome = result.result
+    return result.changed ? result.pins : null
+  })
+  return outcome
 }
 
 // -------------------------------------------------------------- checks
@@ -253,7 +271,7 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   } catch {
     return { kind: 'unknown' }
   }
-  const pin = pins.pins.get(account)
+  const pin = pins.pins.list.pins.find((known) => known.account === account)
   // ...and those its authority vouches for. A binding is never withdrawn: a
   // pinned account without one is a server leaving it out.
   if (!person.driveKeyBinding) return pin ? { kind: 'invalid' } : { kind: 'unproven' }
@@ -269,12 +287,14 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
     if (pin.authorityPublicKey === person.accountAuthorityPublicKey) return { kind: 'ok', verified: pin.state === 'verified' }
     return { kind: 'changed' }
   }
-  // First met: trusted from now on.
-  await updatePins(me, (next) => {
-    if (next.has(account)) return false
-    next.set(account, { account, authorityPublicKey: person.accountAuthorityPublicKey, state: 'seen', since: now() })
-    return true
-  }).catch(() => undefined)
+  // First met: trusted from now on, unless the list knows better.
+  const recorded = await recordPin(me, account, person.accountAuthorityPublicKey, 'firstSeen').catch((): Recorded => ({ kind: 'unchanged' }))
+  // Someone the user knew had this address and is elsewhere now: another person.
+  if (recorded.kind === 'formerAddressTaken') return { kind: 'changed' }
+  // An identity the user replaced (its trust revoked), turning up again.
+  if (recorded.kind === 'replacedIdentity') return { kind: 'changed' }
+  // The same account, pinned under another of its names.
+  if (recorded.kind === 'knownElsewhere') return { kind: 'ok', verified: recorded.pin.state === 'verified' }
   return { kind: 'ok', verified: false }
 }
 
@@ -284,7 +304,7 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
  * without asking that server: only a listed one is worth looking up.
  */
 export async function isPinned(me: DriveIdentity, account: string): Promise<boolean> {
-  return (await pinStore(me)).pins.has(account)
+  return (await pinStore(me)).pins.list.pins.some((pin) => pin.account === account)
 }
 
 /** Sharing to someone whose identity is in doubt, before the user said to go on. */
@@ -330,20 +350,11 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
     person.driveKeyBinding,
   )
   if (!bound) throw new Error('the keys are not signed by this account')
-  await updatePins(me, async (next) => {
-    const previous = next.get(account)
-    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey) return false
-    const replaced = previous ? [...(previous.replaced ?? [])] : []
-    if (previous) replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
-    next.set(account, {
-      account,
-      authorityPublicKey: person.accountAuthorityPublicKey,
-      state: 'seen',
-      since: now(),
-      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
-    })
-    return true
-  })
+  const recorded = await recordPin(me, account, person.accountAuthorityPublicKey, 'accepted')
+  // This identity is pinned under another address: the same person, renamed.
+  // Following their rename chain moves the pin (it needs the rename lookups,
+  // docs/plans/username-renames.md); accepting it here would pin them twice.
+  if (recorded.kind === 'knownElsewhere') throw new IdentityKnownElsewhere(account, recorded.pin.account)
 }
 
 /** A person's published identity, once their binding is checked; throws otherwise. */
@@ -360,6 +371,16 @@ async function boundIdentity(me: DriveIdentity, account: string): Promise<Publis
     ).catch(() => false))
   if (!bound) throw new IdentityUnproven(account)
   return person
+}
+
+/** The identity to accept is someone the list already knows under another address (`other`). */
+export class IdentityKnownElsewhere extends Error {
+  constructor(
+    readonly account: string,
+    readonly other: string,
+  ) {
+    super(`the identity at ${account} is already known as ${other}`)
+  }
 }
 
 /** Someone whose keys their account has not (validly) signed: nothing to compare. */
@@ -394,22 +415,7 @@ export async function verifyPerson(me: DriveIdentity, account: string, scanned: 
   const person = await boundIdentity(me, account)
   const matches = await safetyQrMatches(me.authorityPublicKey, person.accountAuthorityPublicKey, scanned)
   if (!matches) throw new SafetyNumberMismatch()
-  await updatePins(me, async (next) => {
-    const previous = next.get(account)
-    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey && previous.state === 'verified') return false
-    const replaced = [...(previous?.replaced ?? [])]
-    if (previous && previous.authorityPublicKey !== person.accountAuthorityPublicKey) {
-      replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
-    }
-    next.set(account, {
-      account,
-      authorityPublicKey: person.accountAuthorityPublicKey,
-      state: 'verified',
-      since: now(),
-      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
-    })
-    return true
-  })
+  await recordPin(me, account, person.accountAuthorityPublicKey, 'verified')
 }
 
 /** Test seam: forget what this page has looked up and pinned. */

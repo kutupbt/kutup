@@ -2449,7 +2449,10 @@ fn synced_pins(
         &key,
         ALICE_BINDING,
         1,
-        &kutup_crypto::identity_pins::IdentityPinsV1 { pins },
+        &kutup_crypto::identity_pins::IdentityPinsV1 {
+            pins,
+            ..Default::default()
+        },
     )
     .unwrap();
     kutup_chat_core::IdentityPinsRecord {
@@ -2468,6 +2471,10 @@ fn pin_of(
         state,
         since: "2026-10-10T12:00:00Z".into(),
         replaced: vec![],
+        formerly: vec![],
+        renames: None,
+        detached_by: None,
+        unknown: Default::default(),
     }
 }
 

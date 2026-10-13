@@ -4,6 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // a binding "verifies" when it names the authority it was made with, an
 // incarnation is the authority's name, and a sealed list is its JSON, which
 // opens only for the key binding and revision it was sealed with.
+/** What the next `recordIdentityPin` decides instead of the model (a Rust outcome to react to). */
+const recordOverride = vi.hoisted(() => ({ next: null as null | Record<string, unknown> }))
+
+interface Pin {
+  account: string
+  authorityPublicKey: string
+  state: 'seen' | 'verified'
+  since: string
+  replaced?: string[]
+}
+
 vi.mock('@kutup/crypto/identityPins', () => ({
   verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
     Promise.resolve(binding === `bound-by-${authority}`),
@@ -16,10 +27,49 @@ vi.mock('@kutup/crypto/identityPins', () => ({
   safetyQrMatches: vi.fn((la: string, pa: string, scanned: string) =>
     Promise.resolve(scanned === `qr:${la}:${pa}`),
   ),
-  sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
+  // Rust's identity_pins::record, modelled: first use pins, accepted or
+  // verified replace (the old incarnation kept), the same authority keeps its history.
+  recordIdentityPin: vi.fn(
+    (current: { text: string; list: { pins: Pin[] } }, account: string, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
+      const list = current.list
+      const out = (next: Record<string, unknown>, changed: boolean, result: Record<string, unknown>) =>
+        Promise.resolve({ pins: { text: JSON.stringify(next), list: next }, changed, result })
+      if (recordOverride.next) {
+        const result = recordOverride.next
+        recordOverride.next = null
+        return out(list, false, result)
+      }
+      const pins = list.pins.map((pin) => ({ ...pin }))
+      const at = pins.findIndex((pin) => pin.account === account)
+      const state = update === 'verified' ? 'verified' : 'seen'
+      const unchanged = out({ ...list, pins }, false, { kind: 'unchanged' })
+      const pinned = () => out({ ...list, pins }, true, { kind: 'pinned' })
+      if (at < 0) {
+        pins.push({ account, authorityPublicKey: authority, state, since })
+        pins.sort((a, b) => (a.account < b.account ? -1 : 1))
+        return pinned()
+      }
+      const pin = pins[at]
+      if (pin.authorityPublicKey === authority) {
+        if (update !== 'verified' || pin.state === 'verified') return unchanged
+        pins[at] = { ...pin, state: 'verified', since }
+        return pinned()
+      }
+      if (update === 'firstSeen') return unchanged
+      const replaced = [...(pin.replaced ?? []), `inc-${pin.authorityPublicKey}`].slice(-10)
+      pins[at] = { account, authorityPublicKey: authority, state, since, replaced }
+      return pinned()
+    },
+  ),
+  EMPTY_PINS: { text: '{"pins":[]}', list: { pins: [] } },
+  sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, pins: { text: string }) =>
+    Promise.resolve(JSON.stringify({ binding, revision, list: JSON.parse(pins.text) as unknown })),
+  ),
   openIdentityPins: vi.fn((_m: string, binding: string, sealed: string) => {
     const parsed = JSON.parse(sealed) as { binding: string; revision: number; list: unknown }
-    return parsed.binding === binding ? Promise.resolve({ list: parsed.list, revision: parsed.revision }) : Promise.reject(new Error('another account'))
+    return parsed.binding === binding
+      ? Promise.resolve({ pins: { text: JSON.stringify(parsed.list), list: parsed.list }, revision: parsed.revision })
+      : Promise.reject(new Error('another account'))
   }),
 }))
 
@@ -99,6 +149,7 @@ function storedPins(): { account: string; authorityPublicKey: string; replaced?:
 }
 
 beforeEach(() => {
+  recordOverride.next = null
   resetIdentityPinsForTesting()
   server.people.clear()
   server.pins = null
@@ -202,6 +253,46 @@ describe('checkIdentity', () => {
     for (const name of ['a', 'b', 'c']) publish(`${name}@kutup.dev`, name.toUpperCase())
     await Promise.all(['a', 'b', 'c'].map((name) => checkIdentity(me, `${name}@kutup.dev`)))
     expect(server.batches).toEqual([['a@kutup.dev', 'b@kutup.dev', 'c@kutup.dev']])
+  })
+
+  it('warns, and pins nothing, when someone the user knew had this address before', async () => {
+    publish('alice@kutup.dev', 'M')
+    recordOverride.next = { kind: 'formerAddressTaken', pins: [{ pin: { account: 'alicia@kutup.dev' }, now: 'alicia@kutup.dev' }] }
+    expect(await checkIdentity(me, 'alice@kutup.dev')).toEqual({ kind: 'changed' })
+    expect(server.pins).toBeNull()
+  })
+
+  it('warns about an identity the user replaced, wherever it turns up', async () => {
+    publish('carol@kutup.dev', 'A')
+    recordOverride.next = { kind: 'replacedIdentity', pin: { account: 'bob@kutup.dev', authorityPublicKey: 'A', state: 'seen', detachedBy: 'replaced' } }
+    expect(await checkIdentity(me, 'carol@kutup.dev')).toEqual({ kind: 'changed' })
+    expect(server.pins).toBeNull()
+  })
+
+  it('recognises an account pinned under another of its names', async () => {
+    publish('alicia@kutup.dev', 'A')
+    recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'verified' } }
+    expect(await checkIdentity(me, 'alicia@kutup.dev')).toEqual({ kind: 'ok', verified: true })
+    expect(server.pins).toBeNull()
+  })
+
+  it('says when the identity to accept is someone known under another address', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    publish('bob@kutup.dev', 'A')
+    recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'seen' } }
+    await expect(acceptIdentity(me, 'bob@kutup.dev')).rejects.toMatchObject({ other: 'alice@kutup.dev' })
+  })
+
+  it('writes back what it does not know: detached pins and later fields', async () => {
+    const detached = [{ account: 'erin@kutup.dev', authorityPublicKey: 'E', state: 'verified', since: '2026-10-10T00:00:00Z' }]
+    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [], detached, laterList: { a: 1 } } }) }
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    const stored = (JSON.parse(server.pins.envelope) as { list: Record<string, unknown> }).list
+    expect(stored.detached).toEqual(detached)
+    expect(stored.laterList).toEqual({ a: 1 })
+    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev' }])
   })
 
   it('trusts the account itself', async () => {

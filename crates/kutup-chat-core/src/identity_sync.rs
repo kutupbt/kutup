@@ -20,8 +20,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::identity::incarnation_id_from_authority_public;
-use kutup_crypto::identity_pins::{self, IdentityPinV1, IdentityPinsV1, PinState};
+use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinMatch, PinState, PinUpdate};
 use zeroize::Zeroizing;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
@@ -107,18 +106,40 @@ impl IdentityPinsSync {
             return Ok(Reconcile::Nothing);
         }
         let (_, list) = self.load(transport).await?;
-        let pin = list.pins.iter().find(|pin| pin.account == trust.account);
-        Ok(match (trust.trust, pin) {
-            (_, Some(pin)) if pin.authority_public_key != trust.self_authority_key => {
+        // The rules every app shares (identity_pins::lookup).
+        let found = identity_pins::lookup(
+            &list,
+            &trust.account,
+            Some(trust.self_authority_key.as_str()),
+        );
+        let verified_here = trust.trust == AuthorityTrust::Verified;
+        Ok(match found {
+            PinMatch::Pinned {
+                pin,
+                same_authority: false,
+            } => {
                 // Chat's own in-person verification outranks a pin that was
                 // only seen elsewhere: it is written to the list instead.
-                if trust.trust == AuthorityTrust::Verified && pin.state != PinState::Verified {
+                if verified_here && pin.state != PinState::Verified {
                     Reconcile::Nothing
                 } else {
                     Reconcile::Quarantine
                 }
             }
-            (AuthorityTrust::Tofu, Some(pin)) if pin.state == PinState::Verified => {
+            // Someone the user knew had this address and is elsewhere now:
+            // whoever is here is another person, unless verified here.
+            PinMatch::Moved { .. } if !verified_here => Reconcile::Quarantine,
+            // An identity the user replaced (its trust revoked), wherever it
+            // turns up: never verified from the list, quarantined unless
+            // verified here.
+            PinMatch::Replaced { .. } if !verified_here => Reconcile::Quarantine,
+            PinMatch::Replaced { .. } => Reconcile::Nothing,
+            // The same account (pinned here, or under another of its names).
+            PinMatch::Pinned { pin, .. }
+            | PinMatch::Renamed { pin }
+            | PinMatch::Returned { pin }
+                if trust.trust == AuthorityTrust::Tofu && pin.state == PinState::Verified =>
+            {
                 Reconcile::MarkVerified
             }
             _ => Reconcile::Nothing,
@@ -136,47 +157,29 @@ impl IdentityPinsSync {
         if trust.continuity_gap || trust.trust == AuthorityTrust::Quarantined {
             return Ok(());
         }
-        let verified = trust.trust == AuthorityTrust::Verified;
+        // The rules every app shares (identity_pins::record): a contact met
+        // through a trusted manifest is pinned on first use, and one verified
+        // in person replaces whatever was pinned.
+        let update = if trust.trust == AuthorityTrust::Verified {
+            PinUpdate::Verified
+        } else {
+            PinUpdate::FirstSeen
+        };
         for _ in 0..5 {
             let (revision, mut list) = self.load(transport).await?;
-            let index = list
-                .pins
-                .iter()
-                .position(|pin| pin.account == trust.account);
-            let wanted = match index.map(|i| &list.pins[i]) {
-                None => true,
-                Some(pin) if verified => {
-                    pin.authority_public_key != trust.self_authority_key
-                        || pin.state != PinState::Verified
-                }
-                Some(_) => false,
-            };
-            if !wanted {
+            let before = list.clone();
+            let since = identity_pins::since_from_unix(now_seconds);
+            identity_pins::record(
+                &mut list,
+                &trust.account,
+                &trust.self_authority_key,
+                update,
+                &since,
+            )
+            .map_err(crypto)?;
+            if list == before {
                 return Ok(());
             }
-            let mut replaced = Vec::new();
-            if let Some(i) = index {
-                let previous = list.pins.remove(i);
-                replaced = previous.replaced.clone();
-                if previous.authority_public_key != trust.self_authority_key {
-                    let authority: [u8; 32] = previous.authority().map_err(crypto)?;
-                    replaced.push(incarnation_id_from_authority_public(&authority));
-                }
-            }
-            let excess = replaced.len().saturating_sub(identity_pins::MAX_REPLACED);
-            replaced.drain(..excess);
-            list.pins.push(IdentityPinV1 {
-                account: trust.account.clone(),
-                authority_public_key: trust.self_authority_key.clone(),
-                state: if verified {
-                    PinState::Verified
-                } else {
-                    PinState::Seen
-                },
-                since: identity_pins::since_from_unix(now_seconds),
-                replaced,
-            });
-            list.pins.sort_by(|a, b| a.account.cmp(&b.account));
             // A time, above every revision seen (docs/plans/drive-identity-pins.md).
             let next = now_seconds
                 .saturating_mul(1000)
@@ -218,6 +221,7 @@ mod tests {
     use super::*;
     use crate::transport::IdentityPinsRecord;
     use crate::transport::SendOutcome;
+    use kutup_crypto::identity_pins::IdentityPinV1;
 
     /// Only the identity pin calls; the server's list, revision by revision.
     #[derive(Default)]
@@ -427,5 +431,90 @@ mod tests {
             0
         ))
         .is_ok());
+    }
+
+    #[test]
+    fn a_released_name_is_not_the_person_who_had_it() {
+        // The list knows Alice (verified) as alicia@, formerly alice@.
+        let server = Server::default();
+        let alice = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[1; 32]).unwrap();
+        let mut list = IdentityPinsV1::default();
+        identity_pins::record(
+            &mut list,
+            "alice@kutup.dev",
+            &authority(1),
+            PinUpdate::Verified,
+            "2026-10-10T12:00:00Z",
+        )
+        .unwrap();
+        let chain = vec![kutup_crypto::account_rename::sign(
+            &alice,
+            1,
+            "alice@kutup.dev",
+            "alicia@kutup.dev",
+            1_791_000_000_000,
+        )
+        .unwrap()];
+        identity_pins::apply_rename(&mut list, &alice.authority_public_key(), &chain).unwrap();
+        let key = identity_pins::derive_key(&MASTER).unwrap();
+        *server.stored.borrow_mut() = Some(IdentityPinsRecord {
+            revision: 1,
+            envelope: STANDARD.encode(identity_pins::seal(&key, OWNER, 1, &list).unwrap()),
+        });
+        // Chat meets someone else at alice@: quarantined, and not pinned.
+        let newcomer = trust("alice@kutup.dev", 6, AuthorityTrust::Tofu);
+        assert_eq!(
+            block_on(sync().reconcile(&server, &newcomer)).unwrap(),
+            Reconcile::Quarantine
+        );
+        block_on(sync().record(&server, &newcomer, 0)).unwrap();
+        assert_eq!(pins(&server).len(), 1);
+        // Alice under a name this device has not followed yet: still verified.
+        let renamed = trust("alicia2@kutup.dev", 1, AuthorityTrust::Tofu);
+        assert_eq!(
+            block_on(sync().reconcile(&server, &renamed)).unwrap(),
+            Reconcile::MarkVerified
+        );
+    }
+
+    #[test]
+    fn an_identity_replaced_elsewhere_is_quarantined_wherever_it_turns_up() {
+        // Bob verified, then replaced by a new identity the user accepted.
+        let server = Server::default();
+        block_on(sync().record(
+            &server,
+            &trust("bob@kutup.dev", 2, AuthorityTrust::Verified),
+            0,
+        ))
+        .unwrap();
+        let mut list = identity_pins::open(
+            &identity_pins::derive_key(&MASTER).unwrap(),
+            OWNER,
+            &STANDARD
+                .decode(server.stored.borrow().clone().unwrap().envelope)
+                .unwrap(),
+        )
+        .unwrap()
+        .0;
+        identity_pins::record(
+            &mut list,
+            "bob@kutup.dev",
+            &authority(3),
+            PinUpdate::Accepted,
+            "2026-10-11T12:00:00Z",
+        )
+        .unwrap();
+        let key = identity_pins::derive_key(&MASTER).unwrap();
+        *server.stored.borrow_mut() = Some(IdentityPinsRecord {
+            revision: 2_000_000_000_000,
+            envelope: STANDARD
+                .encode(identity_pins::seal(&key, OWNER, 2_000_000_000_000, &list).unwrap()),
+        });
+        // The old identity shows up as carol@: never verified from the list.
+        let old = trust("carol@kutup.dev", 2, AuthorityTrust::Tofu);
+        assert_eq!(
+            block_on(sync().reconcile(&server, &old)).unwrap(),
+            Reconcile::Quarantine
+        );
     }
 }

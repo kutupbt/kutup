@@ -875,6 +875,44 @@ assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 0, iv.pins
 assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
+// Renames followed in the pin list (docs/plans/username-renames.md): the same
+// rules as Rust (record, lookup, apply_rename), and the lists refused.
+{
+  const r = iv.renames
+  const chain = JSON.stringify(r.chain)
+  const { pins, ...applied } = crypto.applyAccountRenameToPins(r.before, r.authorityPublicKey, chain)
+  assert.equal(pins, r.after)
+  assert.deepEqual(applied, r.applied)
+  const again = crypto.applyAccountRenameToPins(r.after, r.authorityPublicKey, chain)
+  assert.equal(again.changed, false)
+  assert.equal(again.pins, r.after)
+  assert.throws(() => crypto.applyAccountRenameToPins(r.after, r.authorityPublicKey, JSON.stringify(r.rollback)))
+  for (const lookup of r.replacedLookups) {
+    assert.deepEqual(crypto.lookupIdentityPin(r.replacedList, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
+  }
+  for (const lookup of r.lookups) {
+    assert.deepEqual(crypto.lookupIdentityPin(r.after, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
+  }
+  for (const record of r.records) {
+    const out = crypto.recordIdentityPin(record.before, record.account, record.authority, record.update, record.since)
+    assert.equal(out.pins, record.after, record.case)
+    assert.deepEqual(out.result, record.result, record.case)
+    assert.equal(out.changed, record.after !== record.before, record.case)
+  }
+  // Fields from a later version are kept through an update.
+  const kept = crypto.recordIdentityPin(r.preserved, 'dave@kutup.dev', JSON.parse(r.preserved).pins[0].authorityPublicKey, 'verified', '2026-10-13T12:00:00Z')
+  assert.equal(kept.changed, true)
+  const keptList = JSON.parse(kept.pins)
+  assert.equal(keptList.pins[0].colour, 'blue')
+  assert.equal(keptList.pins[0].renames.signedBy, 'x')
+  assert.deepEqual(keptList.laterList, { a: [1, 2] })
+  assert.equal(keptList.detached[0].note, null)
+  for (const refused of r.refusedLists) {
+    assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 9, refused.pins), undefined, refused.case)
+    assert.throws(() => crypto.recordIdentityPin(refused.pins, 'x@kutup.dev', iv.authorityPublicKey, 'firstSeen', '2026-10-13T12:00:00Z'), undefined, refused.case)
+  }
+}
+
 // Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
 
 // The safety number every app shows (kutup-crypto safety_number, V2): the
