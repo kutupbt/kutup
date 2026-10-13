@@ -1461,10 +1461,11 @@ only the envelope's public header.
 
 The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
 updatedAt}]` (`envelope` base64). A vault in the trash keeps its secret,
-unlisted, until it is restored; a secret for a vault the caller can no longer
-open is deleted as it is listed. Purging a vault deletes every secret for it.
-With `?all=true` the trashed ones are listed too (`inTrash: true`): every
-record the account has.
+unlisted, until it is restored; a secret for a vault the caller cannot open
+now (unshared) is unlisted too, and listed again if access comes back: a
+read never deletes one, and a failed access check fails the request. Purging
+a vault deletes every secret for it. With `?all=true` the trashed ones are
+listed too (`inTrash: true`): every record the account has.
 
 ### PUT /api/pass/vault-secrets/:fileId
 
