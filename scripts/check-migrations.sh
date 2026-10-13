@@ -9,7 +9,8 @@
 #     everything already deployed.
 #
 # The one exception is a squash: every base migration replaced by one
-# <timestamp>_baseline pair newer than all of them (docs/contributing.md,
+# <timestamp>_baseline pair newer than all of them, optionally followed by
+# ordinary new migrations newer than the baseline (docs/contributing.md,
 # "Database migrations").
 #
 #   scripts/check-migrations.sh [base-ref]
@@ -46,12 +47,15 @@ for f in "${head_files[@]}"; do
   printf '%s\n' "${base_files[@]}" | grep -qxF "$f" || new+=("$f")
 done
 
-# A squash: nothing of the base is left and only one baseline pair is new.
+# A squash: nothing of the base is left, and exactly one baseline pair is new.
+# Other new files are ordinary migrations and must come after the baseline.
 squash=false
-if [ "${#base_files[@]}" -gt 0 ] && [ "${#new[@]}" -eq 2 ] \
-  && printf '%s\n' "${new[@]}" | grep -qE '_baseline\.up\.sql$' \
+baseline_up=""
+mapfile -t new_baselines < <(printf '%s\n' "${new[@]}" | grep -E '_baseline\.(up|down)\.sql$' || true)
+if [ "${#base_files[@]}" -gt 0 ] && [ "${#new_baselines[@]}" -eq 2 ] \
   && ! printf '%s\n' "${base_files[@]}" | grep -qxFf <(printf '%s\n' "${head_files[@]}"); then
-  squash=true
+  baseline_up="$(printf '%s\n' "${new_baselines[@]}" | grep '\.up\.sql$' || true)"
+  [ -n "$baseline_up" ] && squash=true
 fi
 
 failed=0
@@ -75,6 +79,10 @@ for f in "${new[@]}"; do
   fi
   v="$(version "$f")"
   [ "$((10#$v))" -gt "$max_base" ] || fail "$name is not newer than the base's newest migration ($max_base)"
+  if $squash && [ "$f" != "$baseline_up" ] && [ "$f" != "${baseline_up%.up.sql}.down.sql" ]; then
+    [ "$((10#$v))" -gt "$((10#$(version "$baseline_up")))" ] \
+      || fail "$name is not newer than the baseline $(basename "$baseline_up")"
+  fi
   case "$f" in
     *.up.sql) other="${f%.up.sql}.down.sql" ;;
     *) other="${f%.down.sql}.up.sql" ;;
@@ -84,7 +92,7 @@ done
 
 if [ "$failed" = 0 ]; then
   if $squash; then
-    echo "check-migrations: a squash of ${#base_files[@]} files into $(printf '%s\n' "${new[@]}" | grep '\.up\.sql$' | xargs basename)"
+    echo "check-migrations: a squash of ${#base_files[@]} files into $(basename "$baseline_up"), plus $(( ${#new[@]} - 2 )) new file(s) after it"
   else
     echo "check-migrations: ${#new[@]} new file(s), base unchanged (base newest $max_base)"
   fi
