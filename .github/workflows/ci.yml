@@ -51,7 +51,10 @@ jobs:
           shared-key: security-static
       - name: Static checks
         env:
-          KUTUP_MIGRATION_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'origin/master' }}
+          # What is applied anywhere is what master has shipped, so every
+          # branch (stacked ones included) is checked against master; on
+          # master itself the script compares with the commit before.
+          KUTUP_MIGRATION_BASE: origin/master
         run: scripts/gate.sh static
 
   rust-workspace:
