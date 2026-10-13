@@ -1212,6 +1212,7 @@ fn push_replacement(
 }
 
 /// How pushing an edit as a version ended.
+#[derive(Debug, PartialEq)]
 enum Pushed {
     /// The version's id.
     Stored(String),
@@ -1428,6 +1429,50 @@ fn sanitize_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_and_place_list_edits_go_up_as_new_files_not_versions() {
+        assert_eq!(push_path("notes/todo.md"), PushPath::Replace);
+        assert_eq!(push_path("src/main.rs"), PushPath::Replace);
+        assert_eq!(push_path("trips/rome.kutupmap"), PushPath::Replace);
+        assert_eq!(push_path("data/blob.dat"), PushPath::Version);
+        assert_eq!(push_path("board.excalidraw"), PushPath::Version);
+    }
+
+    fn row(id: &str, kind: &str) -> crate::api::versions::VersionRow {
+        serde_json::from_value(serde_json::json!({ "id": id, "kind": kind, "keyGeneration": 1 }))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_push_is_based_on_the_whole_file_version_it_started_from() {
+        // Newest first.
+        let versions = [
+            row("y2", "yjs"),
+            row("f2", "file"),
+            row("y1", "yjs"),
+            row("f1", "file"),
+        ];
+        assert_eq!(based_on_for(&versions, "y2").as_deref(), Some("f2"));
+        assert_eq!(based_on_for(&versions, "y1").as_deref(), Some("f1"));
+        assert_eq!(based_on_for(&versions, "f1").as_deref(), Some("f1"));
+        assert_eq!(
+            based_on_for(&[row("y1", "yjs")], "y1").as_deref(),
+            Some("original")
+        );
+        assert_eq!(based_on_for(&[], "").as_deref(), Some("original"));
+        // Recorded before any version: made from the original upload, so a
+        // version saved since is a conflict.
+        assert_eq!(based_on_for(&versions, "").as_deref(), Some("original"));
+        assert_eq!(based_on_for(&versions, "gone"), None);
+    }
+
+    #[test]
+    fn a_based_on_refusal_is_the_conflict_copy_path() {
+        let landed = crate::version_upload::Landed::Conflict(anyhow::anyhow!("version_conflict"));
+        assert_eq!(pushed(landed), Pushed::Conflict);
+        assert_eq!(pushed(crate::version_upload::Landed::Busy), Pushed::Busy);
+    }
 
     fn base(entries: &[(&str, &str, i64, &str)]) -> BTreeMap<String, BaseFile> {
         entries

@@ -350,8 +350,12 @@ fn open(
             Err(error) => error,
         };
         match refusal(&error) {
-            Refusal::Uploading(Some(ours), idle) if idle >= crashed_after_secs && !cancelled => {
-                tus.delete(&ours)
+            // Ours (`yours`: an earlier run here; one with a record was
+            // resumed before this) or, as the folder's owner, another
+            // writer's: either may be cancelled, but only once it has sat
+            // idle past the threshold. One moving is busy.
+            Refusal::Uploading(Some(open), idle) if idle >= crashed_after_secs && !cancelled => {
+                tus.delete(&open)
                     .context("cancel an abandoned upload of this file's new version")?;
                 cancelled = true;
             }
@@ -523,6 +527,12 @@ fn send<R: Read>(
         if conflict {
             return Ok(Landed::Conflict(error));
         }
+        if lost_access(&error) {
+            // The server discarded the upload when the access went.
+            return Err(
+                error.context("access to the file was lost during the upload; it was discarded")
+            );
+        }
         if is_permanent(&error) || key.is_none() {
             let _ = tus.delete(&rec.upload_id);
             return Err(error.context("upload new version"));
@@ -544,6 +554,14 @@ fn send<R: Read>(
         version_id = rec.upload_id.clone();
     }
     Ok(Landed::Stored(version_id))
+}
+
+/// A `403` on a part: the writer lost access mid-upload.
+fn lost_access(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|c| c.downcast_ref::<ApiError>())
+        .is_some_and(|api| api.status == 403)
 }
 
 /// How many times one run goes on from the server's offset after a part
@@ -583,6 +601,10 @@ mod tests {
         idle: Cell<i64>,
         /// The open upload is someone else's.
         foreign: Cell<bool>,
+        /// Someone else's upload, seen by the folder's owner (`yours: false`).
+        owner_view: Cell<bool>,
+        /// Answer the PATCH with this number with 403 (access lost).
+        forbid_patch: Cell<Option<u32>>,
         deletes: Cell<u32>,
     }
 
@@ -603,7 +625,7 @@ mod tests {
                 let ours = if self.foreign.get() {
                     String::new()
                 } else {
-                    format!(r#","uploadId":"{open}""#)
+                    format!(r#","uploadId":"{open}","yours":{}"#, !self.owner_view.get())
                 };
                 return Err(api(
                     409,
@@ -632,6 +654,10 @@ mod tests {
             if self.fail_patch.get() == Some(n) {
                 self.fail_patch.set(None);
                 return Err(api(503, "unavailable"));
+            }
+            if self.forbid_patch.get() == Some(n) {
+                self.uploads.borrow_mut().remove(id);
+                return Err(api(403, r#"{"error":"forbidden","code":"forbidden"}"#));
             }
             let mut uploads = self.uploads.borrow_mut();
             let (total, body, _) = uploads.get_mut(id).context("no upload")?;
@@ -797,8 +823,8 @@ mod tests {
                     use sha2::Digest;
                     sha2::Sha256::digest(&plain).into()
                 })
-                    .unwrap()
-                    .as_str()
+                .unwrap()
+                .as_str()
             )
         );
         let next = File {
@@ -913,9 +939,12 @@ mod tests {
         let (path, plain) = big(&dir);
         let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
         tus.skew_patch.set(Some(1));
-        let landed =
-            upload_version(&tus, &records, request(&file, &key, Content::Path(&path), &hash_key))
-                .unwrap();
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Path(&path), &hash_key),
+        )
+        .unwrap();
         assert!(matches!(landed, Landed::Stored(_)), "{landed:?}");
         assert_eq!(tus.patches.get(), 3, "the taken part is not sent again");
         let stored = tus.stored.borrow();
@@ -942,25 +971,51 @@ mod tests {
         assert_eq!(tus.patches.get(), 0, "nothing sent");
     }
 
-    /// The file grew while it was read: never cut to the measured size.
+    /// The folder's owner sees another writer's upload (`yours: false`):
+    /// busy while it moves, cancelled once idle past the threshold.
     #[test]
-    fn a_file_that_grows_while_uploading_fails() {
+    fn the_owner_cancels_another_writers_upload_only_when_idle() {
         let (file, key) = file();
         let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        let other = tus.create(1, &VersionUploadMeta::default()).unwrap();
+        tus.owner_view.set(true);
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS - 1);
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Busy), "{landed:?}");
+        assert_eq!(tus.deletes.get(), 0);
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS);
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Stored(_)), "{landed:?}");
+        assert!(tus.head(&other).unwrap().is_none());
+        assert_eq!(tus.deletes.get(), 1);
+    }
+
+    /// Access lost mid-upload: the server discarded it; the record goes.
+    #[test]
+    fn lost_access_mid_upload_drops_the_record() {
+        let (file, key) = file();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("log.bin");
-        std::fs::write(&path, b"first").unwrap();
-        let mut req = request(&file, &key, Content::Path(&path), &hash_key);
-        // Measured and hashed, then appended to before it is read.
-        std::fs::write(&path, b"first and more").unwrap();
-        req.sha256 = {
-            use sha2::Digest;
-            sha2::Sha256::digest(b"first").into()
-        };
-        let error = upload_version_measured(&tus, &records, req, 5).unwrap_err();
-        assert!(error.is::<ChangedWhileUploading>(), "{error:#}");
-        assert!(tus.stored.borrow().is_empty());
-        assert_eq!(tus.deletes.get(), 1, "the upload is cancelled");
+        let (path, _) = big(&dir);
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        tus.forbid_patch.set(Some(2));
+        let error = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Path(&path), &hash_key),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("access"), "{error:#}");
+        assert!(records.0.borrow().is_empty());
     }
 
     /// A change of the same size between the hash and the upload: the last

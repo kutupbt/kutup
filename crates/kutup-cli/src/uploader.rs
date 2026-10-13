@@ -432,6 +432,11 @@ fn run_patches(
                 if is_permanent(&err) {
                     let _ = client.tus_delete(&rec.upload_id);
                     let _ = store.delete_resume(resume_key);
+                    if matches!(err.downcast_ref::<ApiError>(), Some(e) if e.status == 403) {
+                        return Err(err.context(
+                            "access to the folder was lost during the upload; it was discarded",
+                        ));
+                    }
                     return Err(err);
                 }
                 let pct = offset * 100 / rec.cipher_total.max(1);
