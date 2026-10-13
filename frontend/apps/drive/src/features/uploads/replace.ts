@@ -1,5 +1,6 @@
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
+import { isListName } from '@kutup/map/list'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { contentHashIn } from '@kutup/drive-core/names'
 import { rekeyFile } from '@kutup/drive-core/rekey'
@@ -20,6 +21,11 @@ import {
 import api, { freshAccessToken } from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 
+/** Whether a file's content is Yjs state (a note or code file, a place list), not its bytes. */
+export function holdsYjsState(name: string): boolean {
+  return editorKindFor(name) === 'text' || isListName(name)
+}
+
 /** Whether `holder` can be replaced by new content here. */
 export function canReplace(folder: Folder, holder: DriveFile): boolean {
   return (
@@ -27,11 +33,12 @@ export function canReplace(folder: Folder, holder: DriveFile): boolean {
     folderLocation(folder).kind === 'local' &&
     holder.fileKey !== null &&
     holder.name !== null &&
-    // A note's content is its Yjs state, not the file's bytes: replacing it
-    // would be an import, not a new version. Office documents, PDFs and
+    // Notes, code files and place lists keep their content as Yjs state,
+    // not the file's bytes: replacing one would be an import, and a
+    // whole-file version would break it. Office documents, PDFs and
     // whiteboards take a new version like any file: the server sets it at
     // the collaboration log's head and open tabs reopen from it.
-    editorKindFor(holder.name) !== 'text'
+    !holdsYjsState(holder.name)
   )
 }
 

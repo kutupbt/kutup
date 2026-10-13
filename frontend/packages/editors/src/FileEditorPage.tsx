@@ -382,9 +382,9 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
             setGeneration((g) => g + 1)
           }
         }}
-        onOutdated={(base, reset) => {
+        onOutdated={(base, reset, unsavedDrawing) => {
           // Edits not yet stored were made on what was replaced: not kept.
-          if (lostUnsentEdits(reset === true, unsentCollabFrames())) {
+          if (lostUnsentEdits(reset === true, unsentCollabFrames(), unsavedDrawing)) {
             toast.warning(t('file.replacedUnsentLost'), { duration: 20_000 })
           }
           setOpenAt(base ?? null)
@@ -529,7 +529,8 @@ function Workspace({
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
-  onOutdated: (base?: SessionBase, reset?: boolean) => void
+  /** `unsavedDrawing`: the whiteboard had changes not saved yet. */
+  onOutdated: (base?: SessionBase, reset?: boolean, unsavedDrawing?: boolean) => void
 }) {
   const { t } = useTranslation()
   const back = useBack(folder)
@@ -580,7 +581,13 @@ function Workspace({
         )
       case 'whiteboard':
         return (
-          <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} readOnly={readOnly} onOutdated={onOutdated} />
+          <WhiteboardEditor
+            ref={whiteboardRef}
+            {...common}
+            initialBytes={opened.bytes}
+            readOnly={readOnly}
+            onOutdated={(base, reset) => onOutdated(base, reset, whiteboardRef.current?.hasUnsavedChanges() ?? false)}
+          />
         )
       case 'viewer': {
         const viewer = chooseViewer(name)

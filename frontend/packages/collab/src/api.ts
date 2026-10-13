@@ -60,6 +60,17 @@ export interface VersionRow {
  */
 export const localBase = (fileId: string) => `/files/${fileId}`
 
+/**
+ * The newest version holding collaboration state (`kind` `yjs`), from a
+ * newest-first list: what a note, code file or place list opens from. A
+ * whole-file version among them (a Replace, which those files are not
+ * offered, or anything else) is never decoded as Yjs; with none, the file
+ * opens from its original upload.
+ */
+export function newestYjsVersion(versions: readonly VersionRow[]): VersionRow | undefined {
+  return versions.find((v) => v.kind === 'yjs')
+}
+
 export async function listVersions(fileId: string, base = localBase(fileId)): Promise<VersionRow[]> {
   const r = await api.get<VersionRow[]>(`${base}/versions`)
   return r.data
