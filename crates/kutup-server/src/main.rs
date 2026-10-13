@@ -9,6 +9,7 @@
 mod albums;
 mod auth_check;
 mod calls;
+mod change_feed;
 mod chat_federation;
 mod chat_hub;
 mod chat_media_federation;
