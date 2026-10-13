@@ -6,7 +6,9 @@
 //! is set as the same HttpOnly cookie scoped to `/api/auth/refresh`.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE, USER_AGENT};
 use axum::http::HeaderMap;
 use axum::response::{AppendHeaders, IntoResponse, Response};
@@ -752,22 +754,25 @@ pub struct ReauthRequest {
 )]
 pub async fn reauth(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<ReauthRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    verify_account_login_key(&state, &headers, &user, &req.login_key).await?;
+    verify_account_login_key(&state, peer, &headers, &user, &req.login_key).await?;
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
 /// Checks a signed-in account's password (as the login key the client
 /// derived from it) the way sign-in does (`auth_check`): against
 /// `login_key_hash`, under the same lockout and ceiling, misses here and at
-/// sign-in counting together. `Err` is 401 for a wrong password, 429 while
-/// held.
+/// sign-in counting together. The caller is signed in to the account, so it
+/// is never held by the unknown-client ceiling. `Err` is 401 for a wrong
+/// password, 429 while held.
 pub async fn verify_account_login_key(
     state: &AppState,
+    peer: SocketAddr,
     headers: &HeaderMap,
     user: &AuthUser,
     login_key: &str,
@@ -776,13 +781,16 @@ pub async fn verify_account_login_key(
     let login_key = STANDARD
         .decode(login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    let client = auth_check::Client::from_headers(state, headers).await?;
-    let guard = auth_check::guard(&client, Some(user_id), "")?;
     let login_key_hash: Option<String> =
         sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
+    let client = auth_check::Client::from_headers(state, headers, peer)
+        .await?
+        .signed_in_as(user_id);
+    let epoch = login_key_hash.as_deref().map(auth_check::credential_epoch);
+    let guard = auth_check::guard(&client, Some(user_id), "", epoch.as_ref().map(|e| &e[..]))?;
     if !guard.verify(Some(&login_key), login_key_hash.as_deref()) {
         tracing::warn!(user_id = %user_id, "account password re-check failed");
         return Err(AppError::unauthorized("invalid credentials"));
@@ -800,6 +808,7 @@ pub async fn verify_account_login_key(
 )]
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> AppResult<Response> {
@@ -814,8 +823,6 @@ pub async fn login(
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
     let name = req.name.trim().to_ascii_lowercase();
     let account = account_by_name(&state, &name).await?;
-    let asker = auth_check::Client::from_headers(&state, &headers).await?;
-    let guard = auth_check::guard(&asker, account, &canonical_name(&state, &name))?;
 
     type Row = (
         Uuid,
@@ -846,6 +853,14 @@ pub async fn login(
     .await?;
 
     let hash = row.as_ref().map(|row| row.1.as_str());
+    let asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
+    let epoch = hash.map(auth_check::credential_epoch);
+    let guard = auth_check::guard(
+        &asker,
+        account,
+        &canonical_name(&state, &name),
+        epoch.as_ref().map(|e| &e[..]),
+    )?;
     if !guard.verify(Some(&login_key_bytes), hash) {
         return Err(AppError::unauthorized("invalid credentials"));
     }

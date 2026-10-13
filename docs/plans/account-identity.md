@@ -116,9 +116,12 @@ PIN's set and remove) and recovery:
 - **Lockout per account and client IP:** five misses in a row from one IP
   lock that account for that IP (`LOGIN_LOCKOUT_THRESHOLD`,
   `LOGIN_LOCKOUT_MINUTES`). A stranger elsewhere cannot lock a person out.
-- **Ceiling per account for unknown clients:** misses from every client the
-  account does not know, together, are capped at `LOGIN_ACCOUNT_CEILING`
-  (100) in the same window, against guessing spread over many addresses.
+- **Ceiling per account for unknown clients:** attempts from every client
+  the account does not know, together, are capped at `LOGIN_ACCOUNT_CEILING`
+  (20) in the same window and `LOGIN_ACCOUNT_DAILY_CEILING` (200) a day,
+  against guessing spread over many addresses. Rate limits and the lockout
+  key an IPv6 client by its /64. Every attempt takes its slots first
+  (parallel attempts get no more); a right secret gives them back.
 - **Known clients:** a successful sign-in sets `kutup_known`, an HttpOnly
   cookie (`Path=/api`, `SameSite=Strict`, 90 days) holding the user id, the
   time and an HMAC under a key derived from the server's stored sign-in key.
@@ -128,7 +131,11 @@ PIN's set and remove) and recovery:
   development hosts (`*.localhost`) cannot share one. A client with a valid
   cookie for the account is not held by the ceiling (still by its own
   per-IP lockout), so a distributed attack does not lock out the account's
-  own devices. The CLI has no cookie and stays under the ceiling.
+  own devices. A caller already signed in to the account (reauth, the PIN's
+  set and remove) counts as known too. The mark's HMAC also covers the
+  account's current password hash, so a new password or a recovery retires
+  every mark; signing out clears it on that origin. The CLI has no cookie:
+  while an attack fills the ceiling, its sign-ins wait (documented risk).
 - Names that are no account meet the same lockout and ceiling on their
   canonical name, so a 429 says nothing about existence.
 - The Pass PIN keeps its own limit (three per sign-in) and is checked at

@@ -213,7 +213,8 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # shown.
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
-# LOGIN_ACCOUNT_CEILING=100
+# LOGIN_ACCOUNT_CEILING=20
+# LOGIN_ACCOUNT_DAILY_CEILING=200
 ```
 
 `.env.example` is the complete checked-in variable template. Keep

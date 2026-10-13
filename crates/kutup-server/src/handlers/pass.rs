@@ -8,7 +8,7 @@
 //! (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -310,6 +310,7 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<SetPinRequest>, JsonRejection>,
@@ -318,7 +319,7 @@ pub async fn set_pin(
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    crate::handlers::auth::verify_account_login_key(&state, &headers, &user, &req.login_key)
+    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
         .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
@@ -356,12 +357,13 @@ pub async fn set_pin(
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    crate::handlers::auth::verify_account_login_key(&state, &headers, &user, &req.login_key)
+    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
         .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")

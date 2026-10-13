@@ -283,9 +283,9 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     );
 
     // Misses spread over many unknown addresses meet the account's ceiling
-    // (LOGIN_ACCOUNT_CEILING, 100)...
+    // (LOGIN_ACCOUNT_CEILING, 20)...
     let mut held = false;
-    for i in 0..110u32 {
+    for i in 0..40u32 {
         let ip = format!("10.77.{}.{}", i / 250, i % 250 + 1);
         if attempt(&ip, &wrong, None).status() == 429 {
             held = true;

@@ -38,7 +38,17 @@ pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<
     sessions::sign_out(&state.pool, user.session.session_id).await?;
     let body = Json(OkResponse { ok: true });
     if user.session.client.uses_cookie() {
-        Ok(([(SET_COOKIE, clear_refresh_cookie(&state))], body).into_response())
+        Ok((
+            AppendHeaders([
+                (SET_COOKIE, clear_refresh_cookie(&state)),
+                (
+                    SET_COOKIE,
+                    crate::auth_check::clear_known_client_cookie(&state),
+                ),
+            ]),
+            body,
+        )
+            .into_response())
     } else {
         Ok(body.into_response())
     }
