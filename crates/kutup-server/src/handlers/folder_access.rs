@@ -140,9 +140,8 @@ pub struct AccessMember {
 pub struct AccessLink {
     pub id: Uuid,
     pub token: String,
-    /// The link key sealed for the owner (purpose 9); absent on links made
-    /// before owners kept a copy — a rotation removes those.
-    pub owner_link_key_envelope: Option<String>,
+    /// The link key sealed for the owner (purpose 9).
+    pub owner_link_key_envelope: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
@@ -241,7 +240,7 @@ pub async fn access(
     type LinkRow = (
         Uuid,
         String,
-        Option<String>,
+        String,
         Option<OffsetDateTime>,
         OffsetDateTime,
     );
@@ -594,8 +593,8 @@ pub async fn rotate(
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
-    let links: Vec<(Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT id, owner_link_key_envelope FROM public_shares WHERE target_id = $1 AND share_type = 'collection'",
+    let links: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM public_shares WHERE target_id = $1 AND share_type = 'collection'",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
@@ -656,17 +655,7 @@ pub async fn rotate(
             })
             .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
     }
-    let link_owner_copy: BTreeMap<Uuid, bool> = links
-        .iter()
-        .map(|(id, owner_copy)| (*id, owner_copy.is_some()))
-        .collect();
     for link in &req.public_links {
-        // A link the owner has no copy of cannot be re-wrapped, so it cannot stay.
-        if !link_owner_copy[&link.id] {
-            return Err(AppError::bad_request(
-                "a link made before owners kept a copy must be removed",
-            ));
-        }
         validate_envelope(
             &link.collection_key_envelope,
             context(

@@ -28,7 +28,6 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct VersionRow {
     id: String,
-    s3_version_id: String,
     storage_path: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
@@ -55,7 +54,6 @@ pub struct VersionRow {
 pub(crate) type VersionTuple = (
     Uuid,
     String,
-    String,
     i64,
     i64,
     Uuid,
@@ -72,7 +70,6 @@ pub(crate) type VersionTuple = (
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     let (
         id,
-        s3v,
         path,
         seq,
         dk,
@@ -88,7 +85,6 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     ) = t;
     VersionRow {
         id: id.to_string(),
-        s3_version_id: s3v,
         storage_path: path,
         seq_at_snapshot: seq,
         doc_key_id: dk,
@@ -104,7 +100,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     }
 }
 
-pub(crate) const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
+pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
        remote_author, parent_version_id
 FROM file_versions"#;
@@ -156,7 +152,7 @@ pub async fn list(
         ("fileId" = String, Path, description = "File id"),
         ("vid" = String, Path, description = "Version id")
     ),
-    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq / x-kutup-s3-version headers"))
+    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers"))
 )]
 pub async fn download(
     State(state): State<AppState>,
@@ -169,31 +165,28 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, String, i64, i64)> = sqlx::query_as(
-        "SELECT storage_path, s3_version_id, doc_key_id, seq_at_snapshot FROM file_versions WHERE id = $1 AND file_id = $2",
+    let row: Option<(String, i64, i64)> = sqlx::query_as(
+        "SELECT storage_path, doc_key_id, seq_at_snapshot FROM file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version, doc_key_id, seq)) = row else {
+    let Some((path, doc_key_id, seq)) = row else {
         return Err(AppError::not_found("not found"));
     };
 
-    // v2 versions are objects of their own; older ones S3 versions of one key.
-    let (body, size) = if s3_version.is_empty() {
-        state.storage.get_object(&path).await
-    } else {
-        state.storage.get_object_version(&path, &s3_version).await
-    }
-    .map_err(|_| AppError::internal("storage"))?;
+    let (body, size) = state
+        .storage
+        .get_object(&path)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
     let extra = vec![
         (
             HeaderName::from_static("x-kutup-doc-key-id"),
             doc_key_id.to_string(),
         ),
         (HeaderName::from_static("x-kutup-seq"), seq.to_string()),
-        (HeaderName::from_static("x-kutup-s3-version"), s3_version),
     ];
     Ok(octet_stream_response(body, size, &extra))
 }
@@ -294,9 +287,9 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    type Row = (String, String, Uuid, Uuid, bool);
+    type Row = (String, Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT v.storage_path, v.s3_version_id, v.author_user_id, c.owner_user_id,
+        "SELECT v.storage_path, v.author_user_id, c.owner_user_id,
                 v.id = ({NEWEST_VERSION})
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
@@ -307,7 +300,7 @@ pub async fn delete(
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version, author, owner, newest)) = row else {
+    let Some((path, author, owner, newest)) = row else {
         return Err(AppError::not_found("not found"));
     };
     if user_id != author && user_id != owner {
@@ -323,7 +316,7 @@ pub async fn delete(
             "the newest version is the file's current content and cannot be deleted",
         ));
     }
-    crate::jobs::remove_version(&state.pool, &state.storage, vid, &path, &s3_version)
+    crate::jobs::remove_version(&state.pool, &state.storage, vid, &path)
         .await
         .map_err(|_| AppError::internal("could not delete the version"))?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -536,12 +529,12 @@ pub(crate) async fn store_version(
     // Stamped when stored, not when the transaction began: a save that waited
     // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
-        r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
+        r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author, parent_version_id,
                                       created_at)
-           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
-           RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
+           RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
                      remote_author, parent_version_id"#,
     )

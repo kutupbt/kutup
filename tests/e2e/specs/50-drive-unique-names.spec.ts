@@ -178,25 +178,11 @@ test('items without hashes are filled in, and a restore into a taken name keeps 
   await writeFile(`${dir}/plan.txt`, 'one')
   await writeFile(`${dir}/second/plan.txt`, 'two')
 
-  // An older client: no name hashes, and it does not see what is there
-  // (so this one does not stop it either). Nothing is filled in meanwhile.
-  const hiddenFolders = new Set<string>()
-  const hidden: string[] = []
+  // Uploads without name hashes (as a replacing upload sends them) that do
+  // not see what is there (so this one does not stop them either). Nothing
+  // is filled in meanwhile. A new folder always claims its name.
   let hideFiles = false
   await context.route('**/name-hashes', (route) => route.abort())
-  await context.route('**/api/collections', async (route) => {
-    const request = route.request()
-    if (request.method() === 'POST') {
-      const body = request.postDataJSON() as Record<string, unknown>
-      delete body.nameHash
-      hiddenFolders.add(String(body.id))
-      return route.continue({ postData: JSON.stringify(body) })
-    }
-    const response = await route.fetch()
-    const rows = (await response.json()) as { id: string }[]
-    // Only the first of each made here is hidden.
-    await route.fulfill({ response, json: rows.filter((r) => !hidden.includes(r.id)) })
-  })
   await context.route('**/api/collections/*/files', async (route) => {
     if (!hideFiles) return route.continue()
     await route.fulfill({ json: [] })
@@ -209,10 +195,6 @@ test('items without hashes are filled in, and a restore into a taken name keeps 
     await route.continue({ headers: { ...headers, 'upload-metadata': kept.join(',') } })
   })
 
-  await createFolder(page, 'Same')
-  hidden.push(...hiddenFolders)
-  await page.reload()
-  await createFolder(page, 'Same')
   await upload(page, `${dir}/plan.txt`)
   await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
   hideFiles = true
@@ -221,12 +203,10 @@ test('items without hashes are filled in, and a restore into a taken name keeps 
   await expect(panel(page).getByText('In My files')).toHaveCount(1, { timeout: 60_000 })
   await context.unrouteAll({ behavior: 'wait' })
 
-  // The owner opens the folder: both pairs are there, and the later of each
-  // is renamed.
+  // The owner opens the folder: both files are there, and the later one is
+  // renamed.
   await page.reload()
-  await expect(item(page, 'Same (2)')).toBeVisible({ timeout: 60_000 })
   await expect(item(page, 'plan (2).txt')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'Same')).toHaveCount(1)
   await expect(item(page, 'plan.txt')).toHaveCount(1)
 
   // A file restored after its name was taken comes back beside it.

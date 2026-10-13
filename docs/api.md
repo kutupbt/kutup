@@ -721,9 +721,10 @@ Create a new collection.
 }
 ```
 
-`nameHash` (optional, see "Names in a folder") keeps the name unique among
-the parent's files and subfolders, or among the owner's top-level folders;
-a taken name is `409 name_taken`.
+`nameHash` (required for a folder, see "Names in a folder"; ignored for an
+album) keeps the name unique among the parent's files and subfolders, or
+among the owner's top-level folders; a missing one is `400`, a taken name
+`409 name_taken`.
 
 The name envelope is bound to `(collection ID, owner user ID, epoch 1,
 revision 1)`. The owner-key envelope binds the same identifiers with the
@@ -1823,8 +1824,13 @@ already there.
   the upload finishes), `PUT /api/files/:id`, `POST /api/files/:id/move`
   (with `contentHash` under the destination's key, if known; otherwise the
   content hash is dropped), and uploads from another server
-  (`nameHash` multipart field). An item written without one has no hash
-  until it is filled in, and is not kept unique meanwhile.
+  (`nameHash` multipart field). A new folder must send it. The other writes
+  may leave it out where the writer cannot hash the name: an upload that
+  replaces a file (it claims the name through `name-hashes` once the old
+  file is in the trash), a rename of a file shared by itself (no folder
+  key), a move of an item whose name the mover cannot read, a peer's upload.
+  Such an item has no hash until the folder's owner fills it in, and is not
+  kept unique meanwhile.
 - A taken name is `409` with what holds it:
 
   ```json
@@ -1877,11 +1883,10 @@ recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
 
 Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
 accountIncarnationId, drivePublicKey, driveSigningPublicKey, canUpload, canDelete, uploadQuotaBytes,
-createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope?, expiresAt?,
+createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope, expiresAt?,
 createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
 recipientIncarnationId, canUpload, canDelete, uploadQuotaBytes, createdAt }] }`.
-A link without `ownerLinkKeyEnvelope` predates owner copies and cannot be kept
-through a rotation.
+Every link carries `ownerLinkKeyEnvelope`, so a rotation re-wraps it.
 
 ### POST /api/collections/:id/rotate
 
@@ -3770,7 +3775,7 @@ Remove both variants and release their bytes to whoever was charged.
 
 ### GET /api/files/:fileId/versions
 List all versions newest-first.
-**Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
+**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
 `parentVersionId` is, for a whole-file version, the version it replaced (the
 file's current content when it was stored); `null` for the original upload,
 for notes' states and for versions stored before it was recorded. Whole-file
@@ -3780,8 +3785,7 @@ with conditional saves (`basedOn`, below) no edit is overwritten unseen
 
 ### GET /api/files/:fileId/versions/:vid/download
 Get the encrypted snapshot bytes for a specific version. Returns
-`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`,
-`X-Kutup-S3-Version`. The snapshot uses the same typed,
+`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`. The snapshot uses the same typed,
 file/collection/epoch-bound Drive file-blob format as an original file. There
 is no snapshot-specific legacy decoder.
 

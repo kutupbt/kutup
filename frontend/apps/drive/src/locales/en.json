@@ -231,8 +231,6 @@
       "link": "Public link",
       "linkCreated": "Created {{created}}",
       "linkExpires": "Created {{created}} · expires {{expires}}",
-      "legacyLinks_one": "{{count}} link was made before links could be copied again. Removing anyone also removes it; make a new link afterwards.",
-      "legacyLinks_other": "{{count}} links were made before links could be copied again. Removing anyone also removes them; make new links afterwards.",
       "copy": "Copy link",
       "copied": "Link copied",
       "remove": "Remove",

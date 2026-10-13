@@ -145,8 +145,8 @@ pub async fn move_file(
         )
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    // The hashes belong to the folder: the destination's, or none (an older
-    // client) until a client fills them in.
+    // The hashes belong to the folder: the destination's, or none (a file
+    // whose name the mover cannot read) until the owner's client fills them in.
     let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
     let content_hash = crate::drive_names::parse_content_hash(req.content_hash.as_deref())?;
     if let Some(hash) = &name_hash {

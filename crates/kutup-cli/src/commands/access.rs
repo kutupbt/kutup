@@ -6,7 +6,7 @@
 //! party keeps what it already had; nothing written from now on is readable
 //! to it.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ struct Member {
 struct Link {
     id: String,
     token: String,
-    owner_link_key_envelope: Option<String>,
+    owner_link_key_envelope: String,
     expires_at: Option<String>,
     created_at: String,
 }
@@ -98,12 +98,7 @@ pub fn list(profile: &str, json: bool, collection_id: &str) -> Result<()> {
         );
     }
     for l in &access.public_links {
-        let note = if l.owner_link_key_envelope.is_some() {
-            ""
-        } else {
-            "  (made before links could be kept; removing anyone removes it)"
-        };
-        println!("  link       {}  created {}{note}", l.id, l.created_at);
+        println!("  link       {}  created {}", l.id, l.created_at);
     }
     Ok(())
 }
@@ -151,7 +146,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         })
         .map(|f| f.id.clone())
         .collect();
-    let mut removed_links: Vec<String> = access
+    let removed_links: Vec<String> = access
         .public_links
         .iter()
         .filter(|l| l.id == who)
@@ -160,23 +155,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     if removed_member.is_empty() && removed_federated.is_empty() && removed_links.is_empty() {
         return Err(NotFound(format!("{who} does not have access to this folder")).into());
     }
-    // Links the owner has no copy of cannot follow the key.
-    let legacy: Vec<String> = access
-        .public_links
-        .iter()
-        .filter(|l| l.owner_link_key_envelope.is_none() && !removed_links.contains(&l.id))
-        .map(|l| l.id.clone())
-        .collect();
-    let prompt = if legacy.is_empty() {
-        format!("Remove {who}? The folder moves to a new key they never get.")
-    } else {
-        format!(
-            "Remove {who}? The folder moves to a new key they never get; {} older public link(s) are removed too.",
-            legacy.len()
-        )
-    };
-    crate::commands::confirm(&prompt, yes)?;
-    removed_links.extend(legacy);
+    crate::commands::confirm(
+        &format!("Remove {who}? The folder moves to a new key they never get."),
+        yes,
+    )?;
 
     // The next epoch.
     let next = col.key_epoch + 1;
@@ -242,12 +224,8 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .iter()
         .filter(|l| !removed_links.contains(&l.id))
         .map(|l| {
-            let envelope = l
-                .owner_link_key_envelope
-                .as_deref()
-                .ok_or_else(|| anyhow!("link {} has no owner copy", l.id))?;
             let link_key = drive_envelope::open_b64(
-                envelope,
+                &l.owner_link_key_envelope,
                 master,
                 DriveEnvelopeContextV1::new(
                     DriveEnvelopePurpose::PublicLinkKey,

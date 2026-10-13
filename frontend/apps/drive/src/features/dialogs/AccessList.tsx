@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Globe, Link2, Server, User } from 'lucide-react'
+import { Check, ChevronDown, Link2, Server, User } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -53,7 +53,6 @@ export function AccessList({ folder }: { folder: Folder }) {
   if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
   const data: FolderAccess = access.data
   const date = (iso: string) => new Date(iso).toLocaleDateString(i18n.language, { dateStyle: 'medium' })
-  const legacyLinks = data.publicLinks.filter((l) => !l.ownerLinkKeyEnvelope).length
   const empty = data.members.length + data.federatedShares.length + data.publicLinks.length === 0
 
   async function copy(linkId: string) {
@@ -155,14 +154,14 @@ export function AccessList({ folder }: { folder: Folder }) {
         {data.publicLinks.map((l) => (
           <Row
             key={l.id}
-            icon={l.ownerLinkKeyEnvelope ? <Link2 className="size-4" aria-hidden /> : <Globe className="size-4" aria-hidden />}
+            icon={<Link2 className="size-4" aria-hidden />}
             name={t('dialogs.access.link')}
             detail={
               l.expiresAt
                 ? t('dialogs.access.linkExpires', { created: date(l.createdAt), expires: date(l.expiresAt) })
                 : t('dialogs.access.linkCreated', { created: date(l.createdAt) })
             }
-            onCopy={l.ownerLinkKeyEnvelope ? () => void copy(l.id) : undefined}
+            onCopy={() => void copy(l.id)}
             control={
               <Button
                 size="sm"
@@ -177,7 +176,6 @@ export function AccessList({ folder }: { folder: Folder }) {
           />
         ))}
       </ul>
-      {legacyLinks > 0 ? <p className="text-xs text-muted-foreground">{t('dialogs.access.legacyLinks', { count: legacyLinks })}</p> : null}
       {pending ? (
         <Alert variant="warn">
           <p className="font-medium">{t('dialogs.access.confirmTitle', { name: pending.label })}</p>

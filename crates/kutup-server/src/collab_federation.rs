@@ -792,17 +792,16 @@ pub async fn version_content(
         let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
         let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
         remote_access(&state, &authenticated, &headers, file_id).await?;
-        let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT storage_path, s3_version_id, size_bytes FROM file_versions WHERE id = $1 AND file_id = $2",
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT storage_path, size_bytes FROM file_versions WHERE id = $1 AND file_id = $2",
         )
         .bind(vid)
         .bind(file_id)
         .fetch_optional(&state.pool)
         .await?;
-        let (path, s3_version_id, size) = row.ok_or_else(|| AppError::not_found("not found"))?;
+        let (path, size) = row.ok_or_else(|| AppError::not_found("not found"))?;
         let content = crate::file_content::CurrentContent {
             path,
-            s3_version_id: Some(s3_version_id).filter(|v| !v.is_empty()),
             size,
             version: Some(vid),
         };

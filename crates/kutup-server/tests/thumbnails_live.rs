@@ -209,6 +209,7 @@ fn thumbnails_contract() {
             "nameEnvelope": drive_envelope::seal_b64(b"Thumbs", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
+            "nameHash": collection_id.replace('-', "").repeat(2),
         }))
         .send()
         .unwrap();

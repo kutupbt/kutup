@@ -343,7 +343,15 @@ pub(crate) async fn create_owned_collection(
         .map_err(|_| AppError::bad_request("invalid collection epoch statement"))?;
     let statement_hash = epoch_statement.statement_hash();
 
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    // Folders keep names unique, so a new one claims its name; albums are
+    // not in the folder tree.
+    let name_hash = if kind == "folder" {
+        Some(crate::drive_names::require_name_hash(
+            req.name_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
@@ -357,8 +365,6 @@ pub(crate) async fn create_owned_collection(
             return Err(AppError::bad_request("invalid parent collection"));
         }
     }
-    // Folders keep names unique; albums are not in the folder tree.
-    let name_hash = if kind == "folder" { name_hash } else { None };
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
@@ -593,9 +599,8 @@ pub async fn update_collection(
     let Some((epoch, current_revision, parent, kind)) = current else {
         return Err(AppError::not_found("not found"));
     };
-    // A new name without its hash (an older client) leaves the old hash
-    // wrong: it is cleared, and the name is not kept unique until a client
-    // fills it in again.
+    // A new name without its hash (the parent's key was not at hand) leaves
+    // the old hash wrong: it is cleared, and the owner's client fills it in.
     let name_hash = if kind == "folder" { name_hash } else { None };
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::of(parent, user_id);

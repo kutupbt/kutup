@@ -212,9 +212,10 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
 const filling = new Set<string>()
 
 /**
- * Fill in the name hashes of the account's top-level folders made before
- * names were kept unique (docs/plans/drive-unique-names.md), in the
- * background; the folders reload when anything changed.
+ * Fill in the name hashes of the account's top-level folders that have none
+ * (a folder restored from the trash whose parent is gone, or into a taken
+ * name; docs/plans/drive-unique-names.md), in the background; the folders
+ * reload when anything changed.
  */
 function fillTopLevel(folders: FolderIndex, me: DriveIdentity, queryClient: QueryClient) {
   const top = folders.all.filter((f) => f.source === 'owned' && !f.parentId)

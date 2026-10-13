@@ -231,8 +231,6 @@
       "link": "Herkese açık bağlantı",
       "linkCreated": "Oluşturulma: {{created}}",
       "linkExpires": "Oluşturulma: {{created}} · bitiş: {{expires}}",
-      "legacyLinks_one": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak onu da kaldırır; ardından yeni bir bağlantı oluşturun.",
-      "legacyLinks_other": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak bunları da kaldırır; ardından yeni bağlantılar oluşturun.",
       "copy": "Bağlantıyı kopyala",
       "copied": "Bağlantı kopyalandı",
       "remove": "Çıkar",

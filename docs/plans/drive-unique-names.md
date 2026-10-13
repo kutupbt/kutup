@@ -68,8 +68,9 @@ differently.
   for top-level folders) among items not in the trash, and every write
   checks files and folders together in one transaction, so a file and a
   folder cannot share a name either.
-- Every write that sets a name or a folder carries the name hash: create
-  folder, rename folder, move folder, upload (tus at create and again when
+- Every write that sets a name or a folder carries the name hash (a new
+  folder must; the others may not have it — see `docs/api.md`, "Names in a
+  folder" — and the owner's client fills it in later): create folder, rename folder, move folder, upload (tus at create and again when
   it finishes, multipart before anything is stored), rename file, move
   file, and uploads arriving from another server. A clash is
   `409 name_taken` with what holds the name (file or folder, its id, its

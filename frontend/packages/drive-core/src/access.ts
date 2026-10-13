@@ -30,8 +30,8 @@ export interface AccessMember {
 export interface AccessLink {
   id: string
   token: string
-  /** Absent on links made before owners kept a copy: they cannot be kept. */
-  ownerLinkKeyEnvelope: string | null
+  /** The link's key sealed for the owner, to copy and re-wrap it. */
+  ownerLinkKeyEnvelope: string
   expiresAt: string | null
   createdAt: string
 }
@@ -73,7 +73,6 @@ export function useFolderAccess(folder: Folder | undefined) {
 
 /** A link's key, from the owner's copy. */
 export function openLinkKey(link: AccessLink, me: DriveIdentity): Promise<Uint8Array> {
-  if (!link.ownerLinkKeyEnvelope) return Promise.reject(new Error('no owner copy of this link'))
   return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
 }
 
@@ -99,8 +98,6 @@ export class RecipientChanged extends Error {
 
 /**
  * Move `folder` to a new key, keeping everyone in `access` except `removed`.
- * Links made before owners kept a copy of their key cannot be re-wrapped and
- * are always removed.
  */
 export async function rotateFolder(
   folder: Folder,
@@ -134,11 +131,7 @@ export async function rotateFolder(
     ),
   ])
 
-  const removedLinks = new Set([
-    ...removed.publicLinks,
-    // A link without an owner copy cannot follow the key: it goes.
-    ...access.publicLinks.filter((l) => !l.ownerLinkKeyEnvelope).map((l) => l.id),
-  ])
+  const removedLinks = new Set(removed.publicLinks)
   const seal = (publicKey: string, account: string, incarnationId: string) =>
     sealNamedShareEnvelope(key, me.masterKey, publicKey, {
       collectionId: folder.id,

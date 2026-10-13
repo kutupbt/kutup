@@ -188,6 +188,7 @@ fn versions_v2_contract() {
             "nameEnvelope": drive_envelope::seal_b64(b"Thumbs", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
+            "nameHash": collection_id.replace('-', "").repeat(2),
         }))
         .send()
         .unwrap();
@@ -283,7 +284,7 @@ fn versions_v2_contract() {
     assert_eq!(v["kind"], "file");
     assert_eq!(v["label"], "Draft");
     assert_eq!(v["sizeBytes"], edited.len() as i64);
-    assert_eq!(v["s3VersionId"], "", "a version is an object of its own");
+    assert!(v.get("s3VersionId").is_none());
     assert!(v["storagePath"]
         .as_str()
         .unwrap()

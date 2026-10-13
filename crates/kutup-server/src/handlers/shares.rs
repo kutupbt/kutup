@@ -572,26 +572,22 @@ pub async fn public_share_state(
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id).await?;
-    let latest: Option<(String, String, i64, i32)> = sqlx::query_as(
-        "SELECT storage_path, s3_version_id, size_bytes, key_generation FROM file_versions
+    let latest: Option<(String, i32)> = sqlx::query_as(
+        "SELECT storage_path, key_generation FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version_id, _, key_generation)) = latest else {
+    let Some((path, key_generation)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
-    let (body, size) = if s3_version_id.is_empty() {
-        state.storage.get_object(&path).await
-    } else {
-        state
-            .storage
-            .get_object_version(&path, &s3_version_id)
-            .await
-    }
-    .map_err(|_| AppError::internal("storage"))?;
+    let (body, size) = state
+        .storage
+        .get_object(&path)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(
         body,
         size,

@@ -221,8 +221,9 @@ interface Pending {
 }
 
 /**
- * Items made before names were kept unique (or by a client that sent no
- * hash) get their hashes, oldest first; one whose name an earlier item
+ * Items without a name hash (a replacing upload stopped half-way, a rename
+ * without the folder's key, a peer's upload, a restore into a taken name)
+ * get their hashes, oldest first; one whose name an earlier item
  * holds is renamed `name (2)` and takes that name's hash. Only the folder's
  * owner does this — they can rename everything in it. Quietly gives up on
  * anything it cannot do: the next visit tries again.

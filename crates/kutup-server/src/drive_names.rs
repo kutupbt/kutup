@@ -35,14 +35,22 @@ impl Place {
     }
 }
 
-/// A name hash as sent: 64 lowercase hex digits, or none (an older client;
-/// the name is then not kept unique until a client fills it in).
+/// A name hash as sent: 64 lowercase hex digits, or none where a write may
+/// leave the name unclaimed for now — an upload that replaces a file (it takes
+/// the name once the old one is in the trash), a rename or move by someone
+/// who cannot read the name or lacks the folder's key, a peer's upload. The
+/// folder's owner fills such names in (`handlers::name_hashes`).
 pub fn parse_name_hash(value: Option<&str>) -> AppResult<Option<String>> {
     match value {
         None => Ok(None),
         Some(hash) if is_hash(hash) => Ok(Some(hash.to_owned())),
         Some(_) => Err(AppError::bad_request("invalid name hash")),
     }
+}
+
+/// A name hash that must be sent: a new folder always knows its name and place.
+pub fn require_name_hash(value: Option<&str>) -> AppResult<String> {
+    parse_name_hash(value)?.ok_or_else(|| AppError::bad_request("nameHash is required"))
 }
 
 /// A content hash as sent, same form.

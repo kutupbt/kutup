@@ -797,26 +797,22 @@ pub async fn remove_file_share(
 
 /// The latest saved Yjs state of `file_id`, as a response body.
 async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResponse> {
-    let latest: Option<(String, String, i32)> = sqlx::query_as(
-        "SELECT storage_path, s3_version_id, key_generation FROM file_versions
+    let latest: Option<(String, i32)> = sqlx::query_as(
+        "SELECT storage_path, key_generation FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version_id, key_generation)) = latest else {
+    let Some((path, key_generation)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
-    let (object, _) = if s3_version_id.is_empty() {
-        state.storage.get_object(&path).await
-    } else {
-        state
-            .storage
-            .get_object_version(&path, &s3_version_id)
-            .await
-    }
-    .map_err(|_| AppError::internal("storage"))?;
+    let (object, _) = state
+        .storage
+        .get_object(&path)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
     let bytes = object
         .collect()
         .await

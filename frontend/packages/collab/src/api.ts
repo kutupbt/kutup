@@ -35,7 +35,6 @@ export async function revokeDevice(id: number): Promise<void> {
 
 export interface VersionRow {
   id: string
-  s3VersionId: string
   storagePath: string
   seqAtSnapshot: number
   docKeyId: number

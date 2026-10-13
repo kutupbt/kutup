@@ -132,7 +132,7 @@ pub struct FileLink {
     pub id: Uuid,
     pub token: String,
     /// The link key sealed for the owner (purpose 9), to copy and re-wrap it.
-    pub owner_link_key_envelope: Option<String>,
+    pub owner_link_key_envelope: String,
     /// The generation its wrap opens; below the file's, it waits to be re-wrapped.
     pub key_generation: i32,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -544,7 +544,7 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
     type Row = (
         Uuid,
         String,
-        Option<String>,
+        String,
         i32,
         Option<OffsetDateTime>,
         OffsetDateTime,

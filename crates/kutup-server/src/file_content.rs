@@ -13,26 +13,23 @@ use crate::storage::StorageService;
 
 pub struct CurrentContent {
     pub path: String,
-    /// Set for objects stored as S3 object versions (versions from before v2).
-    pub s3_version_id: Option<String>,
     pub size: i64,
     /// The `file_versions` row it came from; `None` for the original upload.
     pub version: Option<Uuid>,
 }
 
 pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Option<CurrentContent>> {
-    let version: Option<(Uuid, String, String, i64)> = sqlx::query_as(
-        "SELECT id, storage_path, s3_version_id, size_bytes FROM file_versions
+    let version: Option<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT id, storage_path, size_bytes FROM file_versions
          WHERE file_id = $1 AND kind = 'file'
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(file_id)
     .fetch_optional(pool)
     .await?;
-    if let Some((id, path, s3_version_id, size)) = version {
+    if let Some((id, path, size)) = version {
         return Ok(Some(CurrentContent {
             path,
-            s3_version_id: Some(s3_version_id).filter(|v| !v.is_empty()),
             size,
             version: Some(id),
         }));
@@ -56,7 +53,6 @@ pub async fn original_content(
     .await?;
     Ok(original.map(|(path, size)| CurrentContent {
         path,
-        s3_version_id: None,
         size,
         version: None,
     }))
@@ -64,9 +60,6 @@ pub async fn original_content(
 
 impl CurrentContent {
     pub async fn open(&self, storage: &StorageService) -> anyhow::Result<(ByteStream, i64)> {
-        match &self.s3_version_id {
-            Some(id) => storage.get_object_version(&self.path, id).await,
-            None => storage.get_object(&self.path).await,
-        }
+        storage.get_object(&self.path).await
     }
 }

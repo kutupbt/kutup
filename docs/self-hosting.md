@@ -1193,6 +1193,3 @@ goes after a day. Re-run it after upgrading:
 docker compose run --rm seaweedfs-init
 ```
 
-Versions stored by earlier builds as S3 object versions of
-`files/{id}/snapshot` are moved onto their own keys automatically when the
-server starts.

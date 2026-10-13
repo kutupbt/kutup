@@ -43,8 +43,6 @@ pub struct PatchVersionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct VersionRow {
     pub id: String,
-    #[serde(default)]
-    pub s3_version_id: String,
     /// `file` or `yjs`.
     #[serde(default)]
     pub kind: String,

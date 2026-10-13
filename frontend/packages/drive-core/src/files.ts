@@ -84,8 +84,9 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
 const filling = new Set<string>()
 
 /**
- * Fill in the name hashes of what is in a folder its owner opens, made
- * before names were kept unique or by a client that sent none
+ * Fill in the name hashes of what is in a folder its owner opens that has
+ * none — a replacing upload stopped half-way, a rename without the folder's
+ * key, a peer's upload, a restore into a taken name
  * (docs/plans/drive-unique-names.md), in the background; the listing
  * reloads when anything changed.
  */

@@ -275,7 +275,7 @@ export interface FileAccessMember {
 export interface FileLink {
   id: string
   token: string
-  ownerLinkKeyEnvelope: string | null
+  ownerLinkKeyEnvelope: string
   /** The generation its wrap opens; below the file's, it waits to be re-wrapped. */
   keyGeneration: number
   expiresAt: string | null
@@ -323,7 +323,6 @@ function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, gene
 
 /** A file link's key, from the owner's copy. */
 function fileLinkKey(link: FileLink, me: DriveIdentity): Promise<Uint8Array> {
-  if (!link.ownerLinkKeyEnvelope) return Promise.reject(new Error('no owner copy of this link'))
   return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
 }
 

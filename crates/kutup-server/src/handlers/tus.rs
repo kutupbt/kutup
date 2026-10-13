@@ -197,8 +197,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     let coll_id = meta.get("collectionId").unwrap_or(&empty);
     let metadata_envelope = meta.get("metadataEnvelope").unwrap_or(&empty);
     let file_key_envelope = meta.get("fileKeyEnvelope").unwrap_or(&empty);
-    // The name's hash (docs/plans/drive-unique-names.md), from clients that
-    // keep names unique.
+    // The name's hash (docs/plans/drive-unique-names.md); none for an upload
+    // that replaces a file and takes its name afterwards.
     let name_hash =
         match crate::drive_names::parse_name_hash(meta.get("nameHash").map(String::as_str)) {
             Ok(hash) => hash,

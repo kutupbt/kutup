@@ -228,7 +228,17 @@ impl StorageService {
         Ok((objs, next))
     }
 
-    /// Fetches a specific noncurrent version — mirrors `GetObjectVersion`.
+    /// Reads an object whose upload returned `version_id`: that exact version
+    /// where the store kept one (a versioned bucket), otherwise the object.
+    pub async fn get_stored(&self, key: &str, version_id: &str) -> Result<(ByteStream, i64)> {
+        if version_id.is_empty() {
+            self.get_object(key).await
+        } else {
+            self.get_object_version(key, version_id).await
+        }
+    }
+
+    /// Fetches a specific version of an object — mirrors `GetObjectVersion`.
     pub async fn get_object_version(
         &self,
         path: &str,
@@ -275,28 +285,6 @@ impl StorageService {
                 Ok(())
             }
         }
-    }
-
-    /// Copies one stored version of `source` to `destination` (a new plain
-    /// object), server-side.
-    pub async fn copy_object_version(
-        &self,
-        source: &str,
-        version_id: &str,
-        destination: &str,
-    ) -> Result<()> {
-        self.client
-            .copy_object()
-            .bucket(&self.bucket)
-            .copy_source(format!(
-                "{}/{}?versionId={}",
-                self.bucket, source, version_id
-            ))
-            .key(destination)
-            .send()
-            .await
-            .context("s3 copy version")?;
-        Ok(())
     }
 
     /// Every stored version and delete marker under `prefix`, as (key, version id).

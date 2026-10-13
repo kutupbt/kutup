@@ -193,6 +193,12 @@ pub struct Folder {
     pub key: [u8; 32],
 }
 
+/// A stand-in name hash (64 lowercase hex digits) unique to `id`: the server
+/// never reads names, only keeps their hashes apart.
+pub fn test_name_hash(id: &str) -> String {
+    id.replace('-', "").repeat(2)
+}
+
 pub fn create_folder(c: &Client, base: &str, owner: &User) -> Folder {
     create_folder_in(c, base, owner, None)
 }
@@ -208,6 +214,7 @@ pub fn create_folder_in(c: &Client, base: &str, owner: &User, parent: Option<&st
             "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &key, ctx(DriveEnvelopePurpose::CollectionName, &id, &owner.id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&id, &owner.id, 1, None, &key, owner.identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": parent,
+            "nameHash": test_name_hash(&id),
         }))
         .send()
         .unwrap();

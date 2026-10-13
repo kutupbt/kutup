@@ -973,7 +973,8 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
                 "id": collection_id,
                 "nameEnvelope": name_envelope,
                 "ownerKeyEnvelope": owner_key_envelope,
-                "epochStatement": epoch_statement.encode_b64()
+                "epochStatement": epoch_statement.encode_b64(),
+                "nameHash": collection_id.replace('-', "").repeat(2)
             }))
             .send()
             .unwrap(),

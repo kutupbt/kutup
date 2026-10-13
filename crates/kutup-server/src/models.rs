@@ -236,6 +236,7 @@ pub struct CreateCollectionRequest {
     pub parent_collection_id: Option<String>,
     /// The name's hash under the parent's hash key, or at the top level
     /// the account's top-level one (docs/plans/drive-unique-names.md).
+    /// Required for a folder; ignored for an album.
     pub name_hash: Option<String>,
 }
 

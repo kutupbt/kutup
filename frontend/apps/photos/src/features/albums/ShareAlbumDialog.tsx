@@ -235,11 +235,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             {links.map((link) => (
               <li key={link.id} className="flex items-center gap-2 px-3 py-2">
                 <p className="min-w-0 flex-1 truncate text-sm">{t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}</p>
-                {link.ownerLinkKeyEnvelope ? (
-                  <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
-                    <Copy />
-                  </Button>
-                ) : null}
+                <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
+                  <Copy />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"

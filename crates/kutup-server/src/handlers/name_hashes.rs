@@ -1,6 +1,8 @@
 //! Filling in name and content hashes (docs/plans/drive-unique-names.md):
 //! a file's content hash once its upload has read it all, and the name
-//! hashes of what was made before names were kept unique.
+//! hashes of items written without one (a replacing upload, a rename by
+//! someone without the folder's key, a peer's upload, a restore from the
+//! trash into a taken name or another place).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -105,7 +107,7 @@ pub struct FillNameHashesResult {
 const MAX_ITEMS: usize = 1000;
 
 /// `POST /api/collections/{id}/name-hashes` — the name hashes of a folder's
-/// files and subfolders made before names were kept unique. Only items
+/// files and subfolders that have none (see the module docs). Only items
 /// without one are filled in; one whose name another already holds is
 /// left out and reported. Whoever can write the folder.
 #[utoipa::path(

@@ -44,7 +44,6 @@ pub fn spawn_all(
 ) {
     let (p1, s1) = (pool.clone(), storage.clone());
     tokio::spawn(async move {
-        migrate_legacy_versions(&p1, &s1).await;
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
         loop {
             tick.tick().await;
@@ -253,7 +252,6 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
         OffsetDateTime,
         bool,
         String,
-        String,
         Uuid,
         i64,
         i32,
@@ -264,7 +262,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     let mut after = Uuid::nil();
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
-        r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path, v.s3_version_id,
+        r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
                   v.author_user_id, v.size_bytes, u.version_retention_days
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
@@ -292,7 +290,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
         };
         after = last.1;
         for file in rows.chunk_by(|a, b| a.1 == b.1) {
-            let retention = i64::from(file[0].8);
+            let retention = i64::from(file[0].7);
             let candidates: Vec<crate::version_retention::Candidate> = file
                 .iter()
                 .map(|r| crate::version_retention::Candidate {
@@ -303,7 +301,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                 .collect();
             let doomed = crate::version_retention::doomed(&candidates, now, retention);
             for row in file.iter().filter(|r| doomed.contains(&r.0)) {
-                let (id, _, _, _, path, s3_version, _, _, _) = row;
+                let (id, _, _, _, path, _, _, _) = row;
                 // Row and charge go together, and only if this pass removed the
                 // row (a purge of the file may have raced it). The object goes
                 // after: a failed delete leaves an orphan for the sweep, never a
@@ -316,12 +314,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                         continue;
                     }
                 }
-                let deleted = if s3_version.is_empty() {
-                    storage.delete(path).await
-                } else {
-                    storage.delete_object_version(path, s3_version).await
-                };
-                if let Err(e) = deleted {
+                if let Err(e) = storage.delete(path).await {
                     tracing::warn!("version retention: delete {path} failed: {e}");
                 }
                 removed += 1;
@@ -411,17 +404,11 @@ pub(crate) async fn remove_version(
     storage: &StorageService,
     version_id: Uuid,
     path: &str,
-    s3_version: &str,
 ) -> anyhow::Result<bool> {
     if !release_version(pool, version_id).await? {
         return Ok(false);
     }
-    let deleted = if s3_version.is_empty() {
-        storage.delete(path).await
-    } else {
-        storage.delete_object_version(path, s3_version).await
-    };
-    if let Err(e) = deleted {
+    if let Err(e) = storage.delete(path).await {
         // An orphan for the storage sweep, never a row without its bytes.
         tracing::warn!("version delete: delete {path} failed: {e}");
     }
@@ -450,63 +437,6 @@ async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool
     .await?;
     tx.commit().await?;
     Ok(true)
-}
-
-/// Moves versions stored before v2 — S3 object versions of one key per file
-/// (`files/{id}/snapshot`), exposed to the bucket lifecycle — onto keys of
-/// their own, like every new version. Idempotent; runs in batches until none
-/// are left.
-pub async fn migrate_legacy_versions(pool: &PgPool, storage: &StorageService) -> usize {
-    let mut moved = 0;
-    loop {
-        let rows: Vec<(Uuid, Uuid, String, String)> = match sqlx::query_as(
-            "SELECT id, file_id, storage_path, s3_version_id FROM file_versions
-             WHERE s3_version_id <> '' ORDER BY created_at LIMIT 100",
-        )
-        .fetch_all(pool)
-        .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!("legacy versions: query failed: {e}");
-                return moved;
-            }
-        };
-        if rows.is_empty() {
-            break;
-        }
-        let mut progressed = false;
-        for (id, file_id, path, s3_version) in rows {
-            let destination = crate::handlers::file_versions::version_storage_path(file_id, id);
-            if let Err(e) = storage
-                .copy_object_version(&path, &s3_version, &destination)
-                .await
-            {
-                tracing::warn!("legacy versions: copy {path}@{s3_version} failed: {e}");
-                continue;
-            }
-            let updated = sqlx::query(
-                "UPDATE file_versions SET storage_path = $2, s3_version_id = '' WHERE id = $1 AND s3_version_id = $3",
-            )
-            .bind(id)
-            .bind(&destination)
-            .bind(&s3_version)
-            .execute(pool)
-            .await;
-            if updated.is_ok() {
-                let _ = storage.delete_object_version(&path, &s3_version).await;
-                moved += 1;
-                progressed = true;
-            }
-        }
-        if !progressed {
-            break;
-        }
-    }
-    if moved > 0 {
-        tracing::info!("legacy versions: moved {moved} onto their own keys");
-    }
-    moved
 }
 
 /// Rewrites the account's one storage counter (crate::storage_pool) from
