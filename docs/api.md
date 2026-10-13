@@ -85,8 +85,8 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
 **Request body:**
 ```json
 {
-  "email": "user@example.com",
   "username": "alice",
+  "keyBinding": "<lowercase UUID v4 drawn by the client>",
   "loginKey": "<base64>",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -101,16 +101,17 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
   "argonMemoryKib": 65536,
   "argonIterations": 3,
   "argonParallelism": 1,
-  "recoveryProof": "<base64>"
+  "recoveryProof": "<base64>",
+  "driveKeyBinding": "<canonical base64, 64 bytes>"
 }
 ```
 
 All key material is encrypted client-side before being sent. One parameterized
 Argon2id invocation derives an account-protection root; HKDF purpose subkeys
 produce the master-key KEK and `loginKey`. The server bcrypts only `loginKey`.
-`recoveryProof` is a distinct HKDF output bound to the canonical login email;
+`recoveryProof` is a distinct HKDF output bound to the key binding;
 the raw recovery entropy that opens `recoveryKeyEnvelope` is never sent. Each
-envelope authenticates its suite, purpose, canonical login email, nonce and
+envelope authenticates its suite, purpose, key binding, nonce and
 exact ciphertext length as AEAD associated data. The three purposes cannot be
 substituted for one another or relocated to another account.
 
@@ -118,10 +119,13 @@ The complete account identity is fixed at registration: the account authority,
 incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
 as one binding. A later account manifest must match all of them exactly; a
 self-signed first manifest cannot select a replacement authority.
+`driveKeyBinding` (required) is the authority's signature over the address
+`username@<server name>` and the Drive keys (`kutup_crypto::drive_key_binding`,
+docs/plans/drive-identity-pins.md); `400` when missing or not matching.
 
 **Response:** `201 Created`
 
-**Errors:** `403` if registration is disabled, `409` if the email or username is already taken.
+**Errors:** `403` if registration is disabled, `409` if the username is already taken.
 
 ---
 
@@ -180,7 +184,7 @@ For `web-account` the refresh token is an HttpOnly, host-only cookie named `refr
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`. Its temporary password is derived under the preflight salt as any password is; the server never had it.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (the username is what the new keys' `driveKeyBinding` names). Its temporary password is derived under the preflight salt as any password is; the server never had it.
 
 ---
 
@@ -204,15 +208,16 @@ Complete login when 2FA is enabled. Locked after 5 failed attempts.
 
 ### GET /api/auth/recover/preflight
 
-Fetch the encrypted recovery key bundle so the client can decrypt the master key with the mnemonic-derived recovery key. Rate-limited (5/hr/IP). Returns deterministic fake data for non-existent emails to prevent user enumeration.
+Fetch the encrypted recovery key bundle so the client can decrypt the master key with the mnemonic-derived recovery key. Rate-limited (5/hr/IP). Returns deterministic fake data for names that are no account, to prevent user enumeration.
 
 **Auth:** None
-**Query:** `?email=user@example.com`
+**Query:** `?name=alice` (the username, or the Kutup address `alice@<domain>`)
 
 **Response:**
 ```json
 {
-  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>"
+  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "envelopeBinding": "<the account's key binding>"
 }
 ```
 
@@ -227,7 +232,7 @@ Recover an account using a mnemonic-derived recovery key. The client proves poss
 **Request body:**
 ```json
 {
-  "email": "user@example.com",
+  "name": "alice",
   "recoveryProof": "<base64>",
   "newLoginKey": "<base64>",
   "newMasterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -284,7 +289,7 @@ Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't ye
 
 **Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
 
-**Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key).
+**Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key, and the required `driveKeyBinding` for the account's address; `username` is ignored).
 
 **Response:** creates a session and issues tokens exactly as `/api/auth/login` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
 ```json
@@ -581,8 +586,9 @@ Look up another local user's registered Drive identity (used when sharing a coll
 ```
 
 `driveKeyBinding` is the account authority's signature over the account's
-address and Drive keys (`kutup_crypto::drive_key_binding`); it is absent for an
-account that has not signed one yet. Clients check it and pin the authority
+address and Drive keys (`kutup_crypto::drive_key_binding`); it is absent only
+for an account an administrator wiped that has not finished its new first-login
+setup (and from a peer server that does not send one). Clients check it and pin the authority
 (docs/plans/drive-identity-pins.md); the federated lookup
 (`GET /api/drive/federation/users/:username`) returns the same two fields.
 
@@ -596,16 +602,6 @@ driveSigningPublicKey, driveKeyBinding? }` for the accounts found (unknown,
 disabled and not yet set-up accounts are left out); `400` for more than 100.
 
 **Auth:** Bearer JWT; counted with the user lookups (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), one per request.
-
-### PUT /api/user/drive-key-binding
-
-An account made before Drive key bindings stores its own (the account app does
-this at sign-in when `GET /api/user/me` says `hasDriveKeyBinding: false`).
-Checked against the account's stored keys and address; `400` when it does not
-match, `409` before the account has keys. Body: `{ "driveKeyBinding": "<base64>" }`.
-Registration and first-login setup take the same field.
-
-**Auth:** Bearer JWT · **Response:** `204`
 
 ### GET /api/user/identity-pins · PUT /api/user/identity-pins
 

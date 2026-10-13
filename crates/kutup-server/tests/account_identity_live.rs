@@ -146,7 +146,7 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
     let (admin_name, admin_password) = admin
         .split_once(':')
         .expect("KUTUP_LIVE_ADMIN is username:password");
-    let token = common::admin_token(&c, &base, "", admin_password, admin_name);
+    let token = common::admin_token(&c, &base, admin_password, admin_name);
     let username = format!("tmp{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let create = |body: Value| {
         bearer(c.post(format!("{base}/api/admin/users")), &token)

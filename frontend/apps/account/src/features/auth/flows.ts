@@ -61,6 +61,8 @@ export interface TotpChallenge {
 /** An administrator-created account signing in for the first time. */
 export interface PendingSetup {
   name: string
+  /** The account's username, which its new Drive key binding names. */
+  username: string
   setupToken: string
 }
 
@@ -95,9 +97,6 @@ async function activate(
 ): Promise<void> {
   await activateSession(keys, response.accessToken, response.sessionId)
   await persistKeys(response.sessionId, keys)
-  // In the background: signing in must not wait for it, and the next
-  // sign-in tries again.
-  void ensureDriveKeyBinding(keys.masterKey).catch(() => undefined)
 }
 
 /** The address an account has on this server, which its binding names. */
@@ -109,15 +108,12 @@ async function accountAddress(username: string): Promise<string> {
 }
 
 /**
- * An account made before Drive key bindings (docs/plans/drive-identity-pins.md)
- * signs its own: its authority vouching for its Drive keys, so the people it
- * shares with can check them.
+ * The account's Drive key binding (docs/plans/drive-identity-pins.md): its
+ * authority vouching for its Drive keys under its address, so the people it
+ * shares with can check them. Sent with every new set of keys.
  */
-async function ensureDriveKeyBinding(masterKey: Uint8Array): Promise<void> {
-  const { data: me } = await api.get<{ username: string; hasDriveKeyBinding?: boolean }>('/user/me')
-  if (me.hasDriveKeyBinding !== false || !me.username) return
-  const driveKeyBinding = await signDriveKeyBinding(toBase64(masterKey), await accountAddress(me.username))
-  await api.put('/user/drive-key-binding', { driveKeyBinding })
+async function driveKeyBindingFor(keys: AccountKeys, username: string): Promise<string> {
+  return signDriveKeyBinding(toBase64(keys.masterKey), await accountAddress(username))
 }
 
 /**
@@ -125,8 +121,7 @@ async function ensureDriveKeyBinding(masterKey: Uint8Array): Promise<void> {
  * answers, for every account: one an administrator created too (its
  * temporary password was derived in the administrator's browser), which the
  * server answers with `requiresSetup`. The keys' binding comes only with the
- * session. An account whose keys are still bound to its old sign-in email
- * comes back with a pending re-seal.
+ * session.
  */
 export async function signIn(name: string, password: string): Promise<SignInResult> {
   const { data: preflight } = await api.get<Preflight>('/auth/login/preflight', {
@@ -139,7 +134,7 @@ export async function signIn(name: string, password: string): Promise<SignInResu
   const { data } = await api.post<LoginResponse>('/auth/login', { name, loginKey })
   if (data.requiresSetup && data.setupToken) {
     keyEncryptionKey.fill(0)
-    return { kind: 'setup', setup: { name, setupToken: data.setupToken } }
+    return { kind: 'setup', setup: { name, username: data.username, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
     return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, keyEncryptionKey } }
@@ -213,7 +208,7 @@ const registered = new WeakSet<AccountKeys>()
  */
 export async function registerAndSignIn(username: string, keys: AccountKeys): Promise<void> {
   if (!registered.has(keys)) {
-    const driveKeyBinding = await signDriveKeyBinding(toBase64(keys.masterKey), await accountAddress(username))
+    const driveKeyBinding = await driveKeyBindingFor(keys, username)
     await api.post('/auth/register', { username, ...registrationBody(keys), driveKeyBinding })
     registered.add(keys)
   }
@@ -228,9 +223,10 @@ export async function registerAndSignIn(username: string, keys: AccountKeys): Pr
 
 /** First sign-in of an administrator-created account: store its new keys. */
 export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Promise<void> {
+  const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
   const { data } = await api.post<LoginResponse>(
     '/auth/complete-setup',
-    registrationBody(keys),
+    { ...registrationBody(keys), driveKeyBinding },
     { headers: { Authorization: `Bearer ${setup.setupToken}` } },
   )
   await activate(data, {

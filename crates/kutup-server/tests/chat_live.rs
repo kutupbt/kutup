@@ -32,6 +32,20 @@ fn b64(b: &[u8]) -> String {
     STANDARD.encode(b)
 }
 
+/// The name the live server gives its accounts' addresses (`user@name`).
+fn server_name(c: &Client, base: &str) -> String {
+    let settings: Value = c
+        .get(format!("{base}/api/auth/settings"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    settings["chat"]["serverName"]
+        .as_str()
+        .expect("the server advertises its name")
+        .to_owned()
+}
+
 fn opaque_profile_envelope(
     account: &str,
     version: &str,
@@ -136,6 +150,7 @@ fn login_with_password(c: &Client, base: &str, name: &str, password: &str) -> St
             "argonIterations": parameters.iterations,
             "argonParallelism": parameters.parallelism,
             "recoveryProof": b64(recovery_proof.as_slice()),
+            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &format!("{}@{}", login["username"].as_str().unwrap(), server_name(c, base))).unwrap()),
         });
         let completed = c
             .post(format!("{base}/api/auth/complete-setup"))
@@ -221,6 +236,7 @@ fn register_and_login(
         "accountProtectionSalt": b64(&account_protection_salt),
         "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
         "recoveryProof": b64(recovery_proof.as_slice()),
+        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &format!("{}@{}", username, server_name(c, base))).unwrap()),
     });
     let r = c
         .post(format!("{base}/api/auth/register"))

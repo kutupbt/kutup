@@ -129,9 +129,6 @@ pub struct MeResponse {
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
-    /// Whether the account signed its Drive key binding (it does so at
-    /// sign-in when not; docs/plans/drive-identity-pins.md).
-    pub has_drive_key_binding: bool,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.

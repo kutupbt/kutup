@@ -1,9 +1,8 @@
 // Vault secrets (docs/plans/pass.md, "Vault secrets"): what opens a vault,
 // kept in the account sealed under the master key, so a vault opens with the
 // Kutup sign-in, as Proton Pass does. The server stores them unreadable.
-// They are bound to the account's envelope binding, which the account app
-// changes once when it re-seals the account (docs/plans/account-identity.md):
-// a page opened before that refreshes the binding and tries once more.
+// They are bound to the account's envelope binding, its key binding
+// (docs/plans/account-identity.md).
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'

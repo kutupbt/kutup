@@ -48,6 +48,20 @@ fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
+/// The name a live server gives its accounts' addresses (`user@name`).
+fn server_name(c: &Client, base: &str) -> String {
+    let settings: Value = c
+        .get(format!("{base}/api/auth/settings"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    settings["chat"]["serverName"]
+        .as_str()
+        .expect("the server advertises its name")
+        .to_owned()
+}
+
 fn metadata_value(value: &str) -> String {
     STANDARD.encode(value.as_bytes())
 }
@@ -503,7 +517,7 @@ fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing federation peer {domain}"))
 }
 
-fn registration_payload(email: &str, username: &str) -> Value {
+fn registration_payload(c: &Client, base: &str, email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
     let master_key = test_master_key(email);
     let binding = test_binding(email);
@@ -562,11 +576,16 @@ fn registration_payload(email: &str, username: &str) -> Value {
         "argonIterations": 3,
         "argonParallelism": 1,
         "recoveryProof": b64(recovery_proof.as_slice()),
+        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
+            &identity,
+            &format!("{username}@{}", server_name(c, base)),
+        )
+        .unwrap()),
     })
 }
 
 fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
-    let payload = registration_payload(email, username);
+    let payload = registration_payload(c, base, email, username);
     let public_key = payload["publicKey"].as_str().unwrap().to_owned();
     let response = c
         .post(format!("{base}/api/auth/register"))
@@ -610,7 +629,7 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     let login: Value = first.json().unwrap();
     assert_eq!(login["requiresSetup"], true);
     let setup_token = login["setupToken"].as_str().unwrap();
-    let setup_payload = registration_payload(email, username);
+    let setup_payload = registration_payload(c, base, email, username);
     let setup = json_response(
         c.post(format!("{base}/api/auth/complete-setup"))
             .bearer_auth(setup_token)

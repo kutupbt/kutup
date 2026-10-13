@@ -342,13 +342,3 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
     // A new identity is trusted as seen, never as verified.
     pin(ctx, me, account, &person.authority, PinState::Seen)
 }
-
-/// Signs this account's Drive key binding when it has none yet (an account
-/// made before bindings; the web app does the same at sign-in).
-pub fn ensure_binding(ctx: &Ctx, me: &Me) -> Result<()> {
-    if ctx.client.has_drive_key_binding()? {
-        return Ok(());
-    }
-    let binding = drive_key_binding::sign(&me.identity, &me.account)?;
-    ctx.client.put_drive_key_binding(&STANDARD.encode(binding))
-}

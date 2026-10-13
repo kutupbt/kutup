@@ -248,7 +248,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         // --- public shares ---
         crate::handlers::shares::create_public_share,
         crate::handlers::shares::get_public_share,
-        crate::handlers::identity::put_drive_key_binding,
         crate::handlers::identity::get_identity_pins,
         crate::handlers::identity::put_identity_pins,
         crate::handlers::auth::reauth,
@@ -507,7 +506,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::models::FeedbackSettings,
         crate::handlers::link_reports::ReportLinkRequest,
         crate::handlers::link_reports::LinkReport,
-        crate::handlers::identity::DriveKeyBindingRequest,
         crate::handlers::identity::IdentityPinsBody,
         crate::handlers::auth::ReauthRequest,
         crate::handlers::pass::VaultSecretRow,

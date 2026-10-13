@@ -625,10 +625,6 @@ fn build_router(state: AppState) -> Router {
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route(
-            "/api/user/drive-key-binding",
-            put(identity::put_drive_key_binding),
-        )
-        .route(
             "/api/feedback",
             post(feedback::send_feedback)
                 // A message of 5000 characters and a few details.

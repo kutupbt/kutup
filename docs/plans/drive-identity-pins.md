@@ -71,9 +71,10 @@ over these bytes, plus `incarnationId == hash(authority)`. Vectors in
 ### 2. Server
 
 - `users.drive_key_binding` (signature, base64), required at registration and
-  first-login setup, checked against the stored keys before storage.
-- `PUT /api/user/drive-key-binding`: an account made before this signs its
-  binding at its next sign-in (the account app does it).
+  first-login setup, checked against the keys sent before storage. An
+  administrator's wipe clears it with the keys; the account's new setup signs
+  it again. (The clean-slate release removed the later backfill,
+  `PUT /api/user/drive-key-binding`.)
 - The person lookups (`GET /api/users/by-email/:account`, and the federated
   `GET /api/drive/federation/users/:username`, whose remote server answers
   for its own account) hand out `accountAuthorityPublicKey` and

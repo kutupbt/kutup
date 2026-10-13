@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountKeys } from './flows'
 
 const post = vi.hoisted(() => vi.fn())
-vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn(() => Promise.resolve({ data: { username: 'a', hasDriveKeyBinding: true } })) } }))
+vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn() } }))
 vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
 vi.mock('@kutup/crypto', () => ({ toBase64: () => 'master' }))
 vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding: vi.fn(() => Promise.resolve('binding')) }))
@@ -45,5 +45,18 @@ describe('registerAndSignIn', () => {
     await expect(registerAndSignIn('a', k)).rejects.toBeInstanceOf(AxiosError)
     await registerAndSignIn('a', k)
     expect(post.mock.calls.map(([path]) => path as string)).toEqual(['/auth/register', '/auth/register', '/auth/login'])
+  })
+})
+
+describe('completeSetup', () => {
+  beforeEach(() => post.mockReset())
+
+  it('sends the new keys with their Drive key binding', async () => {
+    post.mockResolvedValue({ data: { userId: 'u1', accessToken: 'a', sessionId: 's' } })
+    const { completeSetup } = await import('./flows')
+    await completeSetup({ name: 'a@kutup.dev', username: 'a', setupToken: 'setup' }, keys())
+    expect(post.mock.calls[0][0]).toBe('/auth/complete-setup')
+    expect(post.mock.calls[0][1]).toMatchObject({ keyBinding: keys().keyBinding, driveKeyBinding: 'binding' })
+    expect(post.mock.calls[0][2]).toMatchObject({ headers: { Authorization: 'Bearer setup' } })
   })
 })

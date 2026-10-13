@@ -1,5 +1,6 @@
-//! Drive identity (docs/plans/drive-identity-pins.md): an account's binding
-//! of its Drive keys to its authority, and its synced pins on other accounts.
+//! Drive identity (docs/plans/drive-identity-pins.md): accounts' bindings of
+//! their Drive keys to their authorities (signed at registration or
+//! first-login setup), and an account's synced pins on other accounts.
 //!
 //! The server checks a binding before storing it but trusts nothing it says:
 //! clients verify bindings themselves against the authorities they pinned.
@@ -18,61 +19,9 @@ use serde_json::json;
 use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::auth::verify_drive_key_binding;
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::AppState;
-
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DriveKeyBindingRequest {
-    /// The account authority's signature over its Drive keys.
-    drive_key_binding: String,
-}
-
-/// `PUT /api/user/drive-key-binding` — an account made before bindings signs
-/// its own at its next sign-in. Checked against its stored keys; a binding
-/// already there is kept (it cannot differ for valid keys).
-#[utoipa::path(
-    put,
-    path = "/api/user/drive-key-binding",
-    tag = "auth",
-    security(("BearerAuth" = [])),
-    request_body = DriveKeyBindingRequest,
-    responses((status = 204, description = "Stored"), (status = 400, description = "Does not match the account's keys"))
-)]
-pub async fn put_drive_key_binding(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Json(req): Json<DriveKeyBindingRequest>,
-) -> AppResult<Response> {
-    let id = trusted_uuid(&user.user_id)?;
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        "SELECT COALESCE(username, ''), account_authority_public_key, public_key, drive_signing_public_key
-           FROM users WHERE id = $1 AND NOT is_first_login",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let (username, authority, hpke, signing) =
-        row.ok_or_else(|| AppError::conflict("the account has no keys yet"))?;
-    let account = format!("{username}@{}", state.config.chat_server_name);
-    verify_drive_key_binding(
-        &account,
-        &authority,
-        &hpke,
-        &signing,
-        &req.drive_key_binding,
-    )?;
-    sqlx::query(
-        "UPDATE users SET drive_key_binding = $1 WHERE id = $2 AND drive_key_binding IS NULL",
-    )
-    .bind(&req.drive_key_binding)
-    .bind(id)
-    .execute(&state.pool)
-    .await?;
-    Ok(StatusCode::NO_CONTENT.into_response())
-}
 
 /// The account's sealed pin list.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

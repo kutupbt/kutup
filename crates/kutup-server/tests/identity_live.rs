@@ -1,5 +1,5 @@
 //! Drive identity (docs/plans/drive-identity-pins.md) against a live server
-//! named `kutup.localhost`: Drive key bindings at registration and later,
+//! named `kutup.localhost`: Drive key bindings, required at registration,
 //! in person lookups, and the synced identity pin list.
 
 use kutup_crypto::drive_key_binding;
@@ -27,7 +27,9 @@ fn drive_key_bindings() {
     };
     let base = base.trim_end_matches('/').to_string();
     let c = Client::new();
-    let (alice, bob) = (register(&c, &base), register_without_binding(&c, &base));
+    // A registration must carry its Drive key binding.
+    assert_eq!(register_without_binding(&c, &base), StatusCode::BAD_REQUEST);
+    let (alice, bob) = (register(&c, &base), register(&c, &base));
     let alice_account = alice.account.clone();
     let bob_account = bob.account.clone();
 
@@ -43,47 +45,6 @@ fn drive_key_bindings() {
         &base64_decode(found["driveKeyBinding"].as_str().unwrap()),
     )
     .unwrap();
-
-    // An account from an older client has none until it signs one.
-    assert!(lookup(&c, &base, &alice.token, &bob_account)["driveKeyBinding"].is_null());
-    let me = |token: &str| -> Value {
-        bearer(c.get(format!("{base}/api/user/me")), token)
-            .send()
-            .unwrap()
-            .json()
-            .unwrap()
-    };
-    assert_eq!(me(&bob.token)["hasDriveKeyBinding"], false);
-    let put = |token: &str, binding: String| {
-        bearer(c.put(format!("{base}/api/user/drive-key-binding")), token)
-            .json(&json!({ "driveKeyBinding": binding }))
-            .send()
-            .unwrap()
-            .status()
-    };
-    // Someone else's binding, or one for another address, is refused.
-    assert_eq!(
-        put(
-            &bob.token,
-            b64(&drive_key_binding::sign(&alice.identity, &alice_account).unwrap())
-        ),
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        put(
-            &bob.token,
-            b64(&drive_key_binding::sign(&bob.identity, &alice_account).unwrap())
-        ),
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        put(
-            &bob.token,
-            b64(&drive_key_binding::sign(&bob.identity, &bob_account).unwrap())
-        ),
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(me(&bob.token)["hasDriveKeyBinding"], true);
     assert!(lookup(&c, &base, &alice.token, &bob_account)["driveKeyBinding"].is_string());
 
     // Many people at once: the ones here, by exact address.

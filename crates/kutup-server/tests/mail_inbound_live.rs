@@ -307,13 +307,10 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
         eprintln!("KUTUP_LIVE_ADMIN not set; skipping the administrator checks");
         return;
     };
-    let mut parts = admin.splitn(3, ':');
-    let (email, username, password) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-    );
-    let admin = common::admin_token(&c, &base, email, password, username);
+    let (username, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin = common::admin_token(&c, &base, password, username);
     let update = |body: Value| {
         let r = bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
             .json(&body)
@@ -801,13 +798,10 @@ fn sending_safety() {
         return;
     };
     let c = client();
-    let mut parts = admin.splitn(3, ':');
-    let (email, username, password) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-    );
-    let admin = common::admin_token(&c, &base, email, password, username);
+    let (username, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin = common::admin_token(&c, &base, password, username);
     let status = |user: &User| -> Value {
         bearer(c.get(format!("{base}/api/mail/sending")), &user.token)
             .send()
@@ -915,7 +909,7 @@ fn sending_safety() {
     // administrator (here one with an address key).
     let reserved = c
         .post(format!("{base}/api/auth/register"))
-        .json(&json!({ "email": "postmaster@example.com", "username": "postmaster" }))
+        .json(&json!({ "username": "postmaster" }))
         .send()
         .unwrap();
     assert_eq!(reserved.status(), 400);
@@ -1768,13 +1762,10 @@ fn distribution_lists_and_role_groups() {
         return;
     };
     let c = client();
-    let mut parts = admin.splitn(3, ':');
-    let (email, username, password) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-    );
-    let admin = common::admin_token(&c, &base, email, password, username);
+    let (username, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin = common::admin_token(&c, &base, password, username);
     let (alice_user, bob_user, carol_user, dave_user) = (
         register(&c, &base),
         register(&c, &base),
@@ -2154,13 +2145,10 @@ fn shared_mailboxes() {
         return;
     };
     let c = client();
-    let mut parts = admin.splitn(3, ':');
-    let (email, username, password) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-    );
-    let admin = common::admin_token(&c, &base, email, password, username);
+    let (username, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin = common::admin_token(&c, &base, password, username);
     let (alice_user, bob_user, carol_user) = (
         register(&c, &base),
         register(&c, &base),
@@ -3306,13 +3294,10 @@ fn outside_sending_is_set_by_administrators() {
         return;
     };
     let c = client();
-    let mut parts = admin.splitn(3, ':');
-    let (email, username, password) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-    );
-    let admin = common::admin_token(&c, &base, email, password, username);
+    let (username, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin = common::admin_token(&c, &base, password, username);
     let user = register(&c, &base);
     let address = set_up_address(&c, &base, &user);
     let policy = |token: &str| -> (u16, Value) {

@@ -57,11 +57,6 @@ fn verify_hash(secret: impl AsRef<[u8]>, hash: &str) -> bool {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterRequest {
-    /// Ignored (older clients): an account signs in with its username, and a
-    /// recovery email is added in Settings.
-    #[serde(default)]
-    #[allow(dead_code)]
-    email: String,
     username: String,
     /// The account's key binding, drawn by the browser (a UUID v4): what its
     /// envelopes are bound to, for good (docs/plans/account-identity.md).
@@ -83,18 +78,14 @@ pub struct RegisterRequest {
     #[serde(default)]
     recovery_proof: String,
     /// The account authority's signature over the Drive keys
-    /// (`kutup_crypto::drive_key_binding`). Optional for older clients: an
-    /// account without one adds it at its next sign-in.
-    #[serde(default)]
-    drive_key_binding: Option<String>,
+    /// (`kutup_crypto::drive_key_binding`), for `username@<server name>`.
+    drive_key_binding: String,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LoginRequest {
-    /// The username or the Kutup address (`email`: older clients; an account
-    /// not yet re-sealed may still give its old sign-in email).
-    #[serde(alias = "email")]
+    /// The username or the Kutup address.
     name: String,
     login_key: String,
 }
@@ -120,8 +111,8 @@ pub struct LoginResponse {
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
-    /// What the account's envelopes carry (its key binding, or its old
-    /// sign-in email until they are re-sealed); given only with the session.
+    /// What the account's envelopes are bound to (its key binding); given
+    /// only with the session.
     #[serde(skip_serializing_if = "String::is_empty")]
     envelope_binding: String,
     #[serde(skip_serializing_if = "is_false")]
@@ -145,7 +136,6 @@ pub struct TwoFALoginRequest {
 #[serde(rename_all = "camelCase", default)]
 pub struct RecoverRequest {
     /// As at sign-in.
-    #[serde(alias = "email")]
     name: String,
     new_login_key: String,
     new_master_key_envelope: String,
@@ -179,19 +169,16 @@ pub struct CodeRequest {
     code: String,
 }
 
-/// `?name=` query for the preflight endpoints (`?email=` from older clients).
+/// `?name=` query for the preflight endpoints.
 #[derive(Debug, Deserialize)]
 pub struct NameQuery {
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    email: Option<String>,
 }
 
 impl NameQuery {
     fn name(self) -> AppResult<String> {
         self.name
-            .or(self.email)
             .map(|n| n.trim().to_ascii_lowercase())
             .filter(|n| !n.is_empty())
             .ok_or_else(|| AppError::bad_request("name required"))
@@ -404,19 +391,19 @@ pub(crate) fn validate_account_envelope(
         .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
 }
 
-/// The binding, when given, checked against the keys and `account`.
-fn checked_drive_key_binding(req: &RegisterRequest, account: &str) -> AppResult<Option<String>> {
-    let Some(binding) = req.drive_key_binding.as_deref() else {
-        return Ok(None);
-    };
+/// The Drive key binding, required, checked against the keys and `account`.
+fn checked_drive_key_binding(req: &RegisterRequest, account: &str) -> AppResult<String> {
+    if req.drive_key_binding.is_empty() {
+        return Err(AppError::bad_request("driveKeyBinding is required"));
+    }
     verify_drive_key_binding(
         account,
         &req.account_authority_public_key,
         &req.public_key,
         &req.drive_signing_public_key,
-        binding,
+        &req.drive_key_binding,
     )?;
-    Ok(Some(binding.to_owned()))
+    Ok(req.drive_key_binding.clone())
 }
 
 /// Checks that the authority vouches for these Drive keys of `account`.
@@ -930,13 +917,15 @@ pub async fn login(
 
     let user_id = id.to_string();
 
-    // First-login account — no key material yet.
+    // First-login account — no key material yet. Its username comes along:
+    // the new keys' Drive key binding names the account's address.
     if is_first_login {
         let setup_token = jwt::generate_setup_token(&user_id, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_setup: true,
             setup_token: Some(setup_token),
+            username,
             ..Default::default()
         })
         .into_response());
@@ -1296,13 +1285,11 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
         String,
         i32,
-        bool,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days,
-                  drive_key_binding IS NOT NULL
+                  is_admin, COALESCE(color, ''), version_retention_days
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -1320,7 +1307,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
-        has_drive_key_binding,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -1342,7 +1328,6 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
-        has_drive_key_binding,
     })
     .into_response())
 }

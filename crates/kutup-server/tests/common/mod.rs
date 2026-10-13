@@ -76,16 +76,19 @@ pub struct User {
 }
 
 pub fn register(c: &Client, base: &str) -> User {
-    register_with(c, base, true)
+    register_with(c, base, true).unwrap_or_else(|status| panic!("register: {status}"))
 }
 
-/// An account as an older client makes it: no Drive key binding
-/// (docs/plans/drive-identity-pins.md).
-pub fn register_without_binding(c: &Client, base: &str) -> User {
-    register_with(c, base, false)
+/// What registering without a Drive key binding answers
+/// (docs/plans/drive-identity-pins.md): it is required.
+pub fn register_without_binding(c: &Client, base: &str) -> StatusCode {
+    match register_with(c, base, false) {
+        Ok(user) => panic!("registered {} without a binding", user.username),
+        Err(status) => status,
+    }
 }
 
-fn register_with(c: &Client, base: &str, binding: bool) -> User {
+fn register_with(c: &Client, base: &str, binding: bool) -> Result<User, StatusCode> {
     let mut rng = rand::thread_rng();
     let tag = rng.next_u64() % 1_000_000_000;
     let key_binding = uuid::Uuid::new_v4().to_string();
@@ -138,7 +141,9 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         .json(&body)
         .send()
         .unwrap();
-    assert!(r.status().is_success(), "register: {}", r.status());
+    if !r.status().is_success() {
+        return Err(r.status());
+    }
     let r = c
         .post(format!("{base}/api/auth/login"))
         .header("x-kutup-client", "cli")
@@ -159,7 +164,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         .unwrap()
         .to_string();
     let account = format!("{username}@{}", server_domain(c, base));
-    User {
+    Ok(User {
         id,
         binding: key_binding,
         login_key: b64(keys.login_key.as_slice()),
@@ -169,7 +174,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         token,
         identity,
         master_key,
-    }
+    })
 }
 
 pub fn me(c: &Client, base: &str, token: &str) -> Value {
@@ -402,7 +407,7 @@ pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> Strin
 /// The administrator's token, signing in by username as any account does
 /// (its temporary password derived under the salt preflight answers),
 /// completing its first-login setup on a fresh server.
-pub fn admin_token(c: &Client, base: &str, _email: &str, password: &str, username: &str) -> String {
+pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> String {
     let preflight: Value = c
         .get(format!("{base}/api/auth/login/preflight?name={username}"))
         .send()
@@ -469,6 +474,10 @@ pub fn admin_token(c: &Client, base: &str, _email: &str, password: &str, usernam
             "argonIterations": parameters.iterations,
             "argonParallelism": parameters.parallelism,
             "recoveryProof": b64(recovery_proof.as_slice()),
+            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
+                &identity,
+                &format!("{username}@{}", server_domain(c, base)),
+            ).unwrap()),
         }))
         .send()
         .unwrap();

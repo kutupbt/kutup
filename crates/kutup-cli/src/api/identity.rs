@@ -33,19 +33,4 @@ impl Client {
         Ok(true)
     }
 
-    /// Whether the account has signed its Drive key binding.
-    pub fn has_drive_key_binding(&self) -> Result<bool> {
-        let me: serde_json::Value = super::decode_json(self.get("/user/me")?)?;
-        Ok(me["hasDriveKeyBinding"].as_bool().unwrap_or(true))
-    }
-
-    /// Stores the account's Drive key binding (checked by the server).
-    pub fn put_drive_key_binding(&self, binding: &str) -> Result<()> {
-        let resp = self
-            .request(Method::PUT, "/user/drive-key-binding")
-            .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({ "driveKeyBinding": binding }))
-            .send()?;
-        super::check_ok(resp)
-    }
 }
