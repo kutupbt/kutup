@@ -15,7 +15,8 @@ use super::{
     FederationRuntimeConfig, FederationStack,
 };
 
-const MIGRATION: &str = include_str!("../../migrations/033_unified_federation_foundation.up.sql");
+/// The whole schema (the squashed baseline), applied into a schema of its own.
+const BASELINE: &str = include_str!("../../migrations/20261013000000_baseline.up.sql");
 
 #[tokio::test]
 async fn live_identity_trust_policy_and_replay_invariants() {
@@ -32,20 +33,7 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         .execute(&mut administrator)
         .await
         .unwrap();
-    sqlx::raw_sql(
-        "CREATE TABLE admin_audit_log (
-             id BIGSERIAL PRIMARY KEY,
-             admin_user_id UUID NOT NULL,
-             action TEXT NOT NULL,
-             target_user_id UUID,
-             payload JSONB NOT NULL DEFAULT '{}',
-             occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-         );",
-    )
-    .execute(&mut administrator)
-    .await
-    .unwrap();
-    sqlx::raw_sql(MIGRATION)
+    sqlx::raw_sql(&BASELINE.replace("public.", &format!("{schema}.")))
         .execute(&mut administrator)
         .await
         .unwrap();

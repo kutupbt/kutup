@@ -98,11 +98,32 @@ JSON values need single quotes when the file is sourced by a shell.
 
 ### Database migrations
 
-Migrations live in `crates/kutup-server/migrations/` (`<N>_<name>.up.sql` / `.down.sql` —
-sqlx's reversible format) and are **embedded into the binary at compile time** via
-`sqlx::migrate!()`, then applied automatically on startup.
+Migrations live in `crates/kutup-server/migrations/` (sqlx's reversible
+`.up.sql` / `.down.sql` pairs) and are **embedded into the binary at compile
+time** via `sqlx::migrate!()`, then applied automatically on startup.
 
-To add a migration, create the pair by hand (or with the sqlx CLI):
+The chain starts at `20261013000000_baseline`: every migration up to the
+clean-slate release, squashed into one schema. `scripts/check-migration-baseline.sh
+<old-ref>` proves a squash equal to the chain it replaces (both applied to an
+empty Postgres 16, compared by schema and rows), and `--generate` writes it.
+
+The rules:
+
+- **Name a new migration by its UTC time**, `YYYYMMDDHHMMSS_<name>`
+  (`sqlx migrate add -r <name>` does), never by a number: two pull requests
+  cannot take the same name, and landing order needs no coordination. A new
+  migration must be newer than every migration on master.
+- **Never edit, rename or delete a migration that has been applied
+  anywhere** (sqlx checks each applied file's checksum, and refuses a
+  database whose applied versions are missing). A change is a new migration.
+- A migration that must not meet existing data (a breaking reset) refuses
+  it: a `DO` block that `RAISE`s when the data is there, as the baseline does
+  for a database from before it.
+- `-- no-transaction` migrations run their statements outside sqlx's
+  transaction only as one statement: keep `CREATE INDEX CONCURRENTLY` alone
+  in its file.
+- A development database from before the baseline cannot be upgraded: drop
+  it and start empty.
 
 ```sh
 cargo install sqlx-cli --no-default-features --features postgres   # one-time
@@ -216,18 +237,6 @@ default to `open`. It is repeatable while its tmpfs databases remain running.
 The script prints both URLs and the development-only admin credentials. Override
 `KUTUP_FEDERATION_PROJECT`, `KUTUP_FED_A_PORT`, and `KUTUP_FED_B_PORT` to run an
 additional isolated topology.
-
-The intentionally breaking Chat and Drive cutovers have separate up/down
-isolation fixtures. Point `KUTUP_TEST_DB` at a disposable PostgreSQL database;
-each test creates and removes its own randomized schema while proving local
-product rows survive:
-
-```sh
-KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
-  --test federation_phase_c_migration_live -- --nocapture
-KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
-  --test federation_phase_d_migration_live -- --nocapture
-```
 
 ---
 

@@ -408,7 +408,7 @@ pub async fn remove_reported_link(
 mod tests {
     #[test]
     fn reasons_match_the_schema() {
-        let schema = include_str!("../../migrations/088_public_link_reports.up.sql");
+        let schema = include_str!("../../migrations/20261013000000_baseline.up.sql");
         for reason in super::REASONS {
             assert!(schema.contains(&format!("'{reason}'")), "{reason}");
         }

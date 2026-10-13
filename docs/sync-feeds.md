@@ -46,7 +46,8 @@ copies (docs/roadmap.md).
 
 1. Add `change_xid` and the trigger to the table, an index on
    `(owner, change_xid, id)`, a tombstone table and a floors table
-   (migration 163 is the template).
+   (Mail's `mail_messages` triggers and `mail_message_tombstones` in the
+   baseline are the template).
 2. Declare a `change_feed::Feed::new(…)` constant with the fixed table names
    and the owner column, plus a literal row filter if only some rows belong
    to the feed. The names are checked when the server is built.
