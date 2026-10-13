@@ -1548,6 +1548,17 @@ fn build_router(state: AppState) -> Router {
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
         // on `new WebSocket`, so the token may arrive via ?token=). ---
         .route("/api/files/:fileId/collab/ws", get(collab::ws))
+        // The log over HTTP, for a peer without a socket (the CLI).
+        .route(
+            "/api/files/:fileId/collab/frames",
+            get(collab::get_frames)
+                .post(collab::post_frame)
+                // One sealed frame at most.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::envelope::MAX_PLAINTEXT_BYTES
+                        + kutup_crypto::envelope::MIN_PACKED,
+                )),
+        )
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
         .route("/api/share", post(shares::create_public_share))

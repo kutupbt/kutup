@@ -48,6 +48,7 @@ Specific codes, where an app does something particular (a test in
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
+| `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
@@ -3914,6 +3915,29 @@ frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
 On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
+
+### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
+
+The collaboration log over HTTP, for a peer that does not hold a socket open:
+the CLI editing notes, code files and place lists as a Yjs peer
+(docs/plans/cli-yjs-sync.md). **Auth:** as the socket: Bearer JWT and
+`?deviceId=` (the caller's active registered device).
+
+- `GET …?deviceId=&after=K&limit=` (a reader of the file) → `{ frames: [{ seq,
+  frame }], headSeq, floor, currentDocKeyId, mySenderSeqHigh, more }`: the
+  sealed frames after position `K`, oldest first, at most 500 (`more` when
+  others follow), the log's head, how far saved versions have trimmed it (a
+  reader below `floor` starts from the latest saved version), the current
+  document key, and this device's highest sender sequence (its next frame goes
+  above it).
+- `POST …?deviceId=` (an editor) with one sealed frame as
+  `application/octet-stream` → `{ seq }`. It passes the same gate as a socket's
+  frame (this device's signature, the exact file, its current key generation
+  and document key, write access, a key the folder still holds) and is kept and
+  sent to everyone with the file open, who merge it like any peer's edit. Only
+  kept kinds: presence and scene frames are refused. `409 frameRefused` when
+  the gate drops it (read the log again and rebuild), `403` without write
+  access, `429` past `RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN` (600) per device.
 
 ### PUT /api/files/:fileId/assets/:assetId
 

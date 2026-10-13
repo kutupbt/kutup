@@ -179,6 +179,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_PREFLIGHT_PER_MIN=20
 # RATE_LIMIT_FORK_PER_MIN=120           # each app opened redeems one session hand-off
 # RATE_LIMIT_AVAILABLE_HASHES_PER_MIN=120 # Drive asking which "name (n)" is free, per account
+# RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN=600 # edits sent over HTTP (the CLI editing notes), per device
 # RATE_LIMIT_CALL_LINK_PER_MIN=60       # opening and joining a meeting link need no account
 # RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds
 # RATE_LIMIT_USER_LOOKUP_PER_MIN=30
