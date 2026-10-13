@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod editor_kind;
 mod errors;
 mod file_crypto;
 mod identity;
@@ -427,6 +428,7 @@ mod tests {
                 code: None,
                 upload_id: None,
                 idle_seconds: None,
+                yours: None,
                 name_taken: None,
                 version_conflict: None,
             })

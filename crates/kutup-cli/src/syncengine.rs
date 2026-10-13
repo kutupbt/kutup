@@ -669,12 +669,20 @@ fn execute_file_action(
             let sha256 = uploader::sha256_file(&abs)?;
             // An edit goes up as a new version of the file Drive holds
             // (docs/plans/drive-unique-names.md: names are unique in a
-            // folder, so the file keeps its name and id); a new file claims
-            // its name as it goes.
+            // folder, so the file keeps its name and id), made from the
+            // version the sync recorded; a text file or place list, which
+            // its editor keeps as Yjs, goes up as a new file in its place. A
+            // new file claims its name as it goes.
             let (file_id, remote_version_id) = match action {
+                FileAction::PushUpdate { .. } if push_path(rel) == PushPath::Replace => {
+                    let entry = remote_entries.get(rel).context("remote entry vanished")?;
+                    let id = push_replacement(client, store, &abs, entry, dir, &sha256, result)?;
+                    (id, String::new())
+                }
                 FileAction::PushUpdate { old_file_id } => {
                     let entry = remote_entries.get(rel).context("remote entry vanished")?;
-                    match push_version(client, store, &abs, &entry.file, dir, &sha256)? {
+                    let recorded = base.map_or("", |b| b.remote_version_id.as_str());
+                    match push_version(client, store, &abs, &entry.file, dir, &sha256, recorded)? {
                         Pushed::Stored(version) => (old_file_id.clone(), version),
                         // Another upload of it is under way (another device,
                         // or someone else): not a conflict; the next run
@@ -1053,7 +1061,14 @@ fn push_version(
     file: &crate::api::File,
     dir: &RemoteDir,
     sha256: &[u8; 32],
+    recorded: &str,
 ) -> Result<Pushed> {
+    // Made from the newest whole-file version at or before the one recorded:
+    // a collaborator's version saved since is a conflict, not overwritten.
+    let Some(based_on) = based_on_for(&client.list_versions(&file.id)?, recorded) else {
+        eprintln!("    {}: the recorded version is gone", abs.display());
+        return Ok(Pushed::Conflict);
+    };
     let file_key = crate::file_crypto::open_key(file, &dir.keys).context("decrypt file key")?;
     // New content goes under a key only the folder's current people hold.
     let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
@@ -1073,22 +1088,131 @@ fn push_version(
             content: version_upload::Content::Path(abs),
             sha256: *sha256,
             hash_key: Some(&dir.hash_key),
-            based_on: None,
+            based_on: Some(based_on),
             progress: Progress::Quiet,
             crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
         },
     )?;
+    if let version_upload::Landed::Conflict(why) = &landed {
+        eprintln!("    {}: {why:#}", abs.display());
+    }
+    Ok(pushed(landed))
+}
+
+/// What a version upload's end means for the push.
+fn pushed(landed: version_upload::Landed) -> Pushed {
     match landed {
-        version_upload::Landed::Stored(version) => Ok(Pushed::Stored(version)),
-        version_upload::Landed::Conflict(why) => {
-            eprintln!("    {}: {why:#}", abs.display());
-            Ok(Pushed::Conflict)
-        }
-        version_upload::Landed::Busy => Ok(Pushed::Busy),
+        version_upload::Landed::Stored(version) => Pushed::Stored(version),
+        version_upload::Landed::Conflict(_) => Pushed::Conflict,
+        version_upload::Landed::Busy => Pushed::Busy,
     }
 }
 
+/// The `basedOn` of a push: the newest whole-file version at or before
+/// `recorded` (the newest version of any kind when the base was recorded;
+/// `""`: none), or `original` when there is none. `None` when the recorded
+/// version is no longer listed: what it was made from cannot be told.
+fn based_on_for(versions: &[crate::api::versions::VersionRow], recorded: &str) -> Option<String> {
+    let from = if recorded.is_empty() {
+        versions.len()
+    } else {
+        versions.iter().position(|v| v.id == recorded)?
+    };
+    Some(
+        versions[from..]
+            .iter()
+            .find(|v| v.kind.is_empty() || v.kind == "file")
+            .map_or_else(
+                || crate::api::versions::ORIGINAL.to_string(),
+                |v| v.id.clone(),
+            ),
+    )
+}
+
+#[derive(Debug, PartialEq)]
+enum PushPath {
+    /// A new version of the file.
+    Version,
+    /// A new file in its place: its editor keeps it as Yjs.
+    Replace,
+}
+
+/// How an edit of `rel` goes up.
+fn push_path(rel: &str) -> PushPath {
+    if crate::editor_kind::edits_as_yjs(split_rel(rel).1) {
+        PushPath::Replace
+    } else {
+        PushPath::Version
+    }
+}
+
+/// An edit of a file its editor keeps as Yjs (text, place lists): uploaded
+/// as a new file under a free numbered name, the old one trashed, and the
+/// new one renamed to the name. Returns the new file's id.
+fn push_replacement(
+    client: &Client,
+    store: &Store,
+    abs: &Path,
+    entry: &RemoteEntry,
+    dir: &RemoteDir,
+    sha256: &[u8; 32],
+    result: &mut SyncResult,
+) -> Result<String> {
+    let name = crate::file_crypto::open_metadata(
+        &entry.file,
+        &crate::file_crypto::open_key(&entry.file, &dir.keys)?,
+    )?
+    .name;
+    let (interim, _) = crate::names::first_available(
+        client,
+        Some(&dir.collection_id),
+        &dir.hash_key,
+        crate::names::numbered_names(&name).skip(1),
+        |_| false,
+    )?;
+    let up = uploader::upload_streaming(
+        client,
+        store,
+        abs,
+        UploadRequest {
+            collection_id: &dir.collection_id,
+            key_epoch: dir.key_epoch,
+            collection_key: &dir.key,
+            resume: true,
+            progress: Progress::Quiet,
+            hash_key: dir.hash_key,
+            name: Some(&interim),
+            sha256: Some(*sha256),
+        },
+    )?;
+    if let Err(e) = client.delete_file(&entry.file.id) {
+        result.errors.push(format!(
+            "{name}: retire old version: {e}; the new one is {interim}"
+        ));
+        return Ok(up.file_id);
+    }
+    let renamed = (|| -> Result<()> {
+        let file = client
+            .list_files(&dir.collection_id)?
+            .into_iter()
+            .find(|f| f.id == up.file_id)
+            .context("the new file is not listed")?;
+        let mut meta = crate::file_crypto::open_metadata(&file, &up.file_key)?;
+        meta.name = name.clone();
+        let mut request = crate::file_crypto::rename_request(&file, &up.file_key, &meta)?;
+        request.name_hash = Some(crate::names::name_hash(&dir.hash_key, &name)?);
+        client.update_file_metadata(&file.id, &request)
+    })();
+    if let Err(e) = renamed {
+        result.errors.push(format!(
+            "{name}: uploaded as {interim}, rename back failed: {e:#}"
+        ));
+    }
+    Ok(up.file_id)
+}
+
 /// How pushing an edit as a version ended.
+#[derive(Debug, PartialEq)]
 enum Pushed {
     /// The version's id.
     Stored(String),
@@ -1305,6 +1429,50 @@ fn sanitize_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_and_place_list_edits_go_up_as_new_files_not_versions() {
+        assert_eq!(push_path("notes/todo.md"), PushPath::Replace);
+        assert_eq!(push_path("src/main.rs"), PushPath::Replace);
+        assert_eq!(push_path("trips/rome.kutupmap"), PushPath::Replace);
+        assert_eq!(push_path("data/blob.dat"), PushPath::Version);
+        assert_eq!(push_path("board.excalidraw"), PushPath::Version);
+    }
+
+    fn row(id: &str, kind: &str) -> crate::api::versions::VersionRow {
+        serde_json::from_value(serde_json::json!({ "id": id, "kind": kind, "keyGeneration": 1 }))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_push_is_based_on_the_whole_file_version_it_started_from() {
+        // Newest first.
+        let versions = [
+            row("y2", "yjs"),
+            row("f2", "file"),
+            row("y1", "yjs"),
+            row("f1", "file"),
+        ];
+        assert_eq!(based_on_for(&versions, "y2").as_deref(), Some("f2"));
+        assert_eq!(based_on_for(&versions, "y1").as_deref(), Some("f1"));
+        assert_eq!(based_on_for(&versions, "f1").as_deref(), Some("f1"));
+        assert_eq!(
+            based_on_for(&[row("y1", "yjs")], "y1").as_deref(),
+            Some("original")
+        );
+        assert_eq!(based_on_for(&[], "").as_deref(), Some("original"));
+        // Recorded before any version: made from the original upload, so a
+        // version saved since is a conflict.
+        assert_eq!(based_on_for(&versions, "").as_deref(), Some("original"));
+        assert_eq!(based_on_for(&versions, "gone"), None);
+    }
+
+    #[test]
+    fn a_based_on_refusal_is_the_conflict_copy_path() {
+        let landed = crate::version_upload::Landed::Conflict(anyhow::anyhow!("version_conflict"));
+        assert_eq!(pushed(landed), Pushed::Conflict);
+        assert_eq!(pushed(crate::version_upload::Landed::Busy), Pushed::Busy);
+    }
 
     fn base(entries: &[(&str, &str, i64, &str)]) -> BTreeMap<String, BaseFile> {
         entries

@@ -30,7 +30,7 @@ use kutup_crypto::stream::HEADER_BYTES;
 use crate::api::tus::{Patched, VersionUploadMeta};
 use crate::api::{ApiError, Client, File};
 use crate::session::{ResumeState, Store};
-use crate::transfer::{chunk_boundary, cipher_size, StreamUploader};
+use crate::transfer::{chunk_boundary, cipher_size, ChangedWhileUploading, StreamUploader};
 use crate::uploader::{is_permanent, make_bar, mtime_parts, now_unix, Progress};
 
 /// A vault save is one small part: an open upload of ours idle this long
@@ -156,16 +156,28 @@ enum Refusal {
     Uploading(Option<String>, i64),
     /// The file moved on (a version, its metadata, its key).
     Conflict,
+    /// tus's own `409` (plain text, no `code`): the part was not at the
+    /// offset the server holds; ask it where it is and go on from there.
+    OffsetMismatch,
     Other,
 }
 
 fn refusal(error: &anyhow::Error) -> Refusal {
-    match error.chain().find_map(|c| c.downcast_ref::<ApiError>()) {
-        Some(api) if api.status == 409 && api.code.as_deref() == Some("versionUploading") => {
+    let Some(api) = error.chain().find_map(|c| c.downcast_ref::<ApiError>()) else {
+        return Refusal::Other;
+    };
+    if api.status != 409 {
+        return Refusal::Other;
+    }
+    match api.code.as_deref() {
+        Some("versionUploading") => {
             Refusal::Uploading(api.upload_id.clone(), api.idle_seconds.unwrap_or(0))
         }
-        Some(api) if api.status == 409 => Refusal::Conflict,
-        _ => Refusal::Other,
+        // Another version than `basedOn`, metadata moved on, or the file's
+        // key changed (the server's plain `conflict`).
+        Some("version_conflict" | "revision_conflict" | "conflict") => Refusal::Conflict,
+        None => Refusal::OffsetMismatch,
+        Some(_) => Refusal::Other,
     }
 }
 
@@ -245,16 +257,52 @@ pub(crate) fn upload_version(
             if let Some(key) = key {
                 records.save(key, &rec)?;
             }
-            send(tus, records, key, &mut rec, up, 0, &bar)
+            let header = up.header_bytes();
+            let rebuild = |at: i64| {
+                StreamUploader::resume(
+                    LocalFile::open(path)?,
+                    request.file_key,
+                    plain_size,
+                    &header,
+                    at,
+                    context,
+                )
+            };
+            send(
+                tus,
+                records,
+                key,
+                &mut rec,
+                up,
+                0,
+                &bar,
+                &request.sha256,
+                rebuild,
+            )
         }
         Content::Bytes(bytes) => {
             let up = StreamUploader::new(bytes, request.file_key, plain_size, context)?;
             let mut rec = ResumeState {
                 upload_id,
+                file_id: file.id.clone(),
                 cipher_total,
                 ..Default::default()
             };
-            send(tus, records, None, &mut rec, up, 0, &bar)
+            let header = up.header_bytes();
+            let rebuild = |at: i64| {
+                StreamUploader::resume(bytes, request.file_key, plain_size, &header, at, context)
+            };
+            send(
+                tus,
+                records,
+                None,
+                &mut rec,
+                up,
+                0,
+                &bar,
+                &request.sha256,
+                rebuild,
+            )
         }
     }
 }
@@ -302,14 +350,18 @@ fn open(
             Err(error) => error,
         };
         match refusal(&error) {
-            Refusal::Uploading(Some(ours), idle) if idle >= crashed_after_secs && !cancelled => {
-                tus.delete(&ours)
+            // Ours (`yours`: an earlier run here; one with a record was
+            // resumed before this) or, as the folder's owner, another
+            // writer's: either may be cancelled, but only once it has sat
+            // idle past the threshold. One moving is busy.
+            Refusal::Uploading(Some(open), idle) if idle >= crashed_after_secs && !cancelled => {
+                tus.delete(&open)
                     .context("cancel an abandoned upload of this file's new version")?;
                 cancelled = true;
             }
             Refusal::Uploading(..) => return Ok(Opened::Not(Landed::Busy)),
             Refusal::Conflict => return Ok(Opened::Not(Landed::Conflict(error))),
-            Refusal::Other => return Err(error),
+            Refusal::OffsetMismatch | Refusal::Other => return Err(error),
         }
     }
 }
@@ -365,13 +417,39 @@ fn resume(
         return drop_it(true);
     };
     bar.set_position(up.plain_read() as u64);
-    let mut rec = rec.clone();
-    send(tus, records, Some(key), &mut rec, up, offset, bar).map(Some)
+    let rebuild = |at: i64| {
+        StreamUploader::resume(
+            LocalFile::open(path)?,
+            request.file_key,
+            rec.plain_size,
+            &header,
+            at,
+            context,
+        )
+    };
+    let mut state = rec.clone();
+    send(
+        tus,
+        records,
+        Some(key),
+        &mut state,
+        up,
+        offset,
+        bar,
+        &request.sha256,
+        rebuild,
+    )
+    .map(Some)
 }
 
-/// Sends the remaining parts. A conflict when the last part lands is
+/// Sends the remaining parts. The last goes only once what was sealed is
+/// what was hashed before (the SHA-256 the metadata carries): a file changed
+/// meanwhile cancels the upload, as the server cannot tell. A part refused
+/// for its offset goes on from where the server is (`rebuild` makes the
+/// stream from an offset). A conflict when the last part lands is
 /// [`Landed::Conflict`] (the server has discarded the upload); a lasting
 /// refusal cancels it; anything else keeps the record for a later run.
+#[allow(clippy::too_many_arguments)]
 fn send<R: Read>(
     tus: &impl VersionTus,
     records: &impl ResumeRecords,
@@ -380,10 +458,31 @@ fn send<R: Read>(
     mut up: StreamUploader<R>,
     mut offset: i64,
     bar: &ProgressBar,
+    sha256: &[u8; 32],
+    rebuild: impl Fn(i64) -> Result<StreamUploader<R>>,
 ) -> Result<Landed> {
     let mut version_id = String::new();
-    while let Some(chunk) = up.next_chunk()? {
-        match tus.patch(&rec.upload_id, offset, chunk) {
+    let mut resyncs = 0;
+    loop {
+        let next = up.next_chunk().and_then(|chunk| match chunk {
+            Some(_) if up.finished() => up.check_sha256(sha256).map(|()| chunk),
+            chunk => Ok(chunk),
+        });
+        let chunk = match next {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                bar.finish_and_clear();
+                if error.is::<ChangedWhileUploading>() {
+                    let _ = tus.delete(&rec.upload_id);
+                    if let Some(key) = key {
+                        records.delete(key)?;
+                    }
+                }
+                return Err(error);
+            }
+        };
+        let error = match tus.patch(&rec.upload_id, offset, chunk) {
             Ok(patched) => {
                 offset = patched.offset;
                 if !patched.version_id.is_empty() {
@@ -394,31 +493,54 @@ fn send<R: Read>(
                     let _ = records.save(key, rec);
                 }
                 bar.set_position(up.plain_read() as u64);
+                continue;
             }
-            Err(error) => {
-                bar.finish_and_clear();
-                if let Some(key) = key {
-                    if matches!(refusal(&error), Refusal::Conflict) || is_permanent(&error) {
+            Err(error) => error,
+        };
+        let refused = refusal(&error);
+        if matches!(refused, Refusal::OffsetMismatch) && resyncs < MAX_RESYNCS {
+            resyncs += 1;
+            match tus.head(&rec.upload_id)? {
+                Some((at, _)) if chunk_boundary(at).is_some() && at < rec.cipher_total => {
+                    up = rebuild(at)?;
+                    offset = at;
+                    bar.set_position(up.plain_read() as u64);
+                    continue;
+                }
+                // Gone: it landed while the answer was lost, or it ended.
+                None if tus.has_version(&rec.file_id, &rec.upload_id)? => {
+                    if let Some(key) = key {
                         records.delete(key)?;
                     }
+                    return Ok(Landed::Stored(rec.upload_id.clone()));
                 }
-                if matches!(refusal(&error), Refusal::Conflict) {
-                    return Ok(Landed::Conflict(error));
-                }
-                if is_permanent(&error) {
-                    let _ = tus.delete(&rec.upload_id);
-                    return Err(error.context("upload new version"));
-                }
-                if key.is_none() {
-                    let _ = tus.delete(&rec.upload_id);
-                    return Err(error.context("upload new version"));
-                }
-                let percent = offset * 100 / rec.cipher_total.max(1);
-                return Err(error.context(format!(
-                    "new version interrupted at {percent}% — run it again to go on from there"
-                )));
+                _ => {}
             }
         }
+        bar.finish_and_clear();
+        let conflict = matches!(refused, Refusal::Conflict);
+        if let Some(key) = key {
+            if conflict || is_permanent(&error) {
+                records.delete(key)?;
+            }
+        }
+        if conflict {
+            return Ok(Landed::Conflict(error));
+        }
+        if lost_access(&error) {
+            // The server discarded the upload when the access went.
+            return Err(
+                error.context("access to the file was lost during the upload; it was discarded")
+            );
+        }
+        if is_permanent(&error) || key.is_none() {
+            let _ = tus.delete(&rec.upload_id);
+            return Err(error.context("upload new version"));
+        }
+        let percent = offset * 100 / rec.cipher_total.max(1);
+        return Err(error.context(format!(
+            "new version interrupted at {percent}% — run it again to go on from there"
+        )));
     }
     bar.finish_and_clear();
     if offset != rec.cipher_total {
@@ -433,6 +555,18 @@ fn send<R: Read>(
     }
     Ok(Landed::Stored(version_id))
 }
+
+/// A `403` on a part: the writer lost access mid-upload.
+fn lost_access(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|c| c.downcast_ref::<ApiError>())
+        .is_some_and(|api| api.status == 403)
+}
+
+/// How many times one run goes on from the server's offset after a part
+/// was refused for its own.
+const MAX_RESYNCS: u32 = 3;
 
 #[cfg(test)]
 mod tests {
@@ -456,12 +590,21 @@ mod tests {
         patches: Cell<u32>,
         /// Fail the PATCH with this number (1-based) once, as a dropped link.
         fail_patch: Cell<Option<u32>>,
+        /// Take the PATCH with this number, but answer tus's offset
+        /// mismatch (an answer that went astray, the part sent again).
+        skew_patch: Cell<Option<u32>>,
+        /// Refuse when the upload opens: `basedOn` is not what the file holds.
+        conflict_at_open: Cell<bool>,
         /// Refuse when the last part lands, as a file that moved on.
         conflict_at_finish: Cell<bool>,
         /// Seconds since the open upload's last part.
         idle: Cell<i64>,
         /// The open upload is someone else's.
         foreign: Cell<bool>,
+        /// Someone else's upload, seen by the folder's owner (`yours: false`).
+        owner_view: Cell<bool>,
+        /// Answer the PATCH with this number with 403 (access lost).
+        forbid_patch: Cell<Option<u32>>,
         deletes: Cell<u32>,
     }
 
@@ -472,11 +615,17 @@ mod tests {
     impl VersionTus for FakeTus {
         fn create(&self, total: i64, meta: &VersionUploadMeta) -> Result<String> {
             self.creates.set(self.creates.get() + 1);
+            if self.conflict_at_open.get() {
+                return Err(api(
+                    409,
+                    r#"{"error":"the file changed since","code":"version_conflict","current":"v7"}"#,
+                ));
+            }
             if let Some(open) = self.uploads.borrow().keys().next() {
                 let ours = if self.foreign.get() {
                     String::new()
                 } else {
-                    format!(r#","uploadId":"{open}""#)
+                    format!(r#","uploadId":"{open}","yours":{}"#, !self.owner_view.get())
                 };
                 return Err(api(
                     409,
@@ -506,10 +655,20 @@ mod tests {
                 self.fail_patch.set(None);
                 return Err(api(503, "unavailable"));
             }
+            if self.forbid_patch.get() == Some(n) {
+                self.uploads.borrow_mut().remove(id);
+                return Err(api(403, r#"{"error":"forbidden","code":"forbidden"}"#));
+            }
             let mut uploads = self.uploads.borrow_mut();
             let (total, body, _) = uploads.get_mut(id).context("no upload")?;
-            assert_eq!(offset, body.len() as i64, "parts arrive in order");
+            if offset != body.len() as i64 {
+                return Err(api(409, "Upload-Offset mismatch"));
+            }
             body.extend_from_slice(&chunk);
+            if self.skew_patch.get() == Some(n) {
+                self.skew_patch.set(None);
+                return Err(api(409, "Upload-Offset mismatch"));
+            }
             let (total, at) = (*total, body.len() as i64);
             if at < total {
                 return Ok(Patched {
@@ -594,11 +753,16 @@ mod tests {
         content: Content<'a>,
         hash_key: &'a [u8; 32],
     ) -> VersionRequest<'a> {
+        use sha2::Digest;
+        let sha256 = match &content {
+            Content::Path(path) => sha2::Sha256::digest(std::fs::read(path).unwrap()).into(),
+            Content::Bytes(bytes) => sha2::Sha256::digest(bytes).into(),
+        };
         VersionRequest {
             file,
             file_key: key,
             content,
-            sha256: [8u8; 32],
+            sha256,
             hash_key: Some(hash_key),
             based_on: None,
             progress: Progress::Quiet,
@@ -655,9 +819,12 @@ mod tests {
         assert_eq!(
             meta.content_hash.as_deref(),
             Some(
-                crate::names::content_hash(&hash_key, &[8u8; 32])
-                    .unwrap()
-                    .as_str()
+                crate::names::content_hash(&hash_key, &{
+                    use sha2::Digest;
+                    sha2::Sha256::digest(&plain).into()
+                })
+                .unwrap()
+                .as_str()
             )
         );
         let next = File {
@@ -753,5 +920,120 @@ mod tests {
         .unwrap();
         assert!(matches!(landed, Landed::Stored(_)));
         assert_eq!(tus.deletes.get(), 0);
+    }
+
+    fn big(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<u8>) {
+        let plain: Vec<u8> = (0..2 * CHUNK_SIZE + 31).map(|i| (i % 247) as u8).collect();
+        let path = dir.path().join("big.bin");
+        std::fs::write(&path, &plain).unwrap();
+        (path, plain)
+    }
+
+    /// The server took a part but its answer was lost and the part went
+    /// again: tus's offset mismatch is not a conflict; the upload asks where
+    /// the server is and goes on from there.
+    #[test]
+    fn an_offset_mismatch_goes_on_from_the_server_offset() {
+        let (file, key) = file();
+        let dir = tempfile::tempdir().unwrap();
+        let (path, plain) = big(&dir);
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        tus.skew_patch.set(Some(1));
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Path(&path), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Stored(_)), "{landed:?}");
+        assert_eq!(tus.patches.get(), 3, "the taken part is not sent again");
+        let stored = tus.stored.borrow();
+        let opened = kutup_crypto::drive_object::decrypt_file_blob(
+            &stored[0].1,
+            &key,
+            DriveFileBlobContextV1::new(&file.id, file.key_generation).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(opened, plain);
+    }
+
+    /// A push made from a version the file no longer holds: refused when it
+    /// opens, reported as a conflict (the sync then keeps both).
+    #[test]
+    fn a_based_on_conflict_is_a_conflict() {
+        let (file, key) = file();
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        tus.conflict_at_open.set(true);
+        let mut req = request(&file, &key, Content::Bytes(b"mine"), &hash_key);
+        req.based_on = Some("v3".into());
+        let landed = upload_version(&tus, &records, req).unwrap();
+        assert!(matches!(landed, Landed::Conflict(_)), "{landed:?}");
+        assert_eq!(tus.patches.get(), 0, "nothing sent");
+    }
+
+    /// The folder's owner sees another writer's upload (`yours: false`):
+    /// busy while it moves, cancelled once idle past the threshold.
+    #[test]
+    fn the_owner_cancels_another_writers_upload_only_when_idle() {
+        let (file, key) = file();
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        let other = tus.create(1, &VersionUploadMeta::default()).unwrap();
+        tus.owner_view.set(true);
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS - 1);
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Busy), "{landed:?}");
+        assert_eq!(tus.deletes.get(), 0);
+        tus.idle.set(VAULT_CRASHED_AFTER_SECS);
+        let landed = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Bytes(b"v2"), &hash_key),
+        )
+        .unwrap();
+        assert!(matches!(landed, Landed::Stored(_)), "{landed:?}");
+        assert!(tus.head(&other).unwrap().is_none());
+        assert_eq!(tus.deletes.get(), 1);
+    }
+
+    /// Access lost mid-upload: the server discarded it; the record goes.
+    #[test]
+    fn lost_access_mid_upload_drops_the_record() {
+        let (file, key) = file();
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = big(&dir);
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        tus.forbid_patch.set(Some(2));
+        let error = upload_version(
+            &tus,
+            &records,
+            request(&file, &key, Content::Path(&path), &hash_key),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("access"), "{error:#}");
+        assert!(records.0.borrow().is_empty());
+    }
+
+    /// A change of the same size between the hash and the upload: the last
+    /// part is held back, the upload cancelled, nothing stored.
+    #[test]
+    fn a_same_size_change_is_caught_by_the_hash() {
+        let (file, key) = file();
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut plain) = big(&dir);
+        let (tus, records, hash_key) = (FakeTus::default(), Records::default(), [6u8; 32]);
+        let req = request(&file, &key, Content::Path(&path), &hash_key);
+        plain[CHUNK_SIZE + 5] ^= 0xff;
+        std::fs::write(&path, &plain).unwrap();
+        let error = upload_version(&tus, &records, req).unwrap_err();
+        assert!(error.is::<ChangedWhileUploading>(), "{error:#}");
+        assert_eq!(tus.patches.get(), 2, "the last of three parts is held back");
+        assert_eq!(tus.deletes.get(), 1);
+        assert!(tus.stored.borrow().is_empty());
+        assert!(records.0.borrow().is_empty());
     }
 }

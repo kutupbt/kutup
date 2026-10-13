@@ -405,6 +405,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
                     code: None,
                     upload_id: None,
                     idle_seconds: None,
+                    yours: None,
                     name_taken: None,
                     version_conflict: None,
                 })

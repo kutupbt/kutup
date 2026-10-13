@@ -8,6 +8,7 @@
 use std::io::{self, ErrorKind, Read, Write};
 
 use anyhow::{bail, Result};
+use sha2::{Digest, Sha256};
 
 use kutup_crypto::drive_object::{
     self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES, FILE_BLOB_PREFIX_BYTES,
@@ -81,7 +82,15 @@ pub struct StreamUploader<R: Read> {
     plain_read: i64,
     buf: Vec<u8>,
     done: bool,
+    /// SHA-256 of the plaintext read so far: what is actually sealed.
+    digest: Sha256,
 }
+
+/// The file changed while it was being uploaded: what was read is not what
+/// was measured or hashed before.
+#[derive(Debug, thiserror::Error)]
+#[error("the file changed while it was being uploaded; run it again")]
+pub struct ChangedWhileUploading;
 
 impl<R: Read> StreamUploader<R> {
     pub fn new(
@@ -103,6 +112,7 @@ impl<R: Read> StreamUploader<R> {
             plain_read: 0,
             buf: vec![0u8; CHUNK_SIZE],
             done: false,
+            digest: Sha256::new(),
         })
     }
 
@@ -129,6 +139,7 @@ impl<R: Read> StreamUploader<R> {
             StreamEncryptor::resume_with_aad(stream_key.as_slice(), header, &object_header)?;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut replayed = 0i64;
+        let mut digest = Sha256::new();
         for _ in 0..k {
             let to_read = (plain_total - replayed).min(CHUNK_SIZE as i64) as usize;
             if to_read == 0 {
@@ -141,6 +152,7 @@ impl<R: Read> StreamUploader<R> {
             // Already-sent chunks are never FINAL — an upload with its FINAL
             // chunk received would have completed server-side.
             let _ = enc.push(&buf[..n], TAG_MESSAGE)?;
+            digest.update(&buf[..n]);
             replayed += n as i64;
         }
         if k > 0 && replayed >= plain_total {
@@ -159,6 +171,7 @@ impl<R: Read> StreamUploader<R> {
             plain_read: replayed,
             buf,
             done: false,
+            digest,
         })
     }
 
@@ -170,6 +183,32 @@ impl<R: Read> StreamUploader<R> {
     /// Plaintext bytes consumed so far (for progress reporting).
     pub fn plain_read(&self) -> i64 {
         self.plain_read
+    }
+
+    /// Whether the last chunk has been returned.
+    pub fn finished(&self) -> bool {
+        self.done
+    }
+
+    /// Checks, once the last chunk is out of [`Self::next_chunk`] and before
+    /// it is sent, that the bytes sealed are the ones hashed beforehand
+    /// (`expected`, the SHA-256 the metadata carries): a change of the same
+    /// size between the two reads is [`ChangedWhileUploading`].
+    pub fn check_sha256(&self, expected: &[u8; 32]) -> Result<()> {
+        let sealed: [u8; 32] = self.digest.clone().finalize().into();
+        if &sealed != expected {
+            return Err(ChangedWhileUploading.into());
+        }
+        Ok(())
+    }
+
+    /// At the measured end: a byte more means the file grew while read.
+    fn check_no_more(&mut self) -> Result<()> {
+        let mut probe = [0u8; 1];
+        if read_full(&mut self.reader, &mut probe)? > 0 {
+            return Err(ChangedWhileUploading.into());
+        }
+        Ok(())
     }
 
     /// Returns the next ciphertext chunk to ship, or `None` at end of stream.
@@ -186,6 +225,7 @@ impl<R: Read> StreamUploader<R> {
             let Some(prefix) = self.prefix.take() else {
                 return Ok(None);
             };
+            self.check_no_more()?;
             let final_frame = self.enc.push(&[], TAG_FINAL)?;
             let mut output = Vec::with_capacity(prefix.len() + final_frame.len());
             output.extend_from_slice(&prefix);
@@ -198,11 +238,17 @@ impl<R: Read> StreamUploader<R> {
         // Shorter than when it was measured: the file changed while it was
         // read. Stop rather than send empty chunks for ever.
         if n < to_read {
-            bail!("the file changed while it was being uploaded; run it again");
+            return Err(ChangedWhileUploading.into());
         }
         self.plain_read += n as i64;
+        self.digest.update(&self.buf[..n]);
 
         let is_last = self.plain_read == self.plain_total;
+        // Longer than measured: it grew while read; cutting it short would
+        // store a different file.
+        if is_last {
+            self.check_no_more()?;
+        }
         let tag = if is_last { TAG_FINAL } else { TAG_MESSAGE };
         let cipher = self.enc.push(&self.buf[..n], tag)?;
 
@@ -313,6 +359,15 @@ mod tests {
         let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 200, context()).unwrap();
         let error = up.next_chunk().unwrap_err();
         assert!(error.to_string().contains("changed"), "{error}");
+    }
+
+    // A file longer than measured (it grew while read) is never cut short.
+    #[test]
+    fn a_file_that_grows_stops_the_upload() {
+        let plain = [1u8; 100];
+        let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 60, context()).unwrap();
+        let error = up.next_chunk().unwrap_err();
+        assert!(error.is::<ChangedWhileUploading>(), "{error}");
     }
 
     // Exact-multiple-of-CHUNK_SIZE plaintexts produce a full-size FINAL
