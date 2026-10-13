@@ -536,7 +536,14 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str, server_name: &str) {
             }
             Err(e) => tracing::warn!("bootstrapAdmin: commit error for @{username}: {e}"),
         },
-        Ok(false) => tracing::warn!("bootstrapAdmin: the address of @{username} is taken"),
+        // The account to get back in with must exist: stop, loudly.
+        Ok(false) => {
+            tracing::error!(
+                "bootstrapAdmin: break-glass admin NOT created: the address of @{username} is taken (a group or another account); choose another ADMIN_ACCOUNT username"
+            );
+            eprintln!("kutup-server: ADMIN_ACCOUNT's username @{username} is taken by a group or another account's address");
+            std::process::exit(2);
+        }
         Err(e) => tracing::warn!(
             "bootstrapAdmin: address error for @{username}: {}",
             e.message

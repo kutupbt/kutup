@@ -230,3 +230,39 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
         .unwrap();
     assert!(r.status().is_success(), "delete: {}", r.status());
 }
+
+#[test]
+fn every_new_account_has_its_mail_address() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let addresses = |token: &str| -> Vec<Value> {
+        bearer(c.get(format!("{base}/api/mail/addresses")), token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    // Registered: the address came with the account, the GET only reads it
+    // (and reads the same row again).
+    let user = register(&c, &base);
+    let first = addresses(&user.token);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["address"], user.account.as_str());
+    assert_eq!(addresses(&user.token)[0]["id"], first[0]["id"]);
+    // The bootstrap administrator: made at start, with its address.
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let admin_token = common::admin_token(&c, &base, "", admin_password, admin_name);
+    let admin_addresses = addresses(&admin_token);
+    assert_eq!(admin_addresses.len(), 1, "{admin_addresses:?}");
+    assert!(admin_addresses[0]["address"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{admin_name}@")));
+}
