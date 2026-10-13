@@ -90,18 +90,21 @@ impl VaultKey {
 /// (`kutup_crypto::pass_vault::MAX_KEY_FILE_BYTES`).
 pub const MAX_KEPT_KEY_FILE_BYTES: usize = 2048;
 
-/// A key file as a vault secret keeps it: small files (KeePass's XML, 32-byte
-/// and hex key files) as they are; any larger file as its SHA-256, which
-/// KeePass treats as the same key (it hashes files that are none of those
-/// kinds, and uses a 32-byte file directly). Check that the result opens the
-/// vault before keeping it.
-pub fn key_file_secret(contents: &[u8]) -> Vec<u8> {
-    use sha2::{Digest as _, Sha256};
-    if contents.len() <= MAX_KEPT_KEY_FILE_BYTES {
-        contents.to_vec()
-    } else {
-        Sha256::digest(contents).to_vec()
+/// A key file as a vault secret keeps it: the key element KeePass derives
+/// from it (`keepass::key_file_element`: an XML key file's key, a 32-byte or
+/// hex key file's bytes, any other file's SHA-256), which opens the vault as
+/// the file does, whatever its size or padding. Kept as those 32 bytes when,
+/// read back as a key file, they give the same element (a 32-byte key file
+/// is used as it is); an unusual key file whose element is not 32 bytes is
+/// kept as it is, if it fits. `None`: it cannot be kept.
+pub fn key_file_secret(contents: &[u8]) -> Option<Vec<u8>> {
+    let element = Zeroizing::new(keepass::key_file_element(contents)?);
+    if element.len() == 32
+        && keepass::key_file_element(&element).as_deref() == Some(element.as_slice())
+    {
+        return Some(element.to_vec());
     }
+    (contents.len() <= MAX_KEPT_KEY_FILE_BYTES).then(|| contents.to_vec())
 }
 
 /// Why a vault could not be opened or saved.
@@ -208,16 +211,35 @@ mod tests {
         assert!(open(&saved, &VaultKey::new().with_password_hash(&wrong)).is_err());
     }
 
+    /// Every kind of key file is kept as 32 bytes that open the vault as it does.
     #[test]
-    fn a_large_key_file_is_kept_as_its_hash() {
-        let large: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
-        let key = VaultKey::new().with_password("p").with_key_file(&large);
-        let bytes = save(&sample(), &key).unwrap();
-        let kept = key_file_secret(&large);
-        assert_eq!(kept.len(), 32);
-        let reopened = VaultKey::new().with_password("p").with_key_file(&kept);
-        assert!(open(&bytes, &reopened).is_ok());
-        assert_eq!(key_file_secret(b"<KeyFile/>"), b"<KeyFile/>");
+    fn a_key_file_is_kept_as_its_key_element() {
+        let bare: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+        let xml_v2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<KeyFile><Meta><Version>2.0</Version></Meta><Key><Data Hash=\"A65F1F33\">6E0A1A8C 6D8F4B2E 9C7A1F52 0B3D4E5F 61728394 A5B6C7D8 E9FA0B1C 2D3E4F50</Data></Key></KeyFile>\n";
+        // An XML key file padded past 2048 bytes is still its 32-byte key,
+        // not a hash of the whole file.
+        let xml_padded = xml_v2.replace("<Meta>", &format!("<!--{}--><Meta>", " ".repeat(4000)));
+        let xml_v1 = format!(
+            "<KeyFile><Meta><Version>1.00</Version></Meta><Key><Data>{}</Data></Key></KeyFile>",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [9u8; 32])
+        );
+        let hex_file = "ab".repeat(32);
+        for file in [
+            bare,
+            xml_v2.as_bytes().to_vec(),
+            xml_padded.into_bytes(),
+            xml_v1.into_bytes(),
+            hex_file.into_bytes(),
+            vec![7u8; 32],
+            b"<KeyFile/>".to_vec(),
+        ] {
+            let key = VaultKey::new().with_password("p").with_key_file(&file);
+            let bytes = save(&sample(), &key).unwrap();
+            let kept = key_file_secret(&file).unwrap();
+            assert_eq!(kept.len(), 32, "{}", String::from_utf8_lossy(&file[..20]));
+            let reopened = VaultKey::new().with_password("p").with_key_file(&kept);
+            assert!(open(&bytes, &reopened).is_ok());
+        }
     }
 
     #[test]

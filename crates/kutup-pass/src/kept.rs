@@ -6,7 +6,7 @@
 //! What is kept opens the vault without holding a password the person chose
 //! (only its SHA-256, KeePass's password part of the composite key); a
 //! password Kutup Pass generated is kept as it is, so it can be shown; a key
-//! file is kept as [`key_file_secret`] reduces it. The format itself is
+//! file is kept as its key element ([`key_file_secret`]). The format itself is
 //! `kutup_crypto::pass_vault`.
 
 use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
@@ -24,6 +24,9 @@ pub enum KeptError {
     /// A generated key needs its password.
     #[error("a generated key needs its password")]
     NoPassword,
+    /// An unusual key file (its key is not 32 bytes) too large to keep.
+    #[error("this key file cannot be kept")]
+    KeyFileNotKeepable,
     #[error(transparent)]
     Crypto(#[from] kutup_crypto::error::CryptoError),
 }
@@ -35,8 +38,11 @@ pub struct Kept {
     pub generated_password: Option<Zeroizing<String>>,
 }
 
-/// Seals `key` (one that opened vault `file_id`; the caller has checked) for
-/// the account: under `master_key`, bound to `binding` and the vault.
+/// Seals `key` for the account: under `master_key`, bound to `binding` and
+/// the vault. It does not open the vault: callers pass a key that opened it
+/// (the Pass worker keeps the key its vault was opened or made with; the CLI
+/// opens the vault with the key first). A key file is kept as its key element
+/// ([`key_file_secret`]), which opens the vault as the file does.
 /// `generated`: its password is one Kutup Pass made, kept to be shown.
 pub fn seal(
     master_key: &[u8],
@@ -48,10 +54,12 @@ pub fn seal(
     if key.password.is_none() && key.password_hash.is_some() {
         return Err(KeptError::NotKeepable);
     }
-    let key_file = key
-        .key_file
-        .as_deref()
-        .map(|file| Zeroizing::new(key_file_secret(file)));
+    let key_file = match key.key_file.as_deref() {
+        Some(file) => Some(Zeroizing::new(
+            key_file_secret(file).ok_or(KeptError::KeyFileNotKeepable)?,
+        )),
+        None => None,
+    };
     let key_file = key_file.as_deref().map(Vec::as_slice);
     let secret = match (generated, key.password.as_deref()) {
         (true, Some(password)) => VaultSecret::generated(password, key_file),

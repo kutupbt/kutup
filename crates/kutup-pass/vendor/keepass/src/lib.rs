@@ -12,6 +12,8 @@ mod key;
 
 pub use self::db::Database;
 
+/// Public in Kutup's copy (vendor/keepass/KUTUP.md).
+pub use self::key::key_file_element;
 #[cfg(feature = "challenge_response")]
 pub use self::key::ChallengeResponseKey;
 pub use self::key::DatabaseKey;

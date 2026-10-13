@@ -117,7 +117,6 @@ export class VaultHandle {
   }
 }
 
-/** A key file as a vault secret keeps it (large files as their SHA-256). */
 /** A kept vault key, opened (kutup_pass::kept): bytes in base64. */
 export interface KeptKey {
   /** SHA-256 of the password, which opens the vault in its place. */

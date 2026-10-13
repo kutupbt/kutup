@@ -61,6 +61,8 @@ assert.equal(ours.otp(bank, 59_000), null)
 
 // A key changed: the new one opens the saved vault, the old one does not.
 ours.changeKey('yeni', null, minute(8))
+// Not kept before it is saved: Drive's copy still opens with the old key.
+assert.throws(() => ours.keepKey(new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', false))
 const rekeyed = ours.save()
 assert.ok(pass.Vault.open(rekeyed, 'yeni', null, null))
 assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))

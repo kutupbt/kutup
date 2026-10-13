@@ -59,6 +59,9 @@ struct MergeOutcome {
 pub struct Vault {
     db: Database,
     key: VaultKey,
+    /// The key was changed and not saved since: Drive's copy still opens
+    /// with the old one, so the new one is not kept yet.
+    key_unsaved: bool,
 }
 
 #[wasm_bindgen]
@@ -72,7 +75,11 @@ impl Vault {
     ) -> Result<Vault, JsValue> {
         let key = key(password, key_file)?;
         let db = edit::new_vault(name, time(now_ms)?).map_err(js_error)?;
-        Ok(Vault { db, key })
+        Ok(Vault {
+            db,
+            key,
+            key_unsaved: false,
+        })
     }
 
     /// Opens a vault's file contents. Fails with a wrong key or a file that
@@ -104,7 +111,11 @@ impl Vault {
             None => key(password, key_file)?,
         };
         let db = kutup_pass::open(contents, &key).map_err(js_error)?;
-        Ok(Vault { db, key })
+        Ok(Vault {
+            db,
+            key,
+            key_unsaved: false,
+        })
     }
 
     /// The whole vault: `kutup_pass::view::VaultView`.
@@ -148,8 +159,10 @@ impl Vault {
     }
 
     /// The vault as KDBX 4.1 file contents.
-    pub fn save(&self) -> Result<Vec<u8>, JsValue> {
-        kutup_pass::save(&self.db, &self.key).map_err(js_error)
+    pub fn save(&mut self) -> Result<Vec<u8>, JsValue> {
+        let saved = kutup_pass::save(&self.db, &self.key).map_err(js_error)?;
+        self.key_unsaved = false;
+        Ok(saved)
     }
 
     /// Merges this vault (ours) with `theirs` against `base` (the version
@@ -198,7 +211,8 @@ impl Vault {
     /// `file_id`: the key this vault was opened or made with, so it is known
     /// to open it. `generated`: its password is one Kutup Pass made, kept to
     /// be shown. Base64. Fails for a vault opened with a kept key (only its
-    /// password's hash is known here).
+    /// password's hash is known here), and after `changeKey` until `save`
+    /// (Drive's copy still opens with the old key).
     #[wasm_bindgen(js_name = keepKey)]
     pub fn keep_key(
         &self,
@@ -207,6 +221,11 @@ impl Vault {
         file_id: &str,
         generated: bool,
     ) -> Result<String, JsValue> {
+        if self.key_unsaved {
+            return Err(js_error(
+                "save the vault with its new key before keeping it",
+            ));
+        }
         let sealed = kutup_pass::kept::seal(
             master_key,
             binding,
@@ -227,6 +246,7 @@ impl Vault {
         now_ms: f64,
     ) -> Result<(), JsValue> {
         self.key = key(password, key_file)?;
+        self.key_unsaved = true;
         self.db.meta.master_key_changed = Some(time(now_ms)?);
         Ok(())
     }
