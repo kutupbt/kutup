@@ -56,7 +56,7 @@ pub fn parse_content_hash(value: Option<&str>) -> AppResult<Option<String>> {
     }
 }
 
-fn is_hash(value: &str) -> bool {
+pub(crate) fn is_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()

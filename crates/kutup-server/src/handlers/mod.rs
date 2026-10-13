@@ -43,6 +43,7 @@ pub mod shares;
 pub mod storage;
 pub mod trash;
 pub mod tus;
+pub mod tus_versions;
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Body;

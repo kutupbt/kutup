@@ -449,16 +449,10 @@ pub(crate) async fn store_version(
     let keep_forever = fields.get("keepForever").is_some_and(|v| v == "true");
     // A conditional save (docs/plans/pass.md, "Saving without overwriting"):
     // stored only if the file still holds the content it was made from.
-    let based_on = match fields.get("basedOn").map(String::as_str) {
-        None => None,
-        Some(_) if kind != "file" => {
-            return Err(AppError::bad_request("basedOn needs kind file"));
-        }
-        Some(crate::handlers::files::ORIGINAL) => Some(None),
-        Some(id) => Some(Some(
-            Uuid::parse_str(id).map_err(|_| AppError::bad_request("invalid basedOn"))?,
-        )),
-    };
+    if fields.contains_key("basedOn") && kind != "file" {
+        return Err(AppError::bad_request("basedOn needs kind file"));
+    }
+    let based_on = parse_based_on(fields.get("basedOn").map(String::as_str))?;
 
     // The same typed, file-bound blob as an upload; the server checks only its
     // public header.
@@ -487,22 +481,8 @@ pub(crate) async fn store_version(
             .bind(fid)
             .execute(&mut *tx)
             .await?;
-        let current: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
-             ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(fid)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if based_on.is_some_and(|expected| expected != current) {
-            let current = current.map_or_else(
-                || crate::handlers::files::ORIGINAL.to_owned(),
-                |id| id.to_string(),
-            );
-            return Err(AppError::conflict("the file changed since").with_details(
-                serde_json::json!({ "code": "version_conflict", "current": current }),
-            ));
-        }
+        let current = current_whole_version(&mut tx, fid).await?;
+        check_based_on(based_on, current)?;
         current
     } else {
         None
@@ -613,6 +593,48 @@ pub(crate) async fn store_version(
         return Err(AppError::internal("commit"));
     }
     Ok(to_version_row(created))
+}
+
+/// `basedOn`: a version id, or `original` (the file as first uploaded).
+pub(crate) fn parse_based_on(value: Option<&str>) -> AppResult<Option<Option<Uuid>>> {
+    Ok(match value {
+        None => None,
+        Some(crate::handlers::files::ORIGINAL) => Some(None),
+        Some(id) => Some(Some(
+            Uuid::parse_str(id).map_err(|_| AppError::bad_request("invalid basedOn"))?,
+        )),
+    })
+}
+
+/// The file's newest whole-file version (`None`: the original upload).
+pub(crate) async fn current_whole_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    fid: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(fid)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// `409 version_conflict` (naming the current version) unless the file still
+/// holds what a save was based on.
+pub(crate) fn check_based_on(
+    based_on: Option<Option<Uuid>>,
+    current: Option<Uuid>,
+) -> AppResult<()> {
+    if based_on.is_some_and(|expected| expected != current) {
+        let current = current.map_or_else(
+            || crate::handlers::files::ORIGINAL.to_owned(),
+            |id| id.to_string(),
+        );
+        return Err(AppError::conflict("the file changed since")
+            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })));
+    }
+    Ok(())
 }
 
 /// Parses the trusted user id + the file-id path param (bad file id ⇒ 404).

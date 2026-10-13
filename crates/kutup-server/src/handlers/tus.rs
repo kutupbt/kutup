@@ -54,7 +54,7 @@ pub(crate) fn tus_text(status: StatusCode, body: &'static str) -> Response {
 }
 
 /// An `AppError` (its JSON body, a refused name's details) as a tus answer.
-fn tus_error(error: crate::error::AppError) -> Response {
+pub(crate) fn tus_error(error: crate::error::AppError) -> Response {
     let mut response = error.into_response();
     response.headers_mut().insert(
         "Tus-Resumable",
@@ -159,7 +159,7 @@ pub async fn options() -> Response {
     params(
         ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
         ("Upload-Length" = i64, Header, description = "Total upload size in bytes"),
-        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs: fileId, collectionId, metadataEnvelope, fileKeyEnvelope")
+        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs. A new file: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash. A new version of a file: versionOf, metadataEnvelope and metadataRevision (its next metadata), optional contentHash and basedOn")
     ),
     responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
 )]
@@ -192,6 +192,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             return (StatusCode::BAD_REQUEST, [("Tus-Resumable", TUS_VERSION)], e).into_response()
         }
     };
+    // A new version of a file already here (`tus_versions`).
+    if meta.contains_key("versionOf") {
+        return super::tus_versions::create(&state, user_id, total_bytes, &meta).await;
+    }
     let empty = String::new();
     let file_id_text = meta.get("fileId").unwrap_or(&empty);
     let coll_id = meta.get("collectionId").unwrap_or(&empty);
@@ -538,25 +542,33 @@ pub async fn patch(
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
 
-    type UploadRow = (
-        Uuid,              // collection_id
-        Uuid,              // file_id
-        i64,               // total_bytes
-        i64,               // received_bytes
-        String,            // metadata_envelope
-        String,            // file_key_envelope
-        i32,               // key_epoch
-        i64,               // metadata_revision
-        String,            // storage_path
-        String,            // s3_upload_id
-        serde_json::Value, // s3_part_etags
-        Vec<u8>,           // pending_bytes
-        Option<String>,    // name_hash
-    );
+    #[derive(sqlx::FromRow)]
+    struct UploadRow {
+        collection_id: Uuid,
+        file_id: Uuid,
+        total_bytes: i64,
+        received_bytes: i64,
+        metadata_envelope: String,
+        /// None for a version.
+        file_key_envelope: Option<String>,
+        key_epoch: i32,
+        metadata_revision: i64,
+        storage_path: String,
+        s3_upload_id: String,
+        s3_part_etags: serde_json::Value,
+        pending_bytes: Vec<u8>,
+        name_hash: Option<String>,
+        /// `file` or `version`; the rest are a version's.
+        kind: String,
+        key_generation: Option<i32>,
+        content_hash: Option<String>,
+        based_on: Option<String>,
+    }
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-                storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash \
+                storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash, \
+                kind, key_generation, content_hash, based_on \
          FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
@@ -570,8 +582,8 @@ pub async fn patch(
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((
-        coll_id,
+    let Some(UploadRow {
+        collection_id: coll_id,
         file_id,
         total_bytes,
         received_bytes,
@@ -581,10 +593,14 @@ pub async fn patch(
         metadata_revision,
         storage_path,
         s3_upload_id,
-        part_etags_json,
-        pending,
+        s3_part_etags: part_etags_json,
+        pending_bytes: pending,
         name_hash,
-    )) = row
+        kind,
+        key_generation: version_key_generation,
+        content_hash: version_content_hash,
+        based_on,
+    }) = row
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
@@ -604,7 +620,9 @@ pub async fn patch(
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "chunk exceeds Upload-Length");
     }
     if received_bytes == 0 {
-        let context = match DriveFileBlobContextV1::new(&file_id.to_string(), 1) {
+        // A new file's key is generation 1; a version's, the file's key when it started.
+        let generation = version_key_generation.map_or(1, |g| g.max(1) as u32);
+        let context = match DriveFileBlobContextV1::new(&file_id.to_string(), generation) {
             Ok(context) => context,
             Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
         };
@@ -686,6 +704,33 @@ pub async fn patch(
     }
 
     // --- finaliser path ---
+    if kind == "version" {
+        let Some(key_generation) = version_key_generation else {
+            return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "corrupt version upload");
+        };
+        return super::tus_versions::finish(
+            &state,
+            tx,
+            super::tus_versions::Landing {
+                user_id,
+                upload_id,
+                file_id,
+                total_bytes,
+                metadata_envelope,
+                metadata_revision,
+                storage_path,
+                s3_upload_id,
+                key_generation,
+                content_hash: version_content_hash,
+                based_on,
+            },
+            &parts,
+        )
+        .await;
+    }
+    let Some(file_key_envelope) = file_key_envelope else {
+        return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "corrupt upload");
+    };
     // Everything the create checked must still hold now that the file lands:
     // the uploader may still write here, the folder is live at the epoch the
     // envelopes are bound to, the id is still free, and the file still fits

@@ -19,8 +19,9 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
 - **An upload that would put an identical file under a name already there
   is not sent** ("Already in this folder"). Same name, different content
   (or a folder of that name): the person chooses **Replace** (the upload
-  becomes a new version of the file there, as Proton does, so the old
-  content stays in its versions; offered up to 2 GiB, a version's limit),
+  becomes a new version of the file there, as Proton's revisions, so the
+  old content stays in its versions; resumable at any size over tus, with
+  the new size, SHA-256 and content hash landing together with it),
   **Keep both** (the first free `name (n)`, asked of the server ten at a
   time, as Proton's `findAvailableName`) or **Skip**, with "apply to all" for
   the rest of the batch. A dropped folder goes into the folder of its name
@@ -140,8 +141,8 @@ not SHA-1.
 - Content hashes in folders on other servers: their listings and uploads
   carry none yet, so a clash there always asks. Names are kept unique there
   (the upload carries its name hash).
-- Replace above 2 GiB: a version upload is not resumable yet
-  (`docs/roadmap.md`), so Replace is not offered there.
+- Replace into a folder on another server: versions go there by
+  multipart, so at most 2 GiB.
 - Uploads into folders on other servers whose server predates this: the
   server cannot enforce what it is not sent.
 - A server-side lookup by content hash across a whole library (Proton

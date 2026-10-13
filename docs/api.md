@@ -8,8 +8,8 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 > **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
 **Request bodies** are capped at 4 MiB unless a route says otherwise; the
-upload routes raise it (whole-file upload 10 GiB, a version 2 GiB, a tus
-chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
+upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
+(a version of any size goes over tus), a tus chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
 10 GiB, streamed to disk). A larger body gets `413`.
 
 ## Errors
@@ -47,6 +47,7 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 409 | A folder restored at the top level needs a name there |
+| `versionUploading` | 409 | A new version of this file is already being uploaded (with its `uploadId` when it is the caller's) |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `newKeyNeeded` | 409 | A new key must be made first |
@@ -1918,7 +1919,34 @@ already there.
   `409 name_taken`; restore it under a new name in the same request
   (`POST /api/trash/:id/restore`).
 - A new version (`POST /api/files/:id/versions`) clears the content hash;
-  the client records the new one.
+  the client records the new one. A version uploaded over tus (below)
+  carries its content hash and lands with it.
+
+### POST /api/uploads with `versionOf` — a new version over tus
+
+Replace on an upload clash, and a CLI sync push of an edited file, upload
+the new content as a version of the file there, as Proton Drive's revisions:
+resumable (tus `HEAD`/`PATCH` as for a new file) and of any size. The
+`Upload-Metadata` holds `versionOf` (the file id), `metadataEnvelope` and
+`metadataRevision` (the file's next metadata revision: its new size and
+`sha256`), and optionally `contentHash` (the new content's hash in its
+folder) and `basedOn` (a version id or `original`, as a multipart save). The
+blob is sealed for the file at its current key generation. Answers `201`
+with `{ "fileId", "versionId" }` (the upload's id is the version's).
+
+Checked when the upload starts, so a conflict fails before the content is
+sent, and again when its last part lands: the caller may write the file
+(`403`), the file is live (`404`), it still holds `basedOn`
+(`409 version_conflict`), its key has not changed (`409`), the metadata is
+its next revision (`409 revision_conflict`), and the upload fits the
+uploader's storage and share limits (`413`). One open upload per file:
+another is `409 versionUploading`, with its `uploadId` when it is the
+caller's (to go on with or cancel). The last part stores the version, the
+file's new metadata and its content hash in one transaction, charged to the
+uploader as a multipart version is; refused there, the upload is discarded
+at once. An abandoned one is reaped like any tus upload, and reserves its
+length until then. Folders on other servers take versions by multipart only
+(`POST BASE/versions`, at most 2 GiB).
 
 ### PUT /api/files/:id/content-hash
 

@@ -909,12 +909,10 @@ its offset there.
 
 ### Drive · resumable new versions (Replace above 2 GiB)
 
-Replace on an upload clash makes the upload a new version of the file
-there (docs/plans/drive-unique-names.md), and so does a CLI sync push of an
-edited file. A version goes up in one request (`POST /api/files/:id/versions`,
-at most 2 GiB), so Replace is not offered above that and the person keeps
-both or skips. Making it resumable needs a tus upload that ends as a version
-of an existing file instead of a new file.
+Done (October 2026): a version goes over tus (`POST /api/uploads` with
+`versionOf`, docs/api.md), resumable and of any size, as Proton Drive's
+revisions; its metadata and content hash land with it. Still by multipart
+(2 GiB): versions into folders on other servers.
 
 ### Drive · resuming a whole folder upload
 

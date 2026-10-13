@@ -2443,6 +2443,7 @@ mod tests {
             ("fileId", file_id),
             ("metadataEnvelope", "metadata"),
             ("fileKeyEnvelope", "wrapped-file-key"),
+            ("nameHash", &"ab".repeat(32)),
         ] {
             body.extend_from_slice(
                 format!(
@@ -2470,5 +2471,6 @@ mod tests {
         assert_eq!(upload.digest, hex::encode(Sha256::digest(ciphertext)));
         assert_eq!(upload.file_id.to_string(), file_id);
         assert_eq!(upload.metadata_envelope, "metadata");
+        assert_eq!(upload.name_hash, "ab".repeat(32));
     }
 }
