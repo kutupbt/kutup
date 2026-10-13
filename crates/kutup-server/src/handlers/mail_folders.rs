@@ -7,8 +7,6 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
@@ -54,11 +52,7 @@ pub struct MailPlaces {
 }
 
 fn check_sealed(name: &str) -> AppResult<()> {
-    let bytes = STANDARD
-        .decode(name)
-        .map_err(|_| AppError::bad_request("name is not base64"))?;
-    kutup_crypto::mail_names::inspect_name(&bytes)
-        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))
+    crate::revisions::mail_name(name).map(drop)
 }
 
 fn check_color(color: &str) -> AppResult<()> {
@@ -282,6 +276,8 @@ where
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailFolder {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub color: Option<String>,
     /// Another folder to move into, or `null` for the top.
     #[serde(default, deserialize_with = "double_option")]
@@ -315,18 +311,26 @@ pub async fn update_folder(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
-    if let Some(name) = &request.name {
-        check_sealed(name)?;
-    }
     if let Some(color) = &request.color {
         check_color(color)?;
     }
     let mut tx = state.pool.begin().await?;
+    // Every change to the account's folders waits for this lock.
     sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let (_, below) = depth_of(&mut tx, user_id, id).await?;
+    if let Some(name) = &request.name {
+        let stored: String = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_folders WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        crate::revisions::check_rename(&stored, name, request.base_name_revision)?;
+    }
     let parent = match &request.parent_id {
         None => None,
         Some(None) => Some(None),
@@ -508,6 +512,8 @@ pub async fn create_label(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailLabel {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub color: Option<String>,
     pub position: Option<i32>,
 }
@@ -530,27 +536,37 @@ pub async fn update_label(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
-    if let Some(name) = &request.name {
-        check_sealed(name)?;
-    }
     if let Some(color) = &request.color {
         check_color(color)?;
     }
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2")
+            .bind(user_id)
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let stored = stored.ok_or_else(|| AppError::not_found("no such label"))?;
+    if let Some(name) = &request.name {
+        crate::revisions::check_rename(&stored, name, request.base_name_revision)?;
+    }
+    // Written only over the name the rename started from.
     let updated = sqlx::query(
         "UPDATE mail_labels SET name_sealed = COALESCE($3, name_sealed),
              color = COALESCE($4, color), position = COALESCE($5, position)
-          WHERE user_id = $1 AND id = $2",
+          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $6)",
     )
     .bind(user_id)
     .bind(id)
     .bind(request.name.as_deref())
     .bind(request.color.as_deref())
     .bind(request.position)
+    .bind(&stored)
     .execute(&state.pool)
     .await?
     .rows_affected();
     if updated == 0 {
-        return Err(AppError::not_found("no such label"));
+        return Err(AppError::conflict("this label was changed elsewhere")
+            .with_details(serde_json::json!({ "code": "revision_conflict" })));
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -606,6 +622,8 @@ pub async fn delete_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
 
     #[test]
     fn colours_and_names_are_checked() {
@@ -621,6 +639,7 @@ mod tests {
             "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
             kutup_crypto::mail_names::MailNameKind::Folder,
             &[2; 16],
+            1,
             "Faturalar",
         )
         .unwrap();

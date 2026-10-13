@@ -41,8 +41,19 @@ pub enum SendOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPinsRecord {
+    /// The revision in the sealed list's header, as the server read it.
     pub revision: u64,
     /// Canonical base64 of the sealed list (`kutup_crypto::identity_pins`).
+    pub envelope: String,
+}
+
+/// A new sealed list for `PUT /api/user/identity-pins`: stored only if the
+/// server still holds `base_revision` (0: none yet). The new revision is in
+/// the envelope's header and must be above it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPinsWrite {
+    pub base_revision: u64,
     pub envelope: String,
 }
 
@@ -169,9 +180,9 @@ pub trait ChatTransport {
         Ok(None)
     }
 
-    /// Store `record`, whose revision must follow the stored one by one.
-    /// `Ok(false)`: another app stored that revision first.
-    async fn store_identity_pins(&self, _record: &IdentityPinsRecord) -> Result<bool> {
+    /// Store `write` if the server still holds its base revision.
+    /// `Ok(false)`: another app stored a list first.
+    async fn store_identity_pins(&self, _write: &IdentityPinsWrite) -> Result<bool> {
         Err(crate::ChatError::Transport(
             "transport does not implement identity pins".into(),
         ))

@@ -160,41 +160,51 @@ fn identity_pins_sync_by_revision() {
         .send()
         .unwrap()
     };
-    let put = |revision: i64, envelope: String| {
+    let put = |base_revision: i64, envelope: String| {
         bearer(
             c.put(format!("{base}/api/user/identity-pins")),
             &owner.token,
         )
-        .json(&json!({ "revision": revision, "envelope": envelope }))
+        .json(&json!({ "baseRevision": base_revision, "envelope": envelope }))
         .send()
         .unwrap()
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
     let seal = |revision: u64| b64(&identity_pins::seal(&key, &binding, revision, &list).unwrap());
 
-    // Revisions follow one another; a write that missed one is refused with the current one.
-    assert_eq!(put(2, seal(2)).status(), StatusCode::CONFLICT);
-    assert_eq!(put(1, seal(1)).status(), StatusCode::NO_CONTENT);
-    let again = put(1, seal(1));
+    // A list is stored on top of the revision it started from (0: none yet),
+    // with a newer one in its header; a write that started from another is
+    // refused with the current revision.
+    const T: u64 = 1_791_633_600_000;
+    assert_eq!(put(5, seal(T)).status(), StatusCode::CONFLICT);
+    assert_eq!(put(0, seal(T)).status(), StatusCode::NO_CONTENT);
+    let again = put(0, seal(T + 1));
     assert_eq!(again.status(), StatusCode::CONFLICT);
     let body: Value = again.json().unwrap();
     assert_eq!(body["code"], "revision_conflict");
-    assert_eq!(body["revision"], 1);
-    assert_eq!(put(2, seal(2)).status(), StatusCode::NO_CONTENT);
-    assert_eq!(put(2, seal(2)).status(), StatusCode::CONFLICT);
+    assert_eq!(body["revision"], T);
+    // Not newer than its base: refused.
+    assert_eq!(put(T as i64, seal(T)).status(), StatusCode::BAD_REQUEST);
+    assert_eq!(put(T as i64, seal(T + 7)).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put(T as i64, seal(T + 8)).status(), StatusCode::CONFLICT);
 
-    // What comes back opens only at its revision, for its owner's key binding.
+    // What comes back carries its revision in its header, for its owner's key binding.
     let stored: Value = get().json().unwrap();
-    assert_eq!(stored["revision"], 2);
+    assert_eq!(stored["revision"], T + 7);
     let sealed = base64_decode(stored["envelope"].as_str().unwrap());
     assert_eq!(
-        identity_pins::open(&key, &binding, 2, &sealed).unwrap(),
-        list
+        identity_pins::open(&key, &binding, &sealed).unwrap(),
+        (list.clone(), T + 7)
     );
-    assert!(identity_pins::open(&key, &binding, 1, &sealed).is_err());
+    let mut relabelled = sealed.clone();
+    relabelled[17] ^= 1;
+    assert!(identity_pins::open(&key, &binding, &relabelled).is_err());
 
     // Not a sealed list: refused.
-    assert_eq!(put(3, b64(b"plain text")).status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        put((T + 7) as i64, b64(b"plain text")).status(),
+        StatusCode::BAD_REQUEST
+    );
     // Another account sees only its own.
     let other = register(&c, &base);
     assert_eq!(

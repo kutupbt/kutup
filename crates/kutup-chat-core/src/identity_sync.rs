@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
-use crate::transport::{ChatTransport, IdentityPinsRecord};
+use crate::transport::{ChatTransport, IdentityPinsWrite};
 
 /// The reason a contact is quarantined when the list says otherwise.
 pub(crate) const DIFFERS_FROM_SYNCED: &str =
@@ -48,6 +48,9 @@ pub(crate) struct IdentityPinsSync {
     binding: String,
     key: Zeroizing<[u8; 32]>,
     cache: Option<(u64, IdentityPinsV1)>,
+    /// The highest revision this engine has seen: an older list is refused
+    /// (the server replaying one), as on the web.
+    highest_seen: u64,
 }
 
 impl IdentityPinsSync {
@@ -58,6 +61,7 @@ impl IdentityPinsSync {
                 .to_string(),
             key: identity_pins::derive_key(master_key).map_err(crypto)?,
             cache: None,
+            highest_seen: 0,
         })
     }
 
@@ -71,9 +75,15 @@ impl IdentityPinsSync {
                 let sealed = STANDARD
                     .decode(&record.envelope)
                     .map_err(|_| ChatError::Invalid("identity pins are not base64".into()))?;
-                let list = identity_pins::open(&self.key, &self.binding, record.revision, &sealed)
-                    .map_err(crypto)?;
-                (record.revision, list)
+                let (list, revision) =
+                    identity_pins::open(&self.key, &self.binding, &sealed).map_err(crypto)?;
+                if revision < self.highest_seen {
+                    return Err(ChatError::Trust(
+                        "identity pins: the server answered an older list than seen".into(),
+                    ));
+                }
+                self.highest_seen = revision;
+                (revision, list)
             }
         };
         self.cache = Some(loaded.clone());
@@ -160,15 +170,20 @@ impl IdentityPinsSync {
                 replaced,
             });
             list.pins.sort_by(|a, b| a.account.cmp(&b.account));
-            let next = revision + 1;
+            // A time, above every revision seen (docs/plans/drive-identity-pins.md).
+            let next = now_seconds
+                .saturating_mul(1000)
+                .max(revision + 1)
+                .max(self.highest_seen + 1);
             let sealed =
                 identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
-            let record = IdentityPinsRecord {
-                revision: next,
+            let write = IdentityPinsWrite {
+                base_revision: revision,
                 envelope: STANDARD.encode(sealed),
             };
             self.cache = None;
-            if transport.store_identity_pins(&record).await? {
+            if transport.store_identity_pins(&write).await? {
+                self.highest_seen = next;
                 self.cache = Some((next, list));
                 return Ok(());
             }
@@ -194,6 +209,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::transport::IdentityPinsRecord;
     use crate::transport::SendOutcome;
 
     /// Only the identity pin calls; the server's list, revision by revision.
@@ -222,12 +238,17 @@ mod tests {
         async fn fetch_identity_pins(&self) -> Result<Option<IdentityPinsRecord>> {
             Ok(self.stored.borrow().clone())
         }
-        async fn store_identity_pins(&self, record: &IdentityPinsRecord) -> Result<bool> {
+        async fn store_identity_pins(&self, write: &IdentityPinsWrite) -> Result<bool> {
             let current = self.stored.borrow().as_ref().map_or(0, |r| r.revision);
-            if record.revision != current + 1 {
+            let sealed = STANDARD.decode(&write.envelope).unwrap();
+            let revision = identity_pins::inspect(&sealed).unwrap();
+            if write.base_revision != current || revision <= current {
                 return Ok(false);
             }
-            *self.stored.borrow_mut() = Some(record.clone());
+            *self.stored.borrow_mut() = Some(IdentityPinsRecord {
+                revision,
+                envelope: write.envelope.clone(),
+            });
             Ok(true)
         }
     }
@@ -264,14 +285,10 @@ mod tests {
     fn pins(server: &Server) -> Vec<IdentityPinV1> {
         let record = server.stored.borrow().clone().unwrap();
         let key = identity_pins::derive_key(&MASTER).unwrap();
-        identity_pins::open(
-            &key,
-            OWNER,
-            record.revision,
-            &STANDARD.decode(record.envelope).unwrap(),
-        )
-        .unwrap()
-        .pins
+        identity_pins::open(&key, OWNER, &STANDARD.decode(record.envelope).unwrap())
+            .unwrap()
+            .0
+            .pins
     }
 
     fn sync() -> IdentityPinsSync {

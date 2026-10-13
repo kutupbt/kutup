@@ -7,7 +7,8 @@
 //! later is a change the user is warned about until they accept it. One list
 //! serves every app of the account and survives a new browser: it is sealed
 //! with XChaCha20-Poly1305 under a key derived from the master key and stored
-//! by the server, which can neither read nor rewrite it. The revision is
+//! by the server, which can neither read nor rewrite it. The revision (a time
+//! in unix milliseconds, above every revision seen) is in the header and
 //! authenticated, so the server cannot relabel an old list as a new one;
 //! clients also remember the highest revision they have seen.
 //!
@@ -37,7 +38,8 @@ const MAGIC: &[u8; 8] = b"KUTIP2\0\0";
 const AAD_DOMAIN: &[u8] = b"kutup/identity-pins/v2\0";
 const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
-const HEADER_LEN: usize = 8 + 2 + NONCE_LEN;
+const REVISION_LEN: usize = 8;
+const HEADER_LEN: usize = 8 + 2 + REVISION_LEN + NONCE_LEN;
 const TAG_LEN: usize = 16;
 
 /// The most accounts one list keeps.
@@ -240,7 +242,7 @@ fn aad(binding: &str, revision: u64) -> Result<Vec<u8>> {
 }
 
 /// Seals the list of the account whose key binding is `owner` at
-/// `revision`: `magic ‖ suite ‖ nonce ‖ ciphertext`.
+/// `revision`: `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`.
 pub fn seal(key: &[u8; 32], owner: &str, revision: u64, list: &IdentityPinsV1) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     copy_randombytes(&mut nonce);
@@ -271,17 +273,19 @@ pub fn seal_with_nonce(
     let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&SUITE.to_be_bytes());
+    out.extend_from_slice(&revision.to_be_bytes());
     out.extend_from_slice(nonce);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Opens the list of the account whose key binding is `owner`, stored at `revision`.
-pub fn open(key: &[u8; 32], owner: &str, revision: u64, sealed: &[u8]) -> Result<IdentityPinsV1> {
-    inspect(sealed)?;
+/// Opens the list of the account whose key binding is `owner`: the list and
+/// the revision it was sealed at (refuse one older than seen).
+pub fn open(key: &[u8; 32], owner: &str, sealed: &[u8]) -> Result<(IdentityPinsV1, u64)> {
+    let revision = inspect(sealed)?;
     let plain = XChaCha20Poly1305::new(key.into())
         .decrypt(
-            XNonce::from_slice(&sealed[10..HEADER_LEN]),
+            XNonce::from_slice(&sealed[10 + REVISION_LEN..HEADER_LEN]),
             Payload {
                 msg: &sealed[HEADER_LEN..],
                 aad: &aad(owner, revision)?,
@@ -289,11 +293,12 @@ pub fn open(key: &[u8; 32], owner: &str, revision: u64, sealed: &[u8]) -> Result
         )
         .map(Zeroizing::new)
         .map_err(|_| CryptoError::AuthFailed)?;
-    decode(&plain)
+    Ok((decode(&plain)?, revision))
 }
 
-/// Checks a sealed list's framing and size without opening it (the server's view).
-pub fn inspect(sealed: &[u8]) -> Result<()> {
+/// Checks a sealed list's framing, size and revision without opening it (the
+/// server's view), and returns the revision.
+pub fn inspect(sealed: &[u8]) -> Result<u64> {
     if sealed.len() <= HEADER_LEN + TAG_LEN || sealed.len() > HEADER_LEN + MAX_LIST_BYTES + TAG_LEN
     {
         return Err(invalid("size is invalid"));
@@ -301,7 +306,11 @@ pub fn inspect(sealed: &[u8]) -> Result<()> {
     if &sealed[..MAGIC.len()] != MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
         return Err(invalid("not an identity pin list"));
     }
-    Ok(())
+    let revision = u64::from_be_bytes(sealed[10..10 + REVISION_LEN].try_into().expect("8"));
+    if revision == 0 {
+        return Err(invalid("revisions start at 1"));
+    }
+    Ok(revision)
 }
 
 /// The largest sealed list.
@@ -339,28 +348,33 @@ mod tests {
     fn a_list_round_trips_under_its_owner_and_revision() {
         let key = derive_key(&[7u8; 32]).unwrap();
         let sealed = seal(&key, OWNER, 3, &list()).unwrap();
-        assert_eq!(open(&key, OWNER, 3, &sealed).unwrap(), list());
+        assert_eq!(open(&key, OWNER, &sealed).unwrap(), (list(), 3));
+        assert_eq!(inspect(&sealed).unwrap(), 3);
         // Relabelled as another revision, or another account's: refused.
+        let mut relabelled = sealed.clone();
+        relabelled[10..18].copy_from_slice(&4u64.to_be_bytes());
         assert!(matches!(
-            open(&key, OWNER, 4, &sealed),
+            open(&key, OWNER, &relabelled),
             Err(CryptoError::AuthFailed)
         ));
         assert!(matches!(
-            open(&key, OTHER, 3, &sealed),
+            open(&key, OTHER, &sealed),
             Err(CryptoError::AuthFailed)
         ));
         // A name is not a key binding: refused before anything is opened.
-        assert!(open(&key, "owner@kutup.dev", 3, &sealed).is_err());
+        assert!(open(&key, "owner@kutup.dev", &sealed).is_err());
         assert!(seal(&key, "owner@kutup.dev", 3, &list()).is_err());
         let mut old_suite = sealed.clone();
         old_suite[..8].copy_from_slice(b"KUTIP1\0\0");
         old_suite[8..10].copy_from_slice(&1u16.to_be_bytes());
         assert!(inspect(&old_suite).is_err());
-        assert!(open(&derive_key(&[8u8; 32]).unwrap(), OWNER, 3, &sealed).is_err());
+        assert!(open(&derive_key(&[8u8; 32]).unwrap(), OWNER, &sealed).is_err());
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 1;
-        assert!(open(&key, OWNER, 3, &tampered).is_err());
-        inspect(&sealed).unwrap();
+        assert!(open(&key, OWNER, &tampered).is_err());
+        let mut zero = sealed.clone();
+        zero[10..18].copy_from_slice(&0u64.to_be_bytes());
+        assert!(inspect(&zero).is_err());
         assert!(seal(&key, OWNER, 0, &list()).is_err());
     }
 

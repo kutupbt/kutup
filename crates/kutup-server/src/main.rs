@@ -37,6 +37,7 @@ mod openapi;
 mod photos;
 mod public_fetch;
 mod ratelimit;
+mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
 mod server_keys;

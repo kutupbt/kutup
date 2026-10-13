@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use kutup_chat_core::{
-    ChatError, ChatTransport, IdentityPinsRecord, Result as CoreResult, SendOutcome,
+    ChatError, ChatTransport, IdentityPinsRecord, IdentityPinsWrite, Result as CoreResult,
+    SendOutcome,
 };
 use kutup_chat_proto::{
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
@@ -96,12 +97,12 @@ impl ChatTransport for NativeTransport {
         decode(&response.body_json).map(Some)
     }
 
-    async fn store_identity_pins(&self, record: &IdentityPinsRecord) -> CoreResult<bool> {
+    async fn store_identity_pins(&self, write: &IdentityPinsWrite) -> CoreResult<bool> {
         let response = self
             .request(
                 ChatHttpMethod::Put,
                 "/user/identity-pins".into(),
-                Some(encode(record)?),
+                Some(encode(write)?),
             )
             .await?;
         if response.status == 409 {

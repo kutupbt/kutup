@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
-use crate::AppState;
+use crate::{revisions, AppState};
 
 /// Contacts one import may carry, all or nothing.
 const MAX_IMPORT: usize = 500;
@@ -88,6 +88,9 @@ struct Checked {
     summary_text: String,
     signature: Vec<u8>,
     card: Vec<u8>,
+    /// The card's revision (its header's), which the summary's signature
+    /// binds too.
+    revision: i64,
 }
 
 impl Checked {
@@ -119,15 +122,22 @@ fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult
     let card = STANDARD
         .decode(&input.card)
         .map_err(|_| AppError::bad_request("card must be base64"))?;
-    let summary =
-        contact_card::verify_summary(input.summary.as_bytes(), &signature, binding, authority)
-            .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
-    contact_card::inspect_card(&card).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let revision = contact_card::inspect_card(&card)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let summary = contact_card::verify_summary(
+        input.summary.as_bytes(),
+        &signature,
+        binding,
+        revision,
+        authority,
+    )
+    .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
     Ok(Checked {
         summary,
         summary_text: input.summary.clone(),
         signature,
         card,
+        revision: revisions::stored(revision)?,
     })
 }
 
@@ -202,8 +212,8 @@ async fn insert(
     checked: &Checked,
 ) -> AppResult<Uuid> {
     let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO contacts (user_id, uid, name, summary, signature, card)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        "INSERT INTO contacts (user_id, uid, name, summary, signature, card, revision)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (user_id, uid) DO NOTHING
          RETURNING id",
     )
@@ -213,6 +223,7 @@ async fn insert(
     .bind(&checked.summary_text)
     .bind(&checked.signature)
     .bind(&checked.card)
+    .bind(checked.revision)
     .fetch_optional(&mut **tx)
     .await?;
     let id = id.ok_or_else(|| AppError::conflict("a contact with this UID already exists"))?;
@@ -319,19 +330,21 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(fetch(&state, user_id, id).await?)).into_response())
 }
 
-/// A contact replacing the stored one at `revision`.
+/// A contact replacing the stored one at `baseRevision`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContactUpdate {
     pub summary: String,
     pub signature: String,
+    /// The new card; its header's revision must be above `baseRevision`.
     pub card: String,
     /// The revision the edit started from.
-    pub revision: i64,
+    pub base_revision: i64,
 }
 
 /// `PUT /api/contacts/{id}` — replaces a contact (same UID) if nobody changed
-/// it since `revision`.
+/// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
+/// current revision otherwise.
 #[utoipa::path(
     put,
     path = "/api/contacts/{id}",
@@ -377,13 +390,17 @@ pub async fn update(
     if uid != checked.summary.uid {
         return Err(AppError::bad_request("a contact keeps its UID"));
     }
-    if revision != input.revision {
-        return Err(AppError::conflict("this contact was changed elsewhere"));
+    revisions::check_follows(checked.revision as u64, input.base_revision)?;
+    if revision != input.base_revision {
+        return Err(revisions::conflict(
+            "this contact was changed elsewhere",
+            revision,
+        ));
     }
     charge(&mut tx, user_id, checked.charge() - old_charge).await?;
     sqlx::query(
         "UPDATE contacts SET name = $2, summary = $3, signature = $4, card = $5,
-                revision = revision + 1, updated_at = now()
+                revision = $6, updated_at = now()
           WHERE id = $1",
     )
     .bind(id)
@@ -391,6 +408,7 @@ pub async fn update(
     .bind(&checked.summary_text)
     .bind(&checked.signature)
     .bind(&checked.card)
+    .bind(checked.revision)
     .execute(&mut *tx)
     .await?;
     write_index(&mut tx, user_id, id, &checked.summary).await?;

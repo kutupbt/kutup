@@ -1346,9 +1346,23 @@ fn sealed_name(
     id: &str,
     name: &str,
 ) -> String {
+    sealed_name_at(user, kind, id, 1, name)
+}
+
+/// [`sealed_name`] at `revision`.
+fn sealed_name_at(
+    user: &User,
+    kind: kutup_crypto::mail_names::MailNameKind,
+    id: &str,
+    revision: u64,
+    name: &str,
+) -> String {
     let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
     let id = *uuid::Uuid::parse_str(id).unwrap().as_bytes();
-    b64(&kutup_crypto::mail_names::seal_name(&key, &user.binding, kind, &id, name).unwrap())
+    b64(
+        &kutup_crypto::mail_names::seal_name(&key, &user.binding, kind, &id, revision, name)
+            .unwrap(),
+    )
 }
 
 #[test]
@@ -1417,6 +1431,33 @@ fn folders_and_labels() {
     .send()
     .unwrap();
     assert_eq!(r.status().as_u16(), 204);
+    // A rename names the revision it started from: two devices renaming at
+    // once do not overwrite each other, and a name never goes back.
+    let base_url = &base;
+    let rename = |base: Option<i64>, revision: u64, name: &str| {
+        let mut body = json!({ "name": sealed_name_at(&user, Folder, &work, revision, name) });
+        if let Some(base) = base {
+            body["baseNameRevision"] = json!(base);
+        }
+        bearer(
+            c.patch(format!("{base_url}/api/mail/folders/{work}")),
+            &user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    assert_eq!(rename(None, 2, "İş").status().as_u16(), 400);
+    assert_eq!(rename(Some(1), 1, "İş").status().as_u16(), 400);
+    assert_eq!(rename(Some(1), 2, "İş").status().as_u16(), 204);
+    let late = rename(Some(1), 3, "Work");
+    assert_eq!(late.status().as_u16(), 409);
+    let late: Value = late.json().unwrap();
+    assert_eq!(
+        (late["code"].as_str(), late["revision"].as_i64()),
+        (Some("revision_conflict"), Some(2))
+    );
+    assert_eq!(rename(Some(2), 3, "İş yeri").status().as_u16(), 204);
     let places: Value = bearer(c.get(format!("{base}/api/mail/places")), &user.token)
         .send()
         .unwrap()
@@ -1444,7 +1485,8 @@ fn folders_and_labels() {
     let acme_bytes = *uuid::Uuid::parse_str(&acme).unwrap().as_bytes();
     assert_eq!(
         kutup_crypto::mail_names::open_name(&key, &user.binding, Folder, &acme_bytes, &sealed)
-            .unwrap(),
+            .unwrap()
+            .0,
         "Acme"
     );
 

@@ -2,27 +2,33 @@
   "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
   "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
   "contactsKey": "HnhG6nPM2lIwmb3Ap4LHJHXe8s5XFky9SPkxhNIvKJQ=",
+  "revision": 1791633600000,
   "summary": "{\"uid\":\"urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\",\"name\":\"Ayşe Yılmaz\",\"emails\":[{\"address\":\"ayse@example.com\",\"label\":\"work\"},{\"address\":\"ayse@kutup.dev\"}],\"groups\":[\"11111111-1111-4111-8111-111111111111\"],\"pinnedKeys\":[{\"address\":\"ayse@example.com\",\"fingerprint\":\"0123456789abcdef0123456789abcdef01234567\",\"encrypt\":true,\"sign\":false}]}",
-  "signature": "gnSESLP0hAThMqtdkFtNLK4xjL6DusOlzz8bSqlyeg8dBq6jixGO22eHGhz+NJirErd/dh+yNC2fF60i1OG6CQ==",
+  "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA==",
   "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
   "vcard": "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\r\nFN:Ayşe Yılmaz\r\nEMAIL;TYPE=work:ayse@example.com\r\nTEL;TYPE=cell:+90 555 000 00 00\r\nNOTE:Met at the conference\r\nEND:VCARD\r\n",
   "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz",
-  "sealed": "S1VUQ0MyAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY=",
+  "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4=",
   "refusedSignatures": [
     {
       "case": "another account's key binding",
       "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
-      "signature": "gnSESLP0hAThMqtdkFtNLK4xjL6DusOlzz8bSqlyeg8dBq6jixGO22eHGhz+NJirErd/dh+yNC2fF60i1OG6CQ=="
+      "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
     },
     {
       "case": "the account's address instead of its binding",
       "binding": "alice@kutup.dev",
-      "signature": "gnSESLP0hAThMqtdkFtNLK4xjL6DusOlzz8bSqlyeg8dBq6jixGO22eHGhz+NJirErd/dh+yNC2fF60i1OG6CQ=="
+      "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
     },
     {
       "case": "signature changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
-      "signature": "g3SESLP0hAThMqtdkFtNLK4xjL6DusOlzz8bSqlyeg8dBq6jixGO22eHGhz+NJirErd/dh+yNC2fF60i1OG6CQ=="
+      "signature": "pM5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
+    },
+    {
+      "case": "signed for another revision",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "signature": "7Fd2OUDJ5uLCQqf6yLDP+uVqTuqPqBekJ0ZGMDh2Yk98VGNbz93fSaGAmt90xlr/51ac2JK5zUMi+O1L0rHUDw=="
     },
     {
       "case": "version 1, bound to the address",
@@ -40,43 +46,49 @@
       "case": "another account's key binding",
       "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MyAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "the account's address instead of its binding",
       "binding": "alice@kutup.dev",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MyAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "another contact's UID",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "uid": "urn:uuid:00000000-0000-4000-8000-000000000000",
-      "sealed": "S1VUQ0MyAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "magic changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MxAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MxAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "suite changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MyAAAAATMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MyAAAAAQAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
+    },
+    {
+      "case": "revision changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4BMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "nonce changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MyAAAAAjIzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAY="
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D4="
     },
     {
       "case": "ciphertext changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-      "sealed": "S1VUQ0MyAAAAAjMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30LL3SEfi223y6Qlf2iYwJAc="
+      "sealed": "S1VUQ0MyAAAAAgAAAaElry4AMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz7vbIROTb2Ty3ocTlhSgWJkZvrh/iPJ9kj7ye+KraxFCmbpkgytr/ts6OPJA/mU/AkEC0RMSpjm0BobYJE3+o8o3OpU01gmTTvzRbq8jtInjM6B8DZ7W57tBTJg1eqvCot0NOcgKBTDsTRjC7GDL/f890ArABTNfJEfKoKp497OQPduriuw2GXhECq4eKbmAyou3QgjecOsWY5fEqbq6+1SoLO2gC4dZ89RzHdlNhIholF9TYQQzXjnma/8aJcRh46gSNbzld5nfQ1nLhQC/74SY0P8UwPfp+1cECNOhRVFKkx5k/LHB6eOllfPL/Vhc06CAnlcu5R/kjrlByouS+jzNYBmsxrdNNM/OhPV4f+D8="
     },
     {
       "case": "suite 1, bound to the address",
