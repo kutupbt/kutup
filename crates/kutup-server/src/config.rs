@@ -104,7 +104,7 @@ pub struct Config {
     /// (`FEDERATION_TEST_ALLOW_PRIVATE`; APP_ENV=test only).
     pub federation_test_allow_private: bool,
     /// Test stacks: every rate limit's default raised (`RATE_LIMITS_RELAXED`;
-    /// refused in production).
+    /// APP_ENV=test only).
     pub rate_limits_relaxed: bool,
     /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
     /// the server reports no groups, refuses the group routes, and the apps
@@ -316,10 +316,8 @@ impl Config {
             &["development", "test", "production"],
         );
         let rate_limits_relaxed = env.bool("RATE_LIMITS_RELAXED", false);
-        if rate_limits_relaxed && app_env == "production" {
-            env.error(
-                "RATE_LIMITS_RELAXED is for test stacks and is refused when APP_ENV=production",
-            );
+        if rate_limits_relaxed && app_env != "test" {
+            env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
         }
         crate::ratelimit::configure(env, rate_limits_relaxed);
         let federation_test_allow_private = env.bool("FEDERATION_TEST_ALLOW_PRIVATE", false);
@@ -916,6 +914,10 @@ mod env_tests {
             errors(&[("APP_ENV", "test"), ("RATE_LIMITS_RELAXED", "true")]),
             Vec::<String>::new()
         );
+        // Test stacks only: not development (the default) either.
+        assert!(errors(&[("RATE_LIMITS_RELAXED", "true")])
+            .iter()
+            .any(|e| e.starts_with("RATE_LIMITS_RELAXED")));
     }
 
     #[test]

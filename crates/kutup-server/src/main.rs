@@ -123,11 +123,40 @@ pub struct AppState {
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
 }
 
+const USAGE: &str = "usage: kutup-server [serve]
+       kutup-server check-config
+       kutup-server storage-check
+       kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
+       kutup-server federation-identity rotate
+       kutup-server feature-policy rotate <sealed-sender|mls-ordering>";
+
+/// Whether `rest` (the arguments after the program name) is a command this
+/// build has. `orphan-sweep` checks its own flags.
+fn known_command(rest: &[String]) -> bool {
+    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+    matches!(
+        rest.as_slice(),
+        [] | ["serve"]
+            | ["check-config"]
+            | ["storage-check"]
+            | ["orphan-sweep", ..]
+            | ["federation-identity", "rotate"]
+            | ["feature-policy", "rotate", "sealed-sender" | "mls-ordering"]
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = telemetry::init()?;
 
     let args: Vec<String> = std::env::args().collect();
+    // Only a known command runs; anything else (a typo, a subcommand this
+    // build does not have) stops here, before the configuration or the
+    // database is touched, so it can never start a second server.
+    if !known_command(&args[1.min(args.len())..]) {
+        eprintln!("{USAGE}");
+        std::process::exit(2);
+    }
     let config = Config::load();
     // `check-config`: read and check every setting, touch nothing (no
     // database, no migrations). Exit 0, or 2 with every problem listed (from
@@ -2172,4 +2201,42 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("x-kutup-version"),
             axum::http::header::LOCATION,
         ])
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::known_command;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn only_known_commands_start_anything() {
+        for ok in [
+            &[][..],
+            &["serve"],
+            &["check-config"],
+            &["storage-check"],
+            &["orphan-sweep"],
+            &["orphan-sweep", "--delete"],
+            &["federation-identity", "rotate"],
+            &["feature-policy", "rotate", "mls-ordering"],
+        ] {
+            assert!(known_command(&args(ok)), "{ok:?}");
+        }
+        // A typo, a subcommand an older or newer build has, extra words:
+        // never the server.
+        for refused in [
+            &["check-confg"][..],
+            &["serve", "now"],
+            &["check-config", "--verbose"],
+            &["storage-check", "x"],
+            &["federation-identity"],
+            &["feature-policy", "rotate", "drive"],
+            &["--help"],
+        ] {
+            assert!(!known_command(&args(refused)), "{refused:?}");
+        }
+    }
 }

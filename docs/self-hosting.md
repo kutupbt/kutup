@@ -183,7 +183,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_ADMIN_PER_MIN=120
 # RATE_LIMIT_CHAT_KEYS_PER_MIN=30
 # RATE_LIMIT_CHAT_KEYS_IP_PER_MIN=120
-# Test stacks only (refused with APP_ENV=production): every RATE_LIMIT_*
+# Test stacks only (APP_ENV=test only): every RATE_LIMIT_*
 # default raised; explicit values still win.
 # RATE_LIMITS_RELAXED=false
 

@@ -11,7 +11,7 @@ test_admin_password="BackupIntegrationAdmin123!"
 # username:password (the password may hold colons).
 export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 # The live tests sign in many times a minute. This stack runs as production
-# (where RATE_LIMITS_RELAXED is refused), so the limits it meets are raised
+# (RATE_LIMITS_RELAXED is for APP_ENV=test only), so the limits it meets are raised
 # one by one.
 export RATE_LIMIT_LOGIN_PER_MIN=1000
 export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
