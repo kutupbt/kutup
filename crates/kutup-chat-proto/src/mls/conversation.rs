@@ -385,7 +385,6 @@ impl MlsOwnerCandidateV1 {
             || self.conversation_id.is_nil()
             || self.incarnation == 0
             || self.created_at < 0
-            || self.account.server.is_none()
         {
             return Err("MLS owner candidate has invalid identifiers or account".into());
         }
@@ -672,7 +671,7 @@ impl MlsConversationMemberV1 {
             .canonical()
             .parse()
             .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.address || self.address.server.is_none() {
+        if canonical != self.address {
             return Err("MLS member address must be canonical and federated".into());
         }
         if let Some(owner_id) = &self.owner_id {
@@ -703,10 +702,7 @@ impl MlsConversationDeviceV1 {
             .canonical()
             .parse()
             .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.address
-            || self.address.server.is_none()
-            || !(1..=127).contains(&self.device_id)
-        {
+        if canonical != self.address || !(1..=127).contains(&self.device_id) {
             return Err(
                 "MLS conversation device must have a canonical account and id 1-127".into(),
             );
@@ -1069,13 +1065,7 @@ impl CreateMlsConversationRequestV1 {
                 return Err("MLS roster must be strictly ordered by canonical address".into());
             }
             previous = Some(address);
-            member_domains.insert(
-                member
-                    .address
-                    .server
-                    .as_deref()
-                    .expect("validated federated member"),
-            );
+            member_domains.insert(member.address.server.as_str());
             admins += usize::from(member.is_admin);
             if let Some(owner_id) = &member.owner_id {
                 if !owner_ids.insert(owner_id.as_str()) {
@@ -1238,7 +1228,6 @@ impl MlsInvitationFeedbackV1 {
             || self.invited_epoch > i64::MAX as u64
             || self.decided_at < 0
             || canonical != self.member
-            || self.member.server.is_none()
         {
             return Err("MLS invitation feedback has invalid identifiers or member".into());
         }
@@ -1426,11 +1415,7 @@ impl FederatedMlsGenesisReplicaV1 {
         let mut previous_address = None;
         for member in &self.members {
             member.validate()?;
-            let domain = member
-                .address
-                .server
-                .as_deref()
-                .ok_or("federated MLS member is missing its server")?;
+            let domain = member.address.server.as_str();
             if destination_domain.is_some_and(|expected| expected != domain) {
                 return Err(
                     "federated MLS genesis contains members from multiple destinations".into(),
@@ -1463,7 +1448,7 @@ impl FederatedMlsGenesisReplicaV1 {
     pub fn includes_member_domain(&self, domain: &str) -> bool {
         self.members
             .iter()
-            .any(|member| member.address.server.as_deref() == Some(domain))
+            .any(|member| member.address.server == domain)
     }
 }
 
@@ -1679,7 +1664,7 @@ impl MlsMembershipEnvelopeV1 {
             .canonical()
             .parse()
             .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.recipient || self.recipient.server.as_deref() != Some(destination) {
+        if canonical != self.recipient || self.recipient.server != destination {
             return Err(
                 "MLS membership envelope recipient must be canonical and local to its destination"
                     .into(),
@@ -1754,7 +1739,7 @@ impl MlsMembershipDeliveryV1 {
         let mut previous_member = None;
         for member in &self.local_members_after {
             member.validate()?;
-            if member.address.server.as_deref() != Some(self.destination.as_str()) {
+            if member.address.server != self.destination.as_str() {
                 return Err("MLS membership delivery contains a non-local member".into());
             }
             let address = member.address.canonical();
@@ -1774,7 +1759,7 @@ impl MlsMembershipDeliveryV1 {
         if self
             .local_devices_after
             .iter()
-            .any(|device| device.address.server.as_deref() != Some(self.destination.as_str()))
+            .any(|device| device.address.server != self.destination.as_str())
         {
             return Err("MLS membership delivery contains a non-local device".into());
         }

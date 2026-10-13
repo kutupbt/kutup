@@ -120,7 +120,14 @@ fn failed_upload_retries_the_exact_durable_keys_after_reopen() {
     let db_file = TempDb::new();
     let db = db_file.open();
     let mut rng = test_rng();
-    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    let mut session = block_on(Session::generate(
+        db.clone(),
+        "alice@example.test",
+        1,
+        2,
+        &mut rng,
+    ))
+    .unwrap();
     block_on(session.complete_registration(1)).unwrap();
     let server = Rc::new(KeyServer::default());
     server.fail_next_upload.set(true);
@@ -134,7 +141,7 @@ fn failed_upload_retries_the_exact_durable_keys_after_reopen() {
     drop(db);
 
     let reopened_db = db_file.open();
-    let reopened = block_on(Session::open(reopened_db.clone(), "alice", 1)).unwrap();
+    let reopened = block_on(Session::open(reopened_db.clone(), "alice@example.test", 1)).unwrap();
     let mut engine = Engine::new(reopened, server.clone());
     let report = block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
 
@@ -158,7 +165,14 @@ fn the_signed_and_last_resort_pair_rotates_and_the_old_one_goes_after_retention(
     let db_file = TempDb::new();
     let db = db_file.open();
     let mut rng = test_rng();
-    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    let mut session = block_on(Session::generate(
+        db.clone(),
+        "alice@example.test",
+        1,
+        2,
+        &mut rng,
+    ))
+    .unwrap();
     block_on(session.complete_registration(1)).unwrap();
     let server = Rc::new(KeyServer::default());
     let mut engine = Engine::new(session, server.clone());
@@ -202,7 +216,14 @@ fn a_server_that_keeps_mail_for_ever_keeps_replaced_keys_too() {
     let db_file = TempDb::new();
     let db = db_file.open();
     let mut rng = test_rng();
-    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    let mut session = block_on(Session::generate(
+        db.clone(),
+        "alice@example.test",
+        1,
+        2,
+        &mut rng,
+    ))
+    .unwrap();
     block_on(session.complete_registration(1)).unwrap();
     let server = Rc::new(KeyServer::default());
     let mut engine = Engine::new(session, server.clone());
@@ -219,7 +240,14 @@ fn an_interrupted_rotation_publishes_the_same_pair_after_reopen() {
     let db_file = TempDb::new();
     let db = db_file.open();
     let mut rng = test_rng();
-    let mut session = block_on(Session::generate(db.clone(), "alice", 1, 2, &mut rng)).unwrap();
+    let mut session = block_on(Session::generate(
+        db.clone(),
+        "alice@example.test",
+        1,
+        2,
+        &mut rng,
+    ))
+    .unwrap();
     block_on(session.complete_registration(1)).unwrap();
     let server = Rc::new(KeyServer::default());
     let mut engine = Engine::new(session, server.clone());
@@ -237,7 +265,7 @@ fn an_interrupted_rotation_publishes_the_same_pair_after_reopen() {
     drop(db);
 
     let reopened_db = db_file.open();
-    let reopened = block_on(Session::open(reopened_db.clone(), "alice", 1)).unwrap();
+    let reopened = block_on(Session::open(reopened_db.clone(), "alice@example.test", 1)).unwrap();
     let mut engine = Engine::new(reopened, server.clone());
     block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
     assert_eq!(

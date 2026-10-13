@@ -22,9 +22,7 @@ impl PendingMlsOwnerApprovalRequest {
     pub(super) fn validate_durable(&self) -> Result<()> {
         validate_group_id(&self.mls_group_id)?;
         self.request.validate().map_err(ChatError::Db)?;
-        if self.requester.server.is_none()
-            || self.requester.canonical() != self.requester.to_string()
-        {
+        if self.requester.canonical() != self.requester.to_string() {
             return Err(ChatError::Db(
                 "MLS owner approval requester is not canonical and federated".into(),
             ));

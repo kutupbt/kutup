@@ -342,25 +342,9 @@ impl Session {
         Ok(())
     }
 
-    /// Bind a bare account opened from an authenticated local session to the
-    /// server's canonical federation domain. This must happen before any
-    /// account comparison, self-sync encryption, or manifest publication.
-    pub(crate) fn bind_local_server(&mut self, server: &str) -> Result<()> {
-        let validated = kutup_chat_proto::AccountAddress::federated(&self.address.user, server)
-            .map_err(|error| ChatError::Invalid(error.to_string()))?;
-        if self
-            .address
-            .domain
-            .as_deref()
-            .is_some_and(|domain| domain != server)
-        {
-            return Err(ChatError::Invalid(
-                "chat account domain differs from the local server".into(),
-            ));
-        }
-        self.address.domain = Some(server.to_owned());
-        self.account = validated.canonical();
-        Ok(())
+    /// This account's home server.
+    pub fn server(&self) -> &str {
+        &self.address.domain
     }
 
     pub(crate) fn local_identity_public_key(&self) -> PublicKey {
@@ -1150,30 +1134,28 @@ impl Session {
             .await
     }
 
-    /// Identified local delivery keeps the legacy bare username on the wire,
-    /// while the browser binds all libsignal sessions to canonical
-    /// `username@homeserver` addresses. Qualify only bare senders with this
-    /// session's already-validated local domain before choosing the ratchet or
-    /// comparing a linked-device sender with the local account.
+    /// A delivered envelope's sender: always a canonical `username@server`
+    /// address; anything else is refused before any ratchet is chosen.
     pub(crate) fn resolve_delivered_sender(
         &self,
         sender: &str,
         device_id: u32,
     ) -> Result<(String, ChatAddress)> {
-        let mut account: kutup_chat_proto::AccountAddress =
+        let account: kutup_chat_proto::AccountAddress =
             sender
                 .parse()
                 .map_err(|error: kutup_chat_proto::AddressError| {
                     ChatError::Invalid(error.to_string())
                 })?;
-        if account.server.is_none() {
-            if let Some(server) = self.address.domain.as_deref() {
-                account = kutup_chat_proto::AccountAddress::federated(&account.username, server)
-                    .map_err(|error| ChatError::Invalid(error.to_string()))?;
-            }
+        if account.canonical() != sender {
+            return Err(ChatError::Invalid(
+                "delivered sender is not a canonical account address".into(),
+            ));
         }
-        let sender = account.canonical();
-        Ok((sender, ChatAddress::from_account(account, device_id)))
+        Ok((
+            sender.to_owned(),
+            ChatAddress::from_account(account, device_id),
+        ))
     }
 
     pub(crate) async fn inspect_sealed_envelope(
@@ -1654,7 +1636,7 @@ impl Session {
         if let Some(send_ids) = resend_request {
             return Ok(ReceiveOutcome::ResendRequested {
                 id: envelope.id.clone(),
-                peer: from.user.clone(),
+                peer: from.name(),
                 send_ids,
             });
         }

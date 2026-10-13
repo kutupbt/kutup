@@ -53,7 +53,7 @@ pub(super) async fn replicate_genesis(
                 request
                     .members
                     .iter()
-                    .filter(|member| member.address.server.as_deref() == Some(destination.as_str()))
+                    .filter(|member| member.address.server == destination.as_str())
                     .cloned()
                     .collect()
             } else {

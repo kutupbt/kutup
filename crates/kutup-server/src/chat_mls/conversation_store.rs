@@ -27,7 +27,7 @@ impl MlsRepository {
             let mut previous = None;
             for member in &request.members {
                 member.validate().map_err(AppError::bad_request)?;
-                if member.address.server.as_deref() != Some(server_name) {
+                if member.address.server != server_name {
                     return Err(AppError::forbidden(
                         "replicated MLS genesis contains a non-local member",
                     ));
@@ -234,7 +234,7 @@ impl MlsRepository {
         for member in request
             .members
             .iter()
-            .filter(|member| member.address.server.as_deref() == Some(server_name))
+            .filter(|member| member.address.server == server_name)
         {
             let local_user_id: Option<Uuid> =
                 sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
@@ -260,7 +260,7 @@ impl MlsRepository {
             .await?;
         }
         for device in &request.initial_devices {
-            if device.address.server.as_deref() != Some(server_name) {
+            if device.address.server != server_name {
                 continue;
             }
             let local_user_id: Uuid =

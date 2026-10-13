@@ -155,7 +155,7 @@ impl MlsRepository {
             let creator = creator.ok_or_else(|| {
                 AppError::bad_request("local MLS recovery omits its creator binding")
             })?;
-            if creator.0.server.as_deref() != Some(local_domain) {
+            if creator.0.server != local_domain {
                 return Err(AppError::forbidden(
                     "local MLS recovery creator belongs to another server",
                 ));

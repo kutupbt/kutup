@@ -1607,11 +1607,10 @@ impl MlsClient {
             .await?
             .ok_or_else(|| ChatError::Invalid("unknown MLS send id".into()))?;
         let canonical_recipient = recipient.canonical();
-        if recipient.server.is_none()
-            || entry
-                .expected_recipients
-                .binary_search(&canonical_recipient)
-                .is_err()
+        if entry
+            .expected_recipients
+            .binary_search(&canonical_recipient)
+            .is_err()
         {
             return Err(ChatError::Trust(
                 "MLS application recipient is absent from the captured roster".into(),

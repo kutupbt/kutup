@@ -75,9 +75,17 @@ fn invitation_feedback_has_one_canonical_vector() {
         "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
     );
 
-    let mut malformed = feedback;
-    malformed.member = "bob".parse().unwrap();
-    assert!(malformed.validate().is_err());
+    // The bare-username member encoding is refused.
+    let bare = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
+    assert!(serde_json::from_slice::<MlsInvitationFeedbackV1>(bare).is_err());
+    assert!("bob".parse::<AccountAddress>().is_err());
+    // Another member changes the digest.
+    let mut other = feedback;
+    other.member = "carol@b.example".parse().unwrap();
+    assert_ne!(
+        other.feedback_digest().unwrap(),
+        "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
+    );
 }
 
 #[test]
@@ -477,7 +485,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
             next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
             local_members_after: members
                 .iter()
-                .filter(|member| member.address.server.as_deref() == Some(destination))
+                .filter(|member| member.address.server == destination)
                 .cloned()
                 .collect(),
             local_devices_after: vec![MlsConversationDeviceV1 {

@@ -1,6 +1,5 @@
-//! Chat addressing. Federation-ready from day one (`docs/chat-protocol.md`
-//! §13): an address is `user`, an optional `domain`, and a device id. Local v1
-//! leaves `domain` unset; phase 3 populates it, changing routing, not types.
+//! Chat addressing (`docs/chat-protocol.md` §13): an address is `user`, its
+//! home server `domain`, and a device id. There is no bare-username form.
 
 use kutup_chat_proto::{AccountAddress, ConversationId};
 use libsignal_protocol::{DeviceId, ProtocolAddress};
@@ -16,22 +15,14 @@ pub(crate) fn device_id_u8(id: u32) -> Result<DeviceId> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatAddress {
     pub user: String,
-    /// `None` for a local user; `Some(domain)` once federation lands.
-    pub domain: Option<String>,
+    /// The account's home server.
+    pub domain: String,
     pub device_id: u32,
 }
 
 impl ChatAddress {
-    pub fn local(user: impl Into<String>, device_id: u32) -> Self {
-        ChatAddress {
-            user: user.into(),
-            domain: None,
-            device_id,
-        }
-    }
-
-    /// Parse a delivered envelope's `sender` (`user`, or `user@domain` once
-    /// federation lands) plus its device id into an address.
+    /// Parse a canonical `user@domain` account (a delivered envelope's
+    /// `sender`, a session's account) plus a device id into an address.
     pub fn from_sender(sender: &str, device_id: u32) -> Result<Self> {
         let account = sender
             .parse::<AccountAddress>()
@@ -79,7 +70,7 @@ mod tests {
     fn federated_sender_becomes_the_libsignal_account_name() {
         let address = ChatAddress::from_sender("user@kutup.dev", 7).unwrap();
         assert_eq!(address.user, "user");
-        assert_eq!(address.domain.as_deref(), Some("kutup.dev"));
+        assert_eq!(address.domain, "kutup.dev");
         assert_eq!(address.name(), "user@kutup.dev");
         assert_eq!(
             address.conversation(),
@@ -90,5 +81,6 @@ mod tests {
     #[test]
     fn malformed_federated_sender_fails_closed() {
         assert!(ChatAddress::from_sender("user@@kutup.dev", 1).is_err());
+        assert!(ChatAddress::from_sender("user", 1).is_err());
     }
 }

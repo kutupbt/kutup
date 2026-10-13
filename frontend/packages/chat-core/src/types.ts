@@ -289,7 +289,8 @@ export interface ChatAttachmentLedgerEntryV1 {
 
 export interface AccountAddress {
   username: string
-  server?: string
+  /** The account's home server. Every account address carries it. */
+  server: string
 }
 
 export type ConversationId =
@@ -308,7 +309,7 @@ export interface ChangeMark {
 export interface ChatHistoryEntry {
   id: string
   conversation: ConversationId
-  /** @deprecated Use conversation. */
+  /** Direct: the other account. Group: the sender's account for an incoming entry, the group id for an outgoing one. */
   peer: string
   direction: 'incoming' | 'outgoing'
   senderDeviceId?: number

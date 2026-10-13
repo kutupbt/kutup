@@ -209,7 +209,7 @@ impl ChatMediaDeliveryOfferV1 {
         let recipient = AccountAddress::from_str(&self.recipient)
             .map_err(|error| format!("invalid Chat media recipient: {error}"))?;
         if recipient.canonical() != self.recipient
-            || recipient.server.as_deref() != Some(self.destination_domain.as_str())
+            || recipient.server != self.destination_domain.as_str()
         {
             return Err("Chat media offer recipient is not canonical for destination".into());
         }
@@ -473,7 +473,7 @@ impl ChatAttachmentLedgerEntryV1 {
             ChatMediaConversationKindV1::Direct | ChatMediaConversationKindV1::NoteToSelf => {
                 let address = AccountAddress::from_str(&self.conversation_reference)
                     .map_err(|error| error.to_string())?;
-                if address.server.is_none() || address.canonical() != self.conversation_reference {
+                if address.canonical() != self.conversation_reference {
                     return Err("Chat attachment account reference is not canonical".into());
                 }
             }

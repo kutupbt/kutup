@@ -705,10 +705,7 @@ pub(super) fn build_governance_deliveries(
         let recipient: AccountAddress = address
             .parse()
             .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-        let destination = recipient
-            .server
-            .clone()
-            .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+        let destination = recipient.server.clone();
         devices_by_domain
             .entry(destination.clone())
             .or_default()
@@ -734,7 +731,7 @@ pub(super) fn build_governance_deliveries(
     for destination in &next_domains {
         let mut local_members_after = next_roster
             .iter()
-            .filter(|member| member.address.server.as_deref() == Some(destination.as_str()))
+            .filter(|member| member.address.server == destination.as_str())
             .cloned()
             .collect::<Vec<_>>();
         local_members_after.sort_by_key(|member| member.address.canonical());

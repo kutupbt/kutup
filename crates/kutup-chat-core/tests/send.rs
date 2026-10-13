@@ -383,7 +383,7 @@ impl ChatTransport for MockServer {
                 mailbox.push(DeliveredEnvelope {
                     id: format!("sync-{}-{}", req.send_id, envelope.device_id),
                     cursor: first_cursor + offset as u64,
-                    sender: Some("alice".into()),
+                    sender: Some("alice@example.test".into()),
                     sealed_sender: false,
                     sender_device_id: req.sender_device_id,
                     envelope_type: envelope.envelope_type,
@@ -475,16 +475,14 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     let server = Rc::new(MockServer::default());
     let authority = AccountAuthority::derive(&[12; 32]).unwrap();
 
-    let mut first = Engine::new(device("alice", 1, &mut rng), server.clone());
-    first.set_local_server("example.test").unwrap();
+    let mut first = Engine::new(device("alice@example.test", 1, &mut rng), server.clone());
     let v1 = block_on(first.sync_own_manifest(&authority, "2026-07-15T12:00:00Z")).unwrap();
     assert_eq!(v1.sequence, 1);
     assert_eq!(v1.devices.len(), 1);
     assert_eq!(v1.devices[0].device_id, 1);
     assert!(v1.devices[0].mls.is_some());
 
-    let mut second = Engine::new(device("alice", 2, &mut rng), server);
-    second.set_local_server("example.test").unwrap();
+    let mut second = Engine::new(device("alice@example.test", 2, &mut rng), server);
     let v2 = block_on(second.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
     assert_eq!(v2.sequence, 2);
     assert_eq!(
@@ -510,7 +508,7 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
 #[test]
 fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 2, &mut rng);
+    let mut bob = device("bob@example.test", 2, &mut rng);
     let registration = bob.registration().unwrap().clone();
     // A sender that fetched Bob's keys before the rotation and found no
     // one-time key left: only the signed and last-resort keys.
@@ -524,8 +522,8 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
     fresh.kyber_pre_key = rotated.last_resort_kyber_pre_key.clone().unwrap();
     assert_ne!(fresh.signed_pre_key.key_id, stale.signed_pre_key.key_id);
 
-    let bob_addr = ChatAddress::local("bob", 2);
-    for (name, bundle) in [("old", &stale), ("new", &fresh)] {
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 2).unwrap();
+    for (name, bundle) in [("old@example.test", &stale), ("new@example.test", &fresh)] {
         let mut sender = device(name, 1, &mut rng);
         block_on(sender.establish(&bob_addr, bundle, &mut rng)).unwrap();
         let content = ChatContent::text_with_id("m1", "2026-10-06T10:00:00Z", 1, name);
@@ -533,7 +531,7 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
             block_on(sender.encrypt(&bob_addr, bundle.registration_id, &content, &mut rng))
                 .unwrap();
         let read = block_on(bob.decrypt(
-            &ChatAddress::local(name, 1),
+            &ChatAddress::from_sender(name, 1).unwrap(),
             &wrap(&envelope, name),
             &mut rng,
         ))
@@ -553,14 +551,14 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
         one_time_kyber,
         registration.last_resort_kyber_pre_key.key_id
     );
-    let mut carol = device("carol", 1, &mut rng);
+    let mut carol = device("carol@example.test", 1, &mut rng);
     block_on(carol.establish(&bob_addr, &one_time, &mut rng)).unwrap();
     let content = ChatContent::text_with_id("m2", "2026-10-06T10:00:00Z", 1, "one-time");
     let envelope =
         block_on(carol.encrypt(&bob_addr, one_time.registration_id, &content, &mut rng)).unwrap();
     block_on(bob.decrypt(
-        &ChatAddress::local("carol", 1),
-        &wrap(&envelope, "carol"),
+        &ChatAddress::from_sender("carol@example.test", 1).unwrap(),
+        &wrap(&envelope, "carol@example.test"),
         &mut rng,
     ))
     .unwrap();
@@ -574,7 +572,7 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
 #[test]
 fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     let mut rng = test_rng();
-    let bob = device("bob", 1, &mut rng);
+    let bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let manifest = signed_manifest("bob@example.test", &bundle);
     let server = Rc::new(MockServer::default());
@@ -585,7 +583,7 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
     let alice_session = block_on(Session::generate(
         alice_db.clone(),
-        "alice",
+        "alice@example.test",
         1,
         10,
         &mut rng,
@@ -602,15 +600,15 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     let msg = ChatContent::text_with_id("secure-1", "secure-1", 1, "manifest required");
 
     assert!(matches!(
-        block_on(alice.send("secure-1", "bob", &msg, &mut rng)),
+        block_on(alice.send("secure-1", "bob@example.test", &msg, &mut rng)),
         Err(ChatError::Trust(_))
     ));
     assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
 
     let msg = ChatContent::text_with_id("secure-2", "secure-1", 1, "manifest required");
-    let summary = block_on(alice.send("secure-2", "bob", &msg, &mut rng)).unwrap();
+    let summary = block_on(alice.send("secure-2", "bob@example.test", &msg, &mut rng)).unwrap();
     assert!(summary.delivered);
-    let pin = block_on(alice_db.load_manifest_trust("bob"))
+    let pin = block_on(alice_db.load_manifest_trust("bob@example.test"))
         .unwrap()
         .unwrap();
     assert_eq!(pin.highest_sequence, 1);
@@ -621,14 +619,14 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
 #[test]
 fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 2, &mut rng);
+    let mut bob = device("bob@example.test", 2, &mut rng);
     let bundle = bundle_of(&bob, 2);
     let server = Rc::new(MockServer::default());
     // One fetch is scripted; a second gets no devices and the send fails.
     server.script(vec![vec![bundle.clone()], vec![]]);
     server.script_manifests(vec![Some(signed_manifest("bob@example.test", &bundle))]);
     server.set_active(vec![(2, reg_id(&bob))]);
-    let alice_session = device("alice", 1, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
     let alice_reg = reg_id(&alice_session);
     let alice_bundle = bundle_of(&alice_session, 1);
     server.script_sync(vec![vec![alice_bundle.clone()]]);
@@ -638,11 +636,11 @@ fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
     ))]);
     server.set_sync_active(vec![(1, alice_reg)]);
     let mut alice = Engine::new(alice_session, server.clone());
-    let alice_addr = ChatAddress::local("alice", 1);
+    let alice_addr = ChatAddress::from_sender("alice@example.test", 1).unwrap();
 
     block_on(alice.send(
         "v1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("v1", "t", 1, "one"),
         &mut rng,
     ))
@@ -653,12 +651,12 @@ fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
     let mut same = ChatContent::text_with_id("m3", "t", 1, "same list");
     same.set_device_list_version(1);
     let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &same, &mut rng)).unwrap();
-    deposit(&server, &envelope, "bob", 2, 1);
+    deposit(&server, &envelope, "bob@example.test", 2, 1);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     assert!(
         block_on(alice.send(
             "v2",
-            "bob",
+            "bob@example.test",
             &ChatContent::text_with_id("v2", "t", 2, "two"),
             &mut rng
         ))
@@ -670,12 +668,12 @@ fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
     let mut newer = ChatContent::text_with_id("m4", "t", 2, "new list");
     newer.set_device_list_version(2);
     let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &newer, &mut rng)).unwrap();
-    deposit(&server, &envelope, "bob", 2, 2);
+    deposit(&server, &envelope, "bob@example.test", 2, 2);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     assert!(
         block_on(alice.send(
             "v3",
-            "bob",
+            "bob@example.test",
             &ChatContent::text_with_id("v3", "t", 3, "three"),
             &mut rng
         ))
@@ -687,8 +685,8 @@ fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
 #[test]
 fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
     let mut rng = test_rng();
-    let bob1 = device("bob", 1, &mut rng);
-    let bob2 = device("bob", 2, &mut rng);
+    let bob1 = device("bob@example.test", 1, &mut rng);
+    let bob2 = device("bob@example.test", 2, &mut rng);
     let b1 = bundle_of(&bob1, 1);
     let b2 = bundle_of(&bob2, 2);
     let server = Rc::new(MockServer::default());
@@ -696,7 +694,7 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
     server.script_manifests(vec![Some(signed_manifest("bob@example.test", &b1))]);
     server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server);
+    let mut alice = Engine::new(device("alice@example.test", 1, &mut rng), server);
     let msg = ChatContent::text_with_id(
         "secure-injection",
         "secure-injection",
@@ -704,7 +702,7 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
         "reject injection",
     );
     assert!(matches!(
-        block_on(alice.send("secure-injection", "bob", &msg, &mut rng)),
+        block_on(alice.send("secure-injection", "bob@example.test", &msg, &mut rng)),
         Err(ChatError::Trust(_))
     ));
     assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
@@ -715,22 +713,21 @@ fn first_contact_safety_number_authenticates_and_pins_the_remote_manifest() {
     let mut rng = test_rng();
     let local_authority = AccountAuthority::derive(&[30; 32]).unwrap();
     let peer_authority = AccountAuthority::derive(&[40; 32]).unwrap();
-    let bob = device("bob", 1, &mut rng);
+    let bob = device("bob@example.test", 1, &mut rng);
     let manifest =
         signed_manifest_with_authority("bob@example.test", &bundle_of(&bob, 1), &peer_authority);
     let server = Rc::new(MockServer::default());
     *server.own_manifest.borrow_mut() = Some(manifest.clone());
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
-    alice.set_local_server("example.test").unwrap();
-    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    let mut alice = Engine::new(device("alice@example.test", 1, &mut rng), server.clone());
+    let safety = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Tofu);
     assert_eq!(safety.authority_key_id, manifest.authority_key_id);
 
     // The pin is durable: a later safety-number render does not depend on the
     // remote server continuing to return the manifest.
     *server.own_manifest.borrow_mut() = None;
-    let repeated = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    let repeated = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(repeated.qr_payload, safety.qr_payload);
 }
 
@@ -744,8 +741,8 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     let local_authority = AccountAuthority::derive(&[31; 32]).unwrap();
     let old_authority = AccountAuthority::derive(&[41; 32]).unwrap();
     let new_authority = AccountAuthority::derive(&[42; 32]).unwrap();
-    let bob_old = device("bob", 1, &mut rng);
-    let bob_new = device("bob", 1, &mut rng);
+    let bob_old = device("bob@example.test", 1, &mut rng);
+    let bob_new = device("bob@example.test", 1, &mut rng);
     let old_bundle = bundle_of(&bob_old, 1);
     let new_bundle = bundle_of(&bob_new, 1);
     let old_manifest =
@@ -758,8 +755,14 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     server.set_active(vec![(1, old_bundle.registration_id)]);
 
     let alice_db = Rc::new(SqliteChatDb::open(&path).unwrap());
-    let mut alice_session =
-        block_on(Session::generate(alice_db, "alice", 1, 10, &mut rng)).unwrap();
+    let mut alice_session = block_on(Session::generate(
+        alice_db,
+        "alice@example.test",
+        1,
+        10,
+        &mut rng,
+    ))
+    .unwrap();
     let alice_bundle = bundle_of(&alice_session, 1);
     block_on(alice_session.complete_registration(1)).unwrap();
     server.script_sync(vec![vec![alice_bundle.clone()]]);
@@ -770,15 +773,14 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     ))]);
     server.set_sync_active(vec![(1, alice_bundle.registration_id)]);
     let mut alice = Engine::new(alice_session, server.clone());
-    alice.set_local_server("example.test").unwrap();
     block_on(alice.send(
         "identity-old",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("identity-old", "identity-old", 1, "old identity"),
         &mut rng,
     ))
     .unwrap();
-    let old_qr = block_on(alice.safety_number(&local_authority, "bob"))
+    let old_qr = block_on(alice.safety_number(&local_authority, "bob@example.test"))
         .unwrap()
         .qr_payload;
 
@@ -789,7 +791,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     assert!(matches!(
         block_on(alice.send(
             "identity-replaced",
-            "bob",
+            "bob@example.test",
             &ChatContent::text_with_id(
                 "identity-replaced",
                 "identity-replaced",
@@ -813,9 +815,15 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     drop(alice);
 
     let reopened_db = Rc::new(SqliteChatDb::open(&path).unwrap());
-    let mut reopened = block_on(Engine::open(reopened_db.clone(), server, "alice", 1)).unwrap();
-    reopened.set_local_server("example.test").unwrap();
-    let quarantined = block_on(reopened.safety_number(&local_authority, "bob")).unwrap();
+    let mut reopened = block_on(Engine::open(
+        reopened_db.clone(),
+        server,
+        "alice@example.test",
+        1,
+    ))
+    .unwrap();
+    let quarantined =
+        block_on(reopened.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(quarantined.trust, AuthorityTrust::Quarantined);
     assert_eq!(quarantined.authority_key_id, new_manifest.authority_key_id);
     assert_eq!(
@@ -823,29 +831,36 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         Some(old_manifest.authority_key_id.as_str())
     );
     assert!(matches!(
-        block_on(reopened.verify_safety_number(&local_authority, "bob", &old_qr)),
+        block_on(reopened.verify_safety_number(&local_authority, "bob@example.test", &old_qr)),
         Err(ChatError::Trust(_))
     ));
 
-    let verified =
-        block_on(reopened.verify_safety_number(&local_authority, "bob", &quarantined.qr_payload))
-            .unwrap();
+    let verified = block_on(reopened.verify_safety_number(
+        &local_authority,
+        "bob@example.test",
+        &quarantined.qr_payload,
+    ))
+    .unwrap();
     assert_eq!(verified.trust, AuthorityTrust::Verified);
     assert_eq!(verified.authority_key_id, new_manifest.authority_key_id);
-    assert!(
-        block_on(reopened_db.load_manifest_history("bob", &old_manifest.incarnation_id, 1,))
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        block_on(reopened_db.load_manifest_history("bob", &new_manifest.incarnation_id, 1,))
-            .unwrap()
-            .is_some()
-    );
+    assert!(block_on(reopened_db.load_manifest_history(
+        "bob@example.test",
+        &old_manifest.incarnation_id,
+        1,
+    ))
+    .unwrap()
+    .is_some());
+    assert!(block_on(reopened_db.load_manifest_history(
+        "bob@example.test",
+        &new_manifest.incarnation_id,
+        1,
+    ))
+    .unwrap()
+    .is_some());
 
     block_on(reopened.send(
         "identity-new",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("identity-new", "identity-new", 3, "new identity accepted"),
         &mut rng,
     ))
@@ -857,8 +872,8 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
 #[test]
 fn fans_out_to_two_devices_and_recovers_missing() {
     let mut rng = test_rng();
-    let mut bob1 = device("bob", 1, &mut rng);
-    let mut bob2 = device("bob", 2, &mut rng);
+    let mut bob1 = device("bob@example.test", 1, &mut rng);
+    let mut bob2 = device("bob@example.test", 2, &mut rng);
     let (b1, b2) = (bundle_of(&bob1, 1), bundle_of(&bob2, 2));
 
     let server = Rc::new(MockServer::default());
@@ -866,9 +881,10 @@ fn fans_out_to_two_devices_and_recovers_missing() {
     server.script(vec![vec![b1.clone()], vec![b1.clone(), b2.clone()]]);
     server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
 
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let msg = ChatContent::text_with_id("s1", "t", 1, "hi both devices");
-    let summary = block_on(alice.send("s1", "bob", &msg, &mut rng)).unwrap();
+    let summary = block_on(alice.send("s1", "bob@example.test", &msg, &mut rng)).unwrap();
 
     assert!(summary.delivered);
     assert_eq!(summary.attempts, 2, "one 409 recovery round, then success");
@@ -879,7 +895,7 @@ fn fans_out_to_two_devices_and_recovers_missing() {
         "outbox drained"
     );
 
-    let alice_addr = ChatAddress::local("alice", 1);
+    let alice_addr = ChatAddress::from_sender("alice@example.test", 1).unwrap();
     let delivered = server.last_delivered();
     assert_eq!(delivered.len(), 2, "both devices addressed");
     assert_eq!(
@@ -901,8 +917,8 @@ fn fans_out_to_two_devices_and_recovers_missing() {
 #[test]
 fn drops_extra_device() {
     let mut rng = test_rng();
-    let mut bob1 = device("bob", 1, &mut rng);
-    let bob2 = device("bob", 2, &mut rng);
+    let mut bob1 = device("bob@example.test", 1, &mut rng);
+    let bob2 = device("bob@example.test", 2, &mut rng);
     let (b1, b2) = (bundle_of(&bob1, 1), bundle_of(&bob2, 2));
 
     let server = Rc::new(MockServer::default());
@@ -910,9 +926,10 @@ fn drops_extra_device() {
     server.script(vec![vec![b1.clone(), b2.clone()], vec![b1.clone()]]);
     server.set_active(vec![(1, reg_id(&bob1))]);
 
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let msg = ChatContent::text_with_id("s2", "t", 1, "only device one is real");
-    let summary = block_on(alice.send("s2", "bob", &msg, &mut rng)).unwrap();
+    let summary = block_on(alice.send("s2", "bob@example.test", &msg, &mut rng)).unwrap();
 
     assert!(summary.delivered);
     assert_eq!(summary.attempts, 2);
@@ -922,7 +939,7 @@ fn drops_extra_device() {
     assert_eq!(
         decrypt_for(
             &mut bob1,
-            &ChatAddress::local("alice", 1),
+            &ChatAddress::from_sender("alice@example.test", 1).unwrap(),
             &delivered,
             1,
             &mut rng
@@ -937,20 +954,21 @@ fn drops_extra_device() {
 #[test]
 fn a_second_message_does_not_fetch_keys_again() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 1, &mut rng);
+    let mut bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     // One fetch is scripted with Bob's bundle; a second would get no devices
     // at all and the send would fail.
     server.script(vec![vec![bundle], vec![]]);
     server.set_active(vec![(1, reg_id(&bob))]);
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    let alice_addr = ChatAddress::local("alice", 1);
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
+    let alice_addr = ChatAddress::from_sender("alice@example.test", 1).unwrap();
 
     for (send_id, seq, text) in [("k1", 1, "first"), ("k2", 2, "second"), ("k3", 3, "third")] {
         let summary = block_on(alice.send(
             send_id,
-            "bob",
+            "bob@example.test",
             &ChatContent::text_with_id(send_id, "t", seq, text),
             &mut rng,
         ))
@@ -1008,8 +1026,8 @@ fn corrupted(env: &kutup_chat_proto::OutgoingEnvelope) -> kutup_chat_proto::Outg
 #[test]
 fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1022,7 +1040,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     // An established conversation: Alice writes, Bob accepts and answers.
     block_on(alice.send(
         "r1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r1", "t", 1, "hello"),
         &mut rng,
     ))
@@ -1030,20 +1048,26 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     deposit(
         &bob_server,
         &alice_server.last_delivered()[0],
-        "alice",
+        "alice@example.test",
         1,
         1,
     );
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "t", &mut rng)).unwrap();
     block_on(bob.send(
         "r2",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("r2", "t", 1, "hi"),
         &mut rng,
     ))
     .unwrap();
-    deposit(&alice_server, &bob_server.last_delivered()[0], "bob", 2, 1);
+    deposit(
+        &alice_server,
+        &bob_server.last_delivered()[0],
+        "bob@example.test",
+        2,
+        1,
+    );
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     let sent_before = bob_server.delivered.borrow().len();
     let sent_history_before = block_on(bob.session().sent_history()).unwrap().len();
@@ -1051,7 +1075,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     // Alice's next message reaches Bob unreadable.
     block_on(alice.send(
         "r3",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r3", "t", 2, "lost"),
         &mut rng,
     ))
@@ -1059,7 +1083,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     let broken = deposit(
         &bob_server,
         &corrupted(&alice_server.last_delivered()[0]),
-        "alice",
+        "alice@example.test",
         1,
         2,
     );
@@ -1068,7 +1092,10 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     assert_eq!(report.repaired, vec![broken.clone()]);
     assert_eq!(report.messages.len(), 1);
     assert!(report.messages[0].content.is_undecryptable());
-    assert_eq!(report.messages[0].from, ChatAddress::local("alice", 1));
+    assert_eq!(
+        report.messages[0].from,
+        ChatAddress::from_sender("alice@example.test", 1).unwrap()
+    );
     assert!(bob_server.sync_mailbox.borrow().is_empty(), "it was acked");
     assert!(block_on(bob.inbound_attention()).unwrap().is_empty());
     let history = block_on(bob.session().history()).unwrap();
@@ -1088,7 +1115,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
         refresh[0].envelope_type,
         kutup_chat_proto::EnvelopeType::PreKey
     );
-    deposit(&alice_server, &refresh[0], "bob", 2, 2);
+    deposit(&alice_server, &refresh[0], "bob@example.test", 2, 2);
     let report = block_on(alice.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty() && report.errors.is_empty());
     assert_eq!(report.suppressed.len(), 1);
@@ -1097,7 +1124,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     // What Alice writes next travels under the fresh session and reads.
     block_on(alice.send(
         "r4",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r4", "t", 3, "again"),
         &mut rng,
     ))
@@ -1105,7 +1132,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     deposit(
         &bob_server,
         &alice_server.last_delivered()[0],
-        "alice",
+        "alice@example.test",
         1,
         3,
     );
@@ -1118,7 +1145,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     bob.forget_run_state_for_testing();
     block_on(alice.send(
         "r5",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r5", "t", 4, "lost too"),
         &mut rng,
     ))
@@ -1126,7 +1153,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     let broken = deposit(
         &bob_server,
         &corrupted(&alice_server.last_delivered()[0]),
-        "alice",
+        "alice@example.test",
         1,
         4,
     );
@@ -1137,7 +1164,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     assert_eq!(block_on(bob.session().history()).unwrap().len(), 3);
     block_on(alice.send(
         "r6",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r6", "t", 5, "still fine"),
         &mut rng,
     ))
@@ -1145,7 +1172,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     deposit(
         &bob_server,
         &alice_server.last_delivered()[0],
-        "alice",
+        "alice@example.test",
         1,
         5,
     );
@@ -1207,8 +1234,8 @@ fn waiting_records(engine: &Engine) -> Vec<(Option<String>, bool)> {
 fn a_message_still_waited_for_is_asked_for_again_and_given_up_on_after_a_week() {
     const MINUTE: i64 = 60 * 1000;
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1221,30 +1248,37 @@ fn a_message_still_waited_for_is_asked_for_again_and_given_up_on_after_a_week() 
 
     block_on(alice.send(
         "g1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("g1", "t", 1, "hello"),
         &mut rng,
     ))
     .unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        1,
+        false,
+    );
     block_on(bob.receive(&mut rng)).unwrap();
-    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "t", &mut rng)).unwrap();
     block_on(bob.send(
         "g2",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("g2", "t", 1, "hi"),
         &mut rng,
     ))
     .unwrap();
-    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
     // A message arrives unreadable; Alice never answers (the ask is not
     // relayed to her).
     let lost_id = "33333333-3333-4333-8333-333333333333";
     let message = ChatContent::text_with_id(lost_id, "2026-10-06T09:00:00Z", 2, "lost in transit");
-    block_on(alice.send(lost_id, "bob", &message, &mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(alice.send(lost_id, "bob@example.test", &message, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice@example.test", 1, 2, true);
     block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(
         waiting_records(&bob),
@@ -1291,8 +1325,8 @@ fn a_message_still_waited_for_is_asked_for_again_and_given_up_on_after_a_week() 
 #[test]
 fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1304,32 +1338,39 @@ fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
 
     block_on(alice.send(
         "g1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("g1", "t", 1, "hello"),
         &mut rng,
     ))
     .unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        1,
+        false,
+    );
     block_on(bob.receive(&mut rng)).unwrap();
-    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "t", &mut rng)).unwrap();
     block_on(bob.send(
         "g2",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("g2", "t", 1, "hi"),
         &mut rng,
     ))
     .unwrap();
-    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
     let lost_id = "44444444-4444-4444-8444-444444444444";
     let message =
         ChatContent::text_with_id(lost_id, "2026-10-06T09:00:00Z", 2, "too big to wrap, say");
-    block_on(alice.send(lost_id, "bob", &message, &mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(alice.send(lost_id, "bob@example.test", &message, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice@example.test", 1, 2, true);
     block_on(bob.receive(&mut rng)).unwrap();
     // Bob's request reaches Alice, which also takes the fresh session.
-    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 2, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
     // Alice answers that this one cannot be had again.
@@ -1343,8 +1384,15 @@ fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
             send_ids: vec![lost_id.to_string()],
         },
     );
-    block_on(alice.send(control_id, "bob", &lost, &mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    block_on(alice.send(control_id, "bob@example.test", &lost, &mut rng)).unwrap();
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        3,
+        false,
+    );
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty() && report.errors.is_empty());
     // The notice stays, no longer waiting: it says the message is lost.
@@ -1357,8 +1405,8 @@ fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
 #[test]
 fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1370,37 +1418,44 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
 
     block_on(alice.send(
         "f1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("f1", "t", 1, "hello"),
         &mut rng,
     ))
     .unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        1,
+        false,
+    );
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "t", &mut rng)).unwrap();
     block_on(bob.send(
         "f2",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("f2", "t", 1, "hi"),
         &mut rng,
     ))
     .unwrap();
-    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 1, false);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
 
     // Alice's message reaches Bob unreadable. A record waits in its place
     // and Bob asks for exactly that message.
     let lost = "11111111-1111-4111-8111-111111111111";
     let content = ChatContent::text_with_id(lost, "2026-10-04T09:00:00.000Z", 2, "lost");
-    block_on(alice.send(lost, "bob", &content, &mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(alice.send(lost, "bob@example.test", &content, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice@example.test", 1, 2, true);
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(report.repaired.len(), 1);
     assert_eq!(undecryptable_records(&bob), vec![Some(lost.to_string())]);
 
     // Alice answers from her sent history, without anyone doing anything.
     let alice_sent = alice_server.delivered.borrow().len();
-    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 2, false);
     let report = block_on(alice.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty() && report.errors.is_empty());
     assert_eq!(alice_server.delivered.borrow().len(), alice_sent + 1);
@@ -1408,7 +1463,14 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     let alice_history = block_on(alice.session().sent_history()).unwrap().len();
 
     // The message arrives as itself, where it belongs, and the record goes.
-    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        3,
+        false,
+    );
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(report.messages.len(), 1);
     assert_eq!(report.messages[0].content.as_text().unwrap().text, "lost");
@@ -1423,7 +1485,7 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     // Asked a second time within the hour, Alice does not send it again,
     // even after a reload.
     alice.forget_run_state_for_testing();
-    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 2, false);
     alice_server
         .sync_mailbox
         .borrow_mut()
@@ -1442,8 +1504,8 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
 #[test]
 fn a_record_stops_waiting_for_something_that_was_never_a_message() {
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1455,22 +1517,29 @@ fn a_record_stops_waiting_for_something_that_was_never_a_message() {
 
     block_on(alice.send(
         "g1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("g1", "t", 1, "hello"),
         &mut rng,
     ))
     .unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 1, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        1,
+        false,
+    );
     block_on(bob.receive(&mut rng)).unwrap();
-    block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "t", &mut rng)).unwrap();
     block_on(bob.send(
         "g2",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("g2", "t", 1, "hi"),
         &mut rng,
     ))
     .unwrap();
-    relay(&bob_server, &alice_server, "bob", 2, 1, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
     // A typing indicator arrives unreadable. Bob cannot tell it from a
@@ -1478,17 +1547,24 @@ fn a_record_stops_waiting_for_something_that_was_never_a_message() {
     // so, and the record goes.
     let typing_id = "22222222-2222-4222-8222-222222222222";
     let typing = ChatContent::typing_with_id(typing_id, "2026-10-04T09:00:00Z", 2, true);
-    block_on(alice.send(typing_id, "bob", &typing, &mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 2, true);
+    block_on(alice.send(typing_id, "bob@example.test", &typing, &mut rng)).unwrap();
+    relay(&alice_server, &bob_server, "alice@example.test", 1, 2, true);
     block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(
         undecryptable_records(&bob),
         vec![Some(typing_id.to_string())]
     );
 
-    relay(&bob_server, &alice_server, "bob", 2, 2, false);
+    relay(&bob_server, &alice_server, "bob@example.test", 2, 2, false);
     block_on(alice.receive(&mut rng)).unwrap();
-    relay(&alice_server, &bob_server, "alice", 1, 3, false);
+    relay(
+        &alice_server,
+        &bob_server,
+        "alice@example.test",
+        1,
+        3,
+        false,
+    );
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty() && report.errors.is_empty());
     assert!(undecryptable_records(&bob).is_empty());
@@ -1498,8 +1574,8 @@ fn a_record_stops_waiting_for_something_that_was_never_a_message() {
 #[test]
 fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
     let mut rng = test_rng();
-    let alice_session = device("alice", 1, &mut rng);
-    let bob_session = device("bob", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let bob_session = device("bob@example.test", 2, &mut rng);
     let alice_server = Rc::new(MockServer::default());
     alice_server.script(vec![vec![bundle_of(&bob_session, 2)]]);
     alice_server.set_active(vec![(2, reg_id(&bob_session))]);
@@ -1509,7 +1585,7 @@ fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
 
     block_on(alice.send(
         "s1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("s1", "t", 1, "hello"),
         &mut rng,
     ))
@@ -1517,7 +1593,7 @@ fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
     let broken = deposit(
         &bob_server,
         &corrupted(&alice_server.last_delivered()[0]),
-        "alice",
+        "alice@example.test",
         1,
         1,
     );
@@ -1532,20 +1608,21 @@ fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
 #[test]
 fn reinstalled_peer_rekeys_and_flags_safety_number() {
     let mut rng = test_rng();
-    let mut bob_v1 = device("bob", 1, &mut rng);
+    let mut bob_v1 = device("bob@example.test", 1, &mut rng);
     let b_v1 = bundle_of(&bob_v1, 1);
 
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![b_v1.clone()]]);
     server.set_active(vec![(1, reg_id(&bob_v1))]);
 
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    let alice_addr = ChatAddress::local("alice", 1);
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
+    let alice_addr = ChatAddress::from_sender("alice@example.test", 1).unwrap();
 
     // First conversation with the original install.
     let s1 = block_on(alice.send(
         "r1",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r1", "t", 1, "hello v1"),
         &mut rng,
     ))
@@ -1566,7 +1643,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     );
 
     // Bob reinstalls: brand-new identity + registration id, same device id.
-    let mut bob_v2 = device("bob", 1, &mut rng);
+    let mut bob_v2 = device("bob@example.test", 1, &mut rng);
     let b_v2 = bundle_of(&bob_v2, 1);
     // Alice still holds her session with v1 and sends with it, without
     // fetching; the 409 makes her fetch, and that fetch serves v2.
@@ -1575,7 +1652,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
 
     let s2 = block_on(alice.send(
         "r2",
-        "bob",
+        "bob@example.test",
         &ChatContent::text_with_id("r2", "t", 2, "hello v2"),
         &mut rng,
     ))
@@ -1584,7 +1661,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     assert_eq!(s2.attempts, 2, "stale 409 → re-key → resend");
     assert_eq!(
         s2.safety_number_changes,
-        vec![ChatAddress::local("bob", 1)],
+        vec![ChatAddress::from_sender("bob@example.test", 1).unwrap()],
         "the reinstall surfaces a safety-number change"
     );
     // The re-keyed message decrypts on the NEW install.
@@ -1606,7 +1683,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
 #[test]
 fn outbox_persists_across_failure_and_flush_resends() {
     let mut rng = test_rng();
-    let mut bob1 = device("bob", 1, &mut rng);
+    let mut bob1 = device("bob@example.test", 1, &mut rng);
     let b1 = bundle_of(&bob1, 1);
 
     let server = Rc::new(MockServer::default());
@@ -1614,11 +1691,12 @@ fn outbox_persists_across_failure_and_flush_resends() {
     server.set_active(vec![(1, reg_id(&bob1))]);
     *server.fail_sends.borrow_mut() = 1; // the first network send fails after enqueue
 
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let msg = ChatContent::text_with_id("s4", "t", 1, "survives a crash");
 
     // The send fails at the transport, but the ciphertext is already durably queued.
-    let err = block_on(alice.send("s4", "bob", &msg, &mut rng));
+    let err = block_on(alice.send("s4", "bob@example.test", &msg, &mut rng));
     assert!(matches!(err, Err(ChatError::Transport(_))));
     assert_eq!(
         block_on(alice.pending_send_count()).unwrap(),
@@ -1648,7 +1726,7 @@ fn outbox_persists_across_failure_and_flush_resends() {
     );
 
     let delivery_count = server.delivered.borrow().len();
-    let repeated = block_on(alice.send("s4", "bob", &msg, &mut rng)).unwrap();
+    let repeated = block_on(alice.send("s4", "bob@example.test", &msg, &mut rng)).unwrap();
     assert!(repeated.delivered && repeated.deduplicated);
     assert_eq!(repeated.attempts, 0);
     assert_eq!(server.delivered.borrow().len(), delivery_count);
@@ -1656,7 +1734,7 @@ fn outbox_persists_across_failure_and_flush_resends() {
     assert_eq!(
         decrypt_for(
             &mut bob1,
-            &ChatAddress::local("alice", 1),
+            &ChatAddress::from_sender("alice@example.test", 1).unwrap(),
             &server.last_delivered(),
             1,
             &mut rng
@@ -1671,12 +1749,13 @@ fn outbox_persists_across_failure_and_flush_resends() {
 #[test]
 fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
     let mut rng = test_rng();
-    let bob = device("bob", 1, &mut rng);
+    let bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bundle.clone()], vec![bundle]]);
     server.set_active(vec![(1, reg_id(&bob))]);
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
 
     // Two messages to Bob are queued; the server takes neither.
     *server.fail_sends.borrow_mut() = 2;
@@ -1684,7 +1763,7 @@ fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
         assert!(matches!(
             block_on(alice.send(
                 send_id,
-                "bob",
+                "bob@example.test",
                 &ChatContent::text_with_id(send_id, "t", 1, text),
                 &mut rng
             )),
@@ -1701,7 +1780,7 @@ fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
     assert!(flush.delivered.is_empty());
     assert_eq!(flush.failed.len(), 1);
     assert_eq!(flush.failed[0].send_id, "first");
-    assert_eq!(flush.failed[0].peer, "bob");
+    assert_eq!(flush.failed[0].peer, "bob@example.test");
     assert!(matches!(flush.failed[0].error, ChatError::Transport(_)));
     assert_eq!(block_on(alice.pending_send_count()).unwrap(), 2);
 
@@ -1716,12 +1795,13 @@ fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
 #[test]
 fn receipt_retry_failure_does_not_block_reconciliation_flush() {
     let mut rng = test_rng();
-    let bob = device("bob", 1, &mut rng);
+    let bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bundle]]);
     server.set_active(vec![(1, reg_id(&bob))]);
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let send_id = "33333333-3333-4333-8333-333333333333";
     let target = "11111111-1111-4111-8111-111111111111";
     let receipt = ChatContent::receipt_with_id(
@@ -1735,7 +1815,7 @@ fn receipt_retry_failure_does_not_block_reconciliation_flush() {
 
     *server.fail_sends.borrow_mut() = 2;
     assert!(matches!(
-        block_on(alice.send(send_id, "bob", &receipt, &mut rng)),
+        block_on(alice.send(send_id, "bob@example.test", &receipt, &mut rng)),
         Err(ChatError::Transport(_))
     ));
     assert!(
@@ -1753,23 +1833,24 @@ fn receipt_retry_failure_does_not_block_reconciliation_flush() {
 #[test]
 fn typing_is_delivered_without_history_or_linked_device_transcript() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 1, &mut rng);
+    let mut bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bundle]]);
     server.set_active(vec![(1, reg_id(&bob))]);
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let send_id = "44444444-4444-4444-8444-444444444444";
     let typing = ChatContent::typing_with_id(send_id, "2026-08-10T00:00:00Z", 1, true);
 
-    let summary = block_on(alice.send(send_id, "bob", &typing, &mut rng)).unwrap();
+    let summary = block_on(alice.send(send_id, "bob@example.test", &typing, &mut rng)).unwrap();
     assert!(summary.delivered);
     assert!(block_on(alice.session().sent_history()).unwrap().is_empty());
     assert!(server.synced.borrow().is_empty());
     assert_eq!(
         decrypt_for(
             &mut bob,
-            &ChatAddress::local("alice", 1),
+            &ChatAddress::from_sender("alice@example.test", 1).unwrap(),
             &server.last_delivered(),
             1,
             &mut rng,
@@ -1782,12 +1863,13 @@ fn typing_is_delivered_without_history_or_linked_device_transcript() {
 #[test]
 fn call_signals_are_delivered_without_history_or_linked_device_transcript() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 1, &mut rng);
+    let mut bob = device("bob@example.test", 1, &mut rng);
     let bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bundle]]);
     server.set_active(vec![(1, reg_id(&bob))]);
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let send_id = "55555555-5555-4555-8555-555555555555";
     let signal = kutup_chat_proto::CallSignalV1 {
         call_id: uuid::Uuid::from_u128(9),
@@ -1800,14 +1882,14 @@ fn call_signals_are_delivered_without_history_or_linked_device_transcript() {
     };
     let offer = ChatContent::call_with_id(send_id, "2026-09-25T00:00:00Z", 1, &signal).unwrap();
 
-    let summary = block_on(alice.send(send_id, "bob", &offer, &mut rng)).unwrap();
+    let summary = block_on(alice.send(send_id, "bob@example.test", &offer, &mut rng)).unwrap();
     assert!(summary.delivered);
     assert!(block_on(alice.session().sent_history()).unwrap().is_empty());
     assert!(server.synced.borrow().is_empty());
     assert_eq!(
         decrypt_for(
             &mut bob,
-            &ChatAddress::local("alice", 1),
+            &ChatAddress::from_sender("alice@example.test", 1).unwrap(),
             &server.last_delivered(),
             1,
             &mut rng,
@@ -1817,13 +1899,13 @@ fn call_signals_are_delivered_without_history_or_linked_device_transcript() {
     );
 
     // Calls are not for Note to Self.
-    assert!(block_on(alice.send(send_id, "alice", &offer, &mut rng)).is_err());
+    assert!(block_on(alice.send(send_id, "alice@example.test", &offer, &mut rng)).is_err());
 }
 
 #[test]
 fn a_call_record_is_local_history_that_replaces_itself() {
     let mut rng = test_rng();
-    let mut alice = device("alice", 1, &mut rng);
+    let mut alice = device("alice@example.test", 1, &mut rng);
     let record = |outcome, duration_seconds| {
         ChatContent::call_log_with_id(
             "00000000-0000-4000-8000-000000000009",
@@ -1840,12 +1922,12 @@ fn a_call_record_is_local_history_that_replaces_itself() {
         .unwrap()
     };
     block_on(alice.record_local_notice(
-        "bob",
+        "bob@example.test",
         &record(kutup_chat_proto::CallOutcomeV1::Missed, None),
     ))
     .unwrap();
     block_on(alice.record_local_notice(
-        "bob",
+        "bob@example.test",
         &record(kutup_chat_proto::CallOutcomeV1::Answered, Some(30)),
     ))
     .unwrap();
@@ -1855,7 +1937,7 @@ fn a_call_record_is_local_history_that_replaces_itself() {
     assert_eq!(content.as_call_log().unwrap().duration_seconds, Some(30));
     // Only local-only records are written this way.
     let text = ChatContent::text_with_id("x", "", 1, "hi");
-    assert!(block_on(alice.record_local_notice("bob", &text)).is_err());
+    assert!(block_on(alice.record_local_notice("bob@example.test", &text)).is_err());
 }
 
 #[test]
@@ -1864,7 +1946,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
     let mut alice1 = block_on(Session::generate(
         alice_db.clone(),
-        "alice",
+        "alice@example.test",
         1,
         10,
         &mut rng,
@@ -1872,8 +1954,8 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     .unwrap();
     let alice1_bundle = bundle_of(&alice1, 1);
     block_on(alice1.complete_registration(1)).unwrap();
-    let alice2 = device("alice", 2, &mut rng);
-    let mut bob1 = device("bob", 1, &mut rng);
+    let alice2 = device("alice@example.test", 2, &mut rng);
+    let mut bob1 = device("bob@example.test", 1, &mut rng);
     let bob_bundle = bundle_of(&bob1, 1);
 
     let server = Rc::new(MockServer::default());
@@ -1893,7 +1975,8 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
         "hello from my other device",
     );
     let mut first = Engine::new_for_development(alice1, server.clone());
-    let summary = block_on(first.send("direct-linked", "bob", &content, &mut rng)).unwrap();
+    let summary =
+        block_on(first.send("direct-linked", "bob@example.test", &content, &mut rng)).unwrap();
     assert!(summary.delivered, "recipient delivery succeeds");
     assert_eq!(server.delivered.borrow().len(), 1);
     assert!(
@@ -1908,7 +1991,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     );
     let received = decrypt_for(
         &mut bob1,
-        &ChatAddress::local("alice", 1),
+        &ChatAddress::from_sender("alice@example.test", 1).unwrap(),
         &server.last_delivered(),
         1,
         &mut rng,
@@ -1922,7 +2005,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
 
     // A process restart reopens the exact ratchet/outbox state. Only the sync
     // leg is retried; the already-confirmed recipient ciphertext is untouched.
-    let reopened = block_on(Session::open(alice_db, "alice", 1)).unwrap();
+    let reopened = block_on(Session::open(alice_db, "alice@example.test", 1)).unwrap();
     let mut restarted = Engine::new_for_development(reopened, server.clone());
     let flushed = block_on(restarted.flush_outbox(&mut rng)).unwrap();
     assert_eq!(flushed.len(), 1);
@@ -1936,7 +2019,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     assert_eq!(report.synced, vec!["direct-linked"]);
     let linked_history = block_on(linked.session().sent_history()).unwrap();
     assert_eq!(linked_history.len(), 1);
-    assert_eq!(linked_history[0].peer, "bob");
+    assert_eq!(linked_history[0].peer, "bob@example.test");
     let linked_content = serde_json::from_slice::<ChatContent>(&linked_history[0].content).unwrap();
     assert_eq!(linked_content.message_id, "direct-linked");
     assert_eq!(
@@ -1946,14 +2029,15 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
 
     let direct_count = server.delivered.borrow().len();
     let sync_count = server.synced.borrow().len();
-    let repeated = block_on(restarted.send("direct-linked", "bob", &content, &mut rng)).unwrap();
+    let repeated =
+        block_on(restarted.send("direct-linked", "bob@example.test", &content, &mut rng)).unwrap();
     assert!(repeated.delivered && repeated.deduplicated);
     assert_eq!(server.delivered.borrow().len(), direct_count);
     assert_eq!(server.synced.borrow().len(), sync_count);
 
     let mismatched = ChatContent::text_with_id("content-id", "t", 2, "must not send");
     assert!(matches!(
-        block_on(restarted.send("transport-id", "bob", &mismatched, &mut rng)),
+        block_on(restarted.send("transport-id", "bob@example.test", &mismatched, &mut rng)),
         Err(ChatError::Invalid(message))
             if message.contains("messageId must match transport sendId")
     ));
@@ -1962,7 +2046,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
 #[test]
 fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
     let mut rng = test_rng();
-    let alice = device("alice", 1, &mut rng);
+    let alice = device("alice@example.test", 1, &mut rng);
     let bundle = bundle_of(&alice, 1);
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![vec![bundle]]);
@@ -1971,7 +2055,7 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
 
     let summary = block_on(engine.send(
         "note-local",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("note-local", "2026-07-16T10:00:00Z", 1, "remember this"),
         &mut rng,
     ))
@@ -1983,7 +2067,7 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
     assert_eq!(block_on(engine.pending_send_count()).unwrap(), 0);
     let history = block_on(engine.session().sent_history()).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].peer, "alice");
+    assert_eq!(history[0].peer, "alice@example.test");
     assert_eq!(
         serde_json::from_slice::<ChatContent>(&history[0].content)
             .unwrap()
@@ -1997,14 +2081,13 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
 #[test]
 fn canonical_single_device_note_to_self_does_not_loop_back_as_incoming() {
     let mut rng = test_rng();
-    let alice = device("alice", 1, &mut rng);
+    let alice = device("alice@example.test", 1, &mut rng);
     let bundle = bundle_of(&alice, 1);
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![vec![bundle.clone()]]);
     server.script_sync_manifests(vec![Some(signed_manifest("alice@example.test", &bundle))]);
     server.set_sync_active(vec![(1, reg_id(&alice))]);
     let mut engine = Engine::new_for_development(alice, server.clone());
-    engine.set_local_server("example.test").unwrap();
 
     assert_eq!(engine.session().user(), "alice@example.test");
     let summary = block_on(engine.send(
@@ -2030,8 +2113,8 @@ fn canonical_single_device_note_to_self_does_not_loop_back_as_incoming() {
 #[test]
 fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let mut rng = test_rng();
-    let alice1 = device("alice", 1, &mut rng);
-    let alice2 = device("alice", 2, &mut rng);
+    let alice1 = device("alice@example.test", 1, &mut rng);
+    let alice2 = device("alice@example.test", 2, &mut rng);
     let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![bundles]);
@@ -2040,7 +2123,7 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let mut first = Engine::new_for_development(alice1, server.clone());
     let summary = block_on(first.send(
         "note-linked",
-        "alice",
+        "alice@example.test",
         &ChatContent::text_with_id("note-linked", "2026-07-16T10:01:00Z", 1, "sync this note"),
         &mut rng,
     ))
@@ -2060,7 +2143,7 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let history = block_on(second.session().sent_history()).unwrap();
     assert_eq!(history.len(), 1);
     assert!(history[0].delivered);
-    assert_eq!(history[0].peer, "alice");
+    assert_eq!(history[0].peer, "alice@example.test");
     assert_eq!(
         serde_json::from_slice::<ChatContent>(&history[0].content)
             .unwrap()
@@ -2073,17 +2156,16 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
 }
 
 #[test]
-fn canonical_linked_device_accepts_bare_local_sender_from_server() {
+fn canonical_linked_device_receives_its_own_qualified_sync() {
     let mut rng = test_rng();
-    let alice1 = device("alice", 1, &mut rng);
-    let alice2 = device("alice", 2, &mut rng);
+    let alice1 = device("alice@example.test", 1, &mut rng);
+    let alice2 = device("alice@example.test", 2, &mut rng);
     let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![bundles]);
     server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
-    first.set_local_server("example.test").unwrap();
     let summary = block_on(first.send(
         "note-canonical-linked",
         "alice@example.test",
@@ -2100,7 +2182,6 @@ fn canonical_linked_device_accepts_bare_local_sender_from_server() {
     assert_eq!(server.last_synced().len(), 1);
 
     let mut second = Engine::new_for_development(alice2, server);
-    second.set_local_server("example.test").unwrap();
     let report = block_on(second.receive(&mut rng)).unwrap();
     assert_eq!(report.synced, vec!["note-canonical-linked"]);
     assert!(report.errors.is_empty());
@@ -2111,18 +2192,49 @@ fn canonical_linked_device_accepts_bare_local_sender_from_server() {
 }
 
 #[test]
+fn an_envelope_from_a_bare_username_is_refused_before_any_ratchet() {
+    let mut rng = test_rng();
+    let mut bob = device("bob@example.test", 2, &mut rng);
+    let alice_session = device("alice@example.test", 1, &mut rng);
+    let alice_reg = reg_id(&alice_session);
+    let alice_bundle = bundle_of(&alice_session, 1);
+    let server = Rc::new(MockServer::default());
+    let mut alice = Engine::new_for_development(alice_session, server.clone());
+    let alice_addr = ChatAddress::from_sender("alice@example.test", 1).unwrap();
+    block_on(bob.establish(&alice_addr, &alice_bundle, &mut rng)).unwrap();
+    let envelope = block_on(bob.encrypt(
+        &alice_addr,
+        alice_reg,
+        &ChatContent::text_with_id("bare-1", "t", 1, "from a bare name"),
+        &mut rng,
+    ))
+    .unwrap();
+    // The pre-change server wrote the local sender as a bare username.
+    deposit(&server, &envelope, "bob", 2, 1);
+    let report = block_on(alice.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.errors.len(), 1);
+    assert!(block_on(alice.session().history()).unwrap().is_empty());
+}
+
+#[test]
 fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     let mut rng = test_rng();
-    let alice1 = device("alice", 1, &mut rng);
-    let alice2 = device("alice", 2, &mut rng);
+    let alice1 = device("alice@example.test", 1, &mut rng);
+    let alice2 = device("alice@example.test", 2, &mut rng);
     let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![bundles]);
     server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
-    let local =
-        block_on(first.block_contact("bob", &[0; 32], "2026-07-16T10:05:00Z", &mut rng)).unwrap();
+    let local = block_on(first.block_contact(
+        "bob@example.test",
+        &[0; 32],
+        "2026-07-16T10:05:00Z",
+        &mut rng,
+    ))
+    .unwrap();
     assert_eq!(local.state, ContactState::Blocked);
     assert!(!local.sync_pending);
     assert_eq!(server.synced.borrow().len(), 1);
@@ -2132,7 +2244,7 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     assert_eq!(report.contact_synced.len(), 1);
     assert!(report.messages.is_empty() && report.synced.is_empty());
     let linked = block_on(second.contacts()).unwrap().pop().unwrap();
-    assert_eq!(linked.peer, "bob");
+    assert_eq!(linked.peer, "bob@example.test");
     assert_eq!(linked.state, ContactState::Blocked);
     assert_eq!(linked.revision, local.revision);
     assert_eq!(linked.source_device_id, 1);
@@ -2145,15 +2257,15 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
 #[test]
 fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
     let mut rng = test_rng();
-    let mut bob = device("bob", 1, &mut rng);
+    let mut bob = device("bob@example.test", 1, &mut rng);
     let bob_bundle = bundle_of(&bob, 1);
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bob_bundle.clone()]]);
     server.set_active(vec![(1, bob_bundle.registration_id)]);
     *server.fail_profile_uploads.borrow_mut() = 1;
 
-    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    alice.set_local_server("chat.example").unwrap();
+    let mut alice =
+        Engine::new_for_development(device("alice@example.test", 1, &mut rng), server.clone());
     let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32]).unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 
@@ -2163,8 +2275,8 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
         1,
         "before publication",
     );
-    block_on(alice.send("profile-pending-text", "bob", &first, &mut rng)).unwrap();
-    let alice_address = ChatAddress::local("alice", 1);
+    block_on(alice.send("profile-pending-text", "bob@example.test", &first, &mut rng)).unwrap();
+    let alice_address = ChatAddress::from_sender("alice@example.test", 1).unwrap();
     let received = decrypt_for(
         &mut bob,
         &alice_address,
@@ -2194,7 +2306,13 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
         3,
         "after publication",
     );
-    block_on(alice.send("profile-published-text", "bob", &second, &mut rng)).unwrap();
+    block_on(alice.send(
+        "profile-published-text",
+        "bob@example.test",
+        &second,
+        &mut rng,
+    ))
+    .unwrap();
     let received = decrypt_for(
         &mut bob,
         &alice_address,
@@ -2221,8 +2339,8 @@ fn list_state(source_device_id: u32) -> kutup_chat_proto::ConversationStateBody 
 #[test]
 fn conversation_state_syncs_to_a_linked_device_as_hidden_note_to_self_history() {
     let mut rng = test_rng();
-    let alice1 = device("alice", 1, &mut rng);
-    let alice2 = device("alice", 2, &mut rng);
+    let alice1 = device("alice@example.test", 1, &mut rng);
+    let alice2 = device("alice@example.test", 2, &mut rng);
     let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
     let server = Rc::new(MockServer::default());
     server.script_sync(vec![bundles]);
@@ -2234,7 +2352,7 @@ fn conversation_state_syncs_to_a_linked_device_as_hidden_note_to_self_history() 
             .unwrap();
     let mut first = Engine::new_for_development(alice1, server.clone());
     assert!(
-        block_on(first.send(id, "alice", &content, &mut rng))
+        block_on(first.send(id, "alice@example.test", &content, &mut rng))
             .unwrap()
             .delivered
     );
@@ -2244,7 +2362,7 @@ fn conversation_state_syncs_to_a_linked_device_as_hidden_note_to_self_history() 
     assert!(report.messages.is_empty());
     let history = block_on(second.session().sent_history()).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].peer, "alice");
+    assert_eq!(history[0].peer, "alice@example.test");
     let synced = serde_json::from_slice::<ChatContent>(&history[0].content).unwrap();
     assert_eq!(synced.as_conversation_state(), Some(list_state(1)));
 }
@@ -2252,19 +2370,19 @@ fn conversation_state_syncs_to_a_linked_device_as_hidden_note_to_self_history() 
 #[test]
 fn same_account_controls_go_only_to_note_to_self_from_their_named_device() {
     let mut rng = test_rng();
-    let alice = device("alice", 1, &mut rng);
+    let alice = device("alice@example.test", 1, &mut rng);
     let server = Rc::new(MockServer::default());
     let mut engine = Engine::new_for_development(alice, server);
 
     let id = "6c1d7e2f-9a3b-4c5d-8e7f-1a2b3c4d5e6f";
     let to_bob = ChatContent::conversation_state_with_id(id, "t", 1, list_state(1)).unwrap();
     assert!(matches!(
-        block_on(engine.send(id, "bob", &to_bob, &mut rng)),
+        block_on(engine.send(id, "bob@example.test", &to_bob, &mut rng)),
         Err(ChatError::Invalid(message)) if message.contains("same-account control")
     ));
     let other_device = ChatContent::conversation_state_with_id(id, "t", 1, list_state(7)).unwrap();
     assert!(matches!(
-        block_on(engine.send(id, "alice", &other_device, &mut rng)),
+        block_on(engine.send(id, "alice@example.test", &other_device, &mut rng)),
         Err(ChatError::Invalid(message)) if message.contains("name this device")
     ));
     let delete = ChatContent::delete_for_me_with_id(
@@ -2280,7 +2398,7 @@ fn same_account_controls_go_only_to_note_to_self_from_their_named_device() {
     )
     .unwrap();
     assert!(matches!(
-        block_on(engine.send(id, "bob", &delete, &mut rng)),
+        block_on(engine.send(id, "bob@example.test", &delete, &mut rng)),
         Err(ChatError::Invalid(_))
     ));
 }
@@ -2288,7 +2406,7 @@ fn same_account_controls_go_only_to_note_to_self_from_their_named_device() {
 #[test]
 fn local_timeline_notices_are_never_sent() {
     let mut rng = test_rng();
-    let alice = device("alice", 1, &mut rng);
+    let alice = device("alice@example.test", 1, &mut rng);
     let server = Rc::new(MockServer::default());
     let mut engine = Engine::new_for_development(alice, server);
     let id = "6c1d7e2f-9a3b-4c5d-8e7f-1a2b3c4d5e6f";
@@ -2301,7 +2419,7 @@ fn local_timeline_notices_are_never_sent() {
         },
     )
     .unwrap();
-    for peer in ["bob", "alice"] {
+    for peer in ["bob@example.test", "alice@example.test"] {
         assert!(matches!(
             block_on(engine.send(id, peer, &notice, &mut rng)),
             Err(ChatError::Invalid(message)) if message.contains("never sent")
@@ -2352,21 +2470,20 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     let other_authority = AccountAuthority::derive(&[41; 32]).unwrap();
     let open = |pins: Option<kutup_chat_core::IdentityPinsRecord>| {
         let mut rng = test_rng();
-        let bob = device("bob", 1, &mut rng);
+        let bob = device("bob@example.test", 1, &mut rng);
         let manifest =
             signed_manifest_with_authority("bob@example.test", &bundle_of(&bob, 1), &bob_authority);
         let server = Rc::new(MockServer::default());
         *server.own_manifest.borrow_mut() = Some(manifest);
         *server.identity_pins.borrow_mut() = pins;
-        let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
-        alice.set_local_server("example.test").unwrap();
+        let mut alice = Engine::new(device("alice@example.test", 1, &mut rng), server.clone());
         alice.enable_identity_pins(&master).unwrap();
         (alice, server)
     };
 
     // Unknown to the list: trusted on first use, and added to it.
     let (mut alice, server) = open(None);
-    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    let safety = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Tofu);
     assert_eq!(server.identity_pins.borrow().as_ref().unwrap().revision, 1);
 
@@ -2375,7 +2492,7 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
         &master,
         vec![pin_of(&bob_authority, PinState::Verified)],
     )));
-    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    let safety = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Verified);
 
     // The account knows Bob by another authority: quarantined, not trusted on first use.
@@ -2384,9 +2501,9 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
         vec![pin_of(&other_authority, PinState::Seen)],
     )));
     assert!(matches!(
-        block_on(alice.safety_number(&local_authority, "bob")),
+        block_on(alice.safety_number(&local_authority, "bob@example.test")),
         Err(ChatError::Trust(_))
     ));
-    let safety = block_on(alice.safety_number(&local_authority, "bob")).unwrap();
+    let safety = block_on(alice.safety_number(&local_authority, "bob@example.test")).unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Quarantined);
 }

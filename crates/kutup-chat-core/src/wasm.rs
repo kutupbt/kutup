@@ -77,7 +77,7 @@ export interface KutupChatContentView {
   kind: string;
   sentAt: string;
   seq: string;
-  messageId?: string;
+  messageId: string;
   replyTo?: string;
   body: unknown;
   text?: string;
@@ -111,7 +111,7 @@ export interface KutupChatContentView {
 
 export interface KutupChatAccountAddress {
   username: string;
-  server?: string;
+  server: string;
 }
 
 export type KutupChatConversationId =
@@ -121,7 +121,7 @@ export type KutupChatConversationId =
 export interface KutupChatHistoryEntry {
   id: string;
   conversation: KutupChatConversationId;
-  /** @deprecated Use conversation. Retained while existing web/native callers migrate. */
+  /** Direct: the other account. Group: the sender's account for an incoming entry, the group id for an outgoing one. */
   peer: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
@@ -832,10 +832,13 @@ impl WasmChatClient {
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
         let mut rng = OsRng.unwrap_err();
-        let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
+        // The device's account is its full `username@server` address.
+        let account = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
+            .map_err(|error| js_error(&error.to_string()))?
+            .canonical();
+        let mut engine = Engine::register(db, transport, account, 50, &mut rng)
             .await
             .map_err(chat_error)?;
-        engine.set_local_server(&server_name).map_err(chat_error)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
             .enable_identity_pins(&master_key)
@@ -3978,7 +3981,9 @@ fn parse_receipt_state(
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
-    /// Compatibility field for the current direct-only web UI release.
+    /// Direct: the other account. Group: the sender's account for an
+    /// incoming entry, the group id for an outgoing one (the author the UI
+    /// shows; `conversation` alone does not name a group message's sender).
     peer: String,
     direction: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]

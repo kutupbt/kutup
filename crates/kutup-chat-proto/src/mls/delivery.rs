@@ -302,7 +302,6 @@ pub struct IdentifiedMlsKeyPackageRequestV1 {
 impl IdentifiedMlsKeyPackageRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != MLS_PROTOCOL_VERSION
-            || self.recipient.server.is_none()
             || self.conversation_id.is_nil()
             || self.incarnation == 0
         {
@@ -326,7 +325,7 @@ impl FederatedIdentifiedMlsKeyPackageRequestV1 {
         kutup_federation_proto::validate_server_name(&self.origin_domain)
             .map_err(|error| error.to_string())?;
         self.request.validate()?;
-        if self.requester.server.as_deref() != Some(self.origin_domain.as_str()) {
+        if self.requester.server != self.origin_domain.as_str() {
             return Err("federated identified MLS request has the wrong requester identity".into());
         }
         Ok(())
@@ -335,7 +334,7 @@ impl FederatedIdentifiedMlsKeyPackageRequestV1 {
 
 impl AnonymousMlsKeyPackageRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
-        if self.protocol_version != MLS_PROTOCOL_VERSION || self.recipient.server.is_none() {
+        if self.protocol_version != MLS_PROTOCOL_VERSION {
             return Err("anonymous MLS KeyPackage request has invalid version or recipient".into());
         }
         decode_canonical_base64("delivery capability", &self.capability, 16, 16)?;
@@ -354,10 +353,7 @@ pub struct MlsKeyPackageBundleV1 {
 
 impl MlsKeyPackageBundleV1 {
     pub fn validate(&self, now: i64) -> Result<(), String> {
-        if self.recipient.server.is_none()
-            || self.key_packages.is_empty()
-            || self.key_packages.len() > MAX_ANONYMOUS_ENVELOPES
-        {
+        if self.key_packages.is_empty() || self.key_packages.len() > MAX_ANONYMOUS_ENVELOPES {
             return Err("anonymous MLS KeyPackage response shape is invalid".into());
         }
         self.manifest.verify()?;
@@ -430,7 +426,6 @@ pub struct AnonymousMlsSubmissionV1 {
 impl AnonymousMlsSubmissionV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != MLS_PROTOCOL_VERSION
-            || self.recipient.server.is_none()
             || self.send_id.is_nil()
             || self.envelopes.is_empty()
             || self.envelopes.len() > MAX_ANONYMOUS_ENVELOPES
@@ -469,7 +464,7 @@ pub fn anonymous_mls_delivery_aad(
     suite: MlsAnonymousDeliverySuiteV1,
     device_id: u32,
 ) -> Result<Vec<u8>, String> {
-    if recipient.server.is_none() || send_id.is_nil() || device_id == 0 {
+    if send_id.is_nil() || device_id == 0 {
         return Err("anonymous MLS AAD identifiers are invalid".into());
     }
     let mut aad = Vec::with_capacity(256);
@@ -509,11 +504,7 @@ pub fn derive_group_delivery_capability(
     epoch: u64,
     recipient: &AccountAddress,
 ) -> Result<[u8; 16], String> {
-    if exporter_secret.len() < 16
-        || conversation_id.is_nil()
-        || incarnation == 0
-        || recipient.server.is_none()
-    {
+    if exporter_secret.len() < 16 || conversation_id.is_nil() || incarnation == 0 {
         return Err("group delivery capability input is invalid".into());
     }
     let mut info = Vec::with_capacity(256);

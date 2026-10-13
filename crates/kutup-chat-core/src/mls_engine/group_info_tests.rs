@@ -112,6 +112,7 @@ struct Pair {
     alice: MlsClient,
     bob: MlsClient,
     alice_public: MlsDevicePublicMaterial,
+    #[allow(dead_code)]
     bob_public: MlsDevicePublicMaterial,
     conversation_id: Uuid,
     group_id: &'static [u8],

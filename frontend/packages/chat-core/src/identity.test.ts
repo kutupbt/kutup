@@ -5,13 +5,12 @@ import {
   conversationKey,
   directConversation,
   parseAccountAddress,
-  toCoreAccountAddress,
-  withHomeServer,
+  parseAccountInput,
 } from './identity'
 
 describe('canonical chat identity', () => {
-  it('parses local and federated account addresses', () => {
-    expect(parseAccountAddress('alice_42')).toEqual({ username: 'alice_42' })
+  it('parses only full account addresses', () => {
+    expect(parseAccountAddress('alice_42')).toBeNull()
     expect(parseAccountAddress('alice_42@Chat.Example')).toEqual({
       username: 'alice_42',
       server: 'chat.example',
@@ -38,12 +37,18 @@ describe('canonical chat identity', () => {
     expect(conversationKey(directConversation(address))).toBe('direct:alice@example.org')
   })
 
-  it('keeps the canonical federation identity at the core boundary', () => {
-    const local = { username: 'alice' }
-    const canonical = withHomeServer(local, 'chat.example')
-    expect(canonicalAccountAddress(canonical)).toBe('alice@chat.example')
-    expect(toCoreAccountAddress(canonical, 'chat.example')).toBe('alice@chat.example')
-    expect(toCoreAccountAddress({ username: 'bob', server: 'remote.example' }, 'chat.example')).toBe(
+  it('reads a typed bare username as an account on the home server', () => {
+    expect(parseAccountInput('alice', 'chat.example')).toEqual({ username: 'alice', server: 'chat.example' })
+    expect(parseAccountInput('bob@remote.example', 'chat.example')).toEqual({
+      username: 'bob',
+      server: 'remote.example',
+    })
+    expect(parseAccountInput('kutup://contact/bob%40remote.example', 'chat.example')).toEqual({
+      username: 'bob',
+      server: 'remote.example',
+    })
+    expect(parseAccountInput('Al', 'chat.example')).toBeNull()
+    expect(canonicalAccountAddress({ username: 'bob', server: 'remote.example' })).toBe(
       'bob@remote.example',
     )
   })

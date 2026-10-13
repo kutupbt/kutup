@@ -51,6 +51,7 @@ impl NativeChatClient {
         self.device_id
     }
 
+    /// The canonical `username@server` account this client runs as.
     pub fn user(&self) -> String {
         self.user.clone()
     }
@@ -198,16 +199,12 @@ pub async fn open_native_chat_client(
             message: "database path is empty".into(),
         });
     }
-    if user.trim().is_empty() {
-        return Err(KutupChatError::InvalidInput {
-            message: "chat username is empty".into(),
-        });
-    }
-    kutup_chat_proto::AccountAddress::federated("server", &server_name).map_err(|error| {
-        KutupChatError::InvalidInput {
+    // The device's account is its full `username@server` address.
+    let user = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
+        .map_err(|error| KutupChatError::InvalidInput {
             message: error.to_string(),
-        }
-    })?;
+        })?
+        .canonical();
     let database_key = take_key(database_key, "database key")?;
     let master_key = take_key(master_key, "account master key")?;
     let (commands, receiver) = mpsc::channel();
@@ -222,7 +219,6 @@ pub async fn open_native_chat_client(
                     database_key,
                     master_key,
                     user: worker_user,
-                    server_name,
                     http,
                 },
                 receiver,
@@ -257,8 +253,8 @@ struct WorkerConfig {
     database_path: String,
     database_key: [u8; 32],
     master_key: [u8; 32],
+    /// The canonical `username@server` account.
     user: String,
-    server_name: String,
     http: Arc<dyn ChatHttpClient>,
 }
 
@@ -315,7 +311,6 @@ fn worker_main(
         let mut rng = OsRng.unwrap_err();
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
-        engine.set_local_server(&config.server_name)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine.enable_identity_pins(&config.master_key)?;
         config.master_key.zeroize();

@@ -1446,7 +1446,7 @@ impl ViewOnceOpenedBody {
             .sender
             .parse()
             .map_err(|_| "Chat view-once sender is invalid".to_string())?;
-        if sender.server.is_none() || sender.canonical() != self.sender {
+        if sender.canonical() != self.sender {
             return Err("Chat view-once sender must be canonical".into());
         }
         if self.timestamp_ms <= 0 || self.timestamp_ms > MAX_SAFE_CLOCK_MS {

@@ -184,7 +184,7 @@ impl RecoverMlsConversationRequestV1 {
             .canonical()
             .parse()
             .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical_creator != self.creator || self.creator.server.is_none() {
+        if canonical_creator != self.creator {
             return Err("MLS recovery creator must be canonical and federated".into());
         }
         if !(1..=127).contains(&self.creator_device_id)
@@ -205,11 +205,7 @@ impl RecoverMlsConversationRequestV1 {
             .iter()
             .map(|member| {
                 member.validate()?;
-                member
-                    .address
-                    .server
-                    .clone()
-                    .ok_or("MLS recovery member has no domain".to_string())
+                Ok::<String, String>(member.address.server.clone())
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -245,7 +241,7 @@ impl RecoverMlsConversationRequestV1 {
             let expected_local = self
                 .members
                 .iter()
-                .filter(|member| member.address.server.as_deref() == Some(&delivery.destination))
+                .filter(|member| member.address.server == delivery.destination)
                 .cloned()
                 .collect::<Vec<_>>();
             if delivery.local_members_after != expected_local {

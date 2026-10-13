@@ -288,7 +288,7 @@ pub(crate) async fn federated_record_invitation_feedback(
         return signed_federation_error(federation, &authenticated, AppError::bad_request(error));
     }
     if authenticated.destination() != federation.server_name()
-        || feedback.member.server.as_deref() != Some(authenticated.origin())
+        || feedback.member.server != authenticated.origin()
     {
         return signed_federation_error(
             federation,

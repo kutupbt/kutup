@@ -132,10 +132,7 @@ impl ProfileEnvelopeContextV1 {
         source_device_id: u32,
     ) -> Result<Self, String> {
         let address = AccountAddress::from_str(account).map_err(|error| error.to_string())?;
-        if address.server.is_none()
-            || address.canonical() != account
-            || account.len() > MAX_ACCOUNT_BYTES
-        {
+        if address.canonical() != account || account.len() > MAX_ACCOUNT_BYTES {
             return Err("encrypted profile account must be a canonical federated address".into());
         }
         let version = hex::decode(profile_version)

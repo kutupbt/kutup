@@ -3,7 +3,10 @@ import type { AccountAddress, ConversationId } from './types'
 const USERNAME = /^[a-z0-9_-]{3,32}$/
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
-/** Parse only Kutup's canonical account syntax: username or username@server. */
+/**
+ * Parse Kutup's canonical account syntax, `username@server` (or a
+ * `kutup://contact/` link to one). A bare username is not an account address.
+ */
 export function parseAccountAddress(value: string): AccountAddress | null {
   const trimmed = value.trim()
   let candidate = trimmed
@@ -15,8 +18,7 @@ export function parseAccountAddress(value: string): AccountAddress | null {
     }
   }
   const parts = candidate.split('@')
-  if (parts.length > 2 || !USERNAME.test(parts[0] ?? '')) return null
-  if (parts.length === 1) return { username: parts[0]! }
+  if (parts.length !== 2 || !USERNAME.test(parts[0] ?? '')) return null
 
   const server = parts[1]!.toLowerCase()
   if (
@@ -32,8 +34,19 @@ export function parseAccountAddress(value: string): AccountAddress | null {
   return { username: parts[0]!, server }
 }
 
+/**
+ * Read what a person typed: a full address, a contact link, or a bare
+ * username, which names an account on this (home) server.
+ */
+export function parseAccountInput(value: string, homeServer: string): AccountAddress | null {
+  const trimmed = value.trim()
+  return parseAccountAddress(
+    trimmed.includes('@') || trimmed.startsWith('kutup://') ? trimmed : `${trimmed}@${homeServer}`,
+  )
+}
+
 export function canonicalAccountAddress(address: AccountAddress): string {
-  return address.server ? `${address.username}@${address.server}` : address.username
+  return `${address.username}@${address.server}`
 }
 
 export function directConversation(address: AccountAddress): ConversationId {
@@ -48,19 +61,6 @@ export function conversationKey(conversation: ConversationId): string {
 
 export function directAddress(conversation: ConversationId): string | null {
   return conversation.kind === 'direct' ? canonicalAccountAddress(conversation.address) : null
-}
-
-/** Add this account's home server for display/links without changing the
- * legacy local libsignal/session key used by the current web database. */
-export function withHomeServer(address: AccountAddress, homeServer?: string): AccountAddress {
-  return !address.server && homeServer ? { ...address, server: homeServer } : address
-}
-
-/** Keep every conversation key canonical. Sealed certificates bind the exact
- * `username@server` form, so same-server peers must not be collapsed to a bare
- * legacy username at the crypto boundary. */
-export function toCoreAccountAddress(address: AccountAddress, homeServer?: string): string {
-  return canonicalAccountAddress(withHomeServer(address, homeServer))
 }
 
 export function contactUri(address: AccountAddress): string {

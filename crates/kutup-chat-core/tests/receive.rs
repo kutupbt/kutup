@@ -152,15 +152,22 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     let bob_db = TempDb::new();
 
     // Alice encrypts two messages to Bob (as the server would have stored them).
-    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
     let (env1, env2) = {
         // Generate Bob's device into bob_db (keys persist there); the Session itself
         // is only needed to serve the bundle, then dropped.
-        let mut bob = block_on(Session::generate(bob_db.open(), "bob", 1, 10, &mut rng)).unwrap();
+        let mut bob = block_on(Session::generate(
+            bob_db.open(),
+            "bob@example.test",
+            1,
+            10,
+            &mut rng,
+        ))
+        .unwrap();
         let bundle = serve_bundle(bob.registration().unwrap(), 1);
         block_on(bob.complete_registration(1)).unwrap();
 
-        let mut alice = in_memory("alice", 1, &mut rng);
+        let mut alice = in_memory("alice@example.test", 1, &mut rng);
         block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
         let e1 = block_on(alice.encrypt(
             &bob_addr,
@@ -181,18 +188,27 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
 
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env1, "alice", "mbx-1", 1),
-        deliver(&env2, "alice", "mbx-2", 2),
+        deliver(&env1, "alice@example.test", "mbx-1", 1),
+        deliver(&env2, "alice@example.test", "mbx-2", 2),
     ]);
 
     // Bob reopens his device and drains.
-    let mut bob = block_on(Engine::open(bob_db.open(), server.clone(), "bob", 1)).unwrap();
+    let mut bob = block_on(Engine::open(
+        bob_db.open(),
+        server.clone(),
+        "bob@example.test",
+        1,
+    ))
+    .unwrap();
     let report = block_on(bob.receive(&mut rng)).unwrap();
 
     assert_eq!(report.messages.len(), 2);
     assert_eq!(report.messages[0].content.as_text().unwrap().text, "first");
     assert_eq!(report.messages[1].content.as_text().unwrap().text, "second");
-    assert_eq!(report.messages[0].from, ChatAddress::local("alice", 1));
+    assert_eq!(
+        report.messages[0].from,
+        ChatAddress::from_sender("alice@example.test", 1).unwrap()
+    );
     assert!(report.errors.is_empty() && report.undecodable.is_empty());
     assert_eq!(
         server.acked(),
@@ -206,7 +222,7 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     drop(bob);
 
     // History (and the drain cursor) survive a reopen.
-    let reopened = block_on(Session::open(bob_db.open(), "bob", 1)).unwrap();
+    let reopened = block_on(Session::open(bob_db.open(), "bob@example.test", 1)).unwrap();
     let history = block_on(reopened.history()).unwrap();
     assert_eq!(history.len(), 2);
     let texts: Vec<String> = history
@@ -226,12 +242,12 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
 #[test]
 fn dedups_a_redelivered_cursor() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
 
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
 
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let env = block_on(alice.encrypt(
         &bob_addr,
@@ -246,8 +262,8 @@ fn dedups_a_redelivered_cursor() {
     // ratchet couldn't repeat it).
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env, "alice", "twin-a", 1),
-        deliver(&env, "alice", "twin-b", 1),
+        deliver(&env, "alice@example.test", "twin-a", 1),
+        deliver(&env, "alice@example.test", "twin-b", 1),
     ]);
 
     let mut bob = Engine::new(bob_session, server.clone());
@@ -266,10 +282,10 @@ fn dedups_a_redelivered_cursor() {
 #[test]
 fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let env = block_on(alice.encrypt(
         &bob_addr,
@@ -280,8 +296,8 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
     .unwrap();
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env, "alice", "replay-a", 1),
-        deliver(&env, "alice", "replay-b", 2),
+        deliver(&env, "alice@example.test", "replay-a", 1),
+        deliver(&env, "alice@example.test", "replay-b", 2),
     ]);
 
     let mut bob = Engine::new(bob_session, server.clone());
@@ -295,12 +311,12 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
 #[test]
 fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut rng = test_rng();
-    let bob = in_memory("bob", 1, &mut rng);
+    let bob = in_memory("bob@example.test", 1, &mut rng);
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![DeliveredEnvelope {
         id: "broken-1".into(),
         cursor: 1,
-        sender: Some("alice".into()),
+        sender: Some("alice@example.test".into()),
         sealed_sender: false,
         sender_device_id: 1,
         envelope_type: kutup_chat_proto::EnvelopeType::Message,
@@ -346,21 +362,26 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
 #[test]
 fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let wrapper = ChatContent::sent_transcript(
         "forged-note",
-        "bob",
+        "bob@example.test",
         1,
         ChatContent::text_with_id("m5", "2026-07-16T12:00:00Z", 1, "not Bob's note"),
     );
     let encrypted =
         block_on(alice.encrypt(&bob_addr, bundle.registration_id, &wrapper, &mut rng)).unwrap();
     let server = Rc::new(Mailbox::default());
-    server.deposit(vec![deliver(&encrypted, "alice", "forged-1", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted,
+        "alice@example.test",
+        "forged-1",
+        1,
+    )]);
 
     let mut bob = Engine::new(bob_session, server);
     let report = block_on(bob.receive(&mut rng)).unwrap();
@@ -373,10 +394,10 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
 #[test]
 fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let contents = [
         ChatContent::typing_with_id(
@@ -407,18 +428,33 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
     let server = Rc::new(Mailbox::default());
     let mut bob = Engine::new(bob_session, server.clone());
 
-    server.deposit(vec![deliver(&encrypted[0], "alice", "typing-1", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted[0],
+        "alice@example.test",
+        "typing-1",
+        1,
+    )]);
     let unknown = block_on(bob.receive(&mut rng)).unwrap();
     assert!(unknown.messages.is_empty());
     assert_eq!(unknown.suppressed, vec!["typing-1"]);
     assert!(block_on(bob.contacts()).unwrap().is_empty());
     assert!(block_on(bob.session().history()).unwrap().is_empty());
 
-    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    server.deposit(vec![deliver(
+        &encrypted[1],
+        "alice@example.test",
+        "request-2",
+        2,
+    )]);
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
 
-    server.deposit(vec![deliver(&encrypted[2], "alice", "typing-3", 3)]);
+    server.deposit(vec![deliver(
+        &encrypted[2],
+        "alice@example.test",
+        "typing-3",
+        3,
+    )]);
     let accepted = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(accepted.messages.len(), 1);
     assert_eq!(
@@ -435,10 +471,10 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 #[test]
 fn a_call_from_someone_not_accepted_does_not_ring() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let offer = ChatContent::call_with_id(
         "66666666-6666-4666-8666-666666666666",
@@ -456,7 +492,7 @@ fn a_call_from_someone_not_accepted_does_not_ring() {
         block_on(alice.encrypt(&bob_addr, bundle.registration_id, &offer, &mut rng)).unwrap();
     let server = Rc::new(Mailbox::default());
     let mut bob = Engine::new(bob_session, server.clone());
-    server.deposit(vec![deliver(&encrypted, "alice", "call-1", 1)]);
+    server.deposit(vec![deliver(&encrypted, "alice@example.test", "call-1", 1)]);
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty());
     assert_eq!(report.suppressed, vec!["call-1"]);
@@ -467,10 +503,10 @@ fn a_call_from_someone_not_accepted_does_not_ring() {
 #[test]
 fn disappearing_timer_is_durable_only_for_established_conversations() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let contents = [
         ChatContent::disappearing_timer_with_id(
@@ -503,18 +539,33 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
     let server = Rc::new(Mailbox::default());
     let mut bob = Engine::new(bob_session, server.clone());
 
-    server.deposit(vec![deliver(&encrypted[0], "alice", "timer-1", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted[0],
+        "alice@example.test",
+        "timer-1",
+        1,
+    )]);
     let unknown = block_on(bob.receive(&mut rng)).unwrap();
     assert!(unknown.messages.is_empty());
     assert_eq!(unknown.suppressed, vec!["timer-1"]);
     assert!(block_on(bob.contacts()).unwrap().is_empty());
     assert!(block_on(bob.session().history()).unwrap().is_empty());
 
-    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    server.deposit(vec![deliver(
+        &encrypted[1],
+        "alice@example.test",
+        "request-2",
+        2,
+    )]);
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
+    block_on(bob.accept_contact("alice@example.test", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
 
-    server.deposit(vec![deliver(&encrypted[2], "alice", "timer-3", 3)]);
+    server.deposit(vec![deliver(
+        &encrypted[2],
+        "alice@example.test",
+        "timer-3",
+        3,
+    )]);
     let accepted = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(accepted.messages.len(), 1);
     assert_eq!(
@@ -534,16 +585,16 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
 #[test]
 fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let control = ChatContent::disappearing_expiry_start_with_id(
         "44444444-4444-4444-8444-444444444444",
         "2026-08-10T12:00:03Z",
         1,
-        ConversationId::direct(AccountAddress::local("alice").unwrap()),
+        ConversationId::direct("alice@example.test".parse::<AccountAddress>().unwrap()),
         "55555555-5555-4555-8555-555555555555",
         1,
     )
@@ -551,7 +602,12 @@ fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
     let encrypted =
         block_on(alice.encrypt(&bob_addr, bundle.registration_id, &control, &mut rng)).unwrap();
     let server = Rc::new(Mailbox::default());
-    server.deposit(vec![deliver(&encrypted, "alice", "forged-expiry-start", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted,
+        "alice@example.test",
+        "forged-expiry-start",
+        1,
+    )]);
 
     let mut bob = Engine::new(bob_session, server.clone());
     let report = block_on(bob.receive(&mut rng)).unwrap();
@@ -565,10 +621,10 @@ fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
 #[test]
 fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let bob_session = in_memory("bob", 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_session = in_memory("bob@example.test", 1, &mut rng);
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice", 1, &mut rng);
+    let mut alice = in_memory("alice@example.test", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let unknown_key = base64::engine::general_purpose::STANDARD.encode([6u8; 32]);
     let first_key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
@@ -602,24 +658,39 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let mut bob = Engine::new(bob_session, server.clone());
 
     // An unsolicited control cannot manufacture an empty message request.
-    server.deposit(vec![deliver(&encrypted[0], "alice", "profile-1", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted[0],
+        "alice@example.test",
+        "profile-1",
+        1,
+    )]);
     let unknown_profile = block_on(bob.receive(&mut rng)).unwrap();
     assert!(unknown_profile.messages.is_empty());
     assert!(block_on(bob.contacts()).unwrap().is_empty());
     assert!(block_on(bob.peer_profiles()).unwrap().is_empty());
 
-    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    server.deposit(vec![deliver(
+        &encrypted[1],
+        "alice@example.test",
+        "request-2",
+        2,
+    )]);
     let first = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(first.messages.len(), 1);
     let contact = block_on(bob.contacts()).unwrap().pop().unwrap();
     assert_eq!(contact.state, ContactState::PendingIncoming);
     let request_profile = block_on(bob.peer_profiles()).unwrap().pop().unwrap();
-    assert_eq!(request_profile.peer, "alice");
+    assert_eq!(request_profile.peer, "alice@example.test");
     assert_eq!(request_profile.key, [7u8; 32]);
 
     // A dedicated profile update is never a visible message and cannot grant
     // itself permission while the sender is still only an incoming request.
-    server.deposit(vec![deliver(&encrypted[2], "alice", "profile-3", 3)]);
+    server.deposit(vec![deliver(
+        &encrypted[2],
+        "alice@example.test",
+        "profile-3",
+        3,
+    )]);
     let ignored_profile = block_on(bob.receive(&mut rng)).unwrap();
     assert!(ignored_profile.messages.is_empty());
     assert!(ignored_profile.profile_key_updated.is_empty());
@@ -627,7 +698,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert!(matches!(
         block_on(bob.send(
             "reply-before-accept",
-            "alice",
+            "alice@example.test",
             &ChatContent::text_with_id(
                 "reply-before-accept",
                 "2026-07-16T12:00:30Z",
@@ -640,11 +711,18 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
             if message.contains("accept the message request")
     ));
 
-    let rejected = block_on(bob.reject_contact("alice", "2026-07-16T12:01:00Z", &mut rng)).unwrap();
+    let rejected =
+        block_on(bob.reject_contact("alice@example.test", "2026-07-16T12:01:00Z", &mut rng))
+            .unwrap();
     assert_eq!(rejected.state, ContactState::Rejected);
     assert!(block_on(bob.session().history()).unwrap().is_empty());
 
-    server.deposit(vec![deliver(&encrypted[3], "alice", "request-4", 4)]);
+    server.deposit(vec![deliver(
+        &encrypted[3],
+        "alice@example.test",
+        "request-4",
+        4,
+    )]);
     let second = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(
         second.messages.len(),
@@ -656,11 +734,21 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         ContactState::PendingIncoming
     );
 
-    let blocked =
-        block_on(bob.block_contact("alice", &[0; 32], "2026-07-16T12:02:00Z", &mut rng)).unwrap();
+    let blocked = block_on(bob.block_contact(
+        "alice@example.test",
+        &[0; 32],
+        "2026-07-16T12:02:00Z",
+        &mut rng,
+    ))
+    .unwrap();
     assert_eq!(blocked.state, ContactState::Blocked);
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
-    server.deposit(vec![deliver(&encrypted[4], "alice", "blocked-5", 5)]);
+    server.deposit(vec![deliver(
+        &encrypted[4],
+        "alice@example.test",
+        "blocked-5",
+        5,
+    )]);
     let third = block_on(bob.receive(&mut rng)).unwrap();
     assert!(third.messages.is_empty());
     assert_eq!(third.suppressed, vec!["blocked-5"]);
@@ -668,6 +756,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert!(server.acked().contains(&"blocked-5".to_string()));
 
     let unblocked =
-        block_on(bob.unblock_contact("alice", "2026-07-16T12:03:00Z", &mut rng)).unwrap();
+        block_on(bob.unblock_contact("alice@example.test", "2026-07-16T12:03:00Z", &mut rng))
+            .unwrap();
     assert_eq!(unblocked.state, ContactState::PendingIncoming);
 }
