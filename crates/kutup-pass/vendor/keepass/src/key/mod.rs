@@ -132,6 +132,9 @@ fn parse_keyfile(buffer: &[u8]) -> Result<KeyElement, DatabaseKeyError> {
 #[derive(Debug, Clone, Default, PartialEq, Zeroize, ZeroizeOnDrop)]
 pub struct DatabaseKey {
     password: Option<String>,
+    /// Kutup's copy (vendor/keepass/KUTUP.md): the password's part of the
+    /// composite key, SHA-256 of the password, given instead of it.
+    password_hash: Option<Vec<u8>>,
     keyfile: Option<Vec<u8>>,
     #[cfg(feature = "challenge_response")]
     challenge_response_key: Option<ChallengeResponseKey>,
@@ -140,6 +143,14 @@ pub struct DatabaseKey {
 }
 
 impl DatabaseKey {
+    /// Kutup's copy (vendor/keepass/KUTUP.md): modify the database key to
+    /// include a password given as its SHA-256, the password's part of the
+    /// composite key.
+    pub fn with_password_hash(mut self, hash: [u8; 32]) -> Self {
+        self.password_hash = Some(hash.to_vec());
+        self
+    }
+
     /// Modify the database key to include a password
     pub fn with_password(mut self, password: &str) -> Self {
         self.password = Some(password.to_string());
@@ -215,6 +226,8 @@ impl DatabaseKey {
 
         if let Some(p) = &self.password {
             out.push(calculate_sha256(&[p.as_bytes()]).to_vec());
+        } else if let Some(hash) = &self.password_hash {
+            out.push(hash.clone());
         }
 
         if let Some(ref f) = self.keyfile {
@@ -239,7 +252,7 @@ impl DatabaseKey {
 
     /// Returns true if the database key is not associated with any key component.
     pub fn is_empty(&self) -> bool {
-        if self.password.is_some() || self.keyfile.is_some() {
+        if self.password.is_some() || self.password_hash.is_some() || self.keyfile.is_some() {
             return false;
         }
         #[cfg(feature = "challenge_response")]

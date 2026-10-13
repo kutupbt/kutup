@@ -117,8 +117,7 @@ test('pass: a vault in Drive, entries with history, one-time codes and attachmen
   const dialog = drive.getByRole('dialog', { name: 'New vault' })
   await expect(dialog.getByRole('combobox', { name: 'Folder' })).toHaveText('My files')
   await dialog.getByLabel('Vault name').fill('Kişisel')
-  await dialog.getByLabel('Vault password', { exact: true }).fill('ikinci-kasa-parola')
-  await dialog.getByLabel('Repeat the vault password').fill('ikinci-kasa-parola')
+  // The default: a random key, kept in the account.
   await dialog.getByRole('button', { name: 'Create vault' }).click()
   // The name was taken in the folder: the second is "Kişisel (2)".
   await expect(drive.getByRole('heading', { name: 'Kişisel (2)', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })

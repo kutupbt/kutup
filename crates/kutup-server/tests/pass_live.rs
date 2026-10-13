@@ -11,20 +11,16 @@
 //!     cargo test -p kutup-server --test pass_live -- --nocapture
 
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecretV1};
+use kutup_crypto::pass_vault::{open_vault_secret, password_hash, seal_vault_secret, VaultSecret};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use zeroize::Zeroizing;
 
 mod common;
 use common::*;
 
-fn secret(password: &str) -> VaultSecretV1 {
-    VaultSecretV1 {
-        password: Some(Zeroizing::new(password.to_owned())),
-        key_file: None,
-    }
+fn secret(password: &str) -> VaultSecret {
+    VaultSecret::chosen(Some(password), None)
 }
 
 fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
@@ -107,7 +103,9 @@ fn vault_secrets() {
     let id = uuid::Uuid::parse_str(&vault.id).unwrap();
     let opened =
         open_vault_secret(&envelope, &owner.master_key, &owner.binding, id.as_bytes()).unwrap();
-    assert_eq!(opened.password.unwrap().as_str(), "o");
+    // Only the password's hash is kept.
+    assert_eq!(opened.password_hash, Some(password_hash("o")));
+    assert!(opened.generated_password.is_none());
     assert_eq!(list(&c, &base, &member).len(), 1);
 
     // Replacing one keeps one.

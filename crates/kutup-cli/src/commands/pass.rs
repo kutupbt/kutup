@@ -1,6 +1,7 @@
 //! `kutup pass` — Kutup Pass vault secrets (docs/plans/pass.md, "Vault
 //! secrets"): keep a vault's key in the account so Kutup Pass and
-//! `kutup sync` open the vault with the Kutup sign-in, list them, forget one.
+//! `kutup sync` open the vault with the Kutup sign-in, list them, forget one,
+//! and show a key Kutup Pass generated (for KeePassXC).
 
 use std::path::PathBuf;
 
@@ -34,6 +35,11 @@ pub enum PassCmd {
         /// The vault's file id.
         file_id: String,
     },
+    /// Show the key Kutup Pass generated for a vault, to open it in KeePassXC.
+    ShowKey {
+        /// The vault's file id.
+        file_id: String,
+    },
 }
 
 pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
@@ -45,6 +51,7 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
         } => keep(profile, json, file_id, key_file.as_ref(), *no_password),
         PassCmd::Ls => ls(profile, json),
         PassCmd::Forget { file_id } => forget(profile, json, file_id),
+        PassCmd::ShowKey { file_id } => show_key(profile, json, file_id),
     }
 }
 
@@ -146,6 +153,39 @@ fn forget(profile: &str, json: bool, file_id: &str) -> Result<()> {
         print_json(&serde_json::json!({ "fileId": file_id, "forgotten": true }))?;
     } else {
         println!("Forgot the key of vault {file_id}.");
+    }
+    Ok(())
+}
+
+/// The password Kutup Pass generated for a vault (docs/plans/pass.md,
+/// "Vault keys"). A password the person chose is kept only as its hash, so
+/// there is nothing to show for it.
+fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
+    let ctx = require_session(profile)?;
+    let row = ctx
+        .client
+        .list_vault_secrets()?
+        .into_iter()
+        .find(|row| row.file_id == file_id)
+        .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;
+    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)?;
+    let id = uuid::Uuid::parse_str(file_id).context("a vault's file id is a UUID")?;
+    let secret = kutup_crypto::pass_vault::open_vault_secret(
+        &envelope,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        id.as_bytes(),
+    )
+    .context("the kept key does not open")?;
+    let Some(password) = secret.generated_password else {
+        anyhow::bail!(
+            "Kutup Pass did not make this vault's key: it opens with the password chosen for it"
+        );
+    };
+    if json {
+        print_json(&serde_json::json!({ "fileId": file_id, "key": password.as_str() }))?;
+    } else {
+        println!("{}", password.as_str());
     }
     Ok(())
 }

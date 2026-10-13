@@ -217,6 +217,8 @@ kutup download <file-id> ./local/path/
 # as versions of the same file and concurrent edits are merged entry by
 # entry (Kutup Pass); the vault key comes from the account (kutup pass
 # keep <file-id>), KUTUP_VAULT_PASSWORD / KUTUP_VAULT_KEY_FILE or a prompt.
+# A vault made in Kutup Pass with a random key: `kutup pass show-key
+# <file-id>` prints it, to open the vault in KeePassXC.
 # Deletions propagate only with
 # --delete; --dry-run previews without touching anything.
 kutup sync ./local-folder <folder-id>

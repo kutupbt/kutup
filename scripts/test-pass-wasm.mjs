@@ -18,16 +18,25 @@ const vault = pass.Vault.create('Kişisel', 'parola-çğ', null, minute(0))
 const root0 = vault.view().rootGroupId
 const bank = vault.apply({ op: 'createEntry', groupId: root0, entry: { fields: fields([['Title', 'Banka'], ['UserName', 'ayse'], ['Password', 'p0']]) } }, minute(1)).id
 const saved = vault.save()
-const reopened = pass.Vault.open(saved, 'parola-çğ', null)
+const reopened = pass.Vault.open(saved, 'parola-çğ', null, null)
 console.log(`create + save + open (Argon2id 64 MiB, 10 iterations): ${Math.round(performance.now() - started)} ms`)
 assert.equal(reopened.view().entries[0].fields.find((f) => f.key === 'Password').value, 'p0')
 assert.equal(reopened.view().entries[0].fields.find((f) => f.key === 'Password').protected, true)
-assert.throws(() => pass.Vault.open(saved, 'wrong', null))
+assert.throws(() => pass.Vault.open(saved, 'wrong', null, null))
 assert.throws(() => reopened.apply({ op: 'deleteEntry', id: 'not-an-id' }, minute(2)))
+// What Kutup Pass keeps: the password's SHA-256 opens it, and saves it so the
+// password still opens it.
+const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('parola-çğ')))
+const byHash = pass.Vault.open(saved, null, hash, null)
+assert.equal(byHash.view().entries.length, 1)
+assert.ok(pass.Vault.open(byHash.save(), 'parola-çğ', null, null))
+assert.throws(() => pass.Vault.open(saved, null, new Uint8Array(32), null))
+assert.throws(() => pass.Vault.open(saved, null, new Uint8Array(31), null))
+assert.throws(() => pass.Vault.open(saved, 'parola-çğ', hash, null))
 
 // Two copies edited apart, then merged.
-const ours = pass.Vault.open(saved, 'parola-çğ', null)
-const theirs = pass.Vault.open(saved, 'parola-çğ', null)
+const ours = pass.Vault.open(saved, 'parola-çğ', null, null)
+const theirs = pass.Vault.open(saved, 'parola-çğ', null, null)
 ours.apply({ op: 'updateEntry', id: bank, entry: { fields: fields([['Title', 'Banka'], ['UserName', 'ayse'], ['Password', 'ours']]) } }, minute(2))
 theirs.apply({ op: 'updateEntry', id: bank, entry: { fields: fields([['Title', 'Banka'], ['UserName', 'ayse-t'], ['Password', 'p0']]) } }, minute(3))
 const mail = theirs.apply({ op: 'createEntry', groupId: root0, entry: { fields: fields([['Title', 'Posta']]) } }, minute(4)).id
@@ -53,8 +62,8 @@ assert.equal(ours.otp(bank, 59_000), null)
 // A key changed: the new one opens the saved vault, the old one does not.
 ours.changeKey('yeni', null, minute(8))
 const rekeyed = ours.save()
-assert.ok(pass.Vault.open(rekeyed, 'yeni', null))
-assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null))
+assert.ok(pass.Vault.open(rekeyed, 'yeni', null, null))
+assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))
 
 assert.equal(pass.keyFileSecret(new Uint8Array(10_000)).length, 32)
 console.log('pass WASM checks passed')

@@ -80,15 +80,16 @@ export interface CryptoWasmModule {
   openMailName(masterKeyBase64: string, account: string, kind: string, id: string, sealedBase64: string): string
   sealPassVaultSecret(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     fileId: string,
     password: string | null | undefined,
     keyFileBase64: string | null | undefined,
+    generated: boolean,
   ): string
   openPassVaultSecret(
     envelopeBase64: string,
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     fileId: string,
   ): import('./passVault').PassVaultSecret
   generateMailGroupKey(

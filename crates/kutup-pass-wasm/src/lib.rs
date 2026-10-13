@@ -74,13 +74,29 @@ impl Vault {
     }
 
     /// Opens a vault's file contents. Fails with a wrong key or a file that
-    /// is not a KeePass vault.
+    /// is not a KeePass vault. The password may be given as its SHA-256
+    /// (`password_hash`, what Kutup Pass keeps), which opens and saves the
+    /// vault as the password does.
     pub fn open(
         contents: &[u8],
         password: Option<String>,
+        password_hash: Option<Vec<u8>>,
         key_file: Option<Vec<u8>>,
     ) -> Result<Vault, JsValue> {
-        let key = key(password, key_file)?;
+        let key = match password_hash {
+            Some(hash) if password.is_none() => {
+                let hash: [u8; 32] = hash
+                    .try_into()
+                    .map_err(|_| js_error("a password hash is 32 bytes"))?;
+                let mut key = VaultKey::new().with_password_hash(hash);
+                if let Some(file) = key_file {
+                    key = key.with_key_file(&file);
+                }
+                key
+            }
+            Some(_) => return Err(js_error("give the password or its hash, not both")),
+            None => key(password, key_file)?,
+        };
         let db = kutup_pass::open(contents, &key).map_err(js_error)?;
         Ok(Vault { db, key })
     }

@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
-use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecretV1};
+use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
 use uuid::Uuid;
@@ -209,12 +209,13 @@ impl VaultKeys {
         self.known.get(rel)?.as_ref()?.get(index)
     }
 
-    /// The key in the account's vault secret for `file_id`, if one is kept.
+    /// The key in the account's vault secret for `file_id`, if one is kept:
+    /// the password as its SHA-256, as the account keeps it.
     fn stored_key(&mut self, client: &Client, file_id: &str) -> Option<VaultKey> {
         let secret = self.open_stored(client, file_id)?;
         let mut key = VaultKey::new();
-        if let Some(password) = &secret.password {
-            key = key.with_password(password);
+        if let Some(hash) = secret.password_element() {
+            key = key.with_password_hash(*hash);
         }
         if let Some(file) = &secret.key_file {
             key = key.with_key_file(file);
@@ -222,7 +223,7 @@ impl VaultKeys {
         Some(key)
     }
 
-    fn open_stored(&mut self, client: &Client, file_id: &str) -> Option<VaultSecretV1> {
+    fn open_stored(&mut self, client: &Client, file_id: &str) -> Option<VaultSecret> {
         let account = self.account.as_ref()?;
         let stored = self.stored.get_or_insert_with(|| {
             client
@@ -280,7 +281,8 @@ impl VaultKeys {
 
 /// Keeps what opens vault `file_id` (whose current contents are `contents`)
 /// in the account: checked to open the vault by itself, sealed under the
-/// master key for `binding` and stored. Returns the envelope (base64).
+/// master key for `binding` (a password only as its SHA-256) and stored.
+/// Returns the envelope (base64).
 pub(crate) fn keep_secret(
     client: &Client,
     master_key: &[u8],
@@ -300,10 +302,7 @@ pub(crate) fn keep_secret(
     }
     kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
     let id = Uuid::parse_str(file_id)?;
-    let secret = VaultSecretV1 {
-        password: password.map(|p| Zeroizing::new(p.to_owned())),
-        key_file: key_file.map(Zeroizing::new),
-    };
+    let secret = VaultSecret::chosen(password, key_file.as_deref());
     let sealed = seal_vault_secret(master_key, binding, id.as_bytes(), &secret)?;
     let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
     client.put_vault_secret(file_id, &envelope)?;

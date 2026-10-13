@@ -52,6 +52,25 @@
     "choose": "Choose key file",
     "remove": "Remove key file"
   },
+  "vaultKey": {
+    "choice": "Vault key",
+    "random": "A random key, kept in my Kutup account (recommended)",
+    "randomDescription": "Nothing to choose or remember: the vault opens with your Kutup sign-in. To open it in KeePassXC on a computer, show the key from the vault's menu.",
+    "chosen": "A password I choose",
+    "chosenDescription": "For a vault you also open in KeePass apps by typing its password.",
+    "label": "Vault key",
+    "show": "Show vault key…",
+    "title": "Key of {{name}}",
+    "description": "Kasa made this key for the vault. Use it, with the vault's file from Drive, to open the vault in KeePassXC or another KeePass app. Enter your Kutup password to see it.",
+    "reveal": "Show key",
+    "copy": "Copy vault key",
+    "copied": "Vault key copied",
+    "none": "Kasa did not make this vault's key: it opens with the password chosen for it.",
+    "notKept": "The key could not be kept in your account",
+    "notKeptDescription": "The vault was made, but its key could not be kept in your Kutup account. Copy the key now and keep it safe: without it the vault cannot be opened.",
+    "forgetTitle": "Forget this vault's key?",
+    "forgetDescription": "Kasa made this vault's key, and your account is the only place it is kept unless you saved it yourself. Show the vault key and save it first; without it the vault cannot be opened again."
+  },
   "unlock": {
     "title": "Unlock {{name}}",
     "description": "Enter the vault's password or key file.",

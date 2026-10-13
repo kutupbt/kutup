@@ -4,7 +4,7 @@ import type { Op } from './types'
 
 type Calls =
   | { call: 'create'; name: string; password: string | null; keyFile: Uint8Array | null; now: number }
-  | { call: 'open'; contents: Uint8Array; password: string | null; keyFile: Uint8Array | null }
+  | { call: 'open'; contents: Uint8Array; password: string | null; passwordHash: Uint8Array | null; keyFile: Uint8Array | null }
   | { call: 'view'; handle: number }
   | { call: 'apply'; handle: number; op: Op; now: number }
   | { call: 'history'; handle: number; entryId: string }

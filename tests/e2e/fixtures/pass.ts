@@ -10,13 +10,17 @@ export async function openPass(page: Page): Promise<void> {
 }
 
 /** Makes a vault from the vault list; it opens unlocked. Returns its page URL. */
-export async function createVault(page: Page, name: string, password: string, remember = true): Promise<string> {
+/** Makes a vault with `password`, or with a random key kept in the account (`null`). */
+export async function createVault(page: Page, name: string, password: string | null, remember = true): Promise<string> {
   await page.getByRole('button', { name: 'New vault' }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New vault' })
   await dialog.getByLabel('Vault name').fill(name)
-  await dialog.getByLabel('Vault password', { exact: true }).fill(password)
-  await dialog.getByLabel('Repeat the vault password').fill(password)
-  if (!remember) await dialog.getByRole('checkbox', { name: 'Unlock with my Kutup sign-in' }).click()
+  if (password !== null) {
+    await dialog.getByRole('radio', { name: /A password I choose/ }).check()
+    await dialog.getByLabel('Vault password', { exact: true }).fill(password)
+    await dialog.getByLabel('Repeat the vault password').fill(password)
+    if (!remember) await dialog.getByRole('checkbox', { name: 'Unlock with my Kutup sign-in' }).click()
+  }
   await dialog.getByRole('button', { name: 'Create vault' }).click()
   await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await expectSaved(page)
