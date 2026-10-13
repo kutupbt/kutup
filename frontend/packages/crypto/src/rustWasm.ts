@@ -80,6 +80,7 @@ export interface CryptoWasmModule {
   sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountEnvelope(envelopeBase64: string): number
+  RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
   sealPassVaultSecret(
     masterKeyBase64: string,
     binding: string,

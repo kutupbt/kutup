@@ -565,8 +565,14 @@ pub async fn update_label(
     .await?
     .rows_affected();
     if updated == 0 {
-        return Err(AppError::conflict("this label was changed elsewhere")
-            .with_details(serde_json::json!({ "code": "revision_conflict" })));
+        let now: Option<String> = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Err(crate::revisions::rename_lost(now, "no such label"));
     }
     Ok(StatusCode::NO_CONTENT)
 }

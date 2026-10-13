@@ -77,6 +77,15 @@ for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E9
   assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
+// The revision guard's store (Rust revision_guard): entries named by an HMAC,
+// revisions sealed to their entry, both under the account's keys.
+const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'))
+const guardEntry = guardKeys.entryId('contact', 'ayse@example.com')
+assert.match(guardEntry, /^[0-9a-f]{64}$/)
+assert.equal(guardKeys.openSeen(guardEntry, guardKeys.sealSeen(guardEntry, 1791633600000)), 1791633600000)
+assert.throws(() => guardKeys.openSeen(guardKeys.entryId('contact', 'bob@example.com'), guardKeys.sealSeen(guardEntry, 5)))
+assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64')).entryId('contact', 'ayse@example.com'), guardEntry)
+
 // The shared envelope vectors: every purpose's envelope is well formed, and
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).
@@ -86,6 +95,11 @@ for (const p of envelopeVectors.purposes) {
   assert.equal(crypto.inspectAccountEnvelope(p.envelope), p.purpose)
   if (genericPurposes.has(p.purpose)) {
     assert.equal(crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
+  } else {
+    // Mail keys and Pass vault secrets open only through their typed APIs
+    // (which the Rust vector test and test-pass-wasm.mjs open): the generic
+    // path refuses even a well-formed one.
+    assert.throws(() => crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding))
   }
   for (const refused of p.refused) {
     if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountEnvelope(refused.envelope), refused.why)

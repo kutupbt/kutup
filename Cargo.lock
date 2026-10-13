@@ -3142,6 +3142,7 @@ dependencies = [
  "hmac 0.12.1",
  "hpke-rs",
  "hpke-rs-rust-crypto",
+ "kutup-crypto",
  "pgp",
  "rand 0.8.6",
  "rsa",
