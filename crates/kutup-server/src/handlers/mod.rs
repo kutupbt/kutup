@@ -101,7 +101,20 @@ pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id:
 
 /// Access check for a file — owner of its collection, a recipient of the
 /// folder, or a recipient of the file itself (docs/plans/drive-file-sharing.md).
+/// A failed query counts as no access; where acting on "no access" would
+/// destroy something, use [`try_can_access_file`].
 pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+    try_can_access_file(pool, user_id, file_id)
+        .await
+        .unwrap_or(false)
+}
+
+/// [`can_access_file`], with a failed query an error rather than "no".
+pub(crate) async fn try_can_access_file(
+    pool: &PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     let row: Option<(Uuid, bool)> = sqlx::query_as(
         r#"SELECT c.owner_user_id,
                   EXISTS(SELECT 1 FROM collection_shares cs
@@ -122,10 +135,8 @@ pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid)
     .bind(file_id)
     .bind(user_id)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    matches!(row, Some((owner, shared)) if owner == user_id || shared)
+    .await?;
+    Ok(matches!(row, Some((owner, shared)) if owner == user_id || shared))
 }
 
 /// Streams an S3 object body to the client as `application/octet-stream`, mirroring the

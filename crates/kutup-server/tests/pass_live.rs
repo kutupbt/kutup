@@ -569,3 +569,95 @@ fn site_icons_follow_the_account_setting() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// A kept vault key survives losing access to the vault for a while (the
+/// folder unshared, then shared again): a read hides it, never deletes it.
+/// Needs `KUTUP_LIVE_DATABASE_URL` too, to take the share away and give it
+/// back without the Drive re-key flow.
+#[test]
+fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let owner = register(&c, &base);
+    let member = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    share(&c, &base, &owner, &folder, &member, false);
+    let vault = seal_file(&folder, &uuid(), b"a KeePass file");
+    assert!(upload(&c, &base, &owner.token, &folder, &vault)
+        .status()
+        .is_success());
+    assert_eq!(
+        put(
+            &c,
+            &base,
+            &member,
+            &vault.id,
+            &sealed_for(&member, &vault.id, "m")
+        ),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(list(&c, &base, &member).len(), 1);
+
+    // Against the database: the folder's share to the member, taken away
+    // (kept as JSON) and given back as it was.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let pool = rt.block_on(sqlx::PgPool::connect(&database_url)).unwrap();
+    let held = || -> i64 {
+        rt.block_on(
+            sqlx::query_scalar(
+                "SELECT count(*) FROM pass_vault_secrets WHERE file_id = $1::uuid AND user_id = $2::uuid",
+            )
+            .bind(&vault.id)
+            .bind(&member.id)
+            .fetch_one(&pool),
+        )
+        .unwrap()
+    };
+    let kept: String = rt
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT row_to_json(cs)::text FROM collection_shares cs
+                  WHERE collection_id = $1::uuid AND recipient_user_id = $2::uuid",
+            )
+            .bind(&folder.id)
+            .bind(&member.id)
+            .fetch_one(&pool),
+        )
+        .unwrap();
+    rt.block_on(
+        sqlx::query(
+            "DELETE FROM collection_shares WHERE collection_id = $1::uuid AND recipient_user_id = $2::uuid",
+        )
+        .bind(&folder.id)
+        .bind(&member.id)
+        .execute(&pool),
+    )
+    .unwrap();
+    assert_eq!(
+        list(&c, &base, &member).len(),
+        0,
+        "hidden while out of reach"
+    );
+    assert_eq!(held(), 1, "the read deleted nothing");
+    rt.block_on(
+        sqlx::query(
+            "INSERT INTO collection_shares
+             SELECT * FROM json_populate_record(NULL::collection_shares, $1::json)",
+        )
+        .bind(&kept)
+        .execute(&pool),
+    )
+    .unwrap();
+    let back = list(&c, &base, &member);
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0]["fileId"], vault.id.as_str());
+}

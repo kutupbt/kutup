@@ -368,8 +368,10 @@ one database, plus a report of what happened.
   SHA-256, which KeePass treats as the same key; what is kept is checked to
   open the vault first. Stored by the server (`pass_vault_secrets`,
   `/api/pass/vault-secrets`), unreadable to it. Creating or opening a vault
-  offers to remember it; a removed member's record is deleted when it is
-  next listed, and purging the vault deletes them all. `kutup sync` tries the
+  offers to remember it; a record of a vault its owner cannot reach now
+  (unshared, perhaps only for a moment) is unlisted, never deleted on a read
+  (a failed access check fails the request), and purging the vault deletes
+  them all. `kutup sync` tries the
   kept secret before the environment and the prompt, offers to keep a typed
   password, and `kutup pass keep|ls|forget` manages them headless.
 - Entry editing covers the KeePassXC fields (research 19 §4): standard fields,
