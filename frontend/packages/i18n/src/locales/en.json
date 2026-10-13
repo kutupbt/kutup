@@ -181,12 +181,13 @@
       "title": "“{{name}}” is already here",
       "fileThere": "{{folder}} already has a file with this name. Names are compared without letter case.",
       "folderThere": "{{folder}} already has a folder with this name. Names are compared without letter case.",
-      "replaceHint": "Replace: the file there goes to the trash, where you can restore it.",
+      "replaceHint": "Replace: this becomes the newest version of the file there; its older versions stay in its history.",
       "keepBothHint": "Keep both: this one is uploaded as “{{name}}”.",
       "applyToAll": "Do the same for the other name clashes in this upload",
       "replace": "Replace",
       "keepBoth": "Keep both",
-      "skip": "Skip"
+      "skip": "Skip",
+      "replaceTooLarge": "Replace is not offered for files over 2 GB: keep both, or skip."
     }
   },
   "contactSuggest": {
@@ -373,5 +374,11 @@
     "send": "Send",
     "sent": "Thanks! Your feedback was sent to the administrators.",
     "failed": "Your feedback could not be sent. Try again."
+  },
+  "restoreName": {
+    "title": "“{{name}}” is already there",
+    "description": "Something with this name is where it comes back. Restore it as “{{name}}”, or leave it in the trash.",
+    "restore": "Restore as “{{name}}”",
+    "leave": "Leave in trash"
   }
 }

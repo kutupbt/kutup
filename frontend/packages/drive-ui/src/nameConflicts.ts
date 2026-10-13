@@ -17,8 +17,10 @@ export interface ConflictQuestion {
   holder: 'file' | 'folder'
   /** The name it would take under "Keep both". */
   keptAs: string
-  /** Replacing is offered: a file holds the name and the person may move it to the trash. */
+  /** Replacing is offered: a file holds the name, and this content can become its newest version. */
   canReplace: boolean
+  /** A file holds the name, but this one is too large to send as its version. */
+  replaceTooLarge?: boolean
   /** More items of the same batch may still clash ("apply to all" is offered). */
   more: boolean
 }

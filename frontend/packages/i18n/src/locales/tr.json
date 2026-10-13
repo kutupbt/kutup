@@ -181,12 +181,13 @@
       "title": "“{{name}}” burada zaten var",
       "fileThere": "{{folder}} içinde bu adda bir dosya zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
       "folderThere": "{{folder}} içinde bu adda bir klasör zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
-      "replaceHint": "Değiştir: oradaki dosya çöp kutusuna taşınır, oradan geri yükleyebilirsiniz.",
+      "replaceHint": "Değiştir: bu, oradaki dosyanın en yeni sürümü olur; eski sürümleri geçmişinde kalır.",
       "keepBothHint": "İkisini de tut: bu dosya “{{name}}” adıyla yüklenir.",
       "applyToAll": "Bu yüklemedeki diğer ad çakışmalarında da aynısını yap",
       "replace": "Değiştir",
       "keepBoth": "İkisini de tut",
-      "skip": "Atla"
+      "skip": "Atla",
+      "replaceTooLarge": "2 GB'tan büyük dosyalar için Değiştir sunulmaz: ikisini de tutun ya da atlayın."
     }
   },
   "contactSuggest": {
@@ -373,5 +374,11 @@
     "send": "Gönder",
     "sent": "Teşekkürler! Geri bildiriminiz yöneticilere gönderildi.",
     "failed": "Geri bildiriminiz gönderilemedi. Yeniden deneyin."
+  },
+  "restoreName": {
+    "title": "“{{name}}” orada zaten var",
+    "description": "Geri döneceği yerde bu adda bir öğe var. “{{name}}” adıyla geri yükleyin ya da çöp kutusunda bırakın.",
+    "restore": "“{{name}}” olarak geri yükle",
+    "leave": "Çöp kutusunda bırak"
   }
 }

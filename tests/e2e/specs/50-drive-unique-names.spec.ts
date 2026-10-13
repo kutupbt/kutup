@@ -1,13 +1,13 @@
 // Names unique in a folder, and files not uploaded twice
 // (docs/plans/drive-unique-names.md):
 //   1. the same file uploaded again is skipped; a different one under a
-//      taken name (case aside) asks Keep both / Replace / Skip;
+//      taken name (case aside) asks Keep both / Replace (a new version of
+//      the file there) / Skip;
 //   2. a folder dropped again goes into the folder already there and sends
 //      only what changed, asking once with "apply to all";
 //   3. renames refuse a taken name, case aside — but Turkish İ keeps its dot;
-//   4. items made without hashes (an older client) are filled in when the
-//      owner opens the folder, the later duplicate renamed `name (2)`;
-//   5. a file restored after its name was taken comes back as `name (2)`.
+//   4. a file restored after its name was taken is offered the next free
+//      name, and comes back under it (or stays in the trash).
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
@@ -81,16 +81,23 @@ test('the same file again is skipped; a different one under a taken name asks', 
   await expect(item(page, 'REPORT (2).TXT')).toBeVisible({ timeout: 60_000 })
   await expect(item(page, 'report.txt')).toBeVisible()
 
-  // Replace: the one there goes to the trash, the new one takes its name.
+  // Replace: the new content becomes the newest version of the file there
+  // (Proton's Replace) — no new file, nothing in the trash.
+  const beforeReplace = uploads.count
   await upload(page, `${dir}/third/report.txt`)
   await conflict(page).getByRole('button', { name: 'Replace' }).click()
   await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
+  expect(uploads.count).toBe(beforeReplace)
   await page.reload()
   await expect(item(page, 'report.txt')).toHaveCount(1, { timeout: 60_000 })
   await expect(item(page, 'report (2).txt')).toHaveCount(0)
   await openSection(page, 'Trash')
-  await expect(item(page, 'report.txt')).toBeVisible({ timeout: 30_000 })
+  await expect(item(page, 'REPORT.TXT')).toHaveCount(0)
+  await expect(item(page, 'report.txt')).toHaveCount(0)
   await openSection(page, 'My files')
+  // The same replacement again is now the same file: skipped.
+  await upload(page, `${dir}/third/report.txt`)
+  await expect(panel(page).getByText('Already in this folder').first()).toBeVisible({ timeout: 60_000 })
 
   // Skip: nothing changes.
   const before = uploads.count
@@ -170,54 +177,35 @@ test('a rename onto a taken name is refused, case aside; Turkish İ keeps its do
   await context.close()
 })
 
-test('items without hashes are filled in, and a restore into a taken name keeps both', async ({ browser }, testInfo) => {
+test('a restore into a taken name is offered the next free name', async ({ browser }, testInfo) => {
   test.slow()
-  const { context, page } = await freshDrive(browser, 'uniquefill')
-  const dir = testInfo.outputPath('fill')
+  const { context, page } = await freshDrive(browser, 'uniquerestore')
+  const dir = testInfo.outputPath('restore')
   await mkdir(`${dir}/second`, { recursive: true })
   await writeFile(`${dir}/plan.txt`, 'one')
   await writeFile(`${dir}/second/plan.txt`, 'two')
 
-  // Uploads without name hashes (as a replacing upload sends them) that do
-  // not see what is there (so this one does not stop them either). Nothing
-  // is filled in meanwhile. A new folder always claims its name.
-  let hideFiles = false
-  await context.route('**/name-hashes', (route) => route.abort())
-  await context.route('**/api/collections/*/files', async (route) => {
-    if (!hideFiles) return route.continue()
-    await route.fulfill({ json: [] })
-  })
-  await context.route('**/api/uploads/', async (route) => {
-    const headers = route.request().headers()
-    const meta = headers['upload-metadata']
-    if (route.request().method() !== 'POST' || !meta) return route.continue()
-    const kept = meta.split(',').filter((pair) => !pair.startsWith('nameHash '))
-    await route.continue({ headers: { ...headers, 'upload-metadata': kept.join(',') } })
-  })
-
   await upload(page, `${dir}/plan.txt`)
   await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
-  hideFiles = true
-  await page.reload()
+  await itemAction(page, 'plan.txt', 'Move to trash')
+  await expect(item(page, 'plan.txt')).toHaveCount(0, { timeout: 30_000 })
+  // Another file takes the name meanwhile.
   await upload(page, `${dir}/second/plan.txt`)
-  await expect(panel(page).getByText('In My files')).toHaveCount(1, { timeout: 60_000 })
-  await context.unrouteAll({ behavior: 'wait' })
+  await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
 
-  // The owner opens the folder: both files are there, and the later one is
-  // renamed.
-  await page.reload()
-  await expect(item(page, 'plan (2).txt')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'plan.txt')).toHaveCount(1)
-
-  // A file restored after its name was taken comes back beside it.
-  await itemAction(page, 'plan (2).txt', 'Move to trash')
-  await expect(item(page, 'plan (2).txt')).toHaveCount(0, { timeout: 30_000 })
-  await renameItem(page, 'plan.txt', 'plan (2).txt')
   await openSection(page, 'Trash')
-  await itemAction(page, 'plan (2).txt', 'Restore')
-  await expect(item(page, 'plan (2).txt')).toHaveCount(0, { timeout: 30_000 })
+  const asked = page.getByRole('dialog').filter({ hasText: 'is already there' })
+  // Left in the trash when the person says so.
+  await itemAction(page, 'plan.txt', 'Restore')
+  await expect(asked).toContainText('“plan.txt” is already there', { timeout: 30_000 })
+  await asked.getByRole('button', { name: 'Leave in trash' }).click()
+  await expect(item(page, 'plan.txt')).toBeVisible()
+  // Restored under the name offered.
+  await itemAction(page, 'plan.txt', 'Restore')
+  await asked.getByRole('button', { name: 'Restore as “plan (2).txt”' }).click()
+  await expect(item(page, 'plan.txt')).toHaveCount(0, { timeout: 30_000 })
   await openSection(page, 'My files')
+  await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
   await expect(item(page, 'plan (2).txt')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'plan (3).txt')).toBeVisible({ timeout: 60_000 })
   await context.close()
 })

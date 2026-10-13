@@ -270,7 +270,14 @@ export async function placeFile(opts: PlaceFileOptions): Promise<UploadOutcome> 
           : { name: freeName(file.name, namesIn(listing.files, listing.subfolders)), hash: undefined }
       const replaceable = plan.holder.kind === 'file' && canReplace(folder, plan.holder.file, file)
       const choice = await opts.policy.choose(
-        { name: file.name, folderName: opts.folderName, holder: plan.holder.kind, keptAs: kept.name, canReplace: replaceable },
+        {
+          name: file.name,
+          folderName: opts.folderName,
+          holder: plan.holder.kind,
+          keptAs: kept.name,
+          canReplace: replaceable,
+          replaceTooLarge: plan.holder.kind === 'file' && file.size > REPLACE_LIMIT_BYTES,
+        },
         opts.signal,
       )
       if (choice === 'skip') return { skipped: 'chosen' }

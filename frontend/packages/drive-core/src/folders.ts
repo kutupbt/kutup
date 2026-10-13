@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useQuery, type QueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { createOwnedCollectionV1, openOwnedCollectionV1, openSharedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -223,7 +223,6 @@ export function cachedFolderIndex(queryClient: QueryClient): FolderIndex | undef
 
 export function useFolders() {
   const identity = useDriveIdentity()
-  const queryClient = useQueryClient()
   return useQuery({
     queryKey: [...foldersKey, identity.data?.userId],
     enabled: identity.isSuccess,

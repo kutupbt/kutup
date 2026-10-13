@@ -7,8 +7,8 @@ import { Label } from '@kutup/ui/components/label'
 import { useNameConflict, type ConflictChoice } from './nameConflicts'
 
 /**
- * An upload's name is taken in its folder: Replace (the file there goes to
- * the trash), Keep both (this one takes the next free name) or Skip, with
+ * An upload's name is taken in its folder: Replace (this content becomes
+ * the newest version of the file there), Keep both (this one takes the next free name) or Skip, with
  * "apply to the rest" for a batch (docs/plans/drive-unique-names.md).
  * Closing the dialog skips.
  */
@@ -35,6 +35,7 @@ export function NameConflictDialog() {
         </DialogHeader>
         <ul className="space-y-1 text-sm text-muted-foreground">
           {question.canReplace ? <li>{t('uploads.conflict.replaceHint')}</li> : null}
+          {question.replaceTooLarge ? <li>{t('uploads.conflict.replaceTooLarge')}</li> : null}
           <li>{t('uploads.conflict.keepBothHint', { name: question.keptAs })}</li>
         </ul>
         {question.more ? (
