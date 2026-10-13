@@ -80,6 +80,13 @@ fn write_vectors() {
         bytes: STANDARD.encode(bytes),
     };
     let tag_at = sealed.len() - 1;
+    // The same master key, another store key (the index deleted and made again).
+    let other_store = MailSearchKeys::open(
+        &master,
+        &MailSearchKeys::wrap_with_nonce(&master, &[0x34u8; 32], &wrap_nonce).unwrap(),
+    )
+    .unwrap();
+    let elsewhere = other_store.seal_with_nonce(name, value, &nonce).unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
         store_name: store_name(&master).unwrap(),
@@ -98,6 +105,11 @@ fn write_vectors() {
             record("a flipped nonce byte", name, flipped(&sealed, 12)),
             record("a flipped tag byte", name, flipped(&sealed, tag_at)),
             record("cut short", name, sealed[..20].to_vec()),
+            record(
+                "sealed under another store key of the same master key",
+                name,
+                elsewhere,
+            ),
             store("another master key", &[0x5bu8; 32], wrapped.clone()),
             store(
                 "a flipped wrapped byte",

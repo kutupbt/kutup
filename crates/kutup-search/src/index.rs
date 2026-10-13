@@ -8,12 +8,19 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::words;
 
 /// Raised whenever what is indexed or how changes: a directory of another
-/// version is not read, and the caller builds the index again.
-pub const INDEX_VERSION: u32 = 2;
+/// version is not read (see [`Index::stored_version`]), and the caller
+/// builds the index again.
+pub const INDEX_VERSION: u32 = 3;
 /// The period a document table and its shards cover (30 days).
 pub const BUCKET_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Characters of a word that name its shard.
 const SHARD_CHARS: usize = 3;
+/// A period's documents are kept in this many tables, each document in the
+/// one its id hashes to, so no table grows past what a record holds and a
+/// document is found from its id alone.
+const DOC_CHUNKS: u32 = 32;
+/// A document's number: its table in the high bits, its place in the low.
+const PLACE_BITS: u32 = 27;
 /// The directory's record name.
 pub const DIRECTORY_KEY: &str = "dir";
 
@@ -40,7 +47,7 @@ pub struct NewDoc {
     pub meta: String,
 }
 
-/// A document held: its id and time, which find its period.
+/// A document held: its id and time, which find its table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DocRef {
     pub id: String,
@@ -55,6 +62,10 @@ pub struct Hit {
     pub meta: String,
 }
 
+/// What a query's words matched, before the documents are read: a period
+/// and a document number.
+pub type Found = Vec<(i64, u32)>;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct Directory {
     version: u32,
@@ -68,7 +79,7 @@ struct PeriodInfo {
     docs: u32,
 }
 
-/// A period's documents; a document's number is its place here.
+/// One table of a period's documents; a document's place is its index here.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct DocTable {
     docs: Vec<DocEntry>,
@@ -82,8 +93,8 @@ struct DocEntry {
     meta: String,
 }
 
-/// Words of one start in one period, each with the ascending numbers of the
-/// documents holding it.
+/// Words of one start in one period, each with the numbers of the documents
+/// holding it.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct Shard {
     words: BTreeMap<String, Vec<u32>>,
@@ -93,8 +104,19 @@ fn period_of(time_ms: i64) -> i64 {
     time_ms.div_euclid(BUCKET_MS)
 }
 
-fn docs_key(period: i64) -> String {
-    format!("docs/{period}")
+/// The table a document id belongs to: FNV-1a, fixed for good (stored
+/// numbers depend on it).
+fn chunk_of(id: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in id.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash % DOC_CHUNKS
+}
+
+fn docs_key(period: i64, chunk: u32) -> String {
+    format!("docs/{period}/{chunk}")
 }
 
 fn shard_key(period: i64, prefix: &str) -> String {
@@ -127,6 +149,17 @@ pub struct Index {
 }
 
 impl Index {
+    /// The version a stored directory was written in.
+    pub fn stored_version(directory: &[u8]) -> Result<u32, SearchError> {
+        #[derive(Deserialize)]
+        struct Versioned {
+            version: u32,
+        }
+        let stored: Versioned =
+            ciborium::from_reader(directory).map_err(|e| SearchError::Decode(e.to_string()))?;
+        Ok(stored.version)
+    }
+
     /// An index from its stored directory; `None` (or another version) is an
     /// empty index, to be built.
     pub fn open(directory: Option<&[u8]>) -> Result<Self, SearchError> {
@@ -137,10 +170,8 @@ impl Index {
         let directory = match directory {
             None => fresh,
             Some(bytes) => {
-                let stored: Directory =
-                    ciborium::from_reader(bytes).map_err(|e| SearchError::Decode(e.to_string()))?;
-                if stored.version == INDEX_VERSION {
-                    stored
+                if Self::stored_version(bytes)? == INDEX_VERSION {
+                    ciborium::from_reader(bytes).map_err(|e| SearchError::Decode(e.to_string()))?
                 } else {
                     fresh
                 }
@@ -172,12 +203,17 @@ impl Index {
         self.directory.periods.keys().rev().copied().collect()
     }
 
+    /// The tables of documents with these ids and times.
+    fn tables_of<'a>(docs: impl Iterator<Item = (&'a str, i64)>) -> BTreeSet<String> {
+        docs.map(|(id, time)| docs_key(period_of(time), chunk_of(id)))
+            .collect()
+    }
+
     /// The records [`Index::add`] needs for `docs`.
     pub fn plan_add(&self, docs: &[NewDoc]) -> Vec<String> {
-        let mut keys = BTreeSet::new();
+        let mut keys = Self::tables_of(docs.iter().map(|d| (d.id.as_str(), d.time_ms)));
         for doc in docs {
             let period = period_of(doc.time_ms);
-            keys.insert(docs_key(period));
             for word in words(&doc.text) {
                 keys.insert(shard_key(period, &prefix_of(&word)));
             }
@@ -189,21 +225,25 @@ impl Index {
     /// records changed, the directory among them. A document already held
     /// (live, same id and period) is left as it is.
     pub fn add(&mut self, docs: &[NewDoc], records: &Records) -> Result<Records, SearchError> {
-        let mut tables: BTreeMap<i64, DocTable> = BTreeMap::new();
+        let mut tables: BTreeMap<(i64, u32), DocTable> = BTreeMap::new();
         let mut shards: BTreeMap<(i64, String), Shard> = BTreeMap::new();
         for doc in docs {
             let period = period_of(doc.time_ms);
-            let table = match tables.entry(period) {
+            let chunk = chunk_of(&doc.id);
+            let table = match tables.entry((period, chunk)) {
                 std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(decode(records, &docs_key(period))?)
+                    entry.insert(decode(records, &docs_key(period, chunk))?)
                 }
             };
             if table.docs.iter().any(|d| d.live && d.id == doc.id) {
                 continue;
             }
-            let number = u32::try_from(table.docs.len())
-                .map_err(|_| SearchError::Encode("too many documents".into()))?;
+            let place = u32::try_from(table.docs.len())
+                .ok()
+                .filter(|p| *p < 1 << PLACE_BITS)
+                .ok_or_else(|| SearchError::Encode("too many documents".into()))?;
+            let number = (chunk << PLACE_BITS) | place;
             table.docs.push(DocEntry {
                 id: doc.id.clone(),
                 time_ms: doc.time_ms,
@@ -220,19 +260,18 @@ impl Index {
                     let loaded = decode(records, &shard_key(period, &key.1))?;
                     shards.insert(key.clone(), loaded);
                 }
-                let numbers = shards
+                shards
                     .get_mut(&key)
                     .expect("loaded")
                     .words
                     .entry(word)
-                    .or_default();
-                // Numbers only grow within a period, so the list stays ascending.
-                numbers.push(number);
+                    .or_default()
+                    .push(number);
             }
         }
         let mut changed = Records::new();
-        for (period, table) in &tables {
-            changed.insert(docs_key(*period), encode(table)?);
+        for ((period, chunk), table) in &tables {
+            changed.insert(docs_key(*period, *chunk), encode(table)?);
         }
         for ((period, prefix), shard) in &shards {
             changed.insert(shard_key(*period, prefix), encode(shard)?);
@@ -241,32 +280,28 @@ impl Index {
         Ok(changed)
     }
 
-    /// The records [`Index::remove`] needs for documents of these times.
-    pub fn plan_remove(&self, times_ms: &[i64]) -> Vec<String> {
-        let periods: BTreeSet<i64> = times_ms.iter().map(|t| period_of(*t)).collect();
-        periods
+    /// The records [`Index::remove`] needs.
+    pub fn plan_remove(&self, docs: &[DocRef]) -> Vec<String> {
+        Self::tables_of(docs.iter().map(|d| (d.id.as_str(), d.time_ms)))
             .into_iter()
-            .filter(|p| self.directory.periods.contains_key(p))
-            .map(docs_key)
             .collect()
     }
 
     /// Marks documents gone (a deleted message); their words stay in the
     /// shards until the index is built again, and are never found.
     pub fn remove(&mut self, docs: &[DocRef], records: &Records) -> Result<Records, SearchError> {
-        let mut changed = Records::new();
-        let mut by_period: BTreeMap<i64, HashSet<&str>> = BTreeMap::new();
+        let mut by_table: BTreeMap<(i64, u32), HashSet<&str>> = BTreeMap::new();
         for doc in docs {
-            by_period
-                .entry(period_of(doc.time_ms))
-                .or_default()
-                .insert(doc.id.as_str());
-        }
-        for (period, ids) in by_period {
-            if !self.directory.periods.contains_key(&period) {
-                continue;
+            if self.directory.periods.contains_key(&period_of(doc.time_ms)) {
+                by_table
+                    .entry((period_of(doc.time_ms), chunk_of(&doc.id)))
+                    .or_default()
+                    .insert(doc.id.as_str());
             }
-            let key = docs_key(period);
+        }
+        let mut changed = Records::new();
+        for ((period, chunk), ids) in by_table {
+            let key = docs_key(period, chunk);
             let mut table: DocTable = decode(records, &key)?;
             let mut any = false;
             for entry in &mut table.docs {
@@ -282,9 +317,11 @@ impl Index {
         Ok(changed)
     }
 
-    /// The records [`Index::update_meta`] needs for documents of these times.
-    pub fn plan_update_meta(&self, times_ms: &[i64]) -> Vec<String> {
-        self.plan_remove(times_ms)
+    /// The records [`Index::update_meta`] needs.
+    pub fn plan_update_meta(&self, docs: &[Hit]) -> Vec<String> {
+        Self::tables_of(docs.iter().map(|d| (d.id.as_str(), d.time_ms)))
+            .into_iter()
+            .collect()
     }
 
     /// Replaces the data of documents held (a message moved, read or
@@ -295,20 +332,20 @@ impl Index {
         docs: &[Hit],
         records: &Records,
     ) -> Result<(Records, Vec<String>), SearchError> {
-        let mut changed = Records::new();
-        let mut held: HashSet<&str> = HashSet::new();
-        let mut by_period: BTreeMap<i64, BTreeMap<&str, &str>> = BTreeMap::new();
+        let mut by_table: BTreeMap<(i64, u32), BTreeMap<&str, &str>> = BTreeMap::new();
         for doc in docs {
-            by_period
-                .entry(period_of(doc.time_ms))
+            by_table
+                .entry((period_of(doc.time_ms), chunk_of(&doc.id)))
                 .or_default()
                 .insert(doc.id.as_str(), doc.meta.as_str());
         }
-        for (period, metas) in by_period {
+        let mut changed = Records::new();
+        let mut held: HashSet<&str> = HashSet::new();
+        for ((period, chunk), metas) in by_table {
             if !self.directory.periods.contains_key(&period) {
                 continue;
             }
-            let key = docs_key(period);
+            let key = docs_key(period, chunk);
             let mut table: DocTable = decode(records, &key)?;
             let mut any = false;
             for entry in &mut table.docs {
@@ -348,7 +385,7 @@ impl Index {
             .collect()
     }
 
-    /// The records [`Index::search`] needs for `query` in `periods`.
+    /// The shards [`Index::search`] reads for `query` in `periods`.
     pub fn plan_search(&self, query: &str, periods: &[i64]) -> Vec<String> {
         let terms = words(query);
         let mut keys = BTreeSet::new();
@@ -356,7 +393,6 @@ impl Index {
             let Some(info) = self.directory.periods.get(period) else {
                 continue;
             };
-            keys.insert(docs_key(*period));
             for term in &terms {
                 for prefix in matching_prefixes(info, term) {
                     keys.insert(shard_key(*period, prefix));
@@ -366,19 +402,20 @@ impl Index {
         keys.into_iter().collect()
     }
 
-    /// The live documents in `periods` holding every word of `query` (each
-    /// as the start of a word), newest first.
+    /// The documents in `periods` holding every word of `query` (each as the
+    /// start of a word), from the shards alone; [`Index::plan_hits`] and
+    /// [`Index::hits`] read only their tables.
     pub fn search(
         &self,
         query: &str,
         periods: &[i64],
         records: &Records,
-    ) -> Result<Vec<Hit>, SearchError> {
+    ) -> Result<Found, SearchError> {
         let terms = words(query);
+        let mut out = Found::new();
         if terms.is_empty() {
-            return Ok(Vec::new());
+            return Ok(out);
         }
-        let mut hits = Vec::new();
         for period in periods {
             let Some(info) = self.directory.periods.get(period) else {
                 continue;
@@ -406,19 +443,37 @@ impl Index {
                     break;
                 }
             }
-            let Some(found) = found else { continue };
-            if found.is_empty() {
-                continue;
+            out.extend(found.unwrap_or_default().into_iter().map(|n| (*period, n)));
+        }
+        Ok(out)
+    }
+
+    /// The tables holding `found`.
+    pub fn plan_hits(&self, found: &Found) -> Vec<String> {
+        found
+            .iter()
+            .map(|(period, number)| docs_key(*period, number >> PLACE_BITS))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// The live documents of `found`, newest first.
+    pub fn hits(&self, found: &Found, records: &Records) -> Result<Vec<Hit>, SearchError> {
+        let mut tables: BTreeMap<String, DocTable> = BTreeMap::new();
+        let mut hits = Vec::new();
+        for (period, number) in found {
+            let key = docs_key(*period, number >> PLACE_BITS);
+            if !tables.contains_key(&key) {
+                tables.insert(key.clone(), decode(records, &key)?);
             }
-            let table: DocTable = decode(records, &docs_key(*period))?;
-            for number in found {
-                if let Some(entry) = table.docs.get(number as usize).filter(|e| e.live) {
-                    hits.push(Hit {
-                        id: entry.id.clone(),
-                        time_ms: entry.time_ms,
-                        meta: entry.meta.clone(),
-                    });
-                }
+            let place = (number & ((1 << PLACE_BITS) - 1)) as usize;
+            if let Some(entry) = tables[&key].docs.get(place).filter(|e| e.live) {
+                hits.push(Hit {
+                    id: entry.id.clone(),
+                    time_ms: entry.time_ms,
+                    meta: entry.meta.clone(),
+                });
             }
         }
         hits.sort_by(|a, b| b.time_ms.cmp(&a.time_ms).then_with(|| b.id.cmp(&a.id)));
@@ -476,12 +531,16 @@ mod tests {
             self.records.extend(changed);
         }
 
+        fn hits(&self, query: &str, periods: &[i64]) -> Vec<Hit> {
+            let needed = self.load(&self.index.plan_search(query, periods));
+            let found = self.index.search(query, periods, &needed).unwrap();
+            let tables = self.load(&self.index.plan_hits(&found));
+            self.index.hits(&found, &tables).unwrap()
+        }
+
         fn search(&self, query: &str) -> Vec<String> {
             let periods = self.index.next_periods(None, usize::MAX);
-            let needed = self.load(&self.index.plan_search(query, &periods));
-            self.index
-                .search(query, &periods, &needed)
-                .unwrap()
+            self.hits(query, &periods)
                 .into_iter()
                 .map(|h| h.id)
                 .collect()
@@ -539,7 +598,7 @@ mod tests {
             id: "a".into(),
             time_ms: doc("a", 0, "").time_ms,
         }];
-        let needed = kept.load(&kept.index.plan_remove(&[gone[0].time_ms]));
+        let needed = kept.load(&kept.index.plan_remove(&gone));
         let changed = kept.index.remove(&gone, &needed).unwrap();
         kept.records.extend(changed);
         assert_eq!(kept.search("rapor"), ["b"]);
@@ -551,10 +610,7 @@ mod tests {
         kept.add(&[doc("a", 0, "rapor"), doc("b", 40, "rapor")]);
         let periods = kept.index.next_periods(None, usize::MAX);
         let found = |kept: &Kept| {
-            let needed = kept.load(&kept.index.plan_search("rapor", &periods));
-            kept.index
-                .search("rapor", &periods, &needed)
-                .unwrap()
+            kept.hits("rapor", &periods)
                 .into_iter()
                 .map(|h| h.meta)
                 .collect::<Vec<_>>()
@@ -574,7 +630,7 @@ mod tests {
                 meta: "row:z".into(),
             },
         ];
-        let needed = kept.load(&kept.index.plan_update_meta(&[a.time_ms]));
+        let needed = kept.load(&kept.index.plan_update_meta(&moved));
         let (changed, missing) = kept.index.update_meta(&moved, &needed).unwrap();
         assert_eq!(changed.len(), 1);
         assert_eq!(missing, ["z"]);
@@ -589,15 +645,13 @@ mod tests {
         kept.add(&[doc("old", 0, "proje"), doc("new", 100, "proje")]);
         let newest = kept.index.next_periods(None, 1);
         assert_eq!(newest.len(), 1);
-        let needed = kept.load(&kept.index.plan_search("proje", &newest));
-        let first = kept.index.search("proje", &newest, &needed).unwrap();
+        let first = kept.hits("proje", &newest);
         assert_eq!(
             first.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),
             ["new"]
         );
         let older = kept.index.next_periods(Some(newest[0]), 1);
-        let needed = kept.load(&kept.index.plan_search("proje", &older));
-        let second = kept.index.search("proje", &older, &needed).unwrap();
+        let second = kept.hits("proje", &older);
         assert_eq!(
             second.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),
             ["old"]
@@ -616,6 +670,7 @@ mod tests {
         };
         let bytes = encode(&stored).unwrap();
         assert!(Index::open(Some(&bytes)).unwrap().is_empty());
+        assert_eq!(Index::stored_version(&bytes).unwrap(), INDEX_VERSION + 1);
         assert!(Index::open(Some(b"\xff")).is_err());
     }
 
@@ -637,5 +692,23 @@ mod tests {
         assert_eq!(kept.index.len(), 5_000);
         assert_eq!(kept.search("kelime7").len(), 100);
         assert_eq!(kept.search("4999")[0], "m4999");
+        // No table of a period grows past a share of it.
+        let largest = kept
+            .records
+            .iter()
+            .filter(|(k, _)| k.starts_with("docs/"))
+            .map(|(_, v)| v.len())
+            .max()
+            .unwrap();
+        assert!(largest < 64 * 1024, "{largest}");
+    }
+
+    #[test]
+    fn a_document_is_found_in_its_table_from_its_id() {
+        assert_eq!(chunk_of("a"), chunk_of("a"));
+        let chunks: BTreeSet<u32> = (0..1000).map(|i| chunk_of(&format!("m{i}"))).collect();
+        assert_eq!(chunks.len(), DOC_CHUNKS as usize);
+        // Fixed for good: stored numbers depend on it.
+        assert_eq!(chunk_of("00000000-0000-4000-8000-000000000001"), 2);
     }
 }

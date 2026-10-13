@@ -53,6 +53,13 @@
       "bytes": "S1VUTVMxAAAAAUREREREREREREQ="
     },
     {
+      "why": "sealed under another store key of the same master key",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAURERERERERERERERERERERERERERERERCXYDtkPBnTzCOx6S7Ju3V9xAfXseA8QA7qP0yYw3nE="
+    },
+    {
       "why": "another master key",
       "kind": "storeKey",
       "name": null,

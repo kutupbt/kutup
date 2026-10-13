@@ -11,7 +11,7 @@
 //! database destroys that key and so everything sealed under it.
 
 use kutup_crypto::mail_search::{store_name, MailSearchKeys};
-use kutup_search::{DocRef, Hit, Index, NewDoc, Records, DIRECTORY_KEY};
+use kutup_search::{DocRef, Found, Hit, Index, NewDoc, Records, DIRECTORY_KEY, INDEX_VERSION};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -38,6 +38,12 @@ struct Loaded {
     name: String,
     #[serde(with = "serde_bytes_compat")]
     sealed: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct Matched {
+    found: Vec<(f64, u32)>,
+    needed: Vec<Needed>,
 }
 
 #[derive(Serialize)]
@@ -147,10 +153,17 @@ impl MailSearch {
         self.wrapped.clone()
     }
 
-    /// Whether a record needed did not open since the index was opened: the
-    /// page builds the index again.
+    /// Whether a record needed did not open, or the directory is of another
+    /// version: from then on nothing is written, and the page deletes the
+    /// database and builds the index again.
     pub fn damaged(&self) -> bool {
         self.damaged
+    }
+
+    /// Whether `text` holds every word of `query` as the index would find
+    /// them (Drafts, kept outside the index).
+    pub fn matches(query: &str, text: &str) -> bool {
+        kutup_search::matches(query, text)
     }
 
     /// The record id the directory is stored under.
@@ -159,16 +172,25 @@ impl MailSearch {
         self.keys.record_id(DIRECTORY_KEY)
     }
 
-    /// Reads the stored directory; none, another version or one that does not
-    /// open leaves the index empty (to be built again).
+    /// Reads the stored directory (none: an empty index). One that does not
+    /// open or decode, or of another version, leaves the index empty and
+    /// [`MailSearch::damaged`]: its records are of no use.
     #[wasm_bindgen(js_name = openDirectory)]
     pub fn open_directory(&mut self, sealed: Option<Vec<u8>>) -> Result<bool, JsValue> {
-        let plain = sealed.and_then(|sealed| self.keys.open_record(DIRECTORY_KEY, &sealed).ok());
-        self.index = match plain.as_deref().map(|bytes| Index::open(Some(bytes))) {
-            Some(Ok(index)) => index,
-            _ => Index::open(None).map_err(js_error)?,
+        self.index = Index::open(None).map_err(js_error)?;
+        let Some(sealed) = sealed else {
+            return Ok(false);
         };
-        self.damaged = false;
+        let opened = self
+            .keys
+            .open_record(DIRECTORY_KEY, &sealed)
+            .ok()
+            .filter(|plain| Index::stored_version(plain).ok() == Some(INDEX_VERSION))
+            .and_then(|plain| Index::open(Some(&plain)).ok());
+        match opened {
+            Some(index) => self.index = index,
+            None => self.damaged = true,
+        }
         Ok(!self.index.is_empty())
     }
 
@@ -216,6 +238,17 @@ impl MailSearch {
         to_js(&needed)
     }
 
+    /// The loaded records, opened, to write from: refused once the index is
+    /// [`MailSearch::damaged`] (an unreadable table would be written anew,
+    /// and the shards would point at the wrong documents).
+    fn opened_for_write(&mut self, loaded: JsValue) -> Result<Records, JsValue> {
+        let records = self.opened(loaded)?;
+        if self.damaged {
+            return Err(js_error("the search index is damaged"));
+        }
+        Ok(records)
+    }
+
     /// The loaded records, opened; one that does not open is read as
     /// missing and marks the index [`MailSearch::damaged`].
     fn opened(&mut self, loaded: JsValue) -> Result<Records, JsValue> {
@@ -260,32 +293,34 @@ impl MailSearch {
     pub fn add(&mut self, docs: JsValue, loaded: JsValue) -> Result<JsValue, JsValue> {
         let docs: Vec<JsDoc> = serde_wasm_bindgen::from_value(docs).map_err(js_error)?;
         let docs: Vec<NewDoc> = docs.into_iter().map(Into::into).collect();
-        let records = self.opened(loaded)?;
+        let records = self.opened_for_write(loaded)?;
         let changed = self.index.add(&docs, &records).map_err(js_error)?;
         self.sealed(changed)
     }
 
-    /// The records [`MailSearch::remove`] needs for messages of these times.
+    /// The records [`MailSearch::remove`] needs for messages (`{ id, timeMs }[]`).
     #[wasm_bindgen(js_name = planRemove)]
-    pub fn plan_remove(&self, times_ms: Vec<f64>) -> Result<JsValue, JsValue> {
-        let times: Vec<i64> = times_ms.into_iter().map(|t| t as i64).collect();
-        self.needed(self.index.plan_remove(&times))
+    pub fn plan_remove(&self, gone: JsValue) -> Result<JsValue, JsValue> {
+        let gone: Vec<JsRef> = serde_wasm_bindgen::from_value(gone).map_err(js_error)?;
+        let gone: Vec<DocRef> = gone.into_iter().map(Into::into).collect();
+        self.needed(self.index.plan_remove(&gone))
     }
 
     /// Marks messages (`{ id, timeMs }[]`) gone.
     pub fn remove(&mut self, gone: JsValue, loaded: JsValue) -> Result<JsValue, JsValue> {
         let gone: Vec<JsRef> = serde_wasm_bindgen::from_value(gone).map_err(js_error)?;
         let gone: Vec<DocRef> = gone.into_iter().map(Into::into).collect();
-        let records = self.opened(loaded)?;
+        let records = self.opened_for_write(loaded)?;
         let changed = self.index.remove(&gone, &records).map_err(js_error)?;
         self.sealed(changed)
     }
 
-    /// The records [`MailSearch::update_meta`] needs for messages of these times.
+    /// The records [`MailSearch::update_meta`] needs (`{ id, timeMs, meta }[]`).
     #[wasm_bindgen(js_name = planUpdateMeta)]
-    pub fn plan_update_meta(&self, times_ms: Vec<f64>) -> Result<JsValue, JsValue> {
-        let times: Vec<i64> = times_ms.into_iter().map(|t| t as i64).collect();
-        self.needed(self.index.plan_update_meta(&times))
+    pub fn plan_update_meta(&self, docs: JsValue) -> Result<JsValue, JsValue> {
+        let docs: Vec<JsHit> = serde_wasm_bindgen::from_value(docs).map_err(js_error)?;
+        let docs: Vec<Hit> = docs.into_iter().map(Into::into).collect();
+        self.needed(self.index.plan_update_meta(&docs))
     }
 
     /// Replaces the list rows of messages held (`{ id, timeMs, meta }[]`):
@@ -295,7 +330,7 @@ impl MailSearch {
     pub fn update_meta(&mut self, docs: JsValue, loaded: JsValue) -> Result<JsValue, JsValue> {
         let docs: Vec<JsHit> = serde_wasm_bindgen::from_value(docs).map_err(js_error)?;
         let docs: Vec<Hit> = docs.into_iter().map(Into::into).collect();
-        let records = self.opened(loaded)?;
+        let records = self.opened_for_write(loaded)?;
         let (changed, missing) = self.index.update_meta(&docs, &records).map_err(js_error)?;
         let stored = self.sealed_list(changed)?;
         to_js(&Updated { stored, missing })
@@ -312,15 +347,15 @@ impl MailSearch {
             .collect()
     }
 
-    /// The records [`MailSearch::search`] needs.
+    /// The shards [`MailSearch::search`] needs.
     #[wasm_bindgen(js_name = planSearch)]
     pub fn plan_search(&self, query: &str, periods: Vec<f64>) -> Result<JsValue, JsValue> {
         let periods: Vec<i64> = periods.into_iter().map(|p| p as i64).collect();
         self.needed(self.index.plan_search(query, &periods))
     }
 
-    /// Messages holding every word of `query` (`{ id, timeMs, meta }[]`,
-    /// newest first).
+    /// What `query` matched, from the shards loaded: `{ found, needed }`,
+    /// `found` to pass to [`MailSearch::hits`] with the tables `needed`.
     pub fn search(
         &mut self,
         query: &str,
@@ -329,10 +364,31 @@ impl MailSearch {
     ) -> Result<JsValue, JsValue> {
         let periods: Vec<i64> = periods.into_iter().map(|p| p as i64).collect();
         let records = self.opened(loaded)?;
-        let hits = self
+        let found = self
             .index
             .search(query, &periods, &records)
             .map_err(js_error)?;
+        let needed: Vec<Needed> = self
+            .index
+            .plan_hits(&found)
+            .into_iter()
+            .map(|name| Needed {
+                id: self.keys.record_id(&name),
+                name,
+            })
+            .collect();
+        to_js(&Matched {
+            found: found.into_iter().map(|(p, n)| (p as f64, n)).collect(),
+            needed,
+        })
+    }
+
+    /// The messages `found` names (`{ id, timeMs, meta }[]`, newest first).
+    pub fn hits(&mut self, found: JsValue, loaded: JsValue) -> Result<JsValue, JsValue> {
+        let found: Vec<(f64, u32)> = serde_wasm_bindgen::from_value(found).map_err(js_error)?;
+        let found: Found = found.into_iter().map(|(p, n)| (p as i64, n)).collect();
+        let records = self.opened(loaded)?;
+        let hits = self.index.hits(&found, &records).map_err(js_error)?;
         to_js(&hits.into_iter().map(JsHit::from).collect::<Vec<_>>())
     }
 }

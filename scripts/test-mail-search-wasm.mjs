@@ -33,7 +33,8 @@ assert.equal(index.size(), 3)
 
 const hits = (target, query) => {
   const periods = target.nextPeriods(undefined, 100)
-  return target.search(query, periods, load(target.planSearch(query, periods)))
+  const { found, needed } = target.search(query, periods, load(target.planSearch(query, periods)))
+  return target.hits(found, load(needed))
 }
 const search = (target, query) => hits(target, query).map((hit) => hit.id)
 assert.deepEqual(search(index, 'fatura'), ['m2', 'm1'])
@@ -49,20 +50,18 @@ assert.equal(again.openDirectory(store.get(again.directoryId())), true)
 assert.deepEqual(search(again, 'fatura ekim'), ['m1'])
 
 // A row changes (moved to the trash) without indexing the text again.
-const updated = again.updateMeta(
-  [
-    { id: 'm2', timeMs: t0 + 40 * day, meta: row('m2', 'trash') },
-    { id: 'm9', timeMs: t0 + 40 * day, meta: row('m9', 'inbox') },
-  ],
-  load(again.planUpdateMeta([t0 + 40 * day])),
-)
+const changes = [
+  { id: 'm2', timeMs: t0 + 40 * day, meta: row('m2', 'trash') },
+  { id: 'm9', timeMs: t0 + 40 * day, meta: row('m9', 'inbox') },
+]
+const updated = again.updateMeta(changes, load(again.planUpdateMeta(changes)))
 keep(updated.stored)
 assert.deepEqual(updated.missing, ['m9'])
 assert.deepEqual(hits(again, 'odendi')[0].meta, row('m2', 'trash'))
 
 // Removed: never found again.
 const gone = [{ id: 'm1', timeMs: t0 }]
-keep(again.remove(gone, load(again.planRemove([t0]))))
+keep(again.remove(gone, load(again.planRemove(gone))))
 assert.deepEqual(search(again, 'fatura'), ['m2'])
 
 // Another account (another master key) cannot unwrap the store key, and its database has another name.
@@ -73,12 +72,22 @@ assert.throws(() => new wasm.MailSearch(otherKey, wrapped))
 
 // A new store key (the index deleted and made again) opens nothing of the old
 // one: the directory reads as empty, and records that do not open mark it damaged.
+// one: its directory does not open, so the index is damaged and writes nothing.
 const fresh = new wasm.MailSearch(masterKey, undefined)
-assert.equal(fresh.openDirectory(store.get(index.directoryId())), false)
+assert.equal(fresh.openDirectory(undefined), false)
 assert.equal(fresh.damaged(), false)
-const stale = [...store].map(([, sealed]) => ({ name: 'docs/0', sealed }))
-fresh.search('fatura', [0], stale.slice(0, 1))
+assert.equal(fresh.openDirectory(store.get(index.directoryId())), false)
 assert.equal(fresh.damaged(), true)
+assert.throws(() => fresh.add(docs, []), /damaged/)
+// A record that does not open marks it too.
+const other2 = new wasm.MailSearch(masterKey, undefined)
+const stale = [...store].map(([, sealed]) => ({ name: 'shard/0/fat', sealed }))
+other2.search('fatura', [0], stale.slice(0, 1))
+assert.equal(other2.damaged(), true)
+
+// Drafts are matched outside the index, by the same rule.
+assert.equal(wasm.MailSearch.matches('ofis istanbul', 'İstanbul ofisi taslak'), true)
+assert.equal(wasm.MailSearch.matches('ofis ankara', 'İstanbul ofisi'), false)
 
 // Nothing stored shows a word or a name.
 const decoder = new TextDecoder('utf-8', { fatal: false })

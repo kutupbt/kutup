@@ -49,13 +49,14 @@ export interface MailSearchIndex {
   openRecord(name: string, sealed: Uint8Array): Uint8Array | undefined
   planAdd(docs: IndexDoc[]): NeededRecord[]
   add(docs: IndexDoc[], loaded: { name: string; sealed: Uint8Array }[]): SealedRecord[]
-  planRemove(timesMs: number[]): NeededRecord[]
+  planRemove(gone: DocRef[]): NeededRecord[]
   remove(gone: DocRef[], loaded: { name: string; sealed: Uint8Array }[]): SealedRecord[]
-  planUpdateMeta(timesMs: number[]): NeededRecord[]
+  planUpdateMeta(docs: SearchHit[]): NeededRecord[]
   updateMeta(docs: SearchHit[], loaded: { name: string; sealed: Uint8Array }[]): { stored: SealedRecord[]; missing: string[] }
   nextPeriods(before: number | undefined, count: number): number[]
   planSearch(query: string, periods: number[]): NeededRecord[]
-  search(query: string, periods: number[], loaded: { name: string; sealed: Uint8Array }[]): SearchHit[]
+  search(query: string, periods: number[], loaded: { name: string; sealed: Uint8Array }[]): { found: [number, number][]; needed: NeededRecord[] }
+  hits(found: [number, number][], loaded: { name: string; sealed: Uint8Array }[]): SearchHit[]
   free(): void
 }
 
@@ -64,6 +65,7 @@ interface MailSearchModule {
   MailSearch: {
     new (masterKey: Uint8Array, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
     storeName(masterKey: Uint8Array): string
+    matches(query: string, text: string): boolean
   }
 }
 
@@ -82,6 +84,12 @@ async function getModule(): Promise<MailSearchModule> {
     })
   }
   return modulePromise
+}
+
+/** Whether `text` holds every word of `query`, as the index finds them (WASM loaded first). */
+export async function mailSearchMatcher(): Promise<(query: string, text: string) => boolean> {
+  const module = await getModule()
+  return (query, text) => module.MailSearch.matches(query, text)
 }
 
 /** The browser database's name for an account: an HMAC under a key from its master key. */

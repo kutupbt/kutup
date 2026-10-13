@@ -10,6 +10,8 @@
 -- an index older than that builds again (`mail_change_floors`).
 ALTER TABLE mail_messages ADD COLUMN change_xid BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX idx_mail_messages_changes ON mail_messages(owner, change_xid, id);
+-- The build's pages: a mailbox newest first (GET /api/mail/search-index).
+CREATE INDEX idx_mail_messages_owner_received ON mail_messages(owner, received_at DESC, id DESC);
 
 CREATE FUNCTION mail_messages_mark_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

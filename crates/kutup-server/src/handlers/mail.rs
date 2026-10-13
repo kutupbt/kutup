@@ -457,13 +457,15 @@ pub struct SearchIndexQuery {
 pub struct SearchIndexPage {
     pub messages: Vec<MailMessage>,
     pub next: Option<String>,
-    /// How many messages body search indexes in all (for its progress).
-    pub total: i64,
+    /// How many messages body search indexes in all (for its progress), on
+    /// the first page only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
 }
 
-/// `GET /api/mail/search-index` — every message of your own mailbox that
-/// body search indexes (all but Drafts), newest first, for the browser to
-/// open and index (docs/plans/mail-body-search.md).
+/// `GET /api/mail/search-index` — every message of your own mailbox, newest
+/// first, for the browser to open and index (docs/plans/mail-body-search.md;
+/// it keeps Drafts by their rows alone).
 #[utoipa::path(
     get,
     path = "/api/mail/search-index",
@@ -489,7 +491,7 @@ pub async fn search_index(
         .transpose()?;
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
-          WHERE owner = $1 AND user_id = $1 AND folder <> 'drafts'
+          WHERE owner = $1 AND user_id = $1
             AND ($2::timestamptz IS NULL OR (received_at, id) < ($2, $3))
           ORDER BY received_at DESC, id DESC
           LIMIT $4"
@@ -500,12 +502,18 @@ pub async fn search_index(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mail_messages WHERE owner = $1 AND user_id = $1 AND folder <> 'drafts'",
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let total: Option<i64> = if before.is_none() {
+        Some(
+            sqlx::query_scalar(
+                "SELECT count(*) FROM mail_messages WHERE owner = $1 AND user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&state.pool)
+            .await?,
+        )
+    } else {
+        None
+    };
     let more = rows.len() as i64 > limit;
     let messages: Vec<MailMessage> = rows
         .into_iter()
@@ -622,7 +630,9 @@ pub async fn search_index_changes(
             .bind(user_id)
             .fetch_optional(&mut *tx)
             .await?;
-    if floor.is_some_and(|floor| floor >= since_xid) {
+    // Changes since then are no longer kept, or the cursor is from another
+    // database (restored, or a new cluster: transactions count from low again).
+    if floor.is_some_and(|floor| floor >= since_xid) || since_xid > upper {
         return Ok(Json(SearchChanges {
             resync: true,
             ..now()

@@ -20,7 +20,8 @@
 mod index;
 
 pub use index::{
-    DocRef, Hit, Index, NewDoc, Records, SearchError, BUCKET_MS, DIRECTORY_KEY, INDEX_VERSION,
+    DocRef, Found, Hit, Index, NewDoc, Records, SearchError, BUCKET_MS, DIRECTORY_KEY,
+    INDEX_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -51,6 +52,17 @@ pub fn fold(text: &str) -> String {
 }
 
 /// The distinct folded words of `text`: runs of letters and digits.
+/// Whether `text` holds every word of `query`, each as the start of a word
+/// (the index's rule, for a few documents kept outside it).
+pub fn matches(query: &str, text: &str) -> bool {
+    let terms = words(query);
+    let held = words(text);
+    !terms.is_empty()
+        && terms
+            .iter()
+            .all(|term| held.iter().any(|word| word.starts_with(term.as_str())))
+}
+
 pub fn words(text: &str) -> Vec<String> {
     let folded = fold(text);
     let mut seen = BTreeSet::new();
@@ -70,6 +82,14 @@ pub fn words(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_text_matches_as_the_index_does() {
+        assert!(matches("fatura ekim", "Ekim faturası ektedir"));
+        assert!(matches("İSTANBUL", "istanbul ofisi"));
+        assert!(!matches("fatura toplanti", "Ekim faturası"));
+        assert!(!matches("  ", "anything"));
+    }
 
     #[test]
     fn folds_turkish_and_accents() {

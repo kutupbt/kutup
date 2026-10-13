@@ -29,13 +29,19 @@ server's change feed keeps the rows current.
 
 ## What is indexed
 
-Each message the reader can open (all folders but Drafts; Spam and Trash
-too, as Proton's All mail): its subject and body text. HTML becomes text as
-Proton's `cleanText` makes it: comments, styles, scripts and hidden elements
-removed, blocks as line breaks, the quoted earlier message left out.
-Attachments are not indexed (neither are they in Proton). Sender and
-recipients (names and addresses) are indexed with the text, so a keyword
+Each message the reader can open (all folders but Drafts;
+Spam and Trash too, as Proton's All mail): its subject and body text. HTML
+becomes text as Proton's `cleanText` makes it: comments, styles, scripts and
+hidden elements removed, blocks as line breaks, the quoted earlier message
+left out. Attachments are not indexed (neither are they in Proton). Sender
+and recipients (names and addresses) are indexed with the text, so a keyword
 finds them too, as Proton's `testKeywords`.
+
+**Drafts** change while written and take a new time when sent, so they are
+not in the word index: their rows are kept in one sealed record beside it
+and matched by subject and people with the index's own rule
+(`kutup_search::matches`), so a search in Drafts, All mail or Starred finds
+them as the server's would, without sending the keyword anywhere.
 
 With its words, each message keeps its **list row** (what the list shows:
 folder, labels, flags, people, time, size, files), as Proton's `ESMessage`
@@ -50,10 +56,15 @@ query word matches the words it begins, every query word must match.
 
 `fold` and `words` live in a small shared crate, `kutup-search`, with the
 period-sharded index over named records the caller stores; each document is
-an id, a time, its text and the caller's own data (Mail's list row), which a
-hit returns and `update_meta` replaces without indexing the text again.
-Mail uses it through `kutup-mail-search-wasm`; Chat keeps its own index for
-now and moves to the shared one in a later, separate change.
+an id, a time, its text and the caller's own data (Mail's list row, without
+the thread's references), which a hit returns and `update_meta` replaces
+without indexing the text again. A period's documents are kept in 32 tables,
+each document in the one its id hashes to (FNV-1a, fixed), its number
+naming its table: no table grows past what a record holds, and a change
+finds a document from its id alone. A query reads the shards first, then
+only the tables its matches are in. Mail uses it through
+`kutup-mail-search-wasm`; Chat keeps its own index for now and moves to the
+shared one in a later, separate change.
 
 ## Storage
 
@@ -80,17 +91,24 @@ as Proton's; Delete local search data deletes the database, and its key.
 ## Building
 
 - Before the first page, the change feed's cursor is taken (so nothing
-  changed during the build is missed). The messages come from
-  `GET /api/mail/search-index`, newest first, in pages; each is downloaded
-  and opened as the reader would open it, four at a time, and indexed in
-  batches of 50, stored with its progress in one IndexedDB transaction.
+  changed during the build is missed). Pages of rows come from
+  `GET /api/mail/search-index`, newest first (its total on the first page
+  only). A page is read under the lock and its rows wait in a sealed list
+  (`pending`, Drafts aside); its messages are downloaded and opened outside
+  the lock, four at a time, then stored under it again, each only if it is
+  still pending and with its row as the list holds it then. The feed keeps
+  that list current under the same lock, so a message moved or deleted
+  while it downloads is stored as it is now, or not at all.
 - **Locks:** every change, in any tab, holds one exclusive Web Lock
-  (`<database>:write`) and reads the directory and progress again inside it;
-  a second lock lets one tab build at a time. Pages are downloaded outside
-  the write lock and stored only if the progress is still where the page
-  began. Other tabs hear of each change on a BroadcastChannel and read the
-  index again; deleting the database closes their connections first.
-- Out of room: what is indexed stays, the index becomes "limited" to a date.
+  (`<database>:write`) and reads the stored state again inside it; a second
+  lock lets one tab build at a time. Other tabs hear of each change on a
+  BroadcastChannel and read the index again; deleting the database closes
+  their connections first.
+- Out of room (or a record past what one may hold): what is indexed stays,
+  the index becomes "limited" to a date.
+- **Damage:** a record that does not open, a directory that does not (or is
+  of another version), or progress that does not: nothing more is written
+  over it; the database is deleted and the index built again.
 - Searches use the server until the index is built (and while paused).
 
 ## Keeping it current: the change feed
@@ -105,17 +123,36 @@ now. Tombstones are kept 30 days; a cursor older than that gets `resync`
 and the index is built again.
 
 On Mail's poll and before every search the browser follows it: gone
-messages (and any now in Drafts) are removed, changed ones get their new
-row, and those not held (new mail) are downloaded and indexed.
+messages are removed, changed ones get their new row (a waiting one too),
+Drafts are kept or dropped by their rows, and those not held (new mail) wait
+to be indexed. While building, one the build has yet to reach is left to it.
+A cursor ahead of the server (a restored database) also gets `resync`.
 
 ## Searching
 
-The keyword goes to the local index, every period, newest first; each hit
-carries its row, which is filtered by the place and the other criteria
-(the server's list rules, `contentFilter.ts`), grouped by conversation when
-the list is, sorted and paged in the browser. Only the reader's own mailbox
-is indexed: shared mailboxes search on the server. With the switch off,
-search stays on the server as today.
+The keyword goes to the local index, every period, newest first, and to the
+Drafts kept beside it; each hit carries its row, which is filtered by the
+place and the other criteria (the server's list rules, `contentFilter.ts`),
+grouped by conversation when the list is, sorted and paged in the browser.
+Only the reader's own mailbox is indexed: shared mailboxes search on the
+server. With the switch off, search stays on the server as today.
+
+## Follow-ups
+
+- The change trigger rewrites `change_xid`, an indexed column, on every
+  update, so no update of `mail_messages` is HOT any more, and a label
+  trigger updates once per label row: a statement-level trigger with a
+  transition table would write once per message.
+- Label changes now take a row lock on `mail_messages`: order those updates
+  by id (or retry on deadlock) when the trigger becomes statement-level.
+- A list row's `groupAddress`, `scheduledAt`/`outboxId` and `sentBy` change
+  in other tables, without a change recorded on the message.
+- Local filtering takes the account's address as "every message", which no
+  longer holds once accounts have aliases; it folds case as JavaScript does,
+  not as `ILIKE`; the server cuts criteria at 200 characters, the browser
+  does not.
+- Tombstones outlive a deleted account until they age out, and
+  `mail_change_floors` has no foreign key.
 
 ## Pieces
 

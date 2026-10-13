@@ -4233,6 +4233,13 @@ fn body_search_lists_what_to_index_and_follows_changes() {
     let tombstone = gone.iter().find(|g| g["id"] == second.as_str()).unwrap();
     assert!(tombstone["receivedAt"].is_string());
 
+    // A cursor ahead of the server (a restored database) asks for a rebuild.
+    let ahead = changes(
+        &alice.token,
+        Some("999999999999.00000000-0000-0000-0000-000000000000"),
+    );
+    assert_eq!(ahead["resync"], true);
+
     // Another account's feed holds none of it; a cursor must be one.
     let theirs = changes(&bob.token, None);
     let theirs = changes(&bob.token, theirs["next"].as_str());
