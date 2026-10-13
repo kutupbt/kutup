@@ -21,18 +21,58 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-/// The tables one feed reads. Names are fixed per feed, never input.
+/// The tables one feed reads, written into its SQL. Made only by
+/// [`Feed::new`] from literals, which checks the names at compile time;
+/// never from input.
 pub(crate) struct Feed {
-    /// The live rows, with `id`, `change_xid` and the owner column.
-    pub rows: &'static str,
-    /// An extra condition on `rows` (Mail: only an account's own mail), with
-    /// `$1` the owner; empty for none.
-    pub rows_filter: &'static str,
-    pub owner_column: &'static str,
-    /// `(owner, id, change_xid, deleted_at, …)`.
-    pub tombstones: &'static str,
-    /// `(owner PRIMARY KEY, floor_xid)`.
-    pub floors: &'static str,
+    rows: &'static str,
+    rows_filter: &'static str,
+    owner_column: &'static str,
+    tombstones: &'static str,
+    floors: &'static str,
+}
+
+impl Feed {
+    /// `rows`: the live rows, with `id`, `change_xid` and `owner_column`.
+    /// `rows_filter`: a literal SQL condition on them (Mail: only an
+    /// account's own mail), with `$1` the owner, or empty. `tombstones`:
+    /// `(owner, id, change_xid, deleted_at, …)`. `floors`:
+    /// `(owner PRIMARY KEY, floor_xid)`. A name that is not
+    /// `[a-z_]+` fails the build.
+    pub(crate) const fn new(
+        rows: &'static str,
+        rows_filter: &'static str,
+        owner_column: &'static str,
+        tombstones: &'static str,
+        floors: &'static str,
+    ) -> Self {
+        assert!(identifier(rows));
+        assert!(identifier(owner_column));
+        assert!(identifier(tombstones));
+        assert!(identifier(floors));
+        Self {
+            rows,
+            rows_filter,
+            owner_column,
+            tombstones,
+            floors,
+        }
+    }
+}
+
+const fn identifier(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if !(bytes[i].is_ascii_lowercase() || bytes[i] == b'_') {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// A position in a feed.
@@ -75,7 +115,9 @@ pub(crate) struct Page {
 }
 
 /// The page after `since` (or, without one, only where the feed is now),
-/// read in `tx` so the caller loads the rows in the same snapshot.
+/// read in `tx`. The caller loads the changed rows in `tx` too: under READ
+/// COMMITTED that read may see a later version of a row, which is harmless,
+/// as any change after `upper` is also answered again from a later page.
 pub(crate) async fn page(
     tx: &mut Transaction<'_, Postgres>,
     feed: &Feed,
