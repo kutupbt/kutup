@@ -408,3 +408,123 @@ fn a_version_over_tus_stands_at_the_log_head() {
     assert!(rows.iter().any(|v| v["seqAtSnapshot"] == 7), "{versions}");
     purge_accounts(&c, &base, &[&owner]);
 }
+
+/// Other writers: a share editor may upload a new version; a read-only
+/// recipient may not; someone else's open upload is named only to its
+/// uploader and the folder's owner, who may cancel it; a writer whose access
+/// is taken away mid-upload loses the upload.
+#[test]
+fn other_writers_and_the_owner() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER unset; skipping");
+        return;
+    };
+    let c = Client::new();
+    let owner = register(&c, &base);
+    let editor = register(&c, &base);
+    let other_editor = register(&c, &base);
+    let viewer = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    share(&c, &base, &owner, &folder, &editor, true);
+    share(&c, &base, &owner, &folder, &other_editor, true);
+    share(&c, &base, &owner, &folder, &viewer, false);
+    let file = seal_file(&folder, &uuid(), b"shared");
+    assert!(upload(&c, &base, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+
+    let plain = vec![3u8; PART + 10];
+    let blob = drive_object::encrypt_file_blob(
+        &plain,
+        &file.key,
+        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
+    )
+    .unwrap();
+    let next = metadata(&file, 2, plain.len());
+    let fields = [
+        ("metadataEnvelope", next.as_str()),
+        ("metadataRevision", "2"),
+    ];
+
+    // A read-only recipient cannot start one.
+    let r = create_version(&c, &base, &viewer.token, &file.id, blob.len(), &fields);
+    assert!(
+        matches!(r.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "{}",
+        r.status()
+    );
+
+    // An editor can.
+    let r = create_version(&c, &base, &editor.token, &file.id, blob.len(), &fields);
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let first = location(&r);
+    let first_id = first.rsplit('/').next().unwrap().to_owned();
+    assert_eq!(
+        patch(&c, &base, &editor.token, &first, 0, &blob[..PART]).status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // Another editor is told only that one is open.
+    let r = create_version(
+        &c,
+        &base,
+        &other_editor.token,
+        &file.id,
+        blob.len(),
+        &fields,
+    );
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let body: Value = r.json().unwrap();
+    assert_eq!(body["code"], "versionUploading");
+    assert!(body.get("uploadId").is_none(), "{body}");
+    // The folder's owner is told which, and may cancel it.
+    let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let body: Value = r.json().unwrap();
+    assert_eq!(body["uploadId"], first_id.as_str());
+    assert_eq!(body["yours"], false);
+    // Another editor may not cancel it.
+    let r = bearer(c.delete(format!("{base}{first}")), &other_editor.token)
+        .header("Tus-Resumable", "1.0.0")
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    let r = bearer(c.delete(format!("{base}{first}")), &owner.token)
+        .header("Tus-Resumable", "1.0.0")
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        patch(&c, &base, &editor.token, &first, PART, &blob[PART..]).status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Access taken away mid-upload: the next part is refused and the upload goes.
+    let r = create_version(&c, &base, &editor.token, &file.id, blob.len(), &fields);
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let second = location(&r);
+    assert_eq!(
+        patch(&c, &base, &editor.token, &second, 0, &blob[..PART]).status(),
+        StatusCode::NO_CONTENT
+    );
+    share(&c, &base, &owner, &folder, &editor, false);
+    assert_eq!(
+        patch(&c, &base, &editor.token, &second, PART, &blob[PART..]).status(),
+        StatusCode::FORBIDDEN
+    );
+    let head = bearer(c.head(format!("{base}{second}")), &editor.token)
+        .header("Tus-Resumable", "1.0.0")
+        .send()
+        .unwrap();
+    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    // The slot is free again.
+    let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let third = location(&r);
+    let r = bearer(c.delete(format!("{base}{third}")), &owner.token)
+        .header("Tus-Resumable", "1.0.0")
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    purge_accounts(&c, &base, &[&owner, &editor, &other_editor, &viewer]);
+}
