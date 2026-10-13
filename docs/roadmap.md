@@ -907,6 +907,15 @@ needs tus (or a chunked equivalent) on the federated upload route, so each
 part is acknowledged by the folder's server and an upload can go on from
 its offset there.
 
+### Drive · resumable new versions (Replace above 2 GiB)
+
+Replace on an upload clash makes the upload a new version of the file
+there (docs/plans/drive-unique-names.md), and so does a CLI sync push of an
+edited file. A version goes up in one request (`POST /api/files/:id/versions`,
+at most 2 GiB), so Replace is not offered above that and the person keeps
+both or skips. Making it resumable needs a tus upload that ends as a version
+of an existing file instead of a new file.
+
 ### Drive · resuming a whole folder upload
 
 Done (October 2026) by names unique in a folder
