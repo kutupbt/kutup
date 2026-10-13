@@ -36,8 +36,6 @@ export interface MediaMetadataV1 {
   height?: number
   durationMs?: number
   camera?: string
-  /** SHA-256 of the content, base64. */
-  hash?: string
   caption?: string
   /** A live photo's video: the file id of its still. */
   liveOf?: string
@@ -47,6 +45,8 @@ export interface FileMetadataV1 {
   name: string
   mimeType: string
   size: number
+  /** SHA-256 of the content, canonical base64: lets a move recompute the content hash. */
+  sha256?: string
   media?: MediaMetadataV1
 }
 
@@ -86,6 +86,7 @@ function validateRevision(value: number): void {
 async function encodeMetadata(metadata: FileMetadataV1): Promise<Uint8Array> {
   const module = await getCryptoWasm()
   const plain: FileMetadataV1 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size }
+  if (metadata.sha256) plain.sha256 = metadata.sha256
   if (metadata.media) plain.media = metadata.media
   return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))
 }

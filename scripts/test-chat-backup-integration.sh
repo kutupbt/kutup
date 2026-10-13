@@ -66,6 +66,20 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
 
+# Drive: names unique in a folder, as Proton Drive's hashes (required on
+# every write, restore under a new name, which names are free), moves, and
+# new versions over tus with the uploads table's check. Each test purges its
+# accounts, so the purge checks below cover what they stored.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test unique_names_live -- --nocapture
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test drive_move_live -- --nocapture
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test version_uploads_live -- --nocapture
 # Registration modes and referral codes (docs/plans/registration-codes.md):
 # one test that switches the mode, so it runs on its own; it puts the mode
 # back to on.

@@ -4,11 +4,11 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Label } from '@kutup/ui/components/label'
-import { useNameConflict, type ConflictChoice } from './nameConflicts'
+import { useNameConflict, type ConflictChoice, type ConflictQuestion } from './nameConflicts'
 
 /**
- * An upload's name is taken in its folder: Replace (the file there goes to
- * the trash), Keep both (this one takes the next free name) or Skip, with
+ * An upload's name is taken in its folder: Replace (this content becomes
+ * the newest version of the file there), Keep both (this one takes the next free name) or Skip, with
  * "apply to the rest" for a batch (docs/plans/drive-unique-names.md).
  * Closing the dialog skips.
  */
@@ -23,6 +23,7 @@ export function NameConflictDialog() {
   if (!open) return null
   const { question } = open
   const choose = (choice: ConflictChoice) => open.answer({ choice, all })
+  if (question.problem) return <ReplaceProblemDialog question={question} choose={choose} />
 
   return (
     <Dialog open onOpenChange={(o) => !o && choose('skip')}>
@@ -53,6 +54,39 @@ export function NameConflictDialog() {
             {t('uploads.conflict.keepBoth')}
           </Button>
           {question.canReplace ? <Button onClick={() => choose('replace')}>{t('uploads.conflict.replace')}</Button> : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * A Replace that could not go ahead (docs/plans/drive-unique-names.md): the
+ * file there changed meanwhile, or another replacement of it is open. Never
+ * retried blindly: Keep both or Skip — or, for this account's own
+ * unfinished replacement, cancel that and start again. Closing skips.
+ */
+function ReplaceProblemDialog({ question, choose }: { question: ConflictQuestion; choose: (choice: ConflictChoice) => void }) {
+  const { t } = useTranslation()
+  const problem = question.problem!
+  return (
+    <Dialog open onOpenChange={(o) => !o && choose('skip')}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t(`uploads.replaceProblem.${problem}.title`, { name: question.name })}</DialogTitle>
+          <DialogDescription>{t(`uploads.replaceProblem.${problem}.description`, { folder: question.folderName })}</DialogDescription>
+        </DialogHeader>
+        <ul className="space-y-1 text-sm text-muted-foreground">
+          <li>{t('uploads.conflict.keepBothHint', { name: question.keptAs })}</li>
+        </ul>
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button variant="outline" onClick={() => choose('skip')}>
+            {t('uploads.conflict.skip')}
+          </Button>
+          <Button variant={problem === 'ownUpload' ? 'outline' : 'default'} onClick={() => choose('keepBoth')}>
+            {t('uploads.conflict.keepBoth')}
+          </Button>
+          {problem === 'ownUpload' ? <Button onClick={() => choose('restart')}>{t('uploads.replaceProblem.restart')}</Button> : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1120,12 +1120,12 @@ fn build_router(state: AppState) -> Router {
             put(handlers::name_hashes::set_content_hash),
         )
         .route(
-            "/api/collections/:id/name-hashes",
-            post(handlers::name_hashes::fill_name_hashes),
+            "/api/collections/:id/available-hashes",
+            post(handlers::name_hashes::available_hashes),
         )
         .route(
-            "/api/drive/top-level-name-hashes",
-            post(handlers::name_hashes::fill_top_level_name_hashes),
+            "/api/drive/top-level-available-hashes",
+            post(handlers::name_hashes::top_level_available_hashes),
         )
         .route(
             "/api/collections/:id/move",

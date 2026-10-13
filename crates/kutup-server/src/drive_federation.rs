@@ -212,9 +212,8 @@ struct ParsedUpload {
     file_id: Uuid,
     metadata_envelope: String,
     file_key_envelope: String,
-    /// The name's hash under the folder's hash key, from a client that sends
-    /// one (docs/plans/drive-unique-names.md).
-    name_hash: Option<String>,
+    /// The name's hash under the folder's hash key (docs/plans/drive-unique-names.md).
+    name_hash: String,
     file: NamedTempFile,
     size: i64,
     digest: String,
@@ -1749,11 +1748,11 @@ pub async fn upload_file(
 
         // Names are unique in the folder for peers too; checked before any
         // byte is stored, and held until commit.
-        if let Some(hash) = &parsed.name_hash {
+        {
             let place = crate::drive_names::Place::Folder(share.collection_id);
             crate::drive_names::lock_place(&mut tx, place).await?;
             if let Err(error) =
-                crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await
+                crate::drive_names::ensure_name_free(&mut tx, place, &parsed.name_hash, None).await
             {
                 tx.rollback().await?;
                 return signed_app_error(federation, &authenticated, error);
@@ -2055,7 +2054,7 @@ where
         file_id: canonical_uuid(&file_id)?,
         metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
-        name_hash: crate::drive_names::parse_name_hash(name_hash.as_deref())?,
+        name_hash: crate::drive_names::require_name_hash(name_hash.as_deref())?,
         file,
         size,
         digest,
@@ -2444,6 +2443,7 @@ mod tests {
             ("fileId", file_id),
             ("metadataEnvelope", "metadata"),
             ("fileKeyEnvelope", "wrapped-file-key"),
+            ("nameHash", &"ab".repeat(32)),
         ] {
             body.extend_from_slice(
                 format!(
@@ -2471,5 +2471,6 @@ mod tests {
         assert_eq!(upload.digest, hex::encode(Sha256::digest(ciphertext)));
         assert_eq!(upload.file_id.to_string(), file_id);
         assert_eq!(upload.metadata_envelope, "metadata");
+        assert_eq!(upload.name_hash, "ab".repeat(32));
     }
 }

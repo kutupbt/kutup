@@ -43,12 +43,15 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         String,
         String,
         Option<String>,
+        Option<Uuid>,
         i64,
         OffsetDateTime,
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
                   c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash, c.color,
+                  (SELECT p.id FROM collections p
+                    WHERE p.id = c.parent_collection_id AND p.deleted_at IS NULL),
                   (SELECT COUNT(*) FROM files f WHERE f.trash_root_id = c.id),
                   c.deleted_at
            FROM collections c
@@ -111,6 +114,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     statement,
                     statement_hash,
                     color,
+                    lands,
                     items,
                     deleted_at,
                 )| TrashFolderRow {
@@ -123,6 +127,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     epoch_statement: statement,
                     epoch_statement_hash: statement_hash,
                     color,
+                    parent_collection_id: lands.map(|id| id.to_string()),
                     items,
                     deleted_at,
                 },
@@ -157,22 +162,46 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     .into_response())
 }
 
+/// A restore that takes a name (docs/plans/drive-unique-names.md): the
+/// name's hash where the item lands, and its new name when it changes
+/// (a file's metadata, a folder's name, each at its next revision).
+#[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RestoreRequest {
+    pub name_hash: Option<String>,
+    pub metadata_envelope: Option<String>,
+    pub metadata_revision: Option<i64>,
+    pub name_envelope: Option<String>,
+    pub name_revision: Option<i64>,
+}
+
 /// `POST /api/trash/{id}/restore` — puts a trash root back where it was. A file whose
 /// folder is still in the trash is a 409 (restore the folder instead); a folder whose
-/// original parent is gone or trashed comes back at the top level.
+/// original parent is gone or trashed comes back at the top level. Its name must be
+/// free where it lands: a taken one is `409 name_taken`, and a folder landing at the
+/// top level is `409 nameNeeded` (its hash belonged to the folder it left); the
+/// client then restores with a name of its own and its hash, in the same request.
 #[utoipa::path(
     post,
     path = "/api/trash/{id}/restore",
     tag = "trash",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Trash-root id (file or folder)")),
+    request_body(content = Option<RestoreRequest>, description = "A name to come back under"),
     responses((status = 200, description = "Restored", body = MessageResponse))
 )]
 pub async fn restore(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    body: Option<Json<RestoreRequest>>,
 ) -> AppResult<Response> {
+    let req = body.map(|Json(req)| req).unwrap_or_default();
+    let given_hash = req
+        .name_hash
+        .as_deref()
+        .map(|hash| crate::drive_names::require_name_hash(Some(hash)))
+        .transpose()?;
     let user_id = trusted_uuid(&user.user_id)?;
     let root_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
@@ -200,30 +229,60 @@ pub async fn restore(
                 "restore the parent folder first",
             ));
         }
-        // Its name taken meanwhile: it comes back without its hash, and the
-        // client gives it a name of its own (docs/plans/drive-unique-names.md).
+        // Its name must be free in its folder: its own, or one the client
+        // gives it now (with the new name sealed at the next revision).
         let place = crate::drive_names::Place::Folder(coll_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
-        let name_hash: Option<String> =
-            sqlx::query_scalar("SELECT name_hash FROM files WHERE id = $1")
-                .bind(root_id)
-                .fetch_one(&mut *tx)
-                .await?;
-        let keep = match &name_hash {
-            Some(hash) => crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(root_id))
-                .await
-                .is_ok(),
-            None => true,
-        };
-        sqlx::query(
-            "UPDATE files SET deleted_at = NULL, trash_root_id = NULL,
-                              name_hash = CASE WHEN $2 THEN name_hash END
-             WHERE id = $1",
+        let (stored_hash, key_generation, revision): (String, i32, i64) = sqlx::query_as(
+            "SELECT name_hash, key_generation, metadata_revision FROM files WHERE id = $1",
         )
         .bind(root_id)
-        .bind(keep)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+        if let Some(envelope) = &req.metadata_envelope {
+            let next = revision
+                .checked_add(1)
+                .filter(|next| req.metadata_revision == Some(*next))
+                .ok_or_else(|| AppError::conflict("metadata revision must advance exactly once"))?;
+            if given_hash.is_none() {
+                return Err(AppError::bad_request("a new name comes with its nameHash"));
+            }
+            crate::handlers::files::validate_envelope(
+                envelope,
+                kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(
+                    &root_id.to_string(),
+                    u32::try_from(key_generation)
+                        .map_err(|_| AppError::conflict("invalid key generation"))?,
+                    u64::try_from(next).map_err(|_| AppError::bad_request("invalid revision"))?,
+                )
+                .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+            )?;
+            sqlx::query(
+                "UPDATE files SET metadata_envelope = $2, metadata_revision = $3 WHERE id = $1",
+            )
+            .bind(root_id)
+            .bind(envelope)
+            .bind(next)
+            .execute(&mut *tx)
+            .await?;
+        }
+        // A new hash is a new name: it comes with that name, sealed.
+        if req.metadata_envelope.is_none() && given_hash.as_ref().is_some_and(|h| *h != stored_hash)
+        {
+            return Err(AppError::bad_request(
+                "a new name hash comes with its metadataEnvelope",
+            ));
+        }
+        let name_hash = given_hash.clone().unwrap_or(stored_hash);
+        crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
+        sqlx::query(
+            "UPDATE files SET deleted_at = NULL, trash_root_id = NULL, name_hash = $2 WHERE id = $1",
+        )
+        .bind(root_id)
+        .bind(&name_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::drive_names::map_unique_violation)?;
         tx.commit().await?;
         return Ok(Json(MessageResponse {
             message: "restored".to_string(),
@@ -260,29 +319,59 @@ pub async fn restore(
             lands = None;
         }
     }
-    // Its name hash holds where it was (under that place's hash key) and only
-    // while no one else took the name; otherwise it comes back without one,
-    // and the client gives it a name of its own there.
+    // Its name must be free where it lands. Its own hash holds only where
+    // it was (under that place's hash key); landing elsewhere, the client
+    // names it there.
     let place = crate::drive_names::Place::of(lands, user_id);
     crate::drive_names::lock_place(&mut tx, place).await?;
-    let name_hash: Option<String> =
-        sqlx::query_scalar("SELECT name_hash FROM collections WHERE id = $1")
+    let (stored_hash, epoch, revision): (String, i32, i64) =
+        sqlx::query_as("SELECT name_hash, key_epoch, name_revision FROM collections WHERE id = $1")
             .bind(root_id)
             .fetch_one(&mut *tx)
             .await?;
-    let keep = lands == parent
-        && match &name_hash {
-            Some(hash) => crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(root_id))
-                .await
-                .is_ok(),
-            None => true,
-        };
-    if !keep {
-        sqlx::query("UPDATE collections SET name_hash = NULL WHERE id = $1")
+    if let Some(envelope) = &req.name_envelope {
+        let next = revision
+            .checked_add(1)
+            .filter(|next| req.name_revision == Some(*next))
+            .ok_or_else(|| AppError::conflict("name revision must advance exactly once"))?;
+        if given_hash.is_none() {
+            return Err(AppError::bad_request("a new name comes with its nameHash"));
+        }
+        crate::handlers::collections::validate_drive_envelope(
+            envelope,
+            kutup_crypto::drive_envelope::DriveEnvelopeContextV1::new(
+                kutup_crypto::drive_envelope::DriveEnvelopePurpose::CollectionName,
+                u32::try_from(epoch).map_err(|_| AppError::conflict("invalid collection epoch"))?,
+                u64::try_from(next).map_err(|_| AppError::bad_request("invalid revision"))?,
+                &root_id.to_string(),
+                &user_id.to_string(),
+            )
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        )?;
+        sqlx::query("UPDATE collections SET name_envelope = $2, name_revision = $3 WHERE id = $1")
             .bind(root_id)
+            .bind(envelope)
+            .bind(next)
             .execute(&mut *tx)
             .await?;
     }
+    let name_hash = match given_hash {
+        Some(hash) => hash,
+        None if lands == parent => stored_hash,
+        None => {
+            return Err(
+                AppError::conflict("the folder comes back at the top level: name it there")
+                    .with_details(serde_json::json!({ "code": "nameNeeded" })),
+            )
+        }
+    };
+    crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
+    sqlx::query("UPDATE collections SET name_hash = $2 WHERE id = $1")
+        .bind(root_id)
+        .bind(&name_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::drive_names::map_unique_violation)?;
 
     sqlx::query(
         "UPDATE collections SET deleted_at = NULL, trash_root_id = NULL WHERE trash_root_id = $1",

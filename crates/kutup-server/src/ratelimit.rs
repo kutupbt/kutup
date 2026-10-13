@@ -39,6 +39,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_CHAT_KEYS_PER_MIN", 30),
     ("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN", 120),
     ("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60),
+    ("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
@@ -467,6 +468,15 @@ impl WindowCounter {
     }
 }
 
+/// Name checks (`available-hashes`): 120 a minute per account, enough for
+/// "Keep both" over a large upload, not for guessing names fast.
+pub static AVAILABLE_HASHES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
 const MAX_TOTP_ATTEMPTS: u32 = 5;
@@ -558,6 +568,7 @@ pub fn spawn_cleanup() {
             CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
             LOGIN_CEILING.cleanup();
+            AVAILABLE_HASHES.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();

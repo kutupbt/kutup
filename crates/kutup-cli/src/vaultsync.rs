@@ -16,11 +16,12 @@ use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
+use sha2::Digest;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::api::versions::{NewVersion, ORIGINAL};
-use crate::api::{ApiError, Client, File};
+use crate::api::versions::ORIGINAL;
+use crate::api::{Client, File};
 use crate::keyring::Keyring;
 
 /// How many times a save that lost a race is merged again and retried.
@@ -364,14 +365,60 @@ pub(crate) struct Saved {
     pub uploaded: bool,
 }
 
+/// A save that found another upload of the vault under way (another device
+/// of the account saving it) through every wait: left for the next run.
+#[derive(Debug, thiserror::Error)]
+#[error("another device is saving this vault; the save is left for the next sync run")]
+pub(crate) struct VaultBusy;
+
+/// The waits, in seconds, before trying a busy save again.
+const BUSY_WAITS: [u64; 4] = [2, 4, 8, 16];
+
+/// Runs `attempt` until it is not busy, waiting [`BUSY_WAITS`] between
+/// tries (`sleep` waits). Busy is never a conflict: still busy after the
+/// last wait is [`VaultBusy`], never `Ok(None)`, so nothing merges on it.
+fn save_unless_busy(
+    mut attempt: impl FnMut() -> Result<crate::version_upload::Landed>,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> Result<Option<String>> {
+    use crate::version_upload::Landed;
+    let mut waits = BUSY_WAITS.iter();
+    loop {
+        match attempt()? {
+            Landed::Stored(version) => return Ok(Some(version)),
+            // The file moved on (another version, a rename, a re-key): merged
+            // again from what Drive holds then.
+            Landed::Conflict(_) => return Ok(None),
+            Landed::Busy => match waits.next() {
+                Some(secs) => sleep(std::time::Duration::from_secs(*secs)),
+                None => return Err(VaultBusy.into()),
+            },
+        }
+    }
+}
+
 /// Saves `contents` as a version made from `based_on` (a recorded version).
-/// `Ok(None)`: the file holds another version now.
+/// `Ok(None)`: the file holds another version now. Waits a little while
+/// another device is saving it, then gives up with [`VaultBusy`].
 pub(crate) fn save_version(
     client: &Client,
     vault: &VaultFile,
     contents: &[u8],
     based_on_version: &str,
 ) -> Result<Option<String>> {
+    save_unless_busy(
+        || save_once(client, vault, contents, based_on_version),
+        std::thread::sleep,
+    )
+}
+
+/// One try at [`save_version`].
+fn save_once(
+    client: &Client,
+    vault: &VaultFile,
+    contents: &[u8],
+    based_on_version: &str,
+) -> Result<crate::version_upload::Landed> {
     // New content goes under a key only the folder's current people hold.
     let (file, file_key) = current_file(client, vault)?;
     let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
@@ -382,28 +429,24 @@ pub(crate) fn save_version(
         vault.collection_id,
         vault.folder_epoch,
     )?;
-    let sealed = drive_object::encrypt_file_blob(
-        contents,
-        &file_key,
-        DriveFileBlobContextV1::new(&file.id, file.key_generation)?,
-    )
-    .context("encrypt vault")?;
-    let stored = client.create_version(
-        &file.id,
-        sealed,
-        &NewVersion {
-            kind: "file".into(),
-            seq_at_snapshot: 0,
-            doc_key_id: 1,
+    // Over tus, conditional on what it was made from; the vault's size,
+    // SHA-256 and content hash land with it.
+    let hash_key = crate::names::folder_hash_key(vault.keys, vault.collection_id).ok();
+    crate::version_upload::upload_version(
+        client,
+        &crate::version_upload::NoRecords,
+        crate::version_upload::VersionRequest {
+            file: &file,
+            file_key: &file_key,
+            content: crate::version_upload::Content::Bytes(contents),
+            sha256: sha2::Sha256::digest(contents).into(),
+            hash_key: hash_key.as_ref(),
             based_on: Some(based_on(based_on_version)),
-            ..Default::default()
+            progress: crate::uploader::Progress::Quiet,
+            crashed_after_secs: crate::version_upload::VAULT_CRASHED_AFTER_SECS,
         },
-    );
-    match stored {
-        Ok(row) => Ok(Some(row.id)),
-        Err(error) if version_conflict(&error).is_some() => Ok(None),
-        Err(error) => Err(error).context("save vault version"),
-    }
+    )
+    .context("save vault version")
 }
 
 /// Merges `local` with what Drive holds now against `base` (a recorded
@@ -531,14 +574,6 @@ fn same_content(a: &Database, b: &Database) -> bool {
     a == *b
 }
 
-/// The `409 version_conflict` in `error`: the version the file holds now.
-pub(crate) fn version_conflict(error: &anyhow::Error) -> Option<String> {
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<ApiError>())
-        .and_then(|api| api.version_conflict.clone())
-}
-
 /// The file as Drive lists it now (its key may have moved on), with its key.
 fn current_file(client: &Client, vault: &VaultFile) -> Result<(File, [u8; 32])> {
     let file = client
@@ -608,6 +643,37 @@ fn open_sealed(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_busy_save_waits_and_saves_once_the_upload_frees() {
+        use crate::version_upload::Landed;
+        let mut tries = vec![Landed::Busy, Landed::Busy, Landed::Stored("v9".into())].into_iter();
+        let mut waited = Vec::new();
+        let saved = save_unless_busy(|| Ok(tries.next().unwrap()), |d| waited.push(d.as_secs()));
+        assert_eq!(saved.unwrap().as_deref(), Some("v9"));
+        assert_eq!(waited, [2, 4]);
+    }
+
+    /// Busy is never "the file holds another version": a save that stays
+    /// busy gives up with VaultBusy, so nothing merges on it.
+    #[test]
+    fn a_save_that_stays_busy_never_merges() {
+        use crate::version_upload::Landed;
+        let mut tries = 0;
+        let saved = save_unless_busy(
+            || {
+                tries += 1;
+                Ok(Landed::Busy)
+            },
+            |_| {},
+        );
+        let error = saved.expect_err("busy is not Ok(None)");
+        assert!(error.is::<VaultBusy>());
+        assert_eq!(tries, BUSY_WAITS.len() + 1);
+        // A conflict, by contrast, is what merging answers.
+        let conflict = save_unless_busy(|| Ok(Landed::Conflict(anyhow!("moved on"))), |_| {});
+        assert!(conflict.unwrap().is_none());
+    }
     use super::*;
 
     #[test]

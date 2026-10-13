@@ -144,6 +144,26 @@ assert.throws(
   /authentication failed/,
 )
 
+// Names and metadata are padded to 256-byte buckets (Rust owns the policy).
+{
+  const v = vectors.driveEnvelope
+  const args = [v.rootKey, v.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
+  assert.equal(crypto.openDriveEnvelope(v.envelope, ...args), v.plaintext)
+  for (const bad of v.invalidPadding) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
+  for (const bad of v.invalidSealedLength) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
+  for (const limit of v.limits) {
+    const plain = Buffer.alloc(limit.len, 0x61).toString('base64')
+    const limitArgs = [v.rootKey, limit.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
+    if (limit.sealedLen === undefined) {
+      assert.throws(() => crypto.sealDriveEnvelope(plain, ...limitArgs))
+    } else {
+      const sealed = crypto.sealDriveEnvelope(plain, ...limitArgs)
+      assert.equal(Buffer.from(sealed, 'base64').length, limit.sealedLen)
+      assert.equal(crypto.openDriveEnvelope(sealed, ...limitArgs), plain)
+    }
+  }
+}
+
 // A link to one file: purpose 11, epoch = the file key's generation.
 {
   const fileKey = Buffer.alloc(32, 0x55).toString('base64')

@@ -9,6 +9,7 @@ use base64::Engine;
 use clap::Subcommand;
 use rand::RngCore;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::api::federation::IncomingShare;
 use crate::api::{
@@ -594,8 +595,15 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         name: name.clone(),
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as u64,
+        sha256: Some(base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&data))),
         media: None,
     };
+    // Its name's hash in the shared folder (docs/plans/drive-unique-names.md).
+    let keys = shared_keyring(&ctx, &share, &col_key)?;
+    let name_hash = crate::names::name_hash(
+        &crate::names::folder_hash_key(&keys, &share.remote_collection_id)?,
+        &name,
+    )?;
     let record = crate::file_crypto::create(
         &share.remote_collection_id,
         share.key_epoch,
@@ -612,10 +620,14 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
             &record.id,
             &record.metadata_envelope,
             &record.file_key_envelope,
+            &name_hash,
             encrypted,
         )
         .map_err(|err| {
             let hint = match err.downcast_ref::<ApiError>() {
+                Some(e) if e.name_taken.is_some() => {
+                    "an item with this name is already in the share"
+                }
                 Some(e) if e.status == 403 => "share doesn't permit uploads",
                 Some(e) if e.status == 413 => "share upload quota exceeded",
                 _ => "upload",

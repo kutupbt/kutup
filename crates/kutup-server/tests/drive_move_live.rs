@@ -61,6 +61,9 @@ fn move_file(
             "toCollectionId": to.id,
             "toKeyEpoch": epoch,
             "fileKeyEnvelope": envelope,
+            // Recomputed under the destination's key; a stand-in unique to
+            // the file and its destination.
+            "nameHash": test_name_hash(&format!("{file_id}{}", to.id))[..64].to_owned(),
         }))
         .send()
         .unwrap()
@@ -77,7 +80,10 @@ fn move_folder(
         c.post(format!("{base}/api/collections/{}/move", folder.id)),
         token,
     )
-    .json(&json!({ "parentCollectionId": parent.map(|p| p.id.clone()) }))
+    .json(&json!({
+        "parentCollectionId": parent.map(|p| p.id.clone()),
+        "nameHash": test_name_hash(&format!("{}{}", folder.id, parent.map_or(folder.id.as_str(), |p| p.id.as_str())))[..64].to_owned(),
+    }))
     .send()
     .unwrap()
     .status()
@@ -432,4 +438,5 @@ fn drive_move_contract() {
     assert_eq!(parent_of(&grandchild.id), Value::Null);
     assert_eq!(parent_of(&parent.id), grandchild.id.as_str());
     assert_eq!(parent_of(&child.id), parent.id.as_str());
+    purge_accounts(&c, &base, &[&owner, &editor, &viewer, &stranger]);
 }

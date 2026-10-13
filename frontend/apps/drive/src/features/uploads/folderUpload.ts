@@ -3,8 +3,7 @@ import type { FolderEntry } from '@kutup/files/upload/uploadFolder'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
-import { asNameTaken, canonicalName, freeName, inFolder, nameHashIn, namesIn } from '@kutup/drive-core/names'
-import { loadFolderFiles } from '@kutup/drive-core/files'
+import { asNameTaken, canonicalName, findAvailableName, freeName, inFolder, nameHashIn, namesIn } from '@kutup/drive-core/names'
 import { openRow, type CollectionRowWithTimes } from '@kutup/drive-core/folders'
 import { ConflictPolicy } from '@kutup/drive-ui/nameConflicts'
 import { createdFolder } from '../drive/copy'
@@ -39,6 +38,8 @@ export async function uploadDirectoryInto(opts: {
   const children = new Map<string, Folder[]>()
   const subfolders = (folder: Folder) => [...(made.has(folder.id) ? [] : opts.subfoldersOf(folder)), ...(children.get(folder.id) ?? [])]
 
+  const named = async (parent: Folder, name: string) => ({ name, hash: await nameHashIn(inFolder(parent), name) })
+
   /** The subfolder `name` of `parent`: the one there, or a new one. */
   async function folderIn(parent: Folder, name: string): Promise<Folder> {
     for (let attempt = 0; ; attempt++) {
@@ -46,12 +47,15 @@ export async function uploadDirectoryInto(opts: {
       const existing = subfolders(parent).find((f) => f.name !== null && canonicalName(f.name) === wanted)
       if (existing?.key && existing.source === 'owned') return existing
       // A file (or a folder that cannot be opened) holds the name: a new
-      // folder beside it, under the next free name.
-      const files = made.has(parent.id) ? [] : await loadFolderFiles(parent)
-      const free = freeName(name, namesIn(files, subfolders(parent)))
-      const created = await createOwnedCollectionV1(me.masterKey, me.userId, free, parent.id)
+      // folder beside it, under the next free name (the server's say, as
+      // Proton's findAvailableName; a folder this upload made holds only
+      // what it put there).
+      const free = made.has(parent.id)
+        ? await named(parent, freeName(name, namesIn([], subfolders(parent))))
+        : await findAvailableName(inFolder(parent), name)
+      const created = await createOwnedCollectionV1(me.masterKey, me.userId, free.name, parent.id)
       try {
-        await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), free) })
+        await api.post('/collections', { ...created.payload, nameHash: free.hash })
       } catch (error) {
         // Made meanwhile (another tab, or a listing not yet reloaded): look again.
         const taken = asNameTaken(error)
@@ -66,7 +70,7 @@ export async function uploadDirectoryInto(opts: {
         }
         continue
       }
-      const folder = createdFolder(me, parent, created, free)
+      const folder = createdFolder(me, parent, created, free.name)
       made.add(folder.id)
       children.set(parent.id, [...(children.get(parent.id) ?? []), folder])
       return folder

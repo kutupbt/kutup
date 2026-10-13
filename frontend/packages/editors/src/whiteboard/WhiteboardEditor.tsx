@@ -50,7 +50,8 @@ import type {
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
-import { CollabTransport, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
+import { SaveTracker, hasLocalChanges } from './unsaved'
+import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
 import {
@@ -70,7 +71,13 @@ const Excalidraw = lazy(() =>
 )
 
 export interface WhiteboardEditorHandle {
-  save: () => Promise<{ bytes: Uint8Array }>
+  /**
+   * The scene to store. Call `settle` with whether it was stored: until then
+   * the drawing counts as unsaved, and a failed save leaves it unsaved.
+   */
+  save: () => Promise<{ bytes: Uint8Array; settle: (stored: boolean) => void }>
+  /** Something was drawn here since the last save (or since it opened). */
+  hasUnsavedChanges: () => boolean
 }
 
 interface Props {
@@ -84,6 +91,11 @@ interface Props {
   readOnly?: boolean
   /** The file key of an older generation: images stored before a re-key. */
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
+  /**
+   * The file was replaced under this tab (a new version from Drive, a
+   * restore elsewhere): reopen from the newest version.
+   */
+  onOutdated?: (base?: undefined, reset?: boolean) => void
 }
 
 // Module-level cache of registerDevice promises — same pattern as
@@ -109,7 +121,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, initialBytes, fileKey, keyGeneration, readOnly = false, fileKeyAt }: Props,
+  { fileId, initialBytes, fileKey, keyGeneration, readOnly = false, fileKeyAt, onOutdated }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -137,6 +149,8 @@ function WhiteboardEditorBase(
 
   // Collab state held in refs so callbacks see latest without rebinding.
   const transportRef = useRef<CollabTransport | null>(null)
+  const onOutdatedRef = useRef(onOutdated)
+  onOutdatedRef.current = onOutdated
   const deviceIdRef = useRef<number | null>(null)
   const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
   const docKeyIdRef = useRef<number>(1)
@@ -146,6 +160,9 @@ function WhiteboardEditorBase(
   // Per-element versionNonce snapshot of what we've already broadcast.
   // Used to compute "changed since last broadcast" diffs in onChange.
   const lastBroadcastRef = useRef<Map<string, number>>(new Map())
+  // Drawn here since the last save: a Replace or a restore elsewhere drops
+  // it, and the page says so (replacedNotice).
+  const saves = useRef(new SaveTracker())
 
   // Set during applyRemote → updateScene; suppresses the onChange echo
   // that would otherwise re-broadcast the remote elements right back.
@@ -244,8 +261,11 @@ function WhiteboardEditorBase(
         const files = api.getFiles()
         const json = serializeAsJSON(elements, appState, files, 'local')
         const bytes = new TextEncoder().encode(json)
-        return Promise.resolve({ bytes })
+        // What is in `bytes` counts as unsaved until it is stored; drawing
+        // after this point marks the scene changed again (onChange).
+        return Promise.resolve({ bytes, settle: saves.current.beginSave() })
       },
+      hasUnsavedChanges: () => saves.current.unsaved,
     }),
     [],
   )
@@ -273,6 +293,11 @@ function WhiteboardEditorBase(
       const transport = new CollabTransport({
         url: wsUrl,
         lastSeenSeq: () => lastSeenSeqRef.current,
+        // The room's base was reset (the file replaced or restored): what
+        // this tab draws on is gone, so it reopens from the newest version.
+        onBase: (message: BaseMsg) => {
+          if (message.reset) onOutdatedRef.current?.(undefined, true)
+        },
         onHello: (h: HelloMsg) => {
           docKeyIdRef.current = h.currentDocKeyId
           lastSeenSeqRef.current = h.headSeq
@@ -619,6 +644,11 @@ function WhiteboardEditorBase(
             // A viewer's scene changes only by others' edits (and its own
             // view state); it sends none and stores no images.
             if (!readOnly) {
+              // Before the broadcast records it as sent.
+              const api = apiRef.current
+              if (!saves.current.hasChanges && api && hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)) {
+                saves.current.markChanged()
+              }
               scheduleBroadcast()
               maybeUploadDirtyAssets()
             }

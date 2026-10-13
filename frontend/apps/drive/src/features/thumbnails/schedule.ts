@@ -10,7 +10,8 @@ export function thumbnailAfterUpload(uploaded: UploadedFile, file: File): void {
     storeThumbnails(
       { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
       await thumbnailsOfFile(file),
-      'original',
+      // Drawn from what was uploaded: the file, or the version it became.
+      uploaded.versionId ?? 'original',
     ),
   )
 }

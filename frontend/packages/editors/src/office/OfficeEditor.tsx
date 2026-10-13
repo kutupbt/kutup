@@ -65,7 +65,7 @@ interface Props {
   resetBase?: boolean
   /** The room's session base is another version (or a restore replaced it):
    *  the document must reopen from `base` (latest when omitted). */
-  onOutdated?: (base?: SessionBase) => void
+  onOutdated?: (base?: SessionBase, reset?: boolean) => void
   /** False: the document as it is, with no session and no live editing (a
    *  public link's page). Opens read-only. */
   live?: boolean
@@ -503,7 +503,7 @@ function OfficeEditorBase(
           // Joined a live session that started elsewhere, or a restore
           // replaced it: reopen from the room's base.
           if (message.reset || !message.yours) {
-            onOutdatedRef.current?.(message.reset ? undefined : { versionId: message.versionId, seq: message.seq })
+            onOutdatedRef.current?.(message.reset ? undefined : { versionId: message.versionId, seq: message.seq }, message.reset)
           }
         },
         onPosition: (message: PositionMsg) => {

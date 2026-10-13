@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use reqwest::Method;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::Client;
 
@@ -37,6 +37,10 @@ pub struct TrashFolder {
     pub epoch_statement_hash: String,
     #[serde(default)]
     pub color: Option<String>,
+    /// Where it comes back to: its parent while that folder is live, else
+    /// none (the top level).
+    #[serde(default)]
+    pub parent_collection_id: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     #[serde(default)]
     pub items: i64,
@@ -77,6 +81,23 @@ pub struct TrashFile {
     pub deleted_at: String,
 }
 
+/// `POST /api/trash/{id}/restore` body: a new name for what comes back,
+/// with its hash where it lands; a file's name sealed in its metadata at
+/// the next revision, a folder's in its name envelope.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreRequest {
+    pub name_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_envelope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_envelope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_revision: Option<u64>,
+}
+
 impl Client {
     /// Lists the caller's trash roots (folders + files), newest first.
     pub fn list_trash(&self) -> Result<TrashResponse> {
@@ -84,12 +105,15 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Restores one trashed root to where it was.
-    pub fn restore_trash(&self, id: &str) -> Result<()> {
-        let resp = self
-            .request(Method::POST, &format!("/trash/{id}/restore"))
-            .send()?;
-        super::check_ok(resp)
+    /// Restores one trashed root to where it was; with `rename`, under the
+    /// new name it carries (when its own is taken there, or a folder comes
+    /// back at the top level: `409` `name_taken` / `nameNeeded`).
+    pub fn restore_trash(&self, id: &str, rename: Option<&RestoreRequest>) -> Result<()> {
+        let mut request = self.request(Method::POST, &format!("/trash/{id}/restore"));
+        if let Some(rename) = rename {
+            request = request.json(rename);
+        }
+        super::check_ok(request.send()?)
     }
 
     /// Permanently destroys one trashed root (releases quota). Irreversible.

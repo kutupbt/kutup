@@ -1,4 +1,4 @@
-import { listVersions } from '@kutup/collab/api'
+import { listVersions, newestYjsVersion } from '@kutup/collab/api'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -47,8 +47,9 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
   const kind = file.name ? (editorKindFor(file.name) ?? (extensionOf(file.name) === 'pdf' ? 'office' : null)) : null
   if (!kind || !file.fileKey) return { kind: 'original' }
   const versions = await listVersions(file.id)
-  // Newest first.
-  const latest = versions[0]
+  // Newest first. A note opens from its newest Yjs state, never a stray
+  // whole-file version; an office document or whiteboard from its newest.
+  const latest = kind === 'text' ? newestYjsVersion(versions) : versions[0]
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const path = `/files/${file.id}/versions/${latest.id}/download`
   if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyGeneration: latest.keyGeneration, seqAtSnapshot: latest.seqAtSnapshot }
@@ -69,7 +70,7 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
 /** A place list's current places as list JSON (docs/plans/maps.md). */
 async function listContent(file: DriveFile): Promise<FileContent> {
   if (!file.fileKey) return { kind: 'original' }
-  const latest = (await listVersions(file.id))[0]
+  const latest = newestYjsVersion(await listVersions(file.id))
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
   const sealed = await sealedAt(file, latest.keyGeneration)

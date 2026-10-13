@@ -339,6 +339,10 @@ pub struct MoveFileRequest {
     /// Its name's hash in the destination (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// Its content's hash in the destination, from the content SHA-256 its
+    /// metadata holds; none leaves it unknown there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// `POST /collections/{id}/move`; `None` moves the folder to the top level.

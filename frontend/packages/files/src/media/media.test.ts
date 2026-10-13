@@ -133,7 +133,7 @@ describe('readMedia', () => {
     expect(await readMedia(new File(['hi'], 'notes.md', { type: 'text/markdown' }))).toBeUndefined()
   })
 
-  it('puts it together, with a content hash', async () => {
+  it('puts it together (the content hash is the file\'s own, not a detail)', async () => {
     const media = await readMedia(await fixture('photo.jpg', 'image/jpeg', Date.UTC(2025, 0, 1)))
     expect(media).toMatchObject({
       takenAt: Date.UTC(2024, 6, 1, 11, 3, 22, 250),
@@ -143,7 +143,7 @@ describe('readMedia', () => {
       height: 16,
       camera: 'Apple iPhone 15',
     })
-    expect(media?.hash).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+    expect(media).not.toHaveProperty('hash')
   })
 
   it('falls back to the name, then the file date', async () => {
