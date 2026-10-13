@@ -131,8 +131,9 @@ what has shipped on master is what is applied anywhere; on master itself, the
 commit before): every migration on the base is byte-for-byte
 unchanged, and every new one is a timestamped `.up.sql`/`.down.sql` pair newer
 than the base's newest. A squash, where every base migration is replaced by one
-newer `_baseline` pair, is the one exception it recognizes. `scripts/gate.sh
-static` runs it.
+newer `_baseline` pair, is the one exception it recognizes; new migrations
+after the squash are ordinary new pairs and must be newer than the baseline.
+`scripts/gate.sh static` runs it.
 
 ```sh
 cargo install sqlx-cli --no-default-features --features postgres   # one-time
