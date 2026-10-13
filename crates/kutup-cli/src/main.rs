@@ -23,6 +23,7 @@ mod syncengine;
 mod transfer;
 mod uploader;
 mod vaultsync;
+mod version_upload;
 mod whiteboard;
 
 use clap::{Parser, Subcommand};
@@ -424,6 +425,7 @@ mod tests {
                 status,
                 message: "x".into(),
                 code: None,
+                upload_id: None,
                 name_taken: None,
                 version_conflict: None,
             })

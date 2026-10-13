@@ -384,6 +384,12 @@ pub struct ResumeState {
     pub created_at: i64,
     /// Bumped after each successful PATCH; drives idle sweeping.
     pub updated_at: i64,
+    /// A new version's upload: the file it is a version of (empty for a new
+    /// file), sealed at `key_generation`.
+    #[serde(default)]
+    pub version_of: String,
+    #[serde(default)]
+    pub key_generation: u32,
 }
 
 /// Sync pair id: one synced (collection, local dir) combination.

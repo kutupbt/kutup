@@ -47,6 +47,8 @@ pub struct ApiError {
     pub message: String,
     /// The server's machine-readable `code`, when it gave one.
     pub code: Option<String>,
+    /// A `409 versionUploading` for an upload of the caller's: its id.
+    pub upload_id: Option<String>,
     /// A `409 name_taken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
@@ -97,6 +99,9 @@ impl ApiError {
         let code = parsed
             .as_ref()
             .and_then(|v| v.get("code")?.as_str().map(str::to_string));
+        let upload_id = parsed
+            .as_ref()
+            .and_then(|v| v.get("uploadId")?.as_str().map(str::to_string));
         let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
@@ -111,6 +116,7 @@ impl ApiError {
             status,
             message,
             code,
+            upload_id,
             name_taken,
             version_conflict,
         }
