@@ -62,9 +62,9 @@ const MESSAGE_TERM: char = '\u{1}';
 const TARGET_TERM: char = '\u{2}';
 
 // Folding and words are shared with Mail's index (`kutup-search`).
-pub use kutup_search::words;
 #[cfg(test)]
 use kutup_search::fold;
+pub use kutup_search::words;
 
 /// One indexed entry, as a shard holds it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
