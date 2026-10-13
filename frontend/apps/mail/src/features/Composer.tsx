@@ -321,6 +321,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [maximised, setMaximised] = useState(() => mailSettings.data?.composerMode === 'maximized')
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const [sending, setSending] = useState(false)
+  // Send pressed while files or inline images still upload: it goes once they
+  // are up (the button says Sending at once), or stops if one failed.
+  const [queued, setQueued] = useState<{ scheduleAt?: Date } | null>(null)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
   const [encrypt, setEncrypt] = useState(true)
   // Proton's "Request read receipt".
@@ -555,6 +558,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   }
 
   async function discard() {
+    setQueued(null)
     closed.current = true
     await saving.current
     if (draftId.current) {
@@ -580,8 +584,13 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       toast.error(t('compose.outsideOff'))
       return
     }
-    if (attachments.some((a) => a.status !== 'ready')) {
+    if (attachments.some((a) => a.status === 'failed')) {
       toast.error(t('compose.attachmentsPending'))
+      return
+    }
+    if (attachments.some((a) => a.status === 'uploading')) {
+      setSending(true)
+      setQueued({ scheduleAt })
       return
     }
     setSending(true)
@@ -632,6 +641,20 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       }
     }
   }
+
+  // A queued send goes when the last upload is done (this render's state, so
+  // the draft names every file).
+  useEffect(() => {
+    if (!queued || attachments.some((a) => a.status === 'uploading')) return
+    setQueued(null)
+    if (attachments.some((a) => a.status === 'failed')) {
+      setSending(false)
+      toast.error(t('compose.attachmentsPending'))
+      return
+    }
+    void send(queued.scheduleAt)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- send reads this render's state
+  }, [queued, attachments])
 
   const title = subject.trim() || t('compose.newMessage')
   return (
