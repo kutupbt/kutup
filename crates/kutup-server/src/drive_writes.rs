@@ -10,8 +10,12 @@ use uuid::Uuid;
 /// (versions, assets, thumbnails, collaborative edits): the folder owner, or
 /// a recipient whose share lets them add files ("can edit"), or a recipient
 /// of the file itself with "can edit". A read-only recipient may open and
-/// download, nothing more.
-pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+/// download, nothing more. A failed query is an error, never "no".
+pub async fn can_write_file(
+    pool: &PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(&format!(
         r#"SELECT c.owner_user_id = $2
                   OR EXISTS(SELECT 1 FROM collection_shares cs
@@ -27,9 +31,7 @@ pub async fn can_write_file(pool: &PgPool, user_id: Uuid, file_id: Uuid) -> bool
     .bind(user_id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()
-    .unwrap_or(false)
+    .map(|allowed| allowed.unwrap_or(false))
 }
 
 /// A file share allows edits only while it opens the file's current key and

@@ -451,12 +451,20 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     };
     let (username, password) = (username.as_str(), password.as_str());
 
-    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE username = $1")
-        .bind(username)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    // A failed check is not "no admin yet": nothing is created on an error.
+    let exists: Option<i64> = match sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users WHERE username = $1",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(exists) => exists,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not check for the account; not creating it");
+            return;
+        }
+    };
     if exists.unwrap_or(0) > 0 {
         return;
     }

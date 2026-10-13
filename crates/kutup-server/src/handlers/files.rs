@@ -141,7 +141,7 @@ pub async fn list_files(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    if !can_access_collection(&state.pool, user_id, coll_id).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -425,7 +425,7 @@ pub async fn download(
         return Err(AppError::not_found("not found"));
     }
     // The folder's people, or someone the file itself is shared with.
-    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -477,7 +477,7 @@ pub async fn download_original(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
     let content = crate::file_content::original_content(&state.pool, file_id)
@@ -637,7 +637,7 @@ pub async fn claim_seed(
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     // Seeding writes the document's first state: an editor's job.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 

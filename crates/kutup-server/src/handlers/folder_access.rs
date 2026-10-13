@@ -112,7 +112,8 @@ pub async fn epochs(
             .bind(collection_id)
             .fetch_optional(&state.pool)
             .await?;
-    if owner != Some(user_id) && !can_access_collection(&state.pool, user_id, collection_id).await {
+    if owner != Some(user_id) && !can_access_collection(&state.pool, user_id, collection_id).await?
+    {
         return Err(AppError::forbidden("forbidden"));
     }
     Ok(Json(epoch_chain(&state.pool, collection_id).await?).into_response())
@@ -827,7 +828,7 @@ pub async fn rekey(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, file_id).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;

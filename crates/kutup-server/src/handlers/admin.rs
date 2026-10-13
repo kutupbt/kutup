@@ -277,9 +277,7 @@ pub async fn update_user(
         )
         .bind(target)
         .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
+        .await?
         .ok_or_else(|| AppError::not_found("not found"))?;
 
     let wants_demote = req.is_admin == Some(false);
@@ -388,9 +386,7 @@ pub async fn delete_user(
         sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten()
+            .await?
             .ok_or_else(|| AppError::not_found("not found"))?;
     if is_break_glass(&state, target_username.as_deref().unwrap_or_default()) {
         return Err(AppError::forbidden("break-glass admin is protected"));

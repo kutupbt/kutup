@@ -76,16 +76,11 @@ pub async fn list_vault_secrets(
         if trashed {
             continue;
         }
-        // Access is checked on live vaults only: the check sees a trashed
-        // file as out of reach, and its record must wait for a restore (or
-        // a purge, which deletes it).
-        if !trashed && !can_access_file(&state.pool, user_id, file_id).await {
-            // Access was taken away: the record goes with it.
-            sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
-                .bind(user_id)
-                .bind(file_id)
-                .execute(&state.pool)
-                .await?;
+        // Out of reach now (unshared, perhaps only for a moment): hidden,
+        // never deleted on a read; a failed check fails the request. A record
+        // goes only with the vault (purged: ON DELETE CASCADE) or when its
+        // owner forgets it (the same fix as #171).
+        if !can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
         out.push(VaultSecretRow {
@@ -125,7 +120,7 @@ pub async fn put_vault_secret(
             .bind(file_id)
             .fetch_optional(&state.pool)
             .await?;
-    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await {
+    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
     // What the account's keys are bound to (docs/plans/account-identity.md).

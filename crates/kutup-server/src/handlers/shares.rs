@@ -263,9 +263,7 @@ pub async fn get_public_share(
     )
     .bind(&token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((
         id,
         share_type,
@@ -403,9 +401,7 @@ pub async fn list_public_share_files(
     )
     .bind(&token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((target_id, share_type, expires_at)) = meta else {
         return Err(AppError::not_found("not found"));
     };
@@ -502,9 +498,7 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
     )
     .bind(token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((target_id, share_type, expires_at)) = meta else {
         return Err(AppError::not_found("not found"));
     };
@@ -519,9 +513,7 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
         sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(fid)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+            .await?;
     let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };

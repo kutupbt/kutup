@@ -231,21 +231,23 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     };
 
     // Permission check + quota gate, mirroring files.rs upload.
-    let collection: Option<(Uuid, i32)> = sqlx::query_as(
+    let collection: Option<(Uuid, i32)> = match sqlx::query_as(
         "SELECT owner_user_id, key_epoch FROM collections WHERE id=$1 AND deleted_at IS NULL",
     )
     .bind(coll_uuid)
     .fetch_optional(&mut *tx)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+    };
     let Some((owner_user_id, key_epoch)) = collection else {
         return tus_text(StatusCode::FORBIDDEN, "forbidden");
     };
     let is_owner = owner_user_id == user_id;
 
     if !is_owner {
-        let can_upload: Option<bool> = sqlx::query_scalar(
+        let can_upload: Option<bool> = match sqlx::query_scalar(
             "SELECT cs.can_upload FROM collection_shares cs \
              JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
              WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
@@ -254,8 +256,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(value) => value,
+            Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        };
         if can_upload != Some(true) {
             return tus_text(StatusCode::FORBIDDEN, "forbidden");
         }
@@ -419,15 +423,17 @@ pub async fn head(
         Err(_) => return tus_text(StatusCode::NOT_FOUND, ""),
     };
 
-    let row: Option<(i64, i64)> = sqlx::query_as(
+    let row: Option<(i64, i64)> = match sqlx::query_as(
         "SELECT total_bytes, received_bytes FROM uploads WHERE id=$1 AND user_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+    };
     let Some((total_bytes, received_bytes)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
@@ -532,7 +538,7 @@ pub async fn patch(
         Vec<u8>,           // pending_bytes
         Option<String>,    // name_hash
     );
-    let row: Option<UploadRow> = sqlx::query_as(
+    let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
                 storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash \
@@ -542,8 +548,10 @@ pub async fn patch(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+    };
     let Some((
         coll_id,
         file_id,
@@ -888,14 +896,17 @@ pub async fn delete(
         Err(_) => return tus_text(StatusCode::NOT_FOUND, ""),
     };
 
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT storage_path, s3_upload_id FROM uploads WHERE id=$1 AND user_id=$2")
-            .bind(upload_id)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+    let row: Option<(String, String)> = match sqlx::query_as(
+        "SELECT storage_path, s3_upload_id FROM uploads WHERE id=$1 AND user_id=$2",
+    )
+    .bind(upload_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+    };
     let Some((storage_path, s3_upload_id)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };

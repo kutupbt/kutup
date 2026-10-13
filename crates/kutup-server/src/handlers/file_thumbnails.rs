@@ -68,7 +68,7 @@ pub async fn upload(
     }
     // The same right as saving a version: whoever may change the content
     // may change its picture.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
@@ -237,7 +237,7 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let variant = parse_variant(&variant)?;
-    if !can_access_file(&state.pool, user_id, fid).await
+    if !can_access_file(&state.pool, user_id, fid).await?
         && !owns_trashed_file(&state.pool, user_id, fid).await
     {
         return Err(AppError::forbidden("forbidden"));
@@ -300,7 +300,7 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;

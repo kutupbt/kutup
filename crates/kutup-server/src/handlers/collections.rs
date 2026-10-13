@@ -223,9 +223,7 @@ pub(crate) async fn collection_rows(
             .bind(row.id)
             .bind(user_id)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+            .await?;
             Some(used.unwrap_or(0))
         } else {
             None

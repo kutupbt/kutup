@@ -99,7 +99,7 @@ pub async fn ws(
     let user_uuid =
         Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
     let access = file_access(&state.pool, user_uuid, file_uuid)
-        .await
+        .await?
         .ok_or_else(|| AppError::not_found("file not found"))?;
     if access == Access::None {
         return Err(AppError::forbidden("forbidden"));
@@ -155,9 +155,7 @@ pub(crate) async fn authenticate_socket(
     )
     .bind(device_id)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     match dev {
         Some((pk, true, owner)) if owner == user_id => Ok((user_id, session_id, device_id, pk)),
         _ => Err(AppError::unauthorized("device not registered or revoked")),
@@ -173,8 +171,13 @@ enum Access {
     Write,
 }
 
-/// `None` when the file (or its folder) is gone.
-async fn file_access(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> Option<Access> {
+/// `None` when the file (or its folder) is gone; a failed query is an error,
+/// never "no access".
+async fn file_access(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<Option<Access>, sqlx::Error> {
     // A folder share or a share of the file itself; either may allow edits.
     let row: Option<(bool, Option<bool>)> = sqlx::query_as(&format!(
         r#"SELECT c.owner_user_id = $2,
@@ -191,14 +194,12 @@ async fn file_access(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> Optio
     .bind(file_id)
     .bind(user_id)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.map(|(owner, share)| match (owner, share) {
+    .await?;
+    Ok(row.map(|(owner, share)| match (owner, share) {
         (true, _) | (_, Some(true)) => Access::Write,
         (_, Some(false)) => Access::Read,
         _ => Access::None,
-    })
+    }))
 }
 
 /// A connection's fixed identity, resolved before the upgrade.
@@ -338,8 +339,10 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
             _ = recheck.tick() => {
                 let session_live =
                     crate::sessions::live(&state.pool, conn.session_id, conn.user_uuid).await.is_ok();
+                // Closed on a definite "no"; a failed check is tried again
+                // at the next tick.
                 let access = file_access(&state.pool, conn.user_uuid, file_uuid).await;
-                if !session_live || matches!(access, None | Some(Access::None)) {
+                if !session_live || matches!(access, Ok(None | Some(Access::None))) {
                     break;
                 }
             }
@@ -557,9 +560,10 @@ async fn handle_frame(
 
     // Everything else changes the document: editors only, checked per frame
     // (a share can be narrowed while the socket is open).
+    // A failed check refuses the edit (never "allowed" on an error).
     match file_access(&state.pool, conn.user_uuid, file_uuid).await {
-        Some(Access::Write) => {}
-        Some(Access::Read) => return true,
+        Ok(Some(Access::Write)) => {}
+        Ok(Some(Access::Read)) => return true,
         _ => return false,
     }
     // Edits only under a file key wrapped at the folder's current epoch: a
