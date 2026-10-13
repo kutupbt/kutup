@@ -1607,26 +1607,50 @@ mod tests {
     fn envelopes_bind_address_and_fingerprint() {
         let master = [7u8; 32];
         let key = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
-        let sealed = seal_address_key(&master, "a@example.com", ADDRESS, &key.secret_key).unwrap();
-        let opened =
-            open_address_key(&sealed, &master, "a@example.com", ADDRESS, &key.fingerprint).unwrap();
+        let sealed = seal_address_key(
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &key.secret_key,
+        )
+        .unwrap();
+        let opened = open_address_key(
+            &sealed,
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &key.fingerprint,
+        )
+        .unwrap();
         assert_eq!(&opened[..], &key.secret_key[..]);
         assert!(open_address_key(
             &sealed,
             &master,
-            "a@example.com",
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             "bob@kutup.dev",
             &key.fingerprint
         )
         .is_err());
-        assert!(open_address_key(&sealed, &master, "a@example.com", ADDRESS, &[0; 20]).is_err());
-        assert!(
-            open_address_key(&sealed, &master, "b@example.com", ADDRESS, &key.fingerprint).is_err()
-        );
+        assert!(open_address_key(
+            &sealed,
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &[0; 20]
+        )
+        .is_err());
+        assert!(open_address_key(
+            &sealed,
+            &master,
+            "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91",
+            ADDRESS,
+            &key.fingerprint
+        )
+        .is_err());
         assert!(open_address_key(
             &sealed,
             &[8; 32],
-            "a@example.com",
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             ADDRESS,
             &key.fingerprint
         )

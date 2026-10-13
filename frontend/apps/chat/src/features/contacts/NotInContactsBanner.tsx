@@ -5,6 +5,7 @@ import { useContactLookup } from '@kutup/contacts-core/api'
 import { Button } from '@kutup/ui/components/button'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { useSaveContact } from './saveContactState'
+import { getSession } from '@kutup/session/store'
 
 /**
  * Above a one-to-one conversation with someone who is not in the address
@@ -48,17 +49,27 @@ export function NotInContactsBanner({ address, name }: { address: string; name?:
 
 const DISMISSED = 'kutup.chat.notInContactsDismissed'
 
+/** Per account: two accounts in one browser keep their own lists. */
+function dismissedKey(): string | null {
+  const userId = getSession()?.userId
+  return userId ? `${DISMISSED}:${userId}` : null
+}
+
 function readDismissed(): Set<string> {
+  const key = dismissedKey()
+  if (!key) return new Set()
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED) ?? '[]') as string[])
+    return new Set(JSON.parse(localStorage.getItem(key) ?? '[]') as string[])
   } catch {
     return new Set()
   }
 }
 
 function writeDismissed(addresses: Set<string>) {
+  const key = dismissedKey()
+  if (!key) return
   try {
-    localStorage.setItem(DISMISSED, JSON.stringify([...addresses].slice(-500)))
+    localStorage.setItem(key, JSON.stringify([...addresses].slice(-500)))
   } catch {
     // Private windows: dismissed for this page only.
   }

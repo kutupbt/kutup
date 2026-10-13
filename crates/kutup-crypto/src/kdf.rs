@@ -155,12 +155,8 @@ pub fn derive_recovery_auth_proof(
             "recovery entropy must be 32 bytes".into(),
         ));
     }
-    let canonical = binding.trim().to_ascii_lowercase();
-    if canonical.is_empty() {
-        return Err(CryptoError::InvalidInput(
-            "recovery binding is empty".into(),
-        ));
-    }
+    let canonical = crate::key_binding::check(binding)
+        .map_err(|_| CryptoError::InvalidInput("recovery binding is not a key binding".into()))?;
     let hkdf = Hkdf::<Sha256>::new(Some(RECOVERY_AUTH_SALT), recovery_entropy);
     let mut proof = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(canonical.as_bytes(), proof.as_mut_slice())
@@ -173,18 +169,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recovery_proof_is_binding_normalized_and_not_raw_entropy() {
+    fn recovery_proof_is_bound_to_a_key_binding_and_not_raw_entropy() {
         let entropy = [9u8; 32];
-        let first = derive_recovery_auth_proof(&entropy, " Alice@Example.COM ").unwrap();
-        let second = derive_recovery_auth_proof(&entropy, "alice@example.com").unwrap();
-        assert_eq!(first.as_slice(), second.as_slice());
+        let first =
+            derive_recovery_auth_proof(&entropy, "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90").unwrap();
         assert_ne!(first.as_slice(), entropy.as_slice());
         assert_ne!(
             first.as_slice(),
-            derive_recovery_auth_proof(&entropy, "bob@example.com")
+            derive_recovery_auth_proof(&entropy, "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91")
                 .unwrap()
                 .as_slice()
         );
+        // Only a key binding: no address, no other case, no padding.
+        for other in [
+            "alice@example.com",
+            "0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90",
+            " 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            "",
+        ] {
+            assert!(
+                derive_recovery_auth_proof(&entropy, other).is_err(),
+                "{other}"
+            );
+        }
     }
 
     #[test]

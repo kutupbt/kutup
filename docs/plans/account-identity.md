@@ -145,6 +145,29 @@ one (a vault file, a mail key, a folder), under the account's own keys.
 - Tests: `newAccount`/`signIn` fixtures sign in by username; specs that type
   an email change; live tests seal with the key binding.
 
+### Verified binding
+
+A device seals only under a key binding it has verified itself, never under
+the server's word:
+
+- At sign-in (and 2FA) the binding the login answer names is verified by
+  opening the master envelope with it: suite 2 derives the envelope's key
+  from the binding, so a wrong one does not open. At registration and first
+  setup the browser drew the binding itself; at recovery the recovery
+  envelope opening under it verifies it.
+- That binding goes into the session's keys (`SessionKeys.keyBinding`, in
+  the sealed per-origin session blob and the fork payload, encoding v2; v1
+  without it is refused).
+- Whenever the session is made live (restore, fork, sign-in), `/user/me`
+  must name the same binding; otherwise the session is refused and the
+  person signs in again. A server serving another binding can no longer make
+  the apps seal identity pins, mail names or the Chat profile under a key the
+  account's other devices cannot open.
+- Account envelopes and the recovery proof take exactly a key binding (a
+  lowercase UUID v4): no trimming, no case folding, no address.
+- Lists kept in the browser per account (the "not in contacts" dismissals of
+  Chat and Mail) are keyed by the user id.
+
 ## Security review
 
 - **No old accounts:** nothing reads an email-bound seal or a suite-1
@@ -202,9 +225,9 @@ may hold colons, a bad username is refused); more suite-2 vectors.
 Follow-ups:
 - The sign-in lockout per account lets anyone lock a known username out
   (key it per account and address, or slow down instead).
-- The web client takes the key binding from `/user/me` without checking it
-  against anything it holds; a bad server could hand out another one (the
-  seals would then fail to open, not leak). Pin it next to the keys.
+- ~~The web client takes the key binding from `/user/me` without checking
+  it~~: the session's keys carry the binding verified on the device
+  ("Verified binding").
 - Some refusals answer before the bcrypt check (a disabled account, a
   malformed login key), so their timing differs from a wrong password.
 - The server could also require the object id where a purpose has one.

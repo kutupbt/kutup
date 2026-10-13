@@ -119,19 +119,13 @@ struct ParsedEnvelope<'a> {
     ciphertext: &'a [u8],
 }
 
-/// A binding as headers carry it: trimmed and lowercased (a key binding is
-/// already).
+/// A binding as headers carry it: exactly a key binding.
 pub fn canonical_binding(value: &str) -> Result<String> {
-    let canonical = value.trim().to_ascii_lowercase();
-    if canonical.is_empty()
-        || canonical.len() > MAX_CONTEXT_LEN
-        || canonical.as_bytes().contains(&0)
-    {
-        return Err(CryptoError::InvalidInput(
-            "account-envelope binding is invalid".into(),
-        ));
-    }
-    Ok(canonical)
+    // Exactly a key binding (a lowercase UUID v4), nothing trimmed or folded:
+    // a name, an address or any other string is refused on seal and open.
+    crate::key_binding::check(value)
+        .map(str::to_owned)
+        .map_err(|_| CryptoError::InvalidInput("account-envelope binding is invalid".into()))
 }
 
 fn build_header(
@@ -535,10 +529,35 @@ mod tests {
         validate(
             &envelope,
             AccountEnvelopePurpose::PasswordMasterKey,
-            &BINDING.to_uppercase(),
+            BINDING,
             32,
         )
         .unwrap();
+        // Only the exact key binding: not uppercased, padded, or an address.
+        for other in [
+            BINDING.to_uppercase(),
+            format!(" {BINDING}"),
+            "ada@kutup.dev".to_owned(),
+        ] {
+            assert!(
+                validate(
+                    &envelope,
+                    AccountEnvelopePurpose::PasswordMasterKey,
+                    &other,
+                    32
+                )
+                .is_err(),
+                "{other}"
+            );
+            assert!(seal_with_nonce(
+                &[0x42; 32],
+                &[0x24; 32],
+                AccountEnvelopePurpose::PasswordMasterKey,
+                &other,
+                &[0x11; 24],
+            )
+            .is_err());
+        }
         assert_eq!(
             open(
                 &envelope,

@@ -462,8 +462,13 @@ mod tests {
     #[test]
     fn a_vault_secret_must_name_the_binding_it_is_checked_against() {
         assert!(checked_envelope(&sealed(ID), ID, VAULT).is_ok());
-        assert!(checked_envelope(&sealed("Ayse@Example.org"), "ayse@example.org", VAULT).is_ok());
-        assert!(checked_envelope(&sealed("ayse@example.org"), ID, VAULT).is_err());
+        assert!(
+            checked_envelope(&sealed("1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91"), ID, VAULT).is_err()
+        );
+        assert!(
+            checked_envelope(&sealed(ID), "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91", VAULT).is_err()
+        );
+        // An address is no binding.
         assert!(checked_envelope(&sealed(ID), "ayse@example.org", VAULT).is_err());
         // Sealed for another vault.
         assert!(checked_envelope(&sealed(ID), ID, Uuid::from_bytes([2u8; 16])).is_err());

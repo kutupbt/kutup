@@ -30,9 +30,13 @@ assert.deepEqual(keys, {
 
 const entropy = Buffer.from(Uint8Array.from({ length: 32 }, (_, index) => index)).toString('base64')
 assert.equal(
-  crypto.deriveRecoveryAuthProof(entropy, ' Alice@Example.COM '),
-  'WCApZxc1kEKYdt6Ygph4RpjnSq23mfVOuZRu/YdM6sQ=',
+  crypto.deriveRecoveryAuthProof(entropy, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
+  '9+S40O1nRFJnEpXLF5JpDBgQMjCVs4EHBQMwgxfmzLA=',
 )
+// Only a key binding: an address, another case or padding is refused.
+for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90']) {
+  assert.throws(() => crypto.deriveRecoveryAuthProof(entropy, binding), /key binding/)
+}
 assert.throws(
   () => crypto.deriveAccountProtectionKeys('password', 'MDEyMzQ1Njc4OWFiY2RlZg==', 1, 32_768, 3, 1),
   /parameters/,
@@ -56,24 +60,22 @@ assert.deepEqual(
 
 const envelopePlaintext = Buffer.alloc(32, 0x42).toString('base64')
 const envelopeKey = Buffer.alloc(32, 0x24).toString('base64')
-const accountEnvelope = crypto.sealAccountEnvelope(
-  envelopePlaintext,
-  envelopeKey,
-  1,
-  ' Alice@Example.COM ',
-)
-assert.equal(
-  crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, 'alice@example.com'),
-  envelopePlaintext,
-)
+const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+assert.equal(crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, 'alice@example.com'),
+  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
   /authentication failed/,
 )
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, 'mallory@example.com'),
+  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91'),
   /authentication failed/,
 )
+// Exactly a key binding: an address, another case or padding is refused on
+// seal and open.
+for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90 ']) {
+  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, binding), /binding/)
+  assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
+}
 
 const driveEnvelope = crypto.sealDriveEnvelope(
   Buffer.from('projects').toString('base64'),
@@ -825,7 +827,7 @@ assert.deepEqual(crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.binding,
 const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, pv.password, null)
 assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.binding, pv.fileId), { password: pv.password, keyFile: null })
 assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.binding, '00000000-0000-4000-8000-000000000000'))
-assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, 'bob@kutup.dev', pv.fileId))
+assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, '1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91', pv.fileId))
 assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, null, null))
 // The generic account-envelope path cannot open one.
 assert.throws(() => crypto.openAccountEnvelope(pv.sealed, pv.masterKey, 6, pv.binding))

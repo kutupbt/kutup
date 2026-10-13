@@ -102,6 +102,7 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
     masterKey: session.masterKey,
     privateKey: session.privateKey,
     publicKey: session.publicKey,
+    keyBinding: session.envelopeBinding,
   })
   try {
     const envelope = await sealLocalState(payload, key, LocalStatePurpose.SessionFork, clientType)

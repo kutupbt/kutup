@@ -43,13 +43,13 @@ fn write_vectors() {
         return;
     }
     let master = [0x5au8; 32];
-    let email = "alice@kutup.dev";
+    let binding = "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90";
     let file_id = uuid::Uuid::parse_str("3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
     let password = "Parola çğış 1";
     let nonce = [0x44u8; 24];
     let sealed = seal_vault_secret_with_nonce(
         &master,
-        email,
+        binding,
         file_id.as_bytes(),
         &secret(password, KEY_FILE.as_bytes()),
         &nonce,
@@ -57,7 +57,7 @@ fn write_vectors() {
     .unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
-        binding: email.into(),
+        binding: binding.into(),
         file_id: file_id.to_string(),
         password: password.into(),
         key_file: STANDARD.encode(KEY_FILE),

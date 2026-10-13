@@ -84,9 +84,17 @@ async function unlockAndActivate(
   binding: string,
   keyEncryptionKey: Uint8Array,
 ): Promise<void> {
+  // The master envelope opens only under its own binding (suite 2 derives
+  // the key from it), so once it has opened the binding is verified.
   const masterKey = await decryptMasterKey(response.masterKeyEnvelope, keyEncryptionKey, binding)
   const privateKey = await decryptPrivateKey(response.drivePrivateKeyEnvelope, masterKey, binding)
-  await activate(response, { userId: response.userId, masterKey, privateKey, publicKey: response.publicKey })
+  await activate(response, {
+    userId: response.userId,
+    masterKey,
+    privateKey,
+    publicKey: response.publicKey,
+    keyBinding: binding,
+  })
 }
 
 async function activate(
@@ -222,6 +230,7 @@ export async function registerAndSignIn(username: string, keys: AccountKeys): Pr
     masterKey: keys.masterKey,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
+    keyBinding: keys.keyBinding,
   })
 }
 
@@ -237,6 +246,7 @@ export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Pro
     masterKey: keys.masterKey,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
+    keyBinding: keys.keyBinding,
   })
 }
 

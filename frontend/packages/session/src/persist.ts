@@ -14,7 +14,7 @@ import { LocalStatePurpose, openLocalState, sealLocalState } from '@kutup/crypto
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import api, { getClientType, refreshAccessToken } from './client'
 import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
-import { activateSession, fetchProfile } from './profile'
+import { activateSession, fetchProfile, KeyBindingMismatchError } from './profile'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
 
 function profileFor(sessionId: string): string {
@@ -115,6 +115,13 @@ export async function restoreSession(): Promise<RestoreResult> {
     localKey.fill(0)
   }
 
-  await activateSession(keys, accessToken, sessionId, await profile)
+  try {
+    await activateSession(keys, accessToken, sessionId, await profile)
+  } catch (error) {
+    // The server now names another key binding than these keys were
+    // verified under: this sign-in is over.
+    if (error instanceof KeyBindingMismatchError) return ended()
+    throw error
+  }
   return 'restored'
 }

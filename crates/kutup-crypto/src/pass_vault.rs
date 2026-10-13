@@ -196,9 +196,17 @@ mod tests {
             secret(None, Some(b"<KeyFile/>")),
             secret(Some(""), Some(&[9; 32])),
         ] {
-            let sealed = seal_vault_secret(&MASTER, "a@kutup.dev", &VAULT, &s).unwrap();
+            let sealed =
+                seal_vault_secret(&MASTER, "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90", &VAULT, &s)
+                    .unwrap();
             assert_eq!(
-                open_vault_secret(&sealed, &MASTER, "a@kutup.dev", &VAULT).unwrap(),
+                open_vault_secret(
+                    &sealed,
+                    &MASTER,
+                    "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+                    &VAULT
+                )
+                .unwrap(),
                 s
             );
         }
@@ -206,16 +214,41 @@ mod tests {
 
     #[test]
     fn bound_to_the_vault_the_account_and_the_key() {
-        let sealed =
-            seal_vault_secret(&MASTER, "a@kutup.dev", &VAULT, &secret(Some("p"), None)).unwrap();
-        assert!(open_vault_secret(&sealed, &MASTER, "a@kutup.dev", &[2; 16]).is_err());
-        assert!(open_vault_secret(&sealed, &MASTER, "b@kutup.dev", &VAULT).is_err());
-        assert!(open_vault_secret(&sealed, &[8; 32], "a@kutup.dev", &VAULT).is_err());
+        let sealed = seal_vault_secret(
+            &MASTER,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            &VAULT,
+            &secret(Some("p"), None),
+        )
+        .unwrap();
+        assert!(open_vault_secret(
+            &sealed,
+            &MASTER,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            &[2; 16]
+        )
+        .is_err());
+        assert!(open_vault_secret(
+            &sealed,
+            &MASTER,
+            "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91",
+            &VAULT
+        )
+        .is_err());
+        assert!(open_vault_secret(
+            &sealed,
+            &[8; 32],
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            &VAULT
+        )
+        .is_err());
     }
 
     #[test]
     fn refuses_empty_and_oversized_secrets() {
-        let seal = |s: &VaultSecretV1| seal_vault_secret(&MASTER, "a@kutup.dev", &VAULT, s);
+        let seal = |s: &VaultSecretV1| {
+            seal_vault_secret(&MASTER, "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90", &VAULT, s)
+        };
         assert!(seal(&secret(None, None)).is_err());
         assert!(seal(&secret(Some(&"x".repeat(MAX_PASSWORD_BYTES + 1)), None)).is_err());
         assert!(seal(&secret(None, Some(&[0; MAX_KEY_FILE_BYTES + 1]))).is_err());
