@@ -3176,9 +3176,12 @@ dependencies = [
 name = "kutup-collab"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "similar",
  "thiserror 2.0.18",
+ "time",
+ "uuid",
  "yrs",
 ]
 

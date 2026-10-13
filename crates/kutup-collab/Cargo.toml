@@ -10,7 +10,9 @@ description = "Kutup's collaboration content in Rust (Yjs, via yrs): the determi
 yrs.workspace = true
 similar.workspace = true
 thiserror.workspace = true
-
+serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
+time = { workspace = true, features = ["parsing"] }
 
 [dev-dependencies]
-serde_json.workspace = true

@@ -12,11 +12,17 @@
 //! - [`TextDoc`]: a document built from a saved state and the log after it,
 //!   whose text a local edit replaces as minimal Yjs operations: concurrent
 //!   edits elsewhere in the text merge as two tabs' do.
+//! - [`ListDoc`]: a place list, whose places a local edit changes entry by
+//!   entry (by the place's id), and [`parse_list_json`] / [`encode_list_json`]
+//!   for its file form (`list.ts` in the web's map package).
 
 use similar::{capture_diff_slices, Algorithm, DiffOp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Doc, GetString, Map, MapPrelim, Options, ReadTxn, StateVector, Text, Transact, Update};
+use yrs::{
+    Any, Doc, GetString, Map, MapPrelim, MapRef, Options, Out, ReadTxn, StateVector, Text,
+    Transact, Update,
+};
 
 /// The text's name in the document (`doc.getText('content')` on the web).
 pub const TEXT_NAME: &str = "content";
@@ -25,6 +31,8 @@ pub const TEXT_NAME: &str = "content";
 pub enum CollabError {
     #[error("not a Yjs update: {0}")]
     Update(String),
+    #[error("not a Kutup place list")]
+    NotAPlaceList,
 }
 
 pub type Result<T> = std::result::Result<T, CollabError>;
@@ -240,6 +248,295 @@ impl TextDoc {
     }
 }
 
+/// At most this many places in a list (`MAX_PLACES` in `list.ts`).
+pub const MAX_PLACES: usize = 5000;
+const MAX_NAME: usize = 200;
+const MAX_NOTE: usize = 2000;
+const MAX_ADDED_BY: usize = 320;
+/// `new Date(0).toISOString()`: the time of a place that has none.
+const NO_TIME: &str = "1970-01-01T00:00:00.000Z";
+
+fn clamp(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
+
+/// A JSON value as JavaScript's `Number()` reads it (numbers and numeric
+/// strings).
+fn number_of(value: Option<&serde_json::Value>) -> Option<f64> {
+    match value? {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn valid_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn valid_time(value: &str) -> bool {
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).is_ok()
+}
+
+/// A place as stored, or `None` when it is not one (no name, bad
+/// coordinates): `normalizePlace` in `list.ts`. A place without a usable id
+/// gets a new one.
+pub fn normalize_place(value: &serde_json::Value) -> Option<Place> {
+    let v = value.as_object()?;
+    let text = |key: &str| v.get(key).and_then(|x| x.as_str());
+    let lat = number_of(v.get("lat"))?;
+    let lon = number_of(v.get("lon"))?;
+    let name = clamp(text("name").unwrap_or("").trim(), MAX_NAME);
+    if !lat.is_finite()
+        || !lon.is_finite()
+        || !(-90.0..=90.0).contains(&lat)
+        || !(-180.0..=180.0).contains(&lon)
+        || name.is_empty()
+    {
+        return None;
+    }
+    let id = match text("id") {
+        Some(id) if valid_id(id) => id.to_owned(),
+        _ => uuid::Uuid::new_v4().to_string(),
+    };
+    Some(Place {
+        id,
+        name,
+        note: clamp(text("note").unwrap_or(""), MAX_NOTE),
+        lat,
+        lon,
+        added_by: clamp(text("addedBy").unwrap_or(""), MAX_ADDED_BY),
+        added_at: match text("addedAt") {
+            Some(at) if valid_time(at) => at.to_owned(),
+            _ => NO_TIME.to_owned(),
+        },
+    })
+}
+
+/// Oldest first, then by name, then by id: the order a list is shown and
+/// exported in. (The web compares names by locale; here by code point, which
+/// differs only for places added in the same millisecond.)
+fn ordered(mut places: Vec<Place>) -> Vec<Place> {
+    places.sort_by(|a, b| {
+        a.added_at
+            .cmp(&b.added_at)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    places
+}
+
+/// The places in a stored list (`parseListJson`): an empty file (or a
+/// one-byte placeholder) is an empty list; entries that are not places, and
+/// repeated ids, are dropped.
+pub fn parse_list_json(bytes: &[u8]) -> Result<Vec<Place>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| CollabError::NotAPlaceList)?;
+    let text = text.trim();
+    if text.chars().count() <= 1 {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| CollabError::NotAPlaceList)?;
+    let places = match (
+        value.get("format").and_then(|f| f.as_str()),
+        value.get("version").and_then(|v| v.as_i64()),
+        value.get("places").and_then(|p| p.as_array()),
+    ) {
+        (Some("kutupmap"), Some(1), Some(places)) => places,
+        _ => return Err(CollabError::NotAPlaceList),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    Ok(places
+        .iter()
+        .take(MAX_PLACES)
+        .filter_map(normalize_place)
+        .filter(|place| seen.insert(place.id.clone()))
+        .collect())
+}
+
+/// A number as `JSON.stringify` writes it: whole numbers without a fraction.
+fn json_number(value: f64) -> serde_json::Value {
+    if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+        serde_json::Value::from(value as i64)
+    } else {
+        serde_json::Value::from(value)
+    }
+}
+
+/// A list's file form (`encodeListJson`): `{ "format": "kutupmap",
+/// "version": 1, "places": [...] }`, places in list order, indented by one
+/// space as the web writes it.
+pub fn encode_list_json(places: &[Place]) -> Vec<u8> {
+    let places: Vec<serde_json::Value> = ordered(places.to_vec())
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "name": p.name,
+                "note": p.note,
+                "lat": json_number(p.lat),
+                "lon": json_number(p.lon),
+                "addedBy": p.added_by,
+                "addedAt": p.added_at,
+            })
+        })
+        .collect();
+    let value = serde_json::json!({ "format": "kutupmap", "version": 1, "places": places });
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+    let mut serializer = serde_json::Serializer::with_formatter(&mut out, formatter);
+    serde::Serialize::serialize(&value, &mut serializer).expect("JSON of plain values");
+    out
+}
+
+/// An entry's fields as JSON, the way `entry.toJSON()` gives them.
+fn entry_json<T: ReadTxn>(entry: &MapRef, txn: &T) -> serde_json::Map<String, serde_json::Value> {
+    entry
+        .iter(txn)
+        .filter_map(|(key, value)| {
+            let value = match value {
+                Out::Any(Any::String(s)) => serde_json::Value::from(s.as_ref()),
+                Out::Any(Any::Number(yrs::any::Number::Int(n))) => serde_json::Value::from(n),
+                Out::Any(Any::Number(yrs::any::Number::Float(f))) => serde_json::Value::from(f),
+                _ => return None,
+            };
+            Some((key.to_owned(), value))
+        })
+        .collect()
+}
+
+/// A place list, as a peer holds it.
+pub struct ListDoc {
+    doc: Doc,
+}
+
+impl ListDoc {
+    /// An empty list for a peer whose Yjs client id is `client_id`.
+    pub fn new(client_id: u64) -> Self {
+        let doc = Doc::with_options(options(client_id));
+        doc.get_or_insert_map(PLACES_NAME);
+        ListDoc { doc }
+    }
+
+    /// Applies a saved state (Yjs V2).
+    pub fn apply_v2(&self, update: &[u8]) -> Result<()> {
+        let update = Update::decode_v2(update).map_err(|e| CollabError::Update(e.to_string()))?;
+        self.doc
+            .transact_mut()
+            .apply_update(update)
+            .map_err(|e| CollabError::Update(e.to_string()))
+    }
+
+    /// Applies an edit from the log or a seed (Yjs V1).
+    pub fn apply_v1(&self, update: &[u8]) -> Result<()> {
+        let update = Update::decode_v1(update).map_err(|e| CollabError::Update(e.to_string()))?;
+        self.doc
+            .transact_mut()
+            .apply_update(update)
+            .map_err(|e| CollabError::Update(e.to_string()))
+    }
+
+    /// The places now, in list order (`placesOf`): entries that are not
+    /// places are left out.
+    pub fn places(&self) -> Vec<Place> {
+        let map = self.doc.get_or_insert_map(PLACES_NAME);
+        let txn = self.doc.transact();
+        let places = map
+            .iter(&txn)
+            .filter_map(|(id, value)| match value {
+                Out::YMap(entry) => {
+                    let mut fields = entry_json(&entry, &txn);
+                    fields.insert("id".into(), serde_json::Value::from(id));
+                    // An id the entry is keyed by is kept as it is.
+                    normalize_place(&serde_json::Value::Object(fields)).map(|mut place| {
+                        place.id = id.to_owned();
+                        place
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        ordered(places)
+    }
+
+    /// Whether the list has no entries at all (a seed may still go in).
+    pub fn is_empty(&self) -> bool {
+        let map = self.doc.get_or_insert_map(PLACES_NAME);
+        let empty = map.len(&self.doc.transact()) == 0;
+        empty
+    }
+
+    /// The whole state, Yjs V2 (what a saved version holds).
+    pub fn state_v2(&self) -> Vec<u8> {
+        self.doc
+            .transact()
+            .encode_state_as_update_v2(&StateVector::default())
+    }
+
+    /// Makes the list `wanted`, entry by entry: places gone are removed, new
+    /// ones added, and of the others only the fields that differ are set, so
+    /// concurrent edits to other places, or other fields, merge. Returns the
+    /// change as one Yjs V1 update, or `None` when there is nothing to do.
+    /// Over [`MAX_PLACES`] is refused, as the editor refuses it.
+    pub fn set_places(&self, wanted: &[Place]) -> Result<Option<Vec<u8>>> {
+        if wanted.len() > MAX_PLACES {
+            return Err(CollabError::NotAPlaceList);
+        }
+        let current: std::collections::BTreeMap<String, Place> = self
+            .places()
+            .into_iter()
+            .map(|place| (place.id.clone(), place))
+            .collect();
+        let wanted_ids: std::collections::BTreeSet<&str> =
+            wanted.iter().map(|p| p.id.as_str()).collect();
+        let before = self.doc.transact().state_vector();
+        let map = self.doc.get_or_insert_map(PLACES_NAME);
+        let mut changed = false;
+        {
+            let mut txn = self.doc.transact_mut();
+            for id in current.keys() {
+                if !wanted_ids.contains(id.as_str()) {
+                    map.remove(&mut txn, id);
+                    changed = true;
+                }
+            }
+            for place in wanted {
+                let Some(old) = current.get(&place.id) else {
+                    insert_place(&map, &mut txn, place);
+                    changed = true;
+                    continue;
+                };
+                if old == place {
+                    continue;
+                }
+                let Some(Out::YMap(entry)) = map.get(&txn, &place.id) else {
+                    continue;
+                };
+                if old.name != place.name {
+                    entry.insert(&mut txn, "name", place.name.as_str());
+                }
+                if old.note != place.note {
+                    entry.insert(&mut txn, "note", place.note.as_str());
+                }
+                if old.lat != place.lat {
+                    entry.insert(&mut txn, "lat", js_number(place.lat));
+                }
+                if old.lon != place.lon {
+                    entry.insert(&mut txn, "lon", js_number(place.lon));
+                }
+                if old.added_by != place.added_by {
+                    entry.insert(&mut txn, "addedBy", place.added_by.as_str());
+                }
+                if old.added_at != place.added_at {
+                    entry.insert(&mut txn, "addedAt", place.added_at.as_str());
+                }
+                changed = true;
+            }
+        }
+        Ok(changed.then(|| self.doc.transact().encode_state_as_update_v1(&before)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +599,93 @@ mod tests {
             merged(&base, &[&edit, &other]),
             "😀😀 İstanbul çok ılık 🎉 😀\n"
         );
+    }
+
+    fn place(id: &str, name: &str, lat: f64) -> Place {
+        Place {
+            id: id.into(),
+            name: name.into(),
+            note: String::new(),
+            lat,
+            lon: 29.0,
+            added_by: "ayşe@kutup.dev".into(),
+            added_at: "2026-10-13T10:00:00.000Z".into(),
+        }
+    }
+
+    fn list_of(base: &[u8], updates: &[&[u8]]) -> Vec<Place> {
+        let doc = ListDoc::new(99);
+        doc.apply_v1(base).unwrap();
+        for update in updates {
+            doc.apply_v1(update).unwrap();
+        }
+        doc.places()
+    }
+
+    #[test]
+    fn list_edits_merge_by_place() {
+        let base = seed_list(
+            "f",
+            &[place("a", "Galata", 41.02), place("b", "Moda", 40.98)],
+        );
+        // The CLI renames one place and removes the other; a tab meanwhile
+        // moves the first and adds a third.
+        let cli = ListDoc::new(1);
+        cli.apply_v1(&base).unwrap();
+        let cli_edit = cli
+            .set_places(&[place("a", "Galata Kulesi", 41.02)])
+            .unwrap()
+            .unwrap();
+        let tab = ListDoc::new(2);
+        tab.apply_v1(&base).unwrap();
+        let mut moved = place("a", "Galata", 41.0256);
+        moved.lon = 28.9742;
+        let tab_edit = tab
+            .set_places(&[
+                moved,
+                place("b", "Moda", 40.98),
+                place("c", "Kadıköy", 40.99),
+            ])
+            .unwrap()
+            .unwrap();
+        for order in [[&cli_edit, &tab_edit], [&tab_edit, &cli_edit]] {
+            let merged = list_of(&base, &[order[0], order[1]]);
+            let names: Vec<_> = merged.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, ["Galata Kulesi", "Kadıköy"]);
+            assert_eq!((merged[0].lat, merged[0].lon), (41.0256, 28.9742));
+        }
+        assert!(
+            cli.set_places(&cli.places()).unwrap().is_none(),
+            "no change, no update"
+        );
+    }
+
+    #[test]
+    fn list_json_reads_and_writes_the_web_form() {
+        let json = br#"{"format":"kutupmap","version":1,"places":[
+            {"id":"b","name":"  Moda ","lat":"40.98","lon":29,"addedAt":"2026-10-13T11:00:00.000Z"},
+            {"id":"a","name":"Galata","lat":41.5,"lon":28.97,"addedAt":"2026-10-13T10:00:00.000Z"},
+            {"id":"a","name":"again","lat":1,"lon":1},
+            {"id":"x","name":"nowhere","lat":91,"lon":0},
+            {"id":"bad id!","name":"Kept with a new id","lat":0,"lon":0}]}"#;
+        let places = parse_list_json(json).unwrap();
+        assert_eq!(places.len(), 3);
+        assert_eq!(places[0].name, "Moda");
+        assert_eq!(places[0].lat, 40.98);
+        assert_eq!(places[2].added_at, NO_TIME);
+        assert!(valid_id(&places[2].id) && places[2].id != "bad id!");
+        let written = String::from_utf8(encode_list_json(&places[..2])).unwrap();
+        // Oldest first; whole numbers without a fraction; one-space indent.
+        assert_eq!(
+            written,
+            "{\n \"format\": \"kutupmap\",\n \"version\": 1,\n \"places\": [\n  {\n   \"id\": \"a\",\n   \"name\": \"Galata\",\n   \"note\": \"\",\n   \"lat\": 41.5,\n   \"lon\": 28.97,\n   \"addedBy\": \"\",\n   \"addedAt\": \"2026-10-13T10:00:00.000Z\"\n  },\n  {\n   \"id\": \"b\",\n   \"name\": \"Moda\",\n   \"note\": \"\",\n   \"lat\": 40.98,\n   \"lon\": 29,\n   \"addedBy\": \"\",\n   \"addedAt\": \"2026-10-13T11:00:00.000Z\"\n  }\n ]\n}"
+        );
+        assert_eq!(
+            parse_list_json(written.as_bytes()).unwrap(),
+            ordered(places[..2].to_vec())
+        );
+        assert!(parse_list_json(b"").unwrap().is_empty());
+        assert!(parse_list_json(b"{\"format\":\"other\"}").is_err());
     }
 
     #[test]
