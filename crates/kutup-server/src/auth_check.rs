@@ -77,6 +77,12 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    /// Where the attempt comes from, as a key (its IP, or IPv6 /64), for
+    /// per-source caps.
+    pub(crate) fn source(&self) -> String {
+        ratelimit::hash_token(&format!("ip:{}", self.ip))
+    }
+
     pub(crate) async fn from_headers(
         state: &AppState,
         headers: &HeaderMap,
@@ -115,9 +121,9 @@ impl Client {
 }
 
 /// What a known-client mark is bound to besides the account: its current
-/// password hash, so a new password (or a recovery) retires every mark.
-pub(crate) fn credential_epoch(login_key_hash: &str) -> [u8; 16] {
-    let digest = sha2::Sha256::digest(login_key_hash.as_bytes());
+/// OPAQUE record, so a new password (or a recovery) retires every mark.
+pub(crate) fn credential_epoch(opaque_record: &[u8]) -> [u8; 16] {
+    let digest = sha2::Sha256::digest(opaque_record);
     let mut epoch = [0u8; 16];
     epoch.copy_from_slice(&digest[..16]);
     epoch
@@ -206,6 +212,30 @@ pub(crate) fn guard(
 }
 
 impl Guard {
+    /// The slots this attempt took, to keep with an OPAQUE sign-in between
+    /// its start and its finish: the lockout key, and the ceiling's two.
+    pub(crate) fn slots(&self) -> (String, Option<(String, String)>) {
+        (
+            self.lockout.clone(),
+            self.ceiling
+                .as_ref()
+                .map(|c| (c.account.clone(), c.source.clone())),
+        )
+    }
+
+    /// A right password, proved after the attempt that took these slots:
+    /// they are given back, as [`Guard::verify`] gives them back.
+    pub(crate) fn succeeded(lockout: &str, ceiling: Option<(&str, &str)>) {
+        ratelimit::LOGIN_LOCKOUT.succeeded(lockout);
+        if let Some((account, source)) = ceiling {
+            Ceiling {
+                account: account.to_owned(),
+                source: source.to_owned(),
+            }
+            .give_back();
+        }
+    }
+
     /// Checks `secret` against `hash` at full cost, `None` for either paying
     /// the same cost. A right secret gives the attempt's slots back.
     pub(crate) fn verify(&self, secret: Option<&[u8]>, hash: Option<&str>) -> bool {
@@ -304,8 +334,8 @@ fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
 /// from: HttpOnly, sent only to `/api`, `Secure` in production; bound to the
 /// account's current password.
 pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppResult<String> {
-    let login_key_hash: String =
-        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1")
+    let opaque_record: Vec<u8> =
+        sqlx::query_scalar("SELECT COALESCE(opaque_record, ''::bytea) FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -313,7 +343,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
         &known_client_key(state).await?,
         user_id,
         time::OffsetDateTime::now_utc().unix_timestamp(),
-        &credential_epoch(&login_key_hash),
+        &credential_epoch(&opaque_record),
     );
     let mut cookie = format!(
         "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api; HttpOnly; SameSite=Strict",

@@ -172,6 +172,32 @@ pub async fn take<'e, E: sqlx::PgExecutor<'e>>(
     )
 }
 
+/// A grant refused: unknown, used, expired, for another purpose, account or
+/// session. One answer for all of them.
+pub fn invalid() -> crate::error::AppError {
+    crate::error::AppError::forbidden("the grant is not valid for this")
+        .with_details(serde_json::json!({ "code": "grantInvalid" }))
+}
+
+/// Uses a grant of `purpose` that was issued to this very session (a reauth
+/// moments ago), or refuses it.
+pub async fn take_for_session<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    token: &str,
+    purpose: Purpose,
+    user: &crate::middleware::AuthUser,
+) -> crate::error::AppResult<()> {
+    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    match take(executor, token, &[purpose]).await? {
+        Some((_, grant))
+            if grant.user_id == user_id && grant.session_id == Some(user.session.session_id) =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid()),
+    }
+}
+
 /// Ends every outstanding grant of `user_id` and its sign-ins under way: a
 /// password change, a recovery or a reset makes them meaningless.
 pub async fn end_all(

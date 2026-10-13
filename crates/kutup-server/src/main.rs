@@ -128,6 +128,8 @@ pub struct AppState {
     pub(crate) maps: Arc<maps::MapService>,
     /// Live editing across servers (docs/plans/collab-federation.md).
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
+    /// The OPAQUE setups (docs/plans/opaque.md §5), opened at startup.
+    pub(crate) opaque: Arc<opaque_setup::OpaqueServer>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -401,7 +403,15 @@ async fn main() -> anyhow::Result<()> {
     chat_mls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
+    // The OPAQUE setups: a wrong OPAQUE_SETUP_KEYS stops here, before any
+    // sign-in could fail for everyone.
+    let opaque = Arc::new(
+        opaque_setup::OpaqueServer::load(&pool, &config.opaque_setup_keys)
+            .await
+            .map_err(anyhow::Error::msg)?,
+    );
     let state = AppState {
+        opaque,
         pool,
         config: Arc::new(config),
         storage,
@@ -681,13 +691,16 @@ fn build_router(state: AppState) -> Router {
             post(auth::check_registration_code)
                 .route_layer(from_fn(middleware::rate_limit_registration_code_check)),
         )
+        // OPAQUE sign-in (docs/plans/opaque.md): every start is one attempt.
         .route(
-            "/api/auth/login/preflight",
-            get(auth::get_login_preflight).route_layer(from_fn(middleware::rate_limit_preflight)),
+            "/api/auth/login/start",
+            post(handlers::opaque::login_start)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/auth/login",
-            post(auth::login).route_layer(from_fn(middleware::rate_limit_login)),
+            "/api/auth/login/finish",
+            post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/auth/login/2fa",
@@ -771,12 +784,6 @@ fn build_router(state: AppState) -> Router {
             "/api/pass/pin/verify",
             // Bounded by the account's three tries, not the sign-in limit.
             post(handlers::pass::verify_pin).route_layer(DefaultBodyLimit::max(4 * 1024)),
-        )
-        .route(
-            "/api/user/reauth",
-            post(auth::reauth)
-                .route_layer(from_fn(middleware::rate_limit_login))
-                .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route("/api/user/storage", get(handlers::storage::usage))
         .route(

@@ -197,7 +197,7 @@ pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<O
 /// address on this server reduced to its username, so `ada` and
 /// `ada@<this server>` get the same fake answers and lockout as a real
 /// account's do.
-fn canonical_name(state: &AppState, name: &str) -> String {
+pub(crate) fn canonical_name(state: &AppState, name: &str) -> String {
     let name = name.trim().to_ascii_lowercase();
     let server = state.config.chat_server_name.to_ascii_lowercase();
     match name.rsplit_once('@') {
@@ -780,160 +780,16 @@ pub async fn register(
         .into_response())
 }
 
-/// `GET /api/auth/login/preflight` — mirrors `GetLoginPreflight`. Returns deterministic
-/// fake salts for unknown emails to defeat enumeration.
-#[utoipa::path(
-    get,
-    path = "/api/auth/login/preflight",
-    tag = "auth",
-    params(("name" = String, Query, description = "The username or the Kutup address")),
-    responses((status = 200, description = "Account-protection suite, parameters and envelope binding", body = PreflightLoginResponse))
-)]
-pub async fn get_login_preflight(
-    State(state): State<AppState>,
-    Query(q): Query<NameQuery>,
-) -> AppResult<Response> {
-    let name = q.name()?;
-    let account = account_by_name(&state, &name).await?;
-    // Every account has a salt, one an administrator made too (its
-    // temporary password is derived as any other), so nothing here tells
-    // a new account, an unknown name or a real one apart.
-    let row: Option<(i16, String, i32, i32, i32)> = match account {
-        Some(id) => sqlx::query_as(
-            "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism FROM users WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?,
-        None => None,
-    };
-
-    let (suite, salt, memory_kib, iterations, parallelism) = match row {
-        Some(row) => row,
-        None => (
-            kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(
-                &fake_accounts_key(&state).await?,
-                &canonical_name(&state, &name),
-                "account-protection",
-                16,
-            ),
-            kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
-            kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
-            kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
-        ),
-    };
-
-    Ok(Json(PreflightLoginResponse {
-        account_protection_suite: u16::try_from(suite).unwrap_or(0),
-        account_protection_salt: salt,
-        argon_memory_kib: u32::try_from(memory_kib).unwrap_or(0),
-        argon_iterations: u32::try_from(iterations).unwrap_or(0),
-        argon_parallelism: u32::try_from(parallelism).unwrap_or(0),
-    })
-    .into_response())
-}
-
-/// `POST /api/user/reauth` body: the login key derived from the typed
-/// password, as for sign-in.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ReauthRequest {
-    pub login_key: String,
-}
-
-/// `POST /api/user/reauth` — checks the signed-in account's password again
-/// (Kutup Pass's lock, docs/plans/pass.md) exactly as sign-in checks it: the
-/// login key against `login_key_hash`, under the same per-account lockout and
-/// per-address rate limit. Nothing comes back but yes or no; the session
-/// already holds what the password would unlock.
-#[utoipa::path(
-    post,
-    path = "/api/user/reauth",
-    tag = "auth",
-    security(("BearerAuth" = [])),
-    request_body = ReauthRequest,
-    responses(
-        (status = 204, description = "The password is the account's"),
-        (status = 401, description = "It is not"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
-    )
-)]
-pub async fn reauth(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    user: AuthUser,
-    body: Result<Json<ReauthRequest>, JsonRejection>,
-) -> AppResult<Response> {
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    verify_account_login_key(&state, peer, &headers, &user, &req.login_key).await?;
-    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
-}
-
-/// Checks a signed-in account's password (as the login key the client
-/// derived from it) the way sign-in does (`auth_check`): against
-/// `login_key_hash`, under the same lockout and ceiling, misses here and at
-/// sign-in counting together. The caller is signed in to the account, so it
-/// is never held by the unknown-client ceiling. `Err` is 401 for a wrong
-/// password, 429 while held.
-pub async fn verify_account_login_key(
+/// What a sign-in whose password was right answers (docs/plans/opaque.md,
+/// "every flow"): first-login setup, the second factor, or the session with
+/// the account's envelopes. Said only to someone who proved the password.
+pub(crate) async fn signed_in_answer(
     state: &AppState,
-    peer: SocketAddr,
     headers: &HeaderMap,
-    user: &AuthUser,
-    login_key: &str,
-) -> AppResult<()> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
-    let login_key = STANDARD
-        .decode(login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    let login_key_hash: Option<String> =
-        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let client = auth_check::Client::from_headers(state, headers, peer)
-        .await?
-        .signed_in_as(user_id);
-    let epoch = login_key_hash.as_deref().map(auth_check::credential_epoch);
-    let guard = auth_check::guard(&client, Some(user_id), "", epoch.as_ref().map(|e| &e[..]))?;
-    if !guard.verify(Some(&login_key), login_key_hash.as_deref()) {
-        tracing::warn!(user_id = %user_id, "account password re-check failed");
-        return Err(AppError::invalid_credentials());
-    }
-    Ok(())
-}
-
-/// `POST /api/auth/login` — mirrors `Login`.
-#[utoipa::path(
-    post,
-    path = "/api/auth/login",
-    tag = "auth",
-    request_body = LoginRequest,
-    responses((status = 200, description = "Session, 2FA challenge, or first-login setup token", body = LoginResponse))
-)]
-pub async fn login(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    body: Result<Json<LoginRequest>, JsonRejection>,
+    client: ClientType,
+    user_id: Uuid,
 ) -> AppResult<Response> {
-    let client = direct_sign_in_client(&headers)?;
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-
-    // The order of `auth_check`: the secret is read before the name is looked
-    // up, the hash checked (at full cost for a name that is no account) before
-    // anything about the account is said, and every miss is the same 401.
-    let login_key_bytes = STANDARD
-        .decode(&req.login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    let name = req.name.trim().to_ascii_lowercase();
-    let account = account_by_name(&state, &name).await?;
-
     type Row = (
-        Uuid,
-        String,
         String,
         String,
         String,
@@ -948,32 +804,16 @@ pub async fn login(
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, login_key_hash, master_key_envelope,
-                  drive_private_key_envelope, public_key,
+        r#"SELECT master_key_envelope, drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, '')
            FROM users WHERE id = $1"#,
     )
-    .bind(account)
+    .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-
-    let hash = row.as_ref().map(|row| row.1.as_str());
-    let asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
-    let epoch = hash.map(auth_check::credential_epoch);
-    let guard = auth_check::guard(
-        &asker,
-        account,
-        &canonical_name(&state, &name),
-        epoch.as_ref().map(|e| &e[..]),
-    )?;
-    if !guard.verify(Some(&login_key_bytes), hash) {
-        return Err(AppError::invalid_credentials());
-    }
     let Some((
-        id,
-        _,
         master_key_envelope,
         drive_private_key_envelope,
         pub_key,
@@ -990,12 +830,10 @@ pub async fn login(
     else {
         return Err(AppError::invalid_credentials());
     };
-    // Said only to someone who knows the password.
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
-
-    let user_id = id.to_string();
+    let user_id = user_id.to_string();
 
     // First-login account — no key material yet. Its username comes along:
     // the new keys' Drive key binding names the account's address.
@@ -1024,8 +862,8 @@ pub async fn login(
     }
 
     issue_tokens_and_respond(
-        &state,
-        &headers,
+        state,
+        headers,
         client,
         &user_id,
         &username,

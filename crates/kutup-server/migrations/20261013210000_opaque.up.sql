@@ -66,11 +66,12 @@ CREATE TABLE auth_grants (
         'pass', 'passwordChange', 'totp', 'deleteAccount', 'adminReset', 'recovery', 'rotate')),
     -- The session it was issued to (none for recovery, which has no session).
     session_id uuid REFERENCES auth_sessions(id) ON DELETE CASCADE,
-    -- adminReset: the account the admin may reset.
+    -- adminReset: the account the admin may reset (none on the admin's own
+    -- reauth grant, which reset-grant exchanges for one with a target).
     target_user_id uuid REFERENCES users(id) ON DELETE CASCADE,
     expires_at timestamptz NOT NULL,
     used_at timestamptz,
-    CHECK ((purpose = 'adminReset') = (target_user_id IS NOT NULL)),
+    CHECK (target_user_id IS NULL OR purpose = 'adminReset'),
     CHECK ((purpose = 'recovery') = (session_id IS NULL))
 );
 CREATE INDEX auth_grants_user ON auth_grants (user_id);

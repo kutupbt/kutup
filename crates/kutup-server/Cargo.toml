@@ -62,10 +62,10 @@ rand09 = { package = "rand", version = "0.9" }
 # offline root is never configured here; only a root-signed server certificate
 # and its online private key are loaded by the service.
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+# The OPAQUE setup keys are wiped from memory when dropped.
+zeroize.workspace = true
 
 [dev-dependencies]
 # The collaboration socket in live tests (tests/collab_frames_live.rs); the
 # version axum's own WebSocket support already brings.
 tokio-tungstenite = "0.24.0"
-# Live tests build vault secrets (tests/pass_live.rs).
-zeroize.workspace = true

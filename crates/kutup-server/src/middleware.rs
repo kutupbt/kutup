@@ -159,7 +159,12 @@ impl FromRequestParts<AppState> for AdminUser {
 /// Extracts the `Bearer <token>` value from the `Authorization` header — mirrors
 /// `extractToken`.
 fn bearer_token(parts: &Parts) -> Option<String> {
-    let auth = parts.headers.get(AUTHORIZATION)?.to_str().ok()?;
+    bearer_from_headers(&parts.headers)
+}
+
+/// The `Bearer <token>` value of a request's headers.
+pub(crate) fn bearer_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let auth = headers.get(AUTHORIZATION)?.to_str().ok()?;
     auth.strip_prefix("Bearer ").map(|t| t.to_string())
 }
 

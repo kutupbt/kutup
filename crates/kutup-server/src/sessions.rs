@@ -185,7 +185,8 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
     let row: Option<(String, bool, String)> = sqlx::query_as(
         "SELECT s.client_type, u.is_admin,
                 encode(sha256(convert_to(
-                    length(u.login_key_hash) || ':' || u.login_key_hash ||
+                    length(COALESCE(encode(u.opaque_record, 'hex'), '')) || ':' ||
+                    COALESCE(encode(u.opaque_record, 'hex'), '') ||
                     u.totp_enabled::text || ',' || u.is_admin::text || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
                     length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
