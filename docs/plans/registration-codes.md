@@ -24,10 +24,11 @@ A single site setting, `registration_mode`, replaces `registration_enabled`:
   boot-time Config, and written once at startup into a database that has no mode
   (`INSERT … ON CONFLICT DO NOTHING`); after that the stored mode is the only
   source, and a missing row reads as `off`.
-- **The old switch:** the migration carries `registration_enabled` over
-  (`false` → `off`, else `on`); its down restores the switch as open only when the
-  mode was `on`. At the re-squash the baseline seeds neither, so a new database
-  takes `REGISTRATION_MODE` (default `off`).
+- **The old switch:** the migration deletes `registration_enabled` and writes no
+  mode, so the baseline folded from the chain seeds neither and a database takes
+  `REGISTRATION_MODE` (default `off`) at its next start; nothing opens by itself.
+  No database keeps the old switch across the wipe, so it is not translated. The
+  down restores the switch as open only when the mode was `on`.
 - **Public settings:** `GET /api/auth/settings` returns `registrationMode`
   (`on|code|off`) in place of `registrationEnabled`.
 - **Admin:** a three-way choice on Server settings, replacing the switch.
