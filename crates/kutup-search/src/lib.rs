@@ -51,7 +51,6 @@ pub fn fold(text: &str) -> String {
         .collect()
 }
 
-/// The distinct folded words of `text`: runs of letters and digits.
 /// Whether `text` holds every word of `query`, each as the start of a word
 /// (the index's rule, for a few documents kept outside it).
 pub fn matches(query: &str, text: &str) -> bool {
@@ -63,6 +62,7 @@ pub fn matches(query: &str, text: &str) -> bool {
             .all(|term| held.iter().any(|word| word.starts_with(term.as_str())))
 }
 
+/// The distinct folded words of `text`: runs of letters and digits.
 pub fn words(text: &str) -> Vec<String> {
     let folded = fold(text);
     let mut seen = BTreeSet::new();

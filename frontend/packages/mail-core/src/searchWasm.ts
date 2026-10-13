@@ -40,6 +40,7 @@ export interface IndexDoc extends SearchHit {
 export interface MailSearchIndex {
   wrappedStoreKey(): Uint8Array
   damaged(): boolean
+  newer(): boolean
   directoryId(): string
   openDirectory(sealed: Uint8Array | undefined): boolean
   size(): number

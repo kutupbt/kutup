@@ -85,6 +85,15 @@ const stale = [...store].map(([, sealed]) => ({ name: 'shard/0/fat', sealed }))
 other2.search('fatura', [0], stale.slice(0, 1))
 assert.equal(other2.damaged(), true)
 
+// A directory of a newer version: this page writes nothing, and it is not damage to wipe.
+const enc = new TextEncoder()
+const cbor = new Uint8Array([0xa2, 0x67, ...enc.encode('version'), 0x04, 0x67, ...enc.encode('periods'), 0xa0])
+const ahead = new wasm.MailSearch(masterKey, wrapped)
+assert.equal(ahead.openDirectory(ahead.sealRecord('dir', cbor).sealed), false)
+assert.equal(ahead.newer(), true)
+assert.throws(() => ahead.add(docs, []), /damaged/)
+assert.equal(again.newer(), false)
+
 // Drafts are matched outside the index, by the same rule.
 assert.equal(wasm.MailSearch.matches('ofis istanbul', 'İstanbul ofisi taslak'), true)
 assert.equal(wasm.MailSearch.matches('ofis ankara', 'İstanbul ofisi'), false)
