@@ -648,9 +648,7 @@ function Workspace({
               keys={keys}
               saveShortcut={saveShortcut}
               getBytes={async () =>
-                wholeFile === 'office'
-                  ? (await officeRef.current!.save()).bytes
-                  : (await whiteboardRef.current!.save()).bytes
+                wholeFile === 'office' ? { bytes: (await officeRef.current!.save()).bytes } : whiteboardRef.current!.save()
               }
               officePdf={
                 wholeFile === 'office'
@@ -777,7 +775,8 @@ function WholeFileActions({
   kind: EditorKind
   keys: Keys
   saveShortcut: MutableRefObject<(() => void) | null>
-  getBytes: () => Promise<Uint8Array>
+  /** The content to store, and (whiteboards) whom to tell whether it was stored. */
+  getBytes: () => Promise<{ bytes: Uint8Array; settle?: (stored: boolean) => void }>
   /** Office only: the document laid out as a PDF, for its thumbnail. */
   officePdf?: () => Promise<Uint8Array>
   /** Its thumbnail is cropped to the used cells. */
@@ -802,14 +801,19 @@ function WholeFileActions({
       if (savingRef.current) return false
       savingRef.current = true
       setSaving(true)
+      let settle: ((stored: boolean) => void) | undefined
       try {
         // Read before the bytes: every edit up to here is in them (one that
         // lands in between is in them too, and replays harmlessly on top).
         const position = logPosition?.() ?? null
-        const bytes = await getBytes()
+        const content = await getBytes()
+        settle = content.settle
+        const { bytes } = content
         const digest = await sha256(bytes)
         const previous = lastSaved.current
         if (previous && previous.digest === digest) {
+          // Stored already, by the save that produced it.
+          settle?.(true)
           if (opts.label) {
             await patchVersion(keys.target.context.fileId, previous.versionId, {
               label: opts.label,
@@ -823,6 +827,7 @@ function WholeFileActions({
           return true
         }
         const { id: versionId } = await saveSnapshot(keys.target, bytes, { ...opts, position })
+        settle?.(true)
         lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
@@ -832,6 +837,7 @@ function WholeFileActions({
         }
         return true
       } catch (error) {
+        settle?.(false)
         if (!opts.quiet) toast.error(error instanceof QuotaExceededError ? t('editor.quotaSave') : t('common.tryAgain'))
         return false
       } finally {

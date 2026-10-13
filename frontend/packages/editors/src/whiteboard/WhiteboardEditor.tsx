@@ -50,7 +50,7 @@ import type {
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
-import { hasLocalChanges } from './unsaved'
+import { SaveTracker, hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
@@ -71,7 +71,11 @@ const Excalidraw = lazy(() =>
 )
 
 export interface WhiteboardEditorHandle {
-  save: () => Promise<{ bytes: Uint8Array }>
+  /**
+   * The scene to store. Call `settle` with whether it was stored: until then
+   * the drawing counts as unsaved, and a failed save leaves it unsaved.
+   */
+  save: () => Promise<{ bytes: Uint8Array; settle: (stored: boolean) => void }>
   /** Something was drawn here since the last save (or since it opened). */
   hasUnsavedChanges: () => boolean
 }
@@ -158,7 +162,7 @@ function WhiteboardEditorBase(
   const lastBroadcastRef = useRef<Map<string, number>>(new Map())
   // Drawn here since the last save: a Replace or a restore elsewhere drops
   // it, and the page says so (replacedNotice).
-  const unsavedRef = useRef(false)
+  const saves = useRef(new SaveTracker())
 
   // Set during applyRemote → updateScene; suppresses the onChange echo
   // that would otherwise re-broadcast the remote elements right back.
@@ -257,10 +261,11 @@ function WhiteboardEditorBase(
         const files = api.getFiles()
         const json = serializeAsJSON(elements, appState, files, 'local')
         const bytes = new TextEncoder().encode(json)
-        unsavedRef.current = false
-        return Promise.resolve({ bytes })
+        // What is in `bytes` counts as unsaved until it is stored; drawing
+        // after this point marks the scene changed again (onChange).
+        return Promise.resolve({ bytes, settle: saves.current.beginSave() })
       },
-      hasUnsavedChanges: () => unsavedRef.current,
+      hasUnsavedChanges: () => saves.current.unsaved,
     }),
     [],
   )
@@ -641,8 +646,8 @@ function WhiteboardEditorBase(
             if (!readOnly) {
               // Before the broadcast records it as sent.
               const api = apiRef.current
-              if (!unsavedRef.current && api) {
-                unsavedRef.current = hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)
+              if (!saves.current.hasChanges && api && hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)) {
+                saves.current.markChanged()
               }
               scheduleBroadcast()
               maybeUploadDirtyAssets()

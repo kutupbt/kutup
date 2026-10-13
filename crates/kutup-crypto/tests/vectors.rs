@@ -985,10 +985,14 @@ fn print_drive_names_vectors() {
         // Turkish dotless ı stays itself; capital I folds to i: different names.
         "ılık.txt",
         "ILIK.txt",
-        // Capital sigma at the end of a word folds to final ς, elsewhere to σ.
+        // Capital sigma folds to final ς at the true end of a word, and to σ
+        // where a letter follows (".txt" counts: the dot is case-ignorable).
         "ΟΔΟΣ.txt",
         "οδος.txt",
         "οδοσ.txt",
+        "ΟΔΟΣ",
+        "οδος",
+        "οδοσ",
     ]
     .iter()
     .map(|name| {
