@@ -46,6 +46,7 @@ Specific codes, where an app does something particular (a test in
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
+| `nameNeeded` | 409 | A folder restored at the top level needs a name there |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `newKeyNeeded` | 409 | A new key must be made first |
@@ -848,9 +849,9 @@ Rename a collection (client re-encrypts the name with the collection key).
 }
 ```
 
-`nameHash` is the new name's hash in the folder's place; a name another
-item there holds is `409 name_taken`. Without it the stored hash is cleared
-(the owner's client fills it in).
+`nameHash` (required for a folder; albums have none) is the new name's
+hash in the folder's place; a name another item there holds is
+`409 name_taken`.
 
 The revision must be exactly one greater than the stored revision and the
 envelope must authenticate that exact revision, current epoch, collection and
@@ -1737,7 +1738,7 @@ Upload an encrypted file to a collection. Multipart form.
 | `collectionId` | string (UUID) | Target collection |
 | `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record under the file key, bound to the file (object = parent = file), key generation 1 and revision 1 |
 | `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
-| `nameHash` | string (optional) | The name's hash in the folder ("Names in a folder"); checked before anything is stored |
+| `nameHash` | string | The name's hash in the folder ("Names in a folder"); required, checked before anything is stored |
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
@@ -1831,8 +1832,8 @@ return `409` or `400` without changing the row.
 
 `nameHash` is the new name's hash in the file's folder; a name another item
 there holds is `409 name_taken`. Absent, the stored hash stays (the metadata
-changed, not the name); `null` clears it (a rename by someone without the
-folder's key — the file shared by itself; the owner's client fills it in).
+changed, not the name). Someone renaming a file shared by itself, without
+the folder's key, sends a random hash (docs/plans/drive-unique-names.md).
 
 ---
 
@@ -1891,29 +1892,27 @@ already there.
 - Hashes are 64 lowercase hex digits; anything else is `400`. Listings
   return `nameHash` (files and folders) and `contentHash` (files) when
   known.
-- Every write that names something or puts it somewhere takes `nameHash`:
+- Every write that names something or puts it somewhere requires `nameHash`
+  (`400` without it):
   `POST /api/collections`, `PUT /api/collections/:id`,
   `POST /api/collections/:id/move`, `POST /api/files/upload`, tus
   `POST /api/uploads` (`nameHash` in `Upload-Metadata`; checked again when
   the upload finishes), `PUT /api/files/:id`, `POST /api/files/:id/move`
   (with `contentHash` under the destination's key, if known; otherwise the
   content hash is dropped), and uploads from another server
-  (`nameHash` multipart field). A new folder must send it. The other writes
-  may leave it out where the writer cannot hash the name: an upload that
-  replaces a file (it claims the name through `name-hashes` once the old
-  file is in the trash), a rename of a file shared by itself (no folder
-  key), a move of an item whose name the mover cannot read, a peer's upload.
-  Such an item has no hash until the folder's owner fills it in, and is not
-  kept unique meanwhile.
+  (`nameHash` multipart field). `PUT /api/files/:id` may leave it out when
+  the name does not change.
 - A taken name is `409` with what holds it:
 
   ```json
   { "error": "an item with this name is already here", "code": "name_taken",
     "holder": { "kind": "file", "id": "<uuid>", "contentHash": "<hex or null>" } }
   ```
-- A file or folder restored from the trash after its name was taken comes
-  back without its hash; the owner's client names it `name (2)`.
-- A new version (`POST /api/files/:id/versions`) clears the content hash.
+- A file or folder restored from the trash after its name was taken is
+  `409 name_taken`; restore it under a new name in the same request
+  (`POST /api/trash/:id/restore`).
+- A new version (`POST /api/files/:id/versions`) clears the content hash;
+  the client records the new one.
 
 ### PUT /api/files/:id/content-hash
 
@@ -1921,18 +1920,18 @@ already there.
 its folder, recorded once an upload has read the whole file. Whoever can
 write the folder (or edit the file shared by itself). `204`.
 
-### POST /api/collections/:id/name-hashes
+### POST /api/collections/:id/available-hashes
 
-`{ "files": [{ "id", "nameHash" }], "folders": [{ "id", "nameHash" }] }` (at
-most 1000) — the hashes of the folder's items that have none yet, in the
-order given. Items already hashed, elsewhere or in the trash are left
-alone; one whose name another item holds is not stored and comes back in
-`{ "clashes": [{ "id", "holderKind", "holderId" }] }`, to be renamed.
-Whoever can write the folder.
+`{ "hashes": ["<hex>", …] }` (1 to 10) → `{ "available": ["<hex>", …] }`:
+the ones no file or folder there holds (items in the trash hold none), so a
+client finds the first free `name (n)` without listing the folder again (as
+Proton Drive's `checkAvailableHashes`). Whoever can write the folder;
+`RATE_LIMIT_AVAILABLE_HASHES_PER_MIN` (default 120) per account, then
+`429 rateLimited`.
 
-### POST /api/drive/top-level-name-hashes
+### POST /api/drive/top-level-available-hashes
 
-The same for the account's own top-level folders (`files` must be empty).
+The same among the account's own top-level folders.
 
 ---
 
@@ -2095,7 +2094,7 @@ owner's.
 
 Move a file to another folder of the same owner (docs/plans/drive-move.md).
 **Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope,
-nameHash?, contentHash? }` — the name's (and, if known, the content's) hash
+nameHash, contentHash? }` — the name's (and, if known, the content's) hash
 in the destination ("Names in a folder"; a taken name is `409 name_taken`),
 and the file's current key sealed under the destination's key at its current
 epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
@@ -2111,7 +2110,7 @@ the file are closed.
 ### POST /api/collections/:id/move
 
 Put a folder under another of the owner's folders, or at the top level.
-**Body:** `{ parentCollectionId: string | null, nameHash? }` — its name's hash
+**Body:** `{ parentCollectionId: string | null, nameHash }` — its name's hash
 in the new place (`409 name_taken` when held). A folder's key is sealed to
 its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
 **Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
@@ -2177,11 +2176,23 @@ owner's trash on its own, its owner may still read them
 
 ### POST /api/trash/:id/restore
 
-Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead). An item whose name another took meanwhile comes back without its name hash (see "Names in a folder"); so does a folder that lands at the top level.
+Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
+
+Its name must be free where it lands ("Names in a folder"): a taken one is `409 name_taken` (with what holds it), and a folder that comes back at the top level, where its hash never applied, is `409` with code `nameNeeded`. Either way, restore it again with a name for that place:
+
+```json
+{
+  "nameHash": "<64 lowercase hex>",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>", "nameRevision": 3,
+  "metadataEnvelope": "<DriveEnvelopeV1 base64>", "metadataRevision": 4
+}
+```
+
+`nameHash` alone keeps the name (a folder at the top level). A new name comes with its envelope at exactly the next revision: `nameEnvelope`/`nameRevision` for a folder, `metadataEnvelope`/`metadataRevision` for a file. The body is optional.
 
 **Auth:** Bearer JWT (owner only)
 
-**Response:** `200 OK` `{"message": "restored"}` · `409 Conflict` when the parent folder is still trashed.
+**Response:** `200 OK` `{"message": "restored"}` · `409 Conflict` when the parent folder is still trashed, the name is taken or a name is needed.
 
 ### DELETE /api/trash/:id
 
