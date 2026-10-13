@@ -377,3 +377,254 @@ pub async fn login_finish(
     let client = direct_sign_in_client(&headers)?;
     signed_in_answer(&state, &headers, client, user_id).await
 }
+
+// --- registration --------------------------------------------------------------
+
+/// A registration's result as a client uploads it: the record, and the setup
+/// it was made against.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RecordUpload {
+    /// OPAQUE `RegistrationUpload`, base64.
+    pub opaque_record: String,
+    /// The `serverKeyId` register/start answered.
+    pub opaque_server_key_id: u16,
+}
+
+impl RecordUpload {
+    /// The record to store, and its setup id. A record made against a setup
+    /// that is no longer the current one is refused (`409 opaqueKeyStale`):
+    /// the client starts again.
+    pub(crate) fn checked(&self, state: &AppState) -> AppResult<(Vec<u8>, i16)> {
+        let upload = decode(&self.opaque_record, "opaqueRecord")?;
+        let record = kutup_crypto::opaque::server_registration_record(&upload)
+            .map_err(|_| AppError::bad_request("invalid opaqueRecord"))?;
+        let (current, _) = state.opaque.current();
+        if self.opaque_server_key_id != current {
+            return Err(AppError::conflict("the server's OPAQUE key changed: register again")
+                .with_details(serde_json::json!({ "code": "opaqueKeyStale" })));
+        }
+        Ok((record, current as i16))
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisterStartRequest {
+    /// The key binding the record is for: the account's own (a new password),
+    /// or a new one (sign-up, setup, an admin reset).
+    key_binding: String,
+    /// OPAQUE `RegistrationRequest`, base64.
+    registration_request: String,
+    /// A grant: `passwordChange`, `recovery` or `rotate` for the account's
+    /// own key binding; an admin reset's grant for a new one. None for a
+    /// sign-up (or with the setup token as Bearer, at first sign-in).
+    #[serde(default)]
+    grant: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterStartResponse {
+    /// OPAQUE `RegistrationResponse`, base64.
+    registration_response: String,
+    /// The setup it is answered under: given back with the record.
+    server_key_id: u16,
+}
+
+async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
+    let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE key_binding = $1)")
+        .bind(key_binding)
+        .fetch_one(&state.pool)
+        .await?;
+    if taken {
+        return Err(AppError::conflict("keyBinding is taken; draw another")
+            .with_details(serde_json::json!({ "code": "keyBindingTaken" })));
+    }
+    Ok(())
+}
+
+/// `POST /api/auth/opaque/register/start` — the server's answer to a
+/// registration request: stateless, derived from the setup and the key
+/// binding. Each answer is one query of that key binding's OPRF key, so it
+/// needs a grant for an existing account's, and is rate-limited as a sign-up
+/// for a new one.
+#[utoipa::path(
+    post,
+    path = "/api/auth/opaque/register/start",
+    tag = "auth",
+    request_body = RegisterStartRequest,
+    responses(
+        (status = 200, body = RegisterStartResponse),
+        (status = 403, description = "grantInvalid, or registrationClosed"),
+        (status = 409, description = "keyBindingTaken: draw another")
+    )
+)]
+pub async fn register_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<RegisterStartRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    let request = decode(&req.registration_request, "registrationRequest")?;
+    if !crate::handlers::auth::is_key_binding(&req.key_binding) {
+        return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
+    }
+    match req.grant.as_deref() {
+        Some(token) => {
+            let (purpose, grant) = grants::peek(
+                &state.pool,
+                token,
+                &[
+                    Purpose::PasswordChange,
+                    Purpose::Recovery,
+                    Purpose::Rotate,
+                    Purpose::AdminReset,
+                ],
+            )
+            .await?
+            .ok_or_else(grants::invalid)?;
+            if purpose == Purpose::AdminReset {
+                // A new key binding for the account the admin may reset.
+                if grant.target_user_id.is_none() {
+                    return Err(grants::invalid());
+                }
+                key_binding_unused(&state, &req.key_binding).await?;
+            } else {
+                // The account's own key binding: a new password for it.
+                let own: Option<String> =
+                    sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
+                        .bind(grant.user_id)
+                        .fetch_optional(&state.pool)
+                        .await?;
+                if own.as_deref() != Some(req.key_binding.as_str()) {
+                    return Err(grants::invalid());
+                }
+            }
+        }
+        None => match crate::middleware::bearer_from_headers(&headers) {
+            // First sign-in of an account an admin made: its own new key
+            // binding, under the setup token.
+            Some(token) => {
+                crate::jwt::validate_setup_token(&token, &state.config.jwt_secret)
+                    .map_err(|_| AppError::unauthorized("invalid setup token"))?;
+                key_binding_unused(&state, &req.key_binding).await?;
+            }
+            // A sign-up: only while sign-ups are open.
+            None => {
+                if crate::registration::mode(&state).await?
+                    == crate::registration::RegistrationMode::Off
+                {
+                    return Err(AppError::forbidden("registration is closed")
+                        .with_details(serde_json::json!({ "code": "registrationClosed" })));
+                }
+                key_binding_unused(&state, &req.key_binding).await?;
+            }
+        },
+    }
+    let (server_key_id, secrets) = state.opaque.current();
+    let response =
+        kutup_crypto::opaque::server_registration_response(secrets, &request, &req.key_binding)
+            .map_err(|_| AppError::bad_request("invalid registrationRequest"))?;
+    Ok(Json(RegisterStartResponse {
+        registration_response: STANDARD.encode(response),
+        server_key_id,
+    })
+    .into_response())
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisterFinishRequest {
+    grant: String,
+    key_binding: String,
+    #[serde(flatten)]
+    record: RecordUpload,
+    /// The master key sealed under the new password's export key
+    /// (`PasswordMasterKey`, bound to the key binding).
+    master_key_envelope: String,
+}
+
+/// `POST /api/auth/opaque/register/finish` — a new password for an account:
+/// after a password change (`passwordChange`, from this session), the
+/// recovery phrase (`recovery`) or a silent re-registration under the current
+/// setup at sign-in (`rotate`). The record and the password envelope change
+/// together; every outstanding grant and sign-in under way ends. A password
+/// change ends the account's other sign-ins, a recovery all of them.
+#[utoipa::path(
+    post,
+    path = "/api/auth/opaque/register/finish",
+    tag = "auth",
+    request_body = RegisterFinishRequest,
+    responses(
+        (status = 204, description = "The new record is the account's"),
+        (status = 403, description = "grantInvalid"),
+        (status = 409, description = "opaqueKeyStale: start again")
+    )
+)]
+pub async fn register_finish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<RegisterFinishRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    let (record, server_key_id) = req.record.checked(&state)?;
+    crate::handlers::auth::validate_account_envelope(
+        &req.master_key_envelope,
+        kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
+        &req.key_binding,
+        "masterKeyEnvelope",
+    )?;
+    // The session asking, when there is one (a recovery has none).
+    let caller = match crate::middleware::bearer_from_headers(&headers) {
+        Some(token) => Some(crate::middleware::authenticate_access_token(&state, &token).await?),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let (purpose, grant) = grants::take(
+        &mut *tx,
+        &req.grant,
+        &[Purpose::PasswordChange, Purpose::Recovery, Purpose::Rotate],
+    )
+    .await?
+    .ok_or_else(grants::invalid)?;
+    // A session's grant is used by that session.
+    if purpose != Purpose::Recovery
+        && caller.as_ref().map(|c| c.session.session_id) != grant.session_id
+    {
+        return Err(grants::invalid());
+    }
+    let updated = sqlx::query(
+        "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
+                          master_key_envelope = $6
+         WHERE id = $1 AND key_binding = $2 AND is_active",
+    )
+    .bind(grant.user_id)
+    .bind(&req.key_binding)
+    .bind(&record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(server_key_id)
+    .bind(&req.master_key_envelope)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(grants::invalid());
+    }
+    grants::end_all(&mut tx, grant.user_id).await?;
+    tx.commit().await?;
+    match purpose {
+        Purpose::PasswordChange => {
+            tracing::info!(user_id = %grant.user_id, "password changed");
+            crate::sessions::revoke_all_for_user(&state.pool, grant.user_id, grant.session_id)
+                .await?;
+        }
+        Purpose::Recovery => {
+            tracing::info!(user_id = %grant.user_id, "password set again with the recovery phrase");
+            crate::sessions::revoke_all_for_user(&state.pool, grant.user_id, None).await?;
+        }
+        // The same password, registered under the current setup: nobody's
+        // sign-in ends, and it is no password change.
+        _ => tracing::info!(user_id = %grant.user_id, "OPAQUE record moved to the current setup"),
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+}

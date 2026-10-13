@@ -47,7 +47,10 @@ pub struct RegisterRequest {
     /// The account's key binding, drawn by the browser (a UUID v4): what its
     /// envelopes are bound to, for good (docs/plans/account-identity.md).
     key_binding: String,
-    login_key: String,
+    /// The OPAQUE record for the password, under the key binding
+    /// (docs/plans/opaque.md §6).
+    #[serde(flatten)]
+    record: crate::handlers::opaque::RecordUpload,
     master_key_envelope: String,
     recovery_key_envelope: String,
     drive_private_key_envelope: String,
@@ -56,11 +59,6 @@ pub struct RegisterRequest {
     account_authority_key_id: String,
     account_incarnation_id: String,
     drive_signing_public_key: String,
-    account_protection_suite: u16,
-    account_protection_salt: String,
-    argon_memory_kib: u32,
-    argon_iterations: u32,
-    argon_parallelism: u32,
     #[serde(default)]
     recovery_proof: String,
     /// The account authority's signature over the Drive keys
@@ -644,10 +642,9 @@ pub async fn register(
     // Who may register, before anything costly or visible
     // (docs/plans/registration-codes.md).
     let code_hash = admitted(&state, peer, &headers, req.registration_code.as_deref()).await?;
+    // Sign-up answers the session, as a sign-in would.
+    let client = direct_sign_in_client(&headers)?;
 
-    if req.login_key.is_empty() {
-        return Err(AppError::bad_request("missing required fields"));
-    }
     if !is_key_binding(&req.key_binding) {
         return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
@@ -670,13 +667,7 @@ pub async fn register(
     {
         return Err(AppError::conflict("this username is taken"));
     }
-    validate_account_protection(
-        req.account_protection_suite,
-        &req.account_protection_salt,
-        req.argon_memory_kib,
-        req.argon_iterations,
-        req.argon_parallelism,
-    )?;
+    let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
         &req.master_key_envelope,
@@ -702,10 +693,6 @@ pub async fn register(
         &format!("{}@{}", req.username, state.config.chat_server_name),
     )?;
 
-    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
-
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
@@ -717,11 +704,10 @@ pub async fn register(
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
-            account_protection_suite, account_protection_salt,
-            argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
+            opaque_record, opaque_suite, opaque_server_key_id,
+            recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -734,12 +720,9 @@ pub async fn register(
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
     .bind(&req.drive_signing_public_key)
-    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.account_protection_salt)
-    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
-    .bind(&hash)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
     .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
@@ -771,13 +754,9 @@ pub async fn register(
         return Err(AppError::conflict("username already taken"));
     }
     tx.commit().await?;
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(MessageResponse {
-            message: "registered".to_string(),
-        }),
-    )
-        .into_response())
+    // The client made the keys and holds the export key: no second OPAQUE
+    // run, the session comes now (docs/plans/opaque.md, "every flow").
+    signed_in_answer(&state, &headers, client, user_id).await
 }
 
 /// What a sign-in whose password was right answers (docs/plans/opaque.md,
@@ -1538,14 +1517,9 @@ pub async fn complete_setup(
         return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
     let account_binding = req.key_binding.clone();
-
-    validate_account_protection(
-        req.account_protection_suite,
-        &req.account_protection_salt,
-        req.argon_memory_kib,
-        req.argon_iterations,
-        req.argon_parallelism,
-    )?;
+    // The new password's record, under the key binding drawn now (the
+    // temporary password's record goes with this).
+    let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
         &req.master_key_envelope,
@@ -1570,30 +1544,26 @@ pub async fn complete_setup(
         &req,
         &format!("{account_username}@{}", state.config.chat_server_name),
     )?;
-    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     // Only while the account is still a first-login one — prevents replay
     // after setup completes.
+    let mut tx = state.pool.begin().await?;
     let res = sqlx::query(
         r#"UPDATE users SET
-              login_key_hash = $1,
+              opaque_record = $1, opaque_suite = $10, opaque_server_key_id = $11,
               master_key_envelope = $2, recovery_key_envelope = $3,
               drive_private_key_envelope = $4, public_key = $5,
               account_authority_public_key = $6, account_authority_key_id = $7,
               account_incarnation_id = $8, drive_signing_public_key = $9,
-              account_protection_suite = $10, account_protection_salt = $11,
-              argon_memory_kib = $12, argon_iterations = $13,
-              argon_parallelism = $14, recovery_key_verifier = $15,
-              drive_key_binding = $17,
-              key_binding = $18,
+              recovery_key_verifier = $12,
+              drive_key_binding = $14,
+              key_binding = $15,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $16 AND is_first_login"#,
+           WHERE id = $13 AND is_first_login"#,
     )
-    .bind(&hash)
+    .bind(&opaque_record)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
     .bind(&req.drive_private_key_envelope)
@@ -1602,25 +1572,29 @@ pub async fn complete_setup(
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
     .bind(&req.drive_signing_public_key)
-    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.account_protection_salt)
-    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
     .bind(uid)
     .bind(&drive_key_binding)
     .bind(&account_binding)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await;
     match res {
         Ok(r) if r.rows_affected() > 0 => {}
+        // Two setups at once, both with fresh key bindings, or a binding
+        // another account drew: one wins.
+        Err(err) if matches!(&err, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")) => {
+            return Err(map_insert_conflict(err))
+        }
         _ => {
             return Err(AppError::bad_request(
                 "setup already completed or user not found",
             ))
         }
     }
+    crate::grants::end_all(&mut tx, uid).await?;
+    tx.commit().await?;
 
     let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
         "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM users WHERE id = $1",
@@ -1790,7 +1764,8 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
                 return AppError::conflict("username already taken");
             }
             if constraint.contains("key_binding") {
-                return AppError::conflict("keyBinding is taken; draw another");
+                return AppError::conflict("keyBinding is taken; draw another")
+                    .with_details(serde_json::json!({ "code": "keyBindingTaken" }));
             }
             return AppError::conflict("already registered");
         }
