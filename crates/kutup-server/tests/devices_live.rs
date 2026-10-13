@@ -322,3 +322,152 @@ fn a_device_lives_with_its_sign_in() {
     assert_eq!(in_use, 1);
     purge_accounts(&c, &base, &[&alice]);
 }
+
+/// Times a day off this server's clock are refused, a challenge answers
+/// once even when two answers race, and after an admin wipe a revoked key
+/// stays refused while an unrevoked one registers under the new identity.
+#[test]
+fn times_challenges_and_a_wipe() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN unset; skipping");
+        return;
+    };
+    let c = Client::new();
+    let alice = register(&c, &base);
+    let day = 24 * 3600 * 1000 + 60_000;
+
+    // A statement a day ahead: refused.
+    let key = device_key();
+    let challenge = device_challenge(&c, &base, &alice);
+    let mut body = device_registration_body(&c, &base, &alice, &alice, &key, &challenge);
+    let ahead = body["issuedAtMs"].as_i64().unwrap() + day;
+    let raw: [u8; 32] =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &challenge)
+            .unwrap()
+            .try_into()
+            .unwrap();
+    body["issuedAtMs"] = json!(ahead);
+    body["signature"] = json!(kutup_crypto::device_registration::sign(
+        &alice.identity,
+        &kutup_crypto::device_registration::DeviceStatement {
+            server: &server_domain(&c, &base),
+            user_id: &alice.id,
+            device_public: &key,
+            purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+            challenge: &raw,
+            issued_at_ms: ahead,
+        },
+    )
+    .unwrap());
+    let (status, body) = post_device(&c, &base, &alice, &body);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Two answers to one challenge at once: one registers at most.
+    let challenge = device_challenge(&c, &base, &alice);
+    let bodies: Vec<Value> = (0..2)
+        .map(|_| device_registration_body(&c, &base, &alice, &alice, &device_key(), &challenge))
+        .collect();
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = bodies
+            .iter()
+            .map(|body| scope.spawn(|| post_device(&Client::new(), &base, &alice, body).0))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CREATED)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+
+    // A revocation dated a day ahead: refused; one now: taken.
+    let revoked = register_device(&c, &base, &alice);
+    let revoked_key = ed25519_dalek::SigningKey::from_bytes(&revoked.seed)
+        .verifying_key()
+        .to_bytes();
+    let revoke = |body: Value| {
+        bearer(
+            c.delete(format!("{base}/api/devices/{}", revoked.id)),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+        .status()
+    };
+    let at = device_revocation_body(&c, &base, &alice, &revoked_key)["revokedAtMs"]
+        .as_i64()
+        .unwrap()
+        + day;
+    let late = json!({
+        "revokedAtMs": at,
+        "signature": kutup_crypto::device_registration::sign_revocation(
+            &alice.identity, &server_domain(&c, &base), &revoked_key, at).unwrap(),
+    });
+    assert_eq!(revoke(late), StatusCode::FORBIDDEN);
+    assert!(revoke(device_revocation_body(&c, &base, &alice, &revoked_key)).is_success());
+    let kept = register_device(&c, &base, &alice);
+    let kept_key = ed25519_dalek::SigningKey::from_bytes(&kept.seed)
+        .verifying_key()
+        .to_bytes();
+
+    // The administrator wipes the account; it is set up again.
+    let (admin_name, admin_password) = admin.split_once(':').expect("username:password");
+    let admin_token = admin_token(&c, &base, admin_password, admin_name);
+    let setup = setup_key("Temporary*Password123");
+    let r = bearer(
+        c.post(format!("{base}/api/admin/users/{}/wipe", alice.id)),
+        &admin_token,
+    )
+    .json(&json!({ "setup": setup }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "wipe: {}", r.status());
+    let first: Value = c
+        .post(format!("{base}/api/auth/login"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "name": alice.username, "loginKey": setup["loginKey"] }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let (token, identity) = complete_setup(
+        &c,
+        &base,
+        first["setupToken"].as_str().unwrap(),
+        &alice.username,
+        "Another*Password456",
+    );
+    let again = User {
+        token,
+        identity,
+        ..alice
+    };
+    let register_key = |key: &[u8; 32]| {
+        let challenge = device_challenge(&c, &base, &again);
+        post_device(
+            &c,
+            &base,
+            &again,
+            &device_registration_body(&c, &base, &again, &again, key, &challenge),
+        )
+        .0
+    };
+    assert_eq!(
+        register_key(&revoked_key),
+        StatusCode::CONFLICT,
+        "a revoked key, for good"
+    );
+    assert_eq!(
+        register_key(&kept_key),
+        StatusCode::CREATED,
+        "an unrevoked one, anew"
+    );
+    purge_accounts(&c, &base, &[&again]);
+}

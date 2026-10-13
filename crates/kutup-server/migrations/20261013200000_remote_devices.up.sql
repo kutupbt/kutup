@@ -39,21 +39,32 @@ CREATE TABLE remote_collab_devices (
 CREATE INDEX remote_collab_devices_incarnation ON remote_collab_devices (domain, incarnation_id);
 
 -- A revoked remote key, for good (only its hash): it is never announced
--- again, even after its device rows are swept.
+-- again by that server, even after its device rows are swept. Keyed by the
+-- server too, so one server's revocation never blocks another's device.
 CREATE TABLE remote_revoked_device_keys (
-    key_hash bytea PRIMARY KEY CHECK (octet_length(key_hash) = 32),
     domain text NOT NULL,
-    -- Whose: how far a bridge's revocations for that account have reached.
+    key_hash bytea NOT NULL CHECK (octet_length(key_hash) = 32),
     incarnation_id character(64) NOT NULL,
-    revoked_at_ms bigint NOT NULL
+    -- As the account signed it: data only, never an order.
+    revoked_at_ms bigint NOT NULL,
+    PRIMARY KEY (domain, key_hash)
 );
-CREATE INDEX remote_revoked_device_keys_account ON remote_revoked_device_keys (domain, incarnation_id);
 
--- A bridge's progress telling a home its users' revocations: the newest
--- revocation time home has stored, per home and account.
+-- How far a bridge's revocations for an account have reached this home: the
+-- highest of the bridge's revocation sequence numbers processed here (its
+-- own order, never a client's clock).
+CREATE TABLE remote_revocation_marks (
+    domain text NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    through_seq bigint NOT NULL,
+    PRIMARY KEY (domain, incarnation_id)
+);
+
+-- A bridge's copy of what each home answered, per home and account: it
+-- sends the revocations after it, in sequence order.
 CREATE TABLE collab_revocation_marks (
     home_domain text NOT NULL,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    through_ms bigint NOT NULL,
+    through_seq bigint NOT NULL,
     PRIMARY KEY (home_domain, user_id)
 );

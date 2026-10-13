@@ -503,6 +503,18 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
     let Some(setup_token) = login["setupToken"].as_str() else {
         return login["accessToken"].as_str().unwrap().to_string();
     };
+    complete_setup(c, base, setup_token, username, password).0
+}
+
+/// Completes an account's first sign-in (an administrator made or wiped it):
+/// new keys, a new identity, the password. The session and the identity.
+pub fn complete_setup(
+    c: &Client,
+    base: &str,
+    setup_token: &str,
+    username: &str,
+    password: &str,
+) -> (String, AccountIdentityKeysV1) {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -552,7 +564,7 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
     let status = completed.status();
     let body: Value = completed.json().unwrap();
     assert_eq!(status, StatusCode::OK, "admin setup: {body}");
-    body["accessToken"].as_str().unwrap().to_string()
+    (body["accessToken"].as_str().unwrap().to_string(), identity)
 }
 
 /// A temporary password as an administrator's browser derives it (the

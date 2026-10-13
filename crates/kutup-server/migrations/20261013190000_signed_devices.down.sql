@@ -2,6 +2,7 @@ DROP TABLE device_registration_challenges;
 DROP INDEX user_devices_session;
 ALTER TABLE user_devices
     DROP CONSTRAINT user_devices_revocation_check,
+    DROP COLUMN revocation_seq,
     DROP COLUMN revocation_signature,
     DROP COLUMN session_id,
     DROP COLUMN revoked_at_ms,
@@ -12,3 +13,4 @@ ALTER TABLE user_devices
     DROP COLUMN registration_issued_at_ms,
     DROP COLUMN registration_challenge,
     DROP COLUMN incarnation_id;
+DROP SEQUENCE user_devices_revocation_seq;

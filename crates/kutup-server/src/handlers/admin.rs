@@ -1846,12 +1846,9 @@ pub async fn wipe_user(
     // 1. Purge every owned folder and file, trashed ones too.
     purge_owned_drive(&state, target).await?;
 
-    // 2. Everything keyed to the lost key material: collab signing devices, incoming
-    //    federated shares (their wrapped keys are unreachable), local shares received.
-    sqlx::query("DELETE FROM user_devices WHERE user_id = $1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
+    // 2. Everything keyed to the lost key material: incoming federated shares
+    //    (their wrapped keys are unreachable), local shares received. (Collab
+    //    devices go with the keys, below.)
     sqlx::query("DELETE FROM federated_incoming_shares WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
@@ -1886,7 +1883,17 @@ pub async fn wipe_user(
         .execute(&state.pool)
         .await?;
 
-    // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password.
+    // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password,
+    //    and with them the old incarnation's collab devices, in one step. Revoked
+    //    devices stay, as tombstones: their keys never register again. Their
+    //    revocations are not told to other servers any more (those take only the
+    //    current incarnation's), nor need be: a server elsewhere stops taking the
+    //    old incarnation's devices once the share is issued to the new one.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM user_devices WHERE user_id = $1 AND revoked_at_ms IS NULL")
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',
@@ -1909,8 +1916,9 @@ pub async fn wipe_user(
     .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
     .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
     .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     // Its pins were sealed under the old master key: nothing can open them now.
     sqlx::query("DELETE FROM identity_pins WHERE user_id = $1")

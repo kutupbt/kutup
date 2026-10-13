@@ -253,8 +253,10 @@ async fn check_statement(
     body: &DeviceStatementBody,
 ) -> AppResult<Option<[u8; 32]>> {
     let challenge = canonical_32(&body.challenge, "challenge")?;
-    // Looked up by its hash (an index lookup: nothing compares the secret
-    // itself in variable time).
+    // Used up in a step of its own, committed before anything is checked:
+    // no refusal or error below can roll it back, so a challenge answers
+    // once whatever happens. Looked up by its hash (an index lookup:
+    // nothing compares the secret itself in variable time).
     let fresh: Option<bool> = sqlx::query_scalar(
         "DELETE FROM device_registration_challenges
          WHERE challenge_hash = $1 AND user_id = $2
@@ -262,7 +264,7 @@ async fn check_statement(
     )
     .bind(Sha256::digest(challenge).to_vec())
     .bind(user_id)
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&state.pool)
     .await?;
     if fresh != Some(true) {
         return Ok(None);
@@ -551,6 +553,15 @@ pub async fn revoke(
     let key: [u8; 32] = key
         .try_into()
         .map_err(|_| AppError::internal("device key"))?;
+    // Its time is the client's clock's: within a day of this server's, as a
+    // statement's (it is data only; revocations are told in this server's
+    // own order).
+    let now_ms = OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    if (req.revoked_at_ms - now_ms).abs() > MAX_CLOCK_SKEW_MS {
+        return Err(not_authorized(
+            "the revocation's time is more than a day off this server's clock",
+        ));
+    }
     let (authority, _) = account_authority(&mut tx, user_id).await?;
     if device_registration::verify_revocation(
         &authority,
@@ -564,7 +575,8 @@ pub async fn revoke(
         return Err(not_authorized("the account's revocation does not verify"));
     }
     sqlx::query(
-        "UPDATE user_devices SET is_active = false, revoked_at_ms = $2, revocation_signature = $3
+        "UPDATE user_devices SET is_active = false, revoked_at_ms = $2, revocation_signature = $3,
+                                 revocation_seq = nextval('user_devices_revocation_seq')
          WHERE id = $1",
     )
     .bind(device_id)

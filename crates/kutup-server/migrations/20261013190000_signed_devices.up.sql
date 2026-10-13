@@ -5,6 +5,7 @@
 -- challenge. Devices made before this carry no statement: there are none
 -- after the clean-slate wipe, and any left are dropped.
 DELETE FROM user_devices;
+CREATE SEQUENCE user_devices_revocation_seq;
 ALTER TABLE user_devices
     ADD COLUMN incarnation_id character(64) NOT NULL,
     ADD COLUMN registration_challenge bytea NOT NULL,
@@ -15,11 +16,15 @@ ALTER TABLE user_devices
     -- is in use only while that session is live, so a sign-out anywhere, an
     -- expired session or a password change retires it without a signature.
     ADD COLUMN session_id uuid REFERENCES auth_sessions(id) ON DELETE SET NULL,
-    -- The account's signed revocation (DeviceRevocationV1), once revoked.
+    -- The account's signed revocation (DeviceRevocationV1), once revoked,
+    -- and this server's order of revocations (what other servers are told
+    -- them in: never the signed time, which a client's clock chose).
     ADD COLUMN revoked_at_ms bigint,
     ADD COLUMN revocation_signature text,
+    ADD COLUMN revocation_seq bigint UNIQUE,
     ADD CONSTRAINT user_devices_revocation_check CHECK (
         (revoked_at_ms IS NULL) = (revocation_signature IS NULL)
+        AND (revoked_at_ms IS NULL) = (revocation_seq IS NULL)
         AND (revoked_at_ms IS NULL OR NOT is_active)),
     ADD CONSTRAINT user_devices_incarnation_id_check CHECK (incarnation_id ~ '^[0-9a-f]{64}$'),
     ADD CONSTRAINT user_devices_registration_challenge_check CHECK (octet_length(registration_challenge) = 32),

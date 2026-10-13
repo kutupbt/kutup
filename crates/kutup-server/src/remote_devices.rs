@@ -26,6 +26,8 @@ pub const LEASE_MS: i64 = 30 * 24 * 3600 * 1000;
 const MAX_FUTURE_MS: i64 = 24 * 3600 * 1000;
 /// Devices and revocations in one announce, together.
 pub const MAX_PER_ANNOUNCE: usize = 50;
+/// How long a device past its lease is kept before it is swept.
+const SWEEP_GRACE_MS: i64 = 7 * 24 * 3600 * 1000;
 
 pub fn now_ms() -> i64 {
     (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
@@ -50,8 +52,12 @@ pub struct AnnouncedDevice {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnnouncedRevocation {
+    /// The bridge's own order of its revocations (never a clock): home says
+    /// back the highest it has processed.
+    pub seq: i64,
     pub authority_public_key: String,
     pub public_signing: String,
+    /// As the account signed it: data only.
     pub revoked_at_ms: i64,
     pub signature: String,
 }
@@ -71,8 +77,8 @@ pub struct Refused {
 pub struct AnnounceOutcome {
     pub accepted: Vec<i64>,
     pub refused: Vec<Refused>,
-    /// The newest revocation time home holds for this account: the bridge
-    /// sends what comes after it next.
+    /// The highest of the bridge's revocation sequence numbers home has
+    /// processed for this account: the bridge sends what comes after it.
     pub revocations_through: i64,
 }
 
@@ -112,7 +118,14 @@ pub async fn take_announce(
         .await?;
 
     // Revocations first: a device revoked in the same announce stays out.
+    // Each is processed for good (kept, or refused as one that can never
+    // verify), so the mark passes it either way.
+    let mut through_seq: i64 = 0;
     for revocation in revocations {
+        if revocation.seq <= 0 {
+            return Err(AppError::bad_request("a revocation's seq is positive"));
+        }
+        through_seq = through_seq.max(revocation.seq);
         let (Some(authority), Some(key)) = (
             key32(&revocation.authority_public_key),
             key32(&revocation.public_signing),
@@ -133,7 +146,7 @@ pub async fn take_announce(
         }
         sqlx::query(
             "INSERT INTO remote_revoked_device_keys (key_hash, domain, incarnation_id, revoked_at_ms)
-             VALUES ($1, $2, $3, $4) ON CONFLICT (key_hash) DO NOTHING",
+             VALUES ($1, $2, $3, $4) ON CONFLICT (domain, key_hash) DO NOTHING",
         )
         .bind(key_hash(&key))
         .bind(domain)
@@ -190,9 +203,13 @@ pub async fn take_announce(
             outcome.refused.push(refuse("expired"));
             continue;
         }
+        // Revoked by that server's account (one server's revocation never
+        // blocks another's device).
         let revoked: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM remote_revoked_device_keys WHERE key_hash = $1)",
+            "SELECT EXISTS (SELECT 1 FROM remote_revoked_device_keys
+                            WHERE domain = $1 AND key_hash = $2)",
         )
+        .bind(domain)
         .bind(key_hash(&key))
         .fetch_one(&mut *tx)
         .await?;
@@ -231,12 +248,16 @@ pub async fn take_announce(
             }
             Some(_) => outcome.refused.push(refuse("keyInUse")),
             None => {
+                // In use, as at home: active and within the lease (devices of
+                // ended sign-ins stop renewing and drop out by themselves).
                 let active: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM remote_collab_devices
-                     WHERE domain = $1 AND incarnation_id = $2 AND active",
+                     WHERE domain = $1 AND incarnation_id = $2 AND active
+                       AND registration_issued_at_ms > $3",
                 )
                 .bind(domain)
                 .bind(incarnation)
+                .bind(now - LEASE_MS)
                 .fetch_one(&mut *tx)
                 .await?;
                 if active >= crate::handlers::devices::MAX_ACTIVE_DEVICES {
@@ -272,11 +293,15 @@ pub async fn take_announce(
         }
     }
     outcome.revocations_through = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(revoked_at_ms), 0) FROM remote_revoked_device_keys
-         WHERE domain = $1 AND incarnation_id = $2",
+        "INSERT INTO remote_revocation_marks (domain, incarnation_id, through_seq)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (domain, incarnation_id) DO UPDATE
+             SET through_seq = GREATEST(remote_revocation_marks.through_seq, EXCLUDED.through_seq)
+         RETURNING through_seq",
     )
     .bind(domain)
     .bind(incarnation)
+    .bind(through_seq)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -344,7 +369,15 @@ pub async fn sweep(pool: &sqlx::PgPool) -> sqlx::Result<u64> {
     )
     .execute(pool)
     .await?;
-    Ok(gone.rows_affected())
+    // Past the lease, and a week more (time for a renewal under way):
+    // devices of ended sign-ins never renew. A revoked key stays refused
+    // through its tombstone.
+    let lapsed =
+        sqlx::query("DELETE FROM remote_collab_devices WHERE registration_issued_at_ms < $1")
+            .bind(now_ms() - LEASE_MS - SWEEP_GRACE_MS)
+            .execute(pool)
+            .await?;
+    Ok(gone.rows_affected() + lapsed.rows_affected())
 }
 
 // --- the bridge's side -------------------------------------------------------
@@ -400,7 +433,7 @@ pub async fn announce_for(
         )
         .collect();
     let through: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT through_ms FROM collab_revocation_marks
+        "SELECT COALESCE((SELECT through_seq FROM collab_revocation_marks
                           WHERE home_domain = $1 AND user_id = $2), 0)",
     )
     .bind(home_domain)
@@ -408,15 +441,14 @@ pub async fn announce_for(
     .fetch_one(pool)
     .await?;
     let room = (MAX_PER_ANNOUNCE - devices.len()) as i64;
-    let revoked: Vec<(Vec<u8>, i64, String)> = sqlx::query_as(
-        // This incarnation's only (home takes no others, so the mark would
-        // never pass them); from the mark itself, as home stores them
-        // idempotently and two may share a millisecond.
-        "SELECT d.public_signing, d.revoked_at_ms, d.revocation_signature
+    let revoked: Vec<(i64, Vec<u8>, i64, String)> = sqlx::query_as(
+        // This incarnation's only (home takes no others), after the mark, in
+        // this server's order: never the signed times, which clients chose.
+        "SELECT d.revocation_seq, d.public_signing, d.revoked_at_ms, d.revocation_signature
          FROM user_devices d JOIN users u ON u.id = d.user_id
-         WHERE d.user_id = $1 AND d.revoked_at_ms IS NOT NULL AND d.revoked_at_ms >= $2
+         WHERE d.user_id = $1 AND d.revocation_seq > $2
            AND d.incarnation_id = u.account_incarnation_id
-         ORDER BY d.revoked_at_ms, d.id LIMIT $3",
+         ORDER BY d.revocation_seq LIMIT $3",
     )
     .bind(user_id)
     .bind(through)
@@ -427,7 +459,8 @@ pub async fn announce_for(
     let revocations = revoked
         .into_iter()
         .take(room as usize)
-        .map(|(key, revoked_at_ms, signature)| AnnouncedRevocation {
+        .map(|(seq, key, revoked_at_ms, signature)| AnnouncedRevocation {
+            seq,
             authority_public_key: authority.clone(),
             public_signing: STANDARD.encode(key),
             revoked_at_ms,
@@ -441,23 +474,23 @@ pub async fn announce_for(
     })
 }
 
-/// Home stored the account's revocations through `through_ms`: the next
-/// announce starts after it.
+/// Home has processed the account's revocations through `through_seq` (its
+/// answer, kept as given: lower after a restore of home, which then gets
+/// them again).
 pub async fn advance_mark(
     pool: &sqlx::PgPool,
     user_id: uuid::Uuid,
     home_domain: &str,
-    through_ms: i64,
+    through_seq: i64,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO collab_revocation_marks (home_domain, user_id, through_ms)
+        "INSERT INTO collab_revocation_marks (home_domain, user_id, through_seq)
          VALUES ($1, $2, $3)
-         ON CONFLICT (home_domain, user_id)
-         DO UPDATE SET through_ms = GREATEST(collab_revocation_marks.through_ms, EXCLUDED.through_ms)",
+         ON CONFLICT (home_domain, user_id) DO UPDATE SET through_seq = EXCLUDED.through_seq",
     )
     .bind(home_domain)
     .bind(user_id)
-    .bind(through_ms)
+    .bind(through_seq)
     .execute(pool)
     .await?;
     Ok(())
@@ -520,7 +553,10 @@ mod tests {
         let key = ed25519_dalek::SigningKey::from_bytes(&[key_seed; 32])
             .verifying_key()
             .to_bytes();
+        // The bridge's order: one sequence for the tests, as for a server.
+        static SEQ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
         AnnouncedRevocation {
+            seq: SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             authority_public_key: STANDARD.encode(who.authority_public_key()),
             public_signing: STANDARD.encode(key),
             revoked_at_ms: at,
@@ -535,14 +571,16 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query(
-            "DELETE FROM remote_revoked_device_keys WHERE domain = $1 AND incarnation_id = $2",
-        )
-        .bind(BRIDGE)
-        .bind(incarnation)
-        .execute(pool)
-        .await
-        .unwrap();
+        for table in ["remote_revoked_device_keys", "remote_revocation_marks"] {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE domain = $1 AND incarnation_id = $2"
+            ))
+            .bind(BRIDGE)
+            .bind(incarnation)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
     }
 
     /// (a) unannounced and (b) wrong-account devices, (c) revocation for
@@ -694,17 +732,12 @@ mod tests {
         );
 
         // A revocation by the account: refused from now on, and never back.
-        let outcome = take_announce(
-            &pool,
-            BRIDGE,
-            account,
-            &incarnation,
-            &[],
-            &[revocation(&alice, 1, now)],
-        )
-        .await
-        .unwrap();
-        assert_eq!(outcome.revocations_through, now);
+        let revoked = revocation(&alice, 1, now);
+        let seq = revoked.seq;
+        let outcome = take_announce(&pool, BRIDGE, account, &incarnation, &[], &[revoked])
+            .await
+            .unwrap();
+        assert_eq!(outcome.revocations_through, seq, "home says how far it got");
         assert_eq!(
             check_sender(&pool, BRIDGE, &incarnation, &frame, &raw)
                 .await
@@ -817,13 +850,21 @@ mod tests {
             let key = ed25519_dalek::SigningKey::from_bytes(&[130 + i as u8; 32])
                 .verifying_key()
                 .to_bytes();
-            let at = now + i / 2; // pairs share a millisecond
+            // Clients' clocks: every third from a laptop two hours fast, the
+            // rest from one that agrees, all in the same millisecond. The
+            // fast ones come first: a mark by time would skip the rest.
+            let at = if i % 3 == 0 {
+                now + 2 * 3600 * 1000
+            } else {
+                now
+            };
             let signature = device_registration::sign_revocation(&alice, BRIDGE, &key, at).unwrap();
             sqlx::query(
                 "INSERT INTO user_devices (user_id, public_signing, incarnation_id, registration_challenge,
                     registration_issued_at_ms, registration_signature, is_active, revoked_at_ms,
-                    revocation_signature)
-                 VALUES ($1, $2, $3, $4, $5, 'x', false, $6, $7)",
+                    revocation_signature, revocation_seq)
+                 VALUES ($1, $2, $3, $4, $5, 'x', false, $6, $7,
+                         nextval('user_devices_revocation_seq'))",
             )
             .bind(user_id)
             .bind(key.to_vec())
@@ -870,11 +911,101 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(stored, 65, "every revocation reached home");
+        // And nothing is sent again.
+        let again = announce_for(&pool, user_id, BRIDGE, &[]).await.unwrap();
+        assert!(again.revocations.is_empty() && !again.more);
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
+        clean(&pool, &incarnation).await;
+    }
+
+    /// The cap counts devices in use (within the lease), and a revocation
+    /// stays with the server whose account made it.
+    #[tokio::test]
+    async fn live_the_cap_counts_devices_in_use_and_revocations_stay_per_server() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let alice = identity(71);
+        let incarnation = alice.incarnation_id();
+        clean(&pool, &incarnation).await;
+        let now = now_ms();
+        // 20 devices whose statements lapsed (their sign-ins ended): not in
+        // use, so a 21st registers.
+        let lapsed: Vec<AnnouncedDevice> = (300..320)
+            .map(|i| device(&alice, i, (i - 100) as u8, now))
+            .collect();
+        take_announce(&pool, BRIDGE, "a@bridge.test", &incarnation, &lapsed, &[])
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE remote_collab_devices SET registration_issued_at_ms = $3
+             WHERE domain = $1 AND incarnation_id = $2",
+        )
+        .bind(BRIDGE)
+        .bind(&incarnation)
+        .bind(now - LEASE_MS - 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let outcome = take_announce(
+            &pool,
+            BRIDGE,
+            "a@bridge.test",
+            &incarnation,
+            &[device(&alice, 400, 240, now)],
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.accepted, vec![400], "{outcome:?}");
+
+        // Another server "revoking" the same key under its own account
+        // blocks nothing here.
+        let mallory = identity(72);
+        let key = ed25519_dalek::SigningKey::from_bytes(&[241; 32])
+            .verifying_key()
+            .to_bytes();
+        let at = now;
+        let forged = AnnouncedRevocation {
+            seq: 1,
+            authority_public_key: STANDARD.encode(mallory.authority_public_key()),
+            public_signing: STANDARD.encode(key),
+            revoked_at_ms: at,
+            signature: device_registration::sign_revocation(&mallory, "other.test", &key, at)
+                .unwrap(),
+        };
+        take_announce(
+            &pool,
+            "other.test",
+            "m@other.test",
+            &mallory.incarnation_id(),
+            &[],
+            &[forged],
+        )
+        .await
+        .unwrap();
+        let outcome = take_announce(
+            &pool,
+            BRIDGE,
+            "a@bridge.test",
+            &incarnation,
+            &[device(&alice, 401, 241, now)],
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.accepted, vec![401], "{outcome:?}");
+        for table in ["remote_revoked_device_keys", "remote_revocation_marks"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE domain = 'other.test'"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         clean(&pool, &incarnation).await;
     }
 }

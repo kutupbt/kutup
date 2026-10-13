@@ -1450,6 +1450,8 @@ async fn announce(state: &AppState, bridge: &Bridge, seq: i64) {
 #[serde(rename_all = "camelCase")]
 struct AnnounceAnswer {
     accepted: Vec<i64>,
+    #[serde(default)]
+    refused: Vec<crate::remote_devices::Refused>,
     revocations_through: i64,
 }
 
@@ -1471,6 +1473,7 @@ async fn announce_devices(
             .collect()
     };
     let mut first = true;
+    let mut last_mark: Option<i64> = None;
     loop {
         let announce = crate::remote_devices::announce_for(
             &state.pool,
@@ -1499,6 +1502,18 @@ async fn announce_devices(
             .lock()
             .unwrap()
             .extend(answer.accepted);
+        // What home would not keep: the person sees their edits refused, so
+        // the reason is logged here (tooManyDevices: they have 20 devices in
+        // use at home; revoked, expired: their client registers or renews).
+        for refused in &answer.refused {
+            tracing::warn!(
+                home = %bridge.target.domain,
+                user_id = %bridge.target.user_id,
+                device_id = refused.device_id,
+                code = %refused.code,
+                "home refused a collaboration device"
+            );
+        }
         crate::remote_devices::advance_mark(
             &state.pool,
             bridge.target.user_id,
@@ -1509,6 +1524,13 @@ async fn announce_devices(
         if !announce.more {
             return Ok(());
         }
+        // Each page moves home's mark on; one that does not would be sent
+        // again for ever.
+        if last_mark.is_some_and(|mark| answer.revocations_through <= mark) {
+            tracing::warn!(home = %bridge.target.domain, "home's revocation mark does not advance");
+            return Ok(());
+        }
+        last_mark = Some(answer.revocations_through);
         first = false;
     }
 }
