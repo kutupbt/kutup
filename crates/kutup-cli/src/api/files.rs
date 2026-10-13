@@ -34,6 +34,7 @@ impl Client {
         collection_id: &str,
         metadata_envelope: &str,
         file_key_envelope: &str,
+        name_hash: &str,
         encrypted_content: Vec<u8>,
     ) -> Result<UploadResponse> {
         let part = Part::bytes(encrypted_content)
@@ -44,6 +45,7 @@ impl Client {
             .text("collectionId", collection_id.to_string())
             .text("metadataEnvelope", metadata_envelope.to_string())
             .text("fileKeyEnvelope", file_key_envelope.to_string())
+            .text("nameHash", name_hash.to_string())
             .part("file", part);
         let resp = self
             .request(Method::POST, "/files/upload")

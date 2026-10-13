@@ -34,14 +34,10 @@ pub fn canonical(name: &str) -> String {
     drive_names::canonical_name(name)
 }
 
-/// `name`, or the first of `name (2)`, `name (3)`… not in `taken`
-/// (canonical names); the number goes before the extension. A name already
-/// ending in a number in brackets counts on from it. The web client's
-/// `freeName` does the same.
-pub fn free_name(name: &str, taken: &std::collections::HashSet<String>) -> String {
-    if !taken.contains(&canonical(name)) {
-        return name.to_string();
-    }
+/// `name`, then `name (2)`, `name (3)`…: the number goes before the
+/// extension, and a name already ending in a number in brackets counts on
+/// from it. The web client's `freeName` tries the same names.
+pub fn numbered_names(name: &str) -> impl Iterator<Item = String> {
     let (stem, extension) = match name.rfind('.') {
         Some(dot) if dot > 0 => (&name[..dot], &name[dot..]),
         _ => (name, ""),
@@ -50,10 +46,42 @@ pub fn free_name(name: &str, taken: &std::collections::HashSet<String>) -> Strin
         Some((base, n)) => (base, n + 1),
         None => (stem, 2),
     };
-    (start..)
-        .map(|n| format!("{base} ({n}){extension}"))
-        .find(|candidate| !taken.contains(&canonical(candidate)))
-        .expect("an unbounded range finds a free name")
+    let (base, extension) = (base.to_string(), extension.to_string());
+    std::iter::once(name.to_string())
+        .chain((start..).map(move |n| format!("{base} ({n}){extension}")))
+}
+
+/// How many names [`first_available`] tries before giving up.
+const MAX_TRIED: usize = 1000;
+
+/// The first of `candidates` that no item holds in a folder (`None`: the
+/// account's top level) and `skip` allows, with its hash: the server is
+/// asked ten hashes at a time, as Proton Drive's `findAvailableName`.
+pub fn first_available(
+    client: &crate::api::Client,
+    collection_id: Option<&str>,
+    hash_key: &[u8; 32],
+    candidates: impl Iterator<Item = String>,
+    skip: impl Fn(&str) -> bool,
+) -> Result<(String, String)> {
+    let mut candidates = candidates.filter(|name| !skip(name)).take(MAX_TRIED);
+    loop {
+        let batch: Vec<(String, String)> = candidates
+            .by_ref()
+            .take(crate::api::MAX_ASKED_HASHES)
+            .map(|name| name_hash(hash_key, &name).map(|hash| (name, hash)))
+            .collect::<Result<_>>()?;
+        if batch.is_empty() {
+            anyhow::bail!("no free name found after {MAX_TRIED} tries");
+        }
+        let hashes: Vec<String> = batch.iter().map(|(_, hash)| hash.clone()).collect();
+        let available = client
+            .available_hashes(collection_id, &hashes)
+            .context("ask which names are free")?;
+        if let Some(found) = batch.into_iter().find(|(_, hash)| available.contains(hash)) {
+            return Ok(found);
+        }
+    }
 }
 
 /// `("a", 3)` for `"a (3)"`.
@@ -76,6 +104,12 @@ mod tests {
         names.iter().map(|n| canonical(n)).collect()
     }
 
+    fn free_name(name: &str, taken: &HashSet<String>) -> String {
+        numbered_names(name)
+            .find(|candidate| !taken.contains(&canonical(candidate)))
+            .unwrap()
+    }
+
     #[test]
     fn free_names_match_the_web_client() {
         assert_eq!(free_name("a.txt", &taken(&[])), "a.txt");
@@ -91,6 +125,14 @@ mod tests {
             free_name("archive.tar.gz", &taken(&["archive.tar.gz"])),
             "archive.tar (2).gz"
         );
+    }
+
+    #[test]
+    fn numbered_names_count_on() {
+        let names: Vec<String> = numbered_names("a (5).txt").take(3).collect();
+        assert_eq!(names, ["a (5).txt", "a (6).txt", "a (7).txt"]);
+        let names: Vec<String> = numbered_names("Photos").take(2).collect();
+        assert_eq!(names, ["Photos", "Photos (2)"]);
     }
 
     #[test]

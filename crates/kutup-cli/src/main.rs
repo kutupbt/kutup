@@ -423,6 +423,7 @@ mod tests {
             let e = anyhow::Error::new(api::ApiError {
                 status,
                 message: "x".into(),
+                code: None,
                 name_taken: None,
                 version_conflict: None,
             })

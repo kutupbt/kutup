@@ -25,7 +25,7 @@ use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use crate::api::Client;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_file_meta};
 use crate::session::{sync_pair_id, Session, Store, SyncDirState, SyncFileState};
-use crate::transfer::stream_download;
+use crate::transfer::{self, stream_download};
 use crate::uploader::{self, now_unix, Progress, UploadRequest};
 use crate::vaultsync::{
     describe, is_vault, merge_and_save, recorded, save_version, VaultFile, VaultKeys,
@@ -656,82 +656,69 @@ fn execute_file_action(
                 .get(parent_rel)
                 .context("remote parent folder missing")?;
             let abs = root.join(rel);
-            // Names are unique in a folder (docs/plans/drive-unique-names.md):
-            // a new file claims its name as it goes; an update goes up
-            // without one, and takes the name once the old file has gone.
-            let update = match action {
-                FileAction::PushUpdate { old_file_id } => Some(old_file_id),
-                _ => None,
-            };
-            let up = uploader::upload_streaming(
-                client,
-                store,
-                &abs,
-                UploadRequest {
-                    collection_id: &dir.collection_id,
-                    key_epoch: dir.key_epoch,
-                    collection_key: &dir.key,
-                    resume: true,
-                    progress: Progress::Quiet,
-                    naming: if update.is_some() {
-                        uploader::Naming::After(dir.hash_key)
-                    } else {
-                        uploader::Naming::Claim(dir.hash_key)
-                    },
-                    name: None,
-                },
-            )?;
-            // Upload-first, then retire the superseded id (soft → trash).
-            if let Some(old_file_id) = update {
-                match client.delete_file(old_file_id) {
-                    Ok(()) => {
-                        let claimed =
-                            crate::names::name_hash(&dir.hash_key, &up.name).and_then(|hash| {
-                                client.fill_name_hashes(
-                                    &dir.collection_id,
-                                    &[(up.file_id.clone(), hash)],
-                                    &[],
-                                )
-                            });
-                        match claimed {
-                            Ok(clashes) if clashes.is_empty() => {}
-                            Ok(_) => result
-                                .errors
-                                .push(format!("{rel}: its name was taken meanwhile")),
-                            Err(e) => result.errors.push(format!("{rel}: claim name: {e:#}")),
-                        }
-                    }
-                    Err(e) => result
-                        .errors
-                        .push(format!("{rel}: retire old version: {e}")),
-                }
-            }
             let stat = stat_local(&abs)?;
+            let sha256 = uploader::sha256_file(&abs)?;
+            // An edit goes up as a new version of the file Drive holds
+            // (docs/plans/drive-unique-names.md: names are unique in a
+            // folder, so the file keeps its name and id); a new file claims
+            // its name as it goes.
+            let (file_id, remote_version_id) = match action {
+                FileAction::PushUpdate { old_file_id } => {
+                    let entry = remote_entries.get(rel).context("remote entry vanished")?;
+                    if transfer::cipher_size(stat.size) <= MAX_VERSION_BYTES {
+                        let version = push_version(client, &abs, &entry.file, dir, &sha256)?;
+                        (old_file_id.clone(), version)
+                    } else {
+                        let id =
+                            push_replacement(client, store, &abs, entry, dir, &sha256, result)?;
+                        (id, String::new())
+                    }
+                }
+                _ => {
+                    let up = uploader::upload_streaming(
+                        client,
+                        store,
+                        &abs,
+                        UploadRequest {
+                            collection_id: &dir.collection_id,
+                            key_epoch: dir.key_epoch,
+                            collection_key: &dir.key,
+                            resume: true,
+                            progress: Progress::Quiet,
+                            hash_key: dir.hash_key,
+                            name: None,
+                            sha256: Some(sha256),
+                        },
+                    )?;
+                    (up.file_id, String::new())
+                }
+            };
             store.put_sync_file(
                 pair,
                 rel,
                 &SyncFileState {
-                    file_id: up.file_id,
+                    file_id,
                     collection_id: dir.collection_id.clone(),
                     local_size: stat.size,
                     local_mtime_secs: stat.mtime_secs,
                     local_mtime_nanos: stat.mtime_nanos,
-                    remote_version_id: String::new(),
+                    remote_version_id,
                     synced_at: now_unix(),
                 },
             )?;
         }
         FileAction::Conflict => {
             result.conflicts += 1;
-            let copy = conflict_name(rel);
-            eprintln!("  ⚠ {rel} (remote copy → {copy})");
             if opts.dry_run {
+                eprintln!("  ⚠ {rel} (remote copy → {})", conflict_name(rel));
                 return Ok(());
             }
             let entry = remote_entries.get(rel).context("remote entry vanished")?;
             let dir = remote_dirs
                 .get(&entry.rel_dir)
                 .context("remote dir vanished")?;
+            let copy = free_conflict_name(client, root, rel, dir)?;
+            eprintln!("  ⚠ {rel} (remote copy → {copy})");
             pull_to(client, entry, &dir.keys, &root.join(&copy))?;
             // Mark the base conflicted: remote side = current (stops the
             // conflict from re-firing), local side = dirty sentinel (the
@@ -767,7 +754,7 @@ fn execute_file_action(
                 let _ = std::fs::remove_file(&tmp);
                 record_base(store, pair, rel, &abs, entry, client, version)?;
             } else {
-                let copy = conflict_name(rel);
+                let copy = free_conflict_name(client, root, rel, dir)?;
                 eprintln!("  ⚠ {rel} (differs from remote; remote copy → {copy})");
                 result.conflicts += 1;
                 std::fs::rename(&tmp, root.join(&copy))?;
@@ -1022,6 +1009,118 @@ fn download_decrypt(
     }
 }
 
+/// The largest version the server stores in one request
+/// (`DRIVE_VERSION_LIMIT_BYTES`); a bigger edit goes up as a new file.
+const MAX_VERSION_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+
+/// Stores the local file `abs` as a new version of `file`, streamed, then
+/// its metadata's size and content SHA-256 and its content hash; returns
+/// the version's id.
+fn push_version(
+    client: &Client,
+    abs: &Path,
+    file: &crate::api::File,
+    dir: &RemoteDir,
+    sha256: &[u8; 32],
+) -> Result<String> {
+    let file_key = crate::file_crypto::open_key(file, &dir.keys).context("decrypt file key")?;
+    // New content goes under a key only the folder's current people hold.
+    let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
+        client,
+        file.clone(),
+        file_key,
+        &dir.keys,
+        &dir.collection_id,
+        dir.key_epoch,
+    )?;
+    let size = std::fs::metadata(abs)?.len();
+    let up = transfer::StreamUploader::new(
+        std::fs::File::open(abs)?,
+        &file_key,
+        size as i64,
+        DriveFileBlobContextV1::new(&file.id, file.key_generation)?,
+    )?;
+    let row = client
+        .create_version_stream(
+            &file.id,
+            transfer::CipherReader::new(up),
+            transfer::cipher_size(size as i64) as u64,
+            &crate::api::versions::NewVersion {
+                kind: "file".into(),
+                doc_key_id: 1,
+                ..Default::default()
+            },
+        )
+        .context("store new version")?;
+    uploader::follow_new_content(client, &file, &file_key, &dir.hash_key, size, sha256)?;
+    Ok(row.id)
+}
+
+/// An edit too big for a version: uploaded as a new file under a free
+/// numbered name, the old one trashed, and the new one renamed to the name.
+/// Returns the new file's id.
+fn push_replacement(
+    client: &Client,
+    store: &Store,
+    abs: &Path,
+    entry: &RemoteEntry,
+    dir: &RemoteDir,
+    sha256: &[u8; 32],
+    result: &mut SyncResult,
+) -> Result<String> {
+    let name = crate::file_crypto::open_metadata(
+        &entry.file,
+        &crate::file_crypto::open_key(&entry.file, &dir.keys)?,
+    )?
+    .name;
+    let (interim, _) = crate::names::first_available(
+        client,
+        Some(&dir.collection_id),
+        &dir.hash_key,
+        crate::names::numbered_names(&name).skip(1),
+        |_| false,
+    )?;
+    let up = uploader::upload_streaming(
+        client,
+        store,
+        abs,
+        UploadRequest {
+            collection_id: &dir.collection_id,
+            key_epoch: dir.key_epoch,
+            collection_key: &dir.key,
+            resume: true,
+            progress: Progress::Quiet,
+            hash_key: dir.hash_key,
+            name: Some(&interim),
+            sha256: Some(*sha256),
+        },
+    )?;
+    if let Err(e) = client.delete_file(&entry.file.id) {
+        result.errors.push(format!(
+            "{name}: retire old version: {e}; the new one is {interim}"
+        ));
+        return Ok(up.file_id);
+    }
+    let renamed = (|| -> Result<()> {
+        let file = client
+            .list_files(&dir.collection_id)?
+            .into_iter()
+            .find(|f| f.id == up.file_id)
+            .context("the new file is not listed")?;
+        let mut meta = crate::file_crypto::open_metadata(&file, &up.file_key)?;
+        meta.name = name.clone();
+        let mut request = crate::file_crypto::rename_request(&file, &up.file_key, &meta)?;
+        request.name_hash = Some(crate::names::name_hash(&dir.hash_key, &name)?);
+        client.update_file_metadata(&file.id, &request)
+    })();
+    if let Err(e) = renamed {
+        result.errors.push(format!(
+            "{name}: uploaded as {interim}, rename back failed: {e:#}"
+        ));
+    }
+    Ok(up.file_id)
+}
+
 fn record_base(
     store: &Store,
     pair: &str,
@@ -1170,6 +1269,22 @@ fn conflict_name(rel: &str) -> String {
         _ => format!("{leaf}.sync-conflict-{stamp}"),
     };
     join_rel(dir, &renamed)
+}
+
+/// A conflict copy's path: [`conflict_name`], numbered on when that name is
+/// already taken here or in the Drive folder the copy goes up to next
+/// (asked with `available-hashes`, docs/plans/drive-unique-names.md).
+fn free_conflict_name(client: &Client, root: &Path, rel: &str, dir: &RemoteDir) -> Result<String> {
+    let copy = conflict_name(rel);
+    let (parent, leaf) = split_rel(&copy);
+    let (name, _) = crate::names::first_available(
+        client,
+        Some(&dir.collection_id),
+        &dir.hash_key,
+        crate::names::numbered_names(leaf),
+        |candidate| root.join(join_rel(parent, candidate)).exists(),
+    )?;
+    Ok(join_rel(parent, &name))
 }
 
 /// Bounded-memory byte comparison.
