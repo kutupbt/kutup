@@ -3174,7 +3174,7 @@ impl OpaqueRegistration {
             .take()
             .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
         export
-            .seal_master_key(&master_key_32(master_key_base64)?, key_binding)
+            .seal_master_key(&*master_key_32(master_key_base64)?, key_binding)
             .map_err(opaque_error)
     }
 
@@ -3279,7 +3279,7 @@ impl OpaqueServer {
     ) -> Result<OpaqueServer, JsValue> {
         let sealed = decode_canonical_base64(sealed_base64, "sealed setup")?;
         let secrets =
-            kutup_crypto::opaque::open_server_setup(&sealed, &master_key_32(key_base64)?, key_id)
+            kutup_crypto::opaque::open_server_setup(&sealed, &*master_key_32(key_base64)?, key_id)
                 .map_err(opaque_error)?;
         Ok(Self { secrets })
     }
@@ -3347,4 +3347,195 @@ impl OpaqueServer {
         let finalization = decode_canonical_base64(finalization_base64, "finalization")?;
         kutup_crypto::opaque::server_login_finish(&state, &finalization).map_err(opaque_error)
     }
+}
+
+// --- the account head (docs/plans/rollback-protection.md) ---------------------
+
+fn head_keys(master_key_base64: &str) -> Result<kutup_crypto::account_head::HeadKeys, JsValue> {
+    kutup_crypto::account_head::HeadKeys::derive(&master_key_32(master_key_base64)?)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+fn head_err(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+fn index_arg(index_json: &str) -> Result<Vec<(String, u64)>, JsValue> {
+    serde_json::from_str(index_json).map_err(|_| js_error("account head: invalid index"))
+}
+
+fn sealed_head(sealed_base64: &str) -> Result<Vec<u8>, JsValue> {
+    decode_canonical_base64(sealed_base64, "account head")
+}
+
+fn js_json<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// This device's writer tag in the heads it writes (hex).
+#[wasm_bindgen(js_name = accountHeadWriter)]
+pub fn account_head_writer(master_key_base64: &str, device_id: &str) -> Result<String, JsValue> {
+    head_keys(master_key_base64)?
+        .writer(device_id)
+        .map_err(head_err)
+}
+
+/// A scope's entry for its whole index, `[[id, revision], …]` (JSON).
+#[wasm_bindgen(js_name = accountHeadScope)]
+pub fn account_head_scope(
+    master_key_base64: &str,
+    scope: &str,
+    index_json: &str,
+) -> Result<JsValue, JsValue> {
+    let entry = head_keys(master_key_base64)?
+        .scope_digest(scope, &index_arg(index_json)?)
+        .map_err(head_err)?;
+    js_json(&entry)
+}
+
+/// The next head, sealed: after `previous_base64` (absent: the account's first
+/// head, for `incarnation_id`), written by `writer`, with the scope entries
+/// in `scopes_json` replaced.
+#[wasm_bindgen(js_name = nextAccountHead)]
+pub fn next_account_head(
+    master_key_base64: &str,
+    binding: &str,
+    incarnation_id: &str,
+    previous_base64: Option<String>,
+    writer: &str,
+    scopes_json: &str,
+) -> Result<String, JsValue> {
+    let keys = head_keys(master_key_base64)?;
+    let scopes: Vec<kutup_crypto::account_head::ScopeV1> =
+        serde_json::from_str(scopes_json).map_err(|_| js_error("account head: invalid scopes"))?;
+    let head = match previous_base64 {
+        Some(previous) => {
+            let previous = sealed_head(&previous)?;
+            let before =
+                kutup_crypto::account_head::open(&keys, binding, &previous).map_err(head_err)?;
+            if before.incarnation_id != incarnation_id {
+                return Err(js_error("account head: the head is another incarnation's"));
+            }
+            before.next(&previous, writer, scopes).map_err(head_err)?
+        }
+        None => kutup_crypto::account_head::AccountHeadV1::first(incarnation_id, writer, scopes)
+            .map_err(head_err)?,
+    };
+    kutup_crypto::account_head::seal(&keys, binding, &head)
+        .map(|sealed| STANDARD.encode(sealed))
+        .map_err(head_err)
+}
+
+/// Opens a sealed head: its JSON.
+#[wasm_bindgen(js_name = openAccountHead)]
+pub fn open_account_head(
+    master_key_base64: &str,
+    binding: &str,
+    sealed_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let head = kutup_crypto::account_head::open(
+        &head_keys(master_key_base64)?,
+        binding,
+        &sealed_head(sealed_base64)?,
+    )
+    .map_err(head_err)?;
+    js_json(&head)
+}
+
+/// What a device remembers of a sealed head: `{ sequence, digest }`.
+#[wasm_bindgen(js_name = accountHeadAnchor)]
+pub fn account_head_anchor(sealed_base64: &str) -> Result<JsValue, JsValue> {
+    js_json(
+        &kutup_crypto::account_head::Anchor::of(&sealed_head(sealed_base64)?).map_err(head_err)?,
+    )
+}
+
+fn anchor_arg(
+    anchor_json: Option<String>,
+) -> Result<Option<kutup_crypto::account_head::Anchor>, JsValue> {
+    anchor_json
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|_| js_error("account head: invalid anchor"))
+        })
+        .transpose()
+}
+
+/// How the current head relates to `anchor_json` (absent: nothing
+/// remembered), given the chain segment from the anchor to it (JSON list of
+/// sealed heads; absent: the server no longer keeps it): `{ kind: "fresh" |
+/// "current" | "extends" | "rollback" | "fork" | "tooOld" }`.
+#[wasm_bindgen(js_name = checkAccountHead)]
+pub fn check_account_head(
+    master_key_base64: &str,
+    binding: &str,
+    incarnation_id: &str,
+    anchor_json: Option<String>,
+    current_base64: &str,
+    segment_json: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let segment: Option<Vec<Vec<u8>>> = segment_json
+        .map(|json| {
+            let list: Vec<String> = serde_json::from_str(&json)
+                .map_err(|_| js_error("account head: invalid segment"))?;
+            list.iter()
+                .map(|sealed| sealed_head(sealed))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let status = kutup_crypto::account_head::check(
+        &head_keys(master_key_base64)?,
+        binding,
+        incarnation_id,
+        anchor_arg(anchor_json)?.as_ref(),
+        &sealed_head(current_base64)?,
+        segment.as_deref(),
+    )
+    .map_err(head_err)?;
+    js_json(&status)
+}
+
+/// Whether a scope's index (`[[id, revision], …]`) matches the verified head:
+/// true, false when the head does not cover the scope yet; throws if it differs.
+#[wasm_bindgen(js_name = checkAccountHeadIndex)]
+pub fn check_account_head_index(
+    master_key_base64: &str,
+    binding: &str,
+    current_base64: &str,
+    scope: &str,
+    index_json: &str,
+) -> Result<bool, JsValue> {
+    let keys = head_keys(master_key_base64)?;
+    let head = kutup_crypto::account_head::open(&keys, binding, &sealed_head(current_base64)?)
+        .map_err(head_err)?;
+    kutup_crypto::account_head::check_index(&keys, &head, scope, &index_arg(index_json)?)
+        .map_err(head_err)
+}
+
+/// Re-anchors on the current head after a check gave `status_json`; returns
+/// the record to log.
+#[wasm_bindgen(js_name = reanchorAccountHead)]
+pub fn reanchor_account_head(
+    master_key_base64: &str,
+    binding: &str,
+    incarnation_id: &str,
+    anchor_json: Option<String>,
+    current_base64: &str,
+    status_json: &str,
+    at_ms: f64,
+) -> Result<JsValue, JsValue> {
+    let status: kutup_crypto::account_head::HeadStatus =
+        serde_json::from_str(status_json).map_err(|_| js_error("account head: invalid status"))?;
+    let record = kutup_crypto::account_head::reanchor(
+        &head_keys(master_key_base64)?,
+        binding,
+        incarnation_id,
+        anchor_arg(anchor_json)?.as_ref(),
+        &sealed_head(current_base64)?,
+        &status,
+        at_ms as u64,
+    )
+    .map_err(head_err)?;
+    js_json(&record)
 }

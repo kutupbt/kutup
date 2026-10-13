@@ -925,4 +925,44 @@ assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', t
   assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
 }
 
+// The account head (kutup-crypto account_head, docs/plans/rollback-protection.md):
+// the browser computes the same scope digests and heads, and tells the same
+// outcomes apart.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-head-v1.json`, 'utf8'))
+  assert.equal(crypto.accountHeadWriter(v.masterKey, v.device), v.writer)
+  for (const [i, sealed] of v.sealed.entries()) {
+    assert.deepEqual(crypto.openAccountHead(v.masterKey, v.binding, sealed), JSON.parse(v.heads[i]))
+    assert.deepEqual(crypto.accountHeadAnchor(sealed), v.anchors[i])
+    const scope = crypto.accountHeadScope(v.masterKey, 'contacts', JSON.stringify(v.indexes[i]))
+    assert.deepEqual(scope, JSON.parse(v.heads[i]).scopes[0])
+  }
+  // A head written here follows the last one and opens.
+  const scope = crypto.accountHeadScope(v.masterKey, 'contacts', JSON.stringify(v.indexes[2]))
+  const next = crypto.nextAccountHead(v.masterKey, v.binding, v.incarnationId, v.sealed[2], v.writer, JSON.stringify([scope]))
+  const opened = crypto.openAccountHead(v.masterKey, v.binding, next)
+  assert.equal(opened.sequence, 4)
+  assert.equal(opened.previous, v.anchors[2].digest)
+  const current = (name) => (name === 'forked' ? v.forked : v.sealed[Number(name)])
+  for (const check of v.checks) {
+    const status = crypto.checkAccountHead(
+      v.masterKey,
+      v.binding,
+      v.incarnationId,
+      check.anchor === null || check.anchor === undefined ? undefined : JSON.stringify(v.anchors[check.anchor]),
+      current(check.current),
+      check.segment ? JSON.stringify(check.segment.map((i) => v.sealed[i])) : undefined,
+    )
+    assert.deepEqual(status, check.status, check.case)
+  }
+  assert.equal(crypto.checkAccountHeadIndex(v.masterKey, v.binding, v.sealed[2], 'contacts', JSON.stringify(v.indexes[2])), true)
+  assert.equal(crypto.checkAccountHeadIndex(v.masterKey, v.binding, v.sealed[2], 'mailNames', '[]'), false)
+  for (const refused of v.refusedIndexes) {
+    assert.throws(() => crypto.checkAccountHeadIndex(v.masterKey, v.binding, v.sealed[2], 'contacts', JSON.stringify(refused.index)), undefined, refused.case)
+  }
+  const record = crypto.reanchorAccountHead(v.masterKey, v.binding, v.incarnationId, JSON.stringify(v.anchors[2]), v.sealed[0], JSON.stringify({ kind: 'rollback' }), v.reanchored.atMs)
+  assert.deepEqual(record, v.reanchored)
+  assert.throws(() => crypto.openAccountHead(v.masterKey, '9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0', v.sealed[0]))
+}
+
 console.log('crypto WASM canonical vectors passed')

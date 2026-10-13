@@ -107,6 +107,14 @@ feature would keep it out of the production bundle.
 
 ---
 
+### Account-level device linking (QR)
+
+A new browser or CLI profile signing in with only the password trusts the
+first account head it reads (docs/plans/rollback-protection.md). Linking it
+from an existing device by QR, as Chat links its devices, would carry the
+current head across and anchor it from the start. Until then a device that
+has Chat's link uses it.
+
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
