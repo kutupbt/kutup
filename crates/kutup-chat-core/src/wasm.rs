@@ -4013,8 +4013,11 @@ impl HistoryEntry {
     }
 
     fn incoming(message: crate::InboxMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.id,
+            iso_time(message.received_at),
+        );
         let id = content.message_id.clone();
         let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
@@ -4032,8 +4035,11 @@ impl HistoryEntry {
     }
 
     fn outgoing(message: crate::SentMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.send_id,
+            iso_time(message.created_at),
+        );
         let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
             id: message.send_id,
@@ -4071,8 +4077,11 @@ impl HistoryEntry {
     }
 
     fn mls(message: crate::MlsHistoryMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.message_id,
+            iso_time(message.timestamp_ms),
+        );
         let group_id = uuid::Uuid::from_bytes(message.conversation_id).to_string();
         Ok(Self {
             id: message.message_id,
@@ -4106,31 +4115,33 @@ fn direct_conversation(peer: &str) -> Result<ConversationId> {
     Ok(ConversationId::direct(address))
 }
 
+/// Content that does not decode is no control: it shows as unsupported.
 fn is_contact_control(bytes: &[u8]) -> Result<bool> {
-    let content = serde_json::from_slice::<ChatContent>(bytes)
-        .map_err(|error| ChatError::Content(error.to_string()))?;
-    Ok(matches!(
-        content.kind.as_str(),
-        kutup_chat_proto::content::kind::CONTACT_CONTROL
-            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
-            | kutup_chat_proto::content::kind::TYPING
-            | kutup_chat_proto::content::kind::CALL
-            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-    ))
+    Ok(crate::timeline::decodes_to(bytes, |kind| {
+        matches!(
+            kind,
+            kutup_chat_proto::content::kind::CONTACT_CONTROL
+                | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+                | kutup_chat_proto::content::kind::TYPING
+                | kutup_chat_proto::content::kind::CALL
+                | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+        )
+    }))
 }
 
+/// Content that does not decode is no control: it shows as unsupported.
 fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
-    let content = serde_json::from_slice::<ChatContent>(bytes)
-        .map_err(|error| ChatError::Content(error.to_string()))?;
-    Ok(matches!(
-        content.kind.as_str(),
-        kutup_chat_proto::content::kind::GROUP_CONTROL
-            | kutup_chat_proto::content::kind::CONTACT_CONTROL
-            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
-            | kutup_chat_proto::content::kind::TYPING
-            | kutup_chat_proto::content::kind::CALL
-            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-    ))
+    Ok(crate::timeline::decodes_to(bytes, |kind| {
+        matches!(
+            kind,
+            kutup_chat_proto::content::kind::GROUP_CONTROL
+                | kutup_chat_proto::content::kind::CONTACT_CONTROL
+                | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+                | kutup_chat_proto::content::kind::TYPING
+                | kutup_chat_proto::content::kind::CALL
+                | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+        )
+    }))
 }
 
 #[derive(Serialize)]
@@ -4783,6 +4794,14 @@ fn js_value_message(value: &JsValue) -> String {
                 .and_then(|message| message.as_string())
         })
         .unwrap_or_else(|| format!("JavaScript transport rejected: {value:?}"))
+}
+
+/// `millis` since the epoch, as RFC 3339.
+fn iso_time(millis: i64) -> String {
+    js_sys::Date::new(&JsValue::from_f64(millis as f64))
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn now_rfc3339() -> String {

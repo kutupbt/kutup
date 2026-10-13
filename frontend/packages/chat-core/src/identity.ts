@@ -25,6 +25,8 @@ export function parseAccountAddress(value: string): AccountAddress | null {
     !server ||
     server.length > 253 ||
     server.endsWith('.') ||
+    // One rule with the server's: a DNS name with a dot, never an IP.
+    !server.includes('.') ||
     /^\d{1,3}(?:\.\d{1,3}){3}$/.test(server) ||
     server.includes(':') ||
     !server.split('.').every((label) => DNS_LABEL.test(label))

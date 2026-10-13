@@ -6,7 +6,6 @@
 //! participate in routing or trust.
 
 use std::fmt;
-use std::net::IpAddr;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -117,27 +116,11 @@ fn validate_username(username: &str) -> Result<(), AddressError> {
     Ok(())
 }
 
+/// One rule for every server name Kutup routes to: the federation stack's
+/// (a canonical lowercase DNS name with at least one dot, no IP literal).
 fn validate_server(server: &str) -> Result<(), AddressError> {
-    if server.is_empty()
-        || server.len() > 253
-        || server.ends_with('.')
-        || server.parse::<IpAddr>().is_ok()
-    {
-        return Err(AddressError("server is not a canonical DNS name".into()));
-    }
-    for label in server.split('.') {
-        if label.is_empty()
-            || label.len() > 63
-            || label.starts_with('-')
-            || label.ends_with('-')
-            || !label
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(AddressError("server is not a canonical DNS name".into()));
-        }
-    }
-    Ok(())
+    kutup_federation_proto::validate_server_name(server)
+        .map_err(|_| AddressError("server is not a canonical DNS name".into()))
 }
 
 #[cfg(test)]
