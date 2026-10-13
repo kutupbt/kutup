@@ -244,7 +244,7 @@ fn canonical_name(state: &AppState, name: &str) -> String {
 static FAKE_ACCOUNTS_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
 
 /// The server's own key for fake answers (stored once, as its other keys).
-async fn fake_accounts_key(state: &AppState) -> AppResult<[u8; 32]> {
+pub(crate) async fn fake_accounts_key(state: &AppState) -> AppResult<[u8; 32]> {
     FAKE_ACCOUNTS_KEY
         .get_or_try_init(|| async {
             crate::server_keys::load_or_create(

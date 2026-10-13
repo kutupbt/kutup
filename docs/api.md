@@ -58,9 +58,11 @@ Specific codes, where an app does something particular (a test in
 
 ## Session version
 
-Every authenticated answer carries `X-Kutup-Session-Version`: a digest of
-the account's security state (its password, 2FA, role, username and key
-binding), read in the same query that checks the session. It changes when
+Every authenticated answer carries `X-Kutup-Session-Version`: 16 hex
+digits, an HMAC under a key only the server holds of the account's security
+state (its password, 2FA, role, username and key binding), read in the same
+query that checks the session. It reveals nothing about that state, only
+whether it changed. It changes when
 any of them changes, from any app or device. Each app (each on its own
 origin) remembers the last one it saw; on a change it reads `/user/me`
 again and, when the key binding is no longer the one its keys carry, ends

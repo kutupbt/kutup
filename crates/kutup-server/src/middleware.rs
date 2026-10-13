@@ -59,10 +59,33 @@ impl FromRequestParts<AppState> for AuthUser {
         let token = bearer_token(parts).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
         let user = authenticate_access_token(state, &token).await?;
         if let Some(slot) = parts.extensions.get::<SessionVersionSlot>() {
-            *slot.0.lock().unwrap() = Some(user.session.version.clone());
+            *slot.0.lock().unwrap() = Some(session_version(state, &user.session.version).await?);
         }
         Ok(user)
     }
+}
+
+static SESSION_VERSION_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
+
+/// The header's value: an HMAC of the account's state digest under a key
+/// only this server holds (derived, under its own label, from its stored
+/// sign-in key), 16 hex digits. It changes when the state does, and tells
+/// nothing else to anyone who sees headers: not the password hash, not
+/// which of 2FA or role changed, and nothing linkable across servers.
+async fn session_version(state: &AppState, digest: &str) -> Result<String, AppError> {
+    use hmac::{Hmac, Mac};
+    let key = SESSION_VERSION_KEY
+        .get_or_try_init(|| async {
+            let root = crate::handlers::auth::fake_accounts_key(state).await?;
+            let mut mac =
+                <Hmac<sha2::Sha256> as Mac>::new_from_slice(&root).expect("any key length");
+            mac.update(b"kutup/session-version/v1\0");
+            Ok::<_, AppError>(mac.finalize().into_bytes().into())
+        })
+        .await?;
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
+    mac.update(digest.as_bytes());
+    Ok(hex::encode(&mac.finalize().into_bytes()[..8]))
 }
 
 /// Where an authenticated request leaves its account's session version for
