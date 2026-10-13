@@ -122,11 +122,13 @@ impl AccountEnvelopePurpose {
                 length: Length::Bucket(256),
                 mutable: false,
             },
-            // One per vault (its Drive file id).
+            // One per vault (its Drive file id), replaced when the vault's
+            // key changes; every one the same length, so the size does not
+            // tell a generated key from a chosen one or a key file's size.
             Self::PassVaultSecret => PurposePolicy {
                 object: ObjectPolicy::Required(16),
-                length: Length::Bucket(256),
-                mutable: false,
+                length: Length::Fixed(crate::pass_vault::MAX_PAYLOAD_LEN + 1),
+                mutable: true,
             },
         }
     }
@@ -860,17 +862,18 @@ mod tests {
     #[test]
     fn an_object_is_bound_and_its_id_is_bounded() {
         let key = [0x24; 32];
-        let envelope = seal_object(
+        let envelope = seal_revision(
             &[0x42; 32],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
             BINDING,
             &[7; 16],
+            9,
         )
         .unwrap();
         assert_eq!(inspect(&envelope).unwrap().object_id, vec![7; 16]);
         assert_eq!(
-            open_object(
+            open_revision(
                 &envelope,
                 &key,
                 AccountEnvelopePurpose::PassVaultSecret,
@@ -878,9 +881,9 @@ mod tests {
                 &[7; 16]
             )
             .unwrap(),
-            vec![0x42; 32]
+            (vec![0x42; 32], 9)
         );
-        assert!(open_object(
+        assert!(open_revision(
             &envelope,
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
@@ -888,12 +891,50 @@ mod tests {
             &[8; 16]
         )
         .is_err());
-        assert!(seal_object(
+        // The object id must have the purpose's length.
+        assert!(seal_revision(
             &[1],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
             BINDING,
-            &[0; 65]
+            &[0; 17],
+            9
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_mutable_secret_carries_its_revision_authenticated() {
+        let key = [0x24; 32];
+        let purpose = AccountEnvelopePurpose::PassVaultSecret;
+        let envelope = seal_revision(&[0x42; 32], &key, purpose, BINDING, &[7; 16], 9).unwrap();
+        assert_eq!(inspect(&envelope).unwrap().revision, Some(9));
+        // Padded to the purpose's fixed length.
+        let Length::Fixed(fixed) = purpose.policy().length else {
+            panic!("fixed")
+        };
+        assert_eq!(
+            inspect(&envelope).unwrap().ciphertext_len as usize,
+            fixed + TAG_LEN
+        );
+        // Relabelled as another revision: refused.
+        let at = envelope.len() - (fixed + TAG_LEN) - LENGTH_LEN - NONCE_LEN - REVISION_LEN;
+        let mut relabelled = envelope.clone();
+        relabelled[at + REVISION_LEN - 1] ^= 1;
+        assert_eq!(inspect(&relabelled).unwrap().revision, Some(8));
+        assert!(open_revision(&relabelled, &key, purpose, BINDING, &[7; 16]).is_err());
+        // A mutable secret needs a revision, never 0, and opens only with it.
+        assert!(seal_object(&[1], &key, purpose, BINDING, &[7; 16]).is_err());
+        assert!(seal_revision(&[1], &key, purpose, BINDING, &[7; 16], 0).is_err());
+        assert!(open_object(&envelope, &key, purpose, BINDING, &[7; 16]).is_err());
+        // And a revision on an immutable purpose is refused.
+        assert!(seal_revision(
+            &[0x42; 32],
+            &key,
+            AccountEnvelopePurpose::PasswordMasterKey,
+            BINDING,
+            &[],
+            1
         )
         .is_err());
     }

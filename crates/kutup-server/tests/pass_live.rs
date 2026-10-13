@@ -23,26 +23,62 @@ fn secret(password: &str) -> VaultSecret {
     VaultSecret::chosen(Some(password), None)
 }
 
+/// A revision above every one sealed before in this test.
+fn next_revision() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(1_791_633_600_000);
+    LAST.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
     let id = uuid::Uuid::parse_str(file_id).unwrap();
     b64(&seal_vault_secret(
         &user.master_key,
         &user.binding,
         id.as_bytes(),
+        next_revision(),
         &secret(password),
     )
     .unwrap())
 }
 
-fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> StatusCode {
+/// The revision of `user`'s secret for `file_id` now (0: none).
+fn current_revision(c: &Client, base: &str, user: &User, file_id: &str) -> u64 {
+    list(c, base, user)
+        .iter()
+        .find(|row| row["fileId"] == file_id)
+        .map(|row| {
+            let envelope =
+                account_envelope::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
+            account_envelope::inspect(&envelope)
+                .unwrap()
+                .revision
+                .unwrap()
+        })
+        .unwrap_or(0)
+}
+
+fn put_on(
+    c: &Client,
+    base: &str,
+    user: &User,
+    file_id: &str,
+    envelope: &str,
+    on: u64,
+) -> reqwest::blocking::Response {
     bearer(
         c.put(format!("{base}/api/pass/vault-secrets/{file_id}")),
         &user.token,
     )
-    .json(&json!({ "envelope": envelope }))
+    .json(&json!({ "envelope": envelope, "baseRevision": on }))
     .send()
     .unwrap()
-    .status()
+}
+
+/// Keeps `envelope` on top of what `user` keeps now.
+fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> StatusCode {
+    let on = current_revision(c, base, user, file_id);
+    put_on(c, base, user, file_id, envelope, on).status()
 }
 
 fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
@@ -101,7 +137,7 @@ fn vault_secrets() {
     let envelope =
         account_envelope::decode_canonical_b64(mine[0]["envelope"].as_str().unwrap()).unwrap();
     let id = uuid::Uuid::parse_str(&vault.id).unwrap();
-    let opened =
+    let (opened, _) =
         open_vault_secret(&envelope, &owner.master_key, &owner.binding, id.as_bytes()).unwrap();
     // Only the password's hash is kept.
     assert_eq!(opened.password_hash, Some(password_hash("o")));
@@ -120,6 +156,35 @@ fn vault_secrets() {
         StatusCode::NO_CONTENT
     );
     assert_eq!(list(&c, &base, &owner).len(), 1);
+
+    // Kept only on top of the key the change started from: a device that
+    // read the first one does not overwrite the second, nor does an older
+    // revision.
+    let kept_now = current_revision(&c, &base, &owner, &vault.id);
+    let late = put_on(
+        &c,
+        &base,
+        &owner,
+        &vault.id,
+        &sealed_for(&owner, &vault.id, "o3"),
+        0,
+    );
+    assert_eq!(late.status(), StatusCode::CONFLICT);
+    let late: Value = late.json().unwrap();
+    assert_eq!(late["code"], "revision_conflict");
+    assert_eq!(late["revision"].as_u64(), Some(kept_now));
+    let older = b64(&seal_vault_secret(
+        &owner.master_key,
+        &owner.binding,
+        id.as_bytes(),
+        kept_now,
+        &secret("o4"),
+    )
+    .unwrap());
+    assert_eq!(
+        put_on(&c, &base, &owner, &vault.id, &older, kept_now).status(),
+        StatusCode::BAD_REQUEST
+    );
 
     // Refused: someone who cannot open the vault; another account's
     // envelope; an envelope of another purpose; not base64.

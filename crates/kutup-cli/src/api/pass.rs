@@ -23,11 +23,17 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Keeps (or replaces) the caller's secret for vault `file_id`.
-    pub fn put_vault_secret(&self, file_id: &str, envelope: &str) -> Result<()> {
+    /// Keeps (or replaces) the caller's secret for vault `file_id`, on top
+    /// of the revision the change started from (`base_revision`, 0 for none).
+    pub fn put_vault_secret(
+        &self,
+        file_id: &str,
+        envelope: &str,
+        base_revision: u64,
+    ) -> Result<()> {
         let resp = self
             .request(Method::PUT, &format!("/pass/vault-secrets/{file_id}"))
-            .json(&serde_json::json!({ "envelope": envelope }))
+            .json(&serde_json::json!({ "envelope": envelope, "baseRevision": base_revision }))
             .send()?;
         super::check_ok(resp)
     }

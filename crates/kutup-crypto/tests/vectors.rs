@@ -373,7 +373,7 @@ fn account_envelope_vector() {
         purpose,
         &vector.binding,
         &object,
-        None,
+        purpose.policy().mutable.then_some(1),
         &b64(&vector.nonce),
     )
     .unwrap();
@@ -382,7 +382,7 @@ fn account_envelope_vector() {
         vector.envelope
     );
     assert_eq!(
-        account_envelope::open_object(
+        account_envelope::open_revision(
             &envelope,
             &b64(&vector.key),
             purpose,
@@ -390,7 +390,7 @@ fn account_envelope_vector() {
             &object
         )
         .unwrap(),
-        b64(&vector.plaintext)
+        (b64(&vector.plaintext), 1)
     );
     // The per-envelope key, pinned.
     assert_eq!(
@@ -409,7 +409,7 @@ fn account_envelope_vector() {
     // the retired 1; the object id in the header changed.
     let key = b64(&vector.key);
     let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
-        account_envelope::open_object(envelope, &key, purpose, binding, object).is_err()
+        account_envelope::open_revision(envelope, &key, purpose, binding, object).is_err()
     };
     assert!(refused(&envelope, purpose, &vector.binding, &[0; 16]));
     assert!(refused(

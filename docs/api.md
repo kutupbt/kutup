@@ -1535,7 +1535,8 @@ only the envelope's public header.
 ### GET /api/pass/vault-secrets
 
 The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
-updatedAt}]` (`envelope` base64). A vault in the trash keeps its secret,
+revision, updatedAt}]` (`envelope` base64; `revision` the one in its header,
+the base of the next keep). A vault in the trash keeps its secret,
 unlisted, until it is restored; a secret for a vault the caller cannot open
 now (unshared) is unlisted too, and listed again if access comes back: a
 read never deletes one, and a failed access check fails the request. Purging
@@ -1543,10 +1544,15 @@ a vault deletes every secret for it.
 
 ### PUT /api/pass/vault-secrets/:fileId
 
-**Body:** `{envelope}`, canonical base64 of at most 4608 bytes. Stores or
-replaces the caller's secret for that vault. `400` unless the envelope is a
-`PassVaultSecret` envelope for the caller's key binding; `404` for a vault
-that does not exist, is in the trash, or the caller cannot open.
+**Body:** `{envelope, baseRevision}`, the envelope canonical base64 of at
+most 4608 bytes. Stores or replaces the caller's secret for that vault, on
+top of the secret it was kept at (`baseRevision`, 0 for none;
+docs/plans/sealed-revisions.md). `400` unless the envelope is a
+`PassVaultSecret` envelope for the caller's key binding and this vault, with
+a revision above `baseRevision` (at most 2^53 − 1); `404` for a vault that
+does not exist, is in the trash, or the caller cannot open; `409` with
+`{ "code": "revision_conflict", "revision": <stored> }` when another device
+kept a key first.
 **Response:** `204`.
 
 ### DELETE /api/pass/vault-secrets/:fileId
