@@ -97,8 +97,15 @@ pub struct LoginResponse {
     color: String,
     /// The account's key binding, what its envelopes carry; given only with
     /// the session.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "String::is_empty", rename = "keyBinding")]
     envelope_binding: String,
+    /// The account's OPAQUE record is under a retired setup: the client
+    /// re-registers the password it just used, silently, with `grant`
+    /// (purpose `rotate`, this session, two minutes).
+    #[serde(skip_serializing_if = "is_false")]
+    rotate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grant: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     requires_totp: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,14 +128,7 @@ pub struct TwoFALoginRequest {
 pub struct RecoverRequest {
     /// As at sign-in.
     name: String,
-    new_login_key: String,
-    new_master_key_envelope: String,
-    new_account_protection_suite: u16,
-    new_account_protection_salt: String,
-    new_argon_memory_kib: u32,
-    new_argon_iterations: u32,
-    new_argon_parallelism: u32,
-    #[serde(default)]
+    /// The proof the recovery phrase gives (never the phrase).
     recovery_proof: String,
 }
 
@@ -1004,97 +1004,58 @@ pub async fn get_recovery_preflight(
     Ok(Json(resp).into_response())
 }
 
-/// `POST /api/auth/recover` — mirrors `Recover`.
+/// `POST /api/auth/recover/grant` — the recovery phrase's proof, for a
+/// `recovery` grant (no session): with it the client registers a new password
+/// (register/start, register/finish), which ends every sign-in of the
+/// account. An unknown name, an account without a verifier and a wrong
+/// phrase are the same `401`, checked at full cost.
 #[utoipa::path(
     post,
-    path = "/api/auth/recover",
+    path = "/api/auth/recover/grant",
     tag = "auth",
     request_body = RecoverRequest,
-    responses((status = 200, description = "Password reset via recovery phrase", body = MessageResponse))
+    responses(
+        (status = 200, description = "A recovery grant", body = crate::handlers::opaque::GrantResponse),
+        (status = 401, description = "invalid recovery proof")
+    )
 )]
-pub async fn recover(
+pub async fn recover_grant(
     State(state): State<AppState>,
     body: Result<Json<RecoverRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-
-    if req.recovery_proof.is_empty() {
-        return Err(AppError::bad_request("recoveryProof is required"));
-    }
-    validate_account_protection(
-        req.new_account_protection_suite,
-        &req.new_account_protection_salt,
-        req.new_argon_memory_kib,
-        req.new_argon_iterations,
-        req.new_argon_parallelism,
-    )?;
     // The proof is read before the name is looked up, and checked first, at
-    // full cost: an unknown name, an account without a verifier and a wrong
-    // phrase are all the same 401, and nothing about the account (its
-    // binding) is checked before it.
+    // full cost.
     let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let account = account_by_name(&state, &req.name).await?;
-    let stored: Option<(String, String)> =
-        match account {
-            Some(id) => sqlx::query_as(
-                "SELECT recovery_key_verifier, COALESCE(key_binding, '') FROM users WHERE id = $1",
+    let stored: Option<String> = match account {
+        Some(id) => {
+            sqlx::query_scalar(
+                "SELECT recovery_key_verifier FROM users WHERE id = $1 AND is_active",
             )
             .bind(id)
             .fetch_optional(&state.pool)
-            .await?,
-            None => None,
-        };
-    let (Some(user_id), Some((stored_verifier, binding))) = (account, stored) else {
+            .await?
+        }
+        None => None,
+    };
+    let (Some(user_id), Some(stored_verifier)) = (account, stored) else {
         let _ = bcrypt::verify(&proof, &FAKE_BCRYPT_HASH);
         return Err(AppError::unauthorized("invalid recovery proof"));
     };
     if !auth_check::verify_hash(&proof, &stored_verifier) {
         return Err(AppError::unauthorized("invalid recovery proof"));
     }
-    validate_account_envelope(
-        &req.new_master_key_envelope,
-        kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
-        &binding,
-        "newMasterKeyEnvelope",
-    )?;
-
-    let login_key_bytes = decode_canonical_base64_exact(&req.new_login_key, 32, "newLoginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
-
-    let res = sqlx::query(
-        r#"UPDATE users SET
-              login_key_hash = $1,
-              master_key_envelope = $2,
-              account_protection_suite = $3,
-              account_protection_salt = $4,
-              argon_memory_kib = $5,
-              argon_iterations = $6,
-              argon_parallelism = $7,
-              is_first_login = false,
-              updated_at = NOW()
-           WHERE id = $8"#,
+    let grant = crate::grants::issue(
+        &state.pool,
+        crate::grants::Purpose::Recovery,
+        user_id,
+        None,
+        None,
+        crate::grants::GRANT_MINUTES,
     )
-    .bind(&hash)
-    .bind(&req.new_master_key_envelope)
-    .bind(i16::try_from(req.new_account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.new_account_protection_salt)
-    .bind(i32::try_from(req.new_argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.new_argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.new_argon_parallelism).unwrap_or(i32::MAX))
-    .bind(user_id)
-    .execute(&state.pool)
     .await?;
-
-    if res.rows_affected() == 0 {
-        return Err(AppError::unauthorized("invalid recovery proof"));
-    }
-    // New password, new key wrapping: every existing sign-in ends.
-    sessions::revoke_all_for_user(&state.pool, user_id, None).await?;
-    Ok(Json(MessageResponse {
-        message: "password reset".to_string(),
-    })
-    .into_response())
+    Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
 }
 
 /// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
@@ -1676,6 +1637,27 @@ async fn issue_tokens_and_respond(
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
+    // Registered under a setup that is no longer the current one: moved by
+    // the client now, while it holds the password (docs/plans/opaque.md §5).
+    let record_key: Option<i16> =
+        sqlx::query_scalar("SELECT opaque_server_key_id FROM users WHERE id = $1")
+            .bind(uid)
+            .fetch_one(&state.pool)
+            .await?;
+    let rotate_grant = match record_key {
+        Some(id) if id != state.opaque.current().0 as i16 => Some(
+            crate::grants::issue(
+                &state.pool,
+                crate::grants::Purpose::Rotate,
+                uid,
+                Some(issued.session_id),
+                None,
+                crate::grants::ROTATE_MINUTES,
+            )
+            .await?,
+        ),
+        _ => None,
+    };
     let access = jwt::generate_access_token(
         user_id,
         is_admin,
@@ -1697,6 +1679,8 @@ async fn issue_tokens_and_respond(
         storage_used_bytes: used,
         color: color.to_string(),
         envelope_binding: envelope_binding.to_string(),
+        rotate: rotate_grant.is_some(),
+        grant: rotate_grant,
         ..Default::default()
     };
     if client.uses_cookie() {

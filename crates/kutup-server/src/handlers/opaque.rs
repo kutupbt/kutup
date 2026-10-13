@@ -129,7 +129,12 @@ pub async fn login_start(
         _ => return Err(AppError::bad_request("purpose must be session or reauth")),
     };
 
-    let canonical = canonical_name(&state, &req.name);
+    // One canonical name for everything below: the lookup, the fake answer,
+    // the lockout and the caps (an address on this server is its username).
+    let canonical_name =
+        kutup_crypto::opaque::CanonicalName::parse(&canonical_name(&state, &req.name))
+            .map_err(|_| AppError::bad_request("invalid name"))?;
+    let canonical = canonical_name.as_str().to_owned();
     // Only a username of this server is an account; an address elsewhere,
     // or a name held after a rename, is not.
     let account: Option<(Uuid, String, Option<Vec<u8>>, Option<i16>)> =
@@ -181,7 +186,7 @@ pub async fn login_start(
                 key_id,
                 secrets,
                 None,
-                kutup_crypto::opaque::unknown_credential_identifier(&canonical),
+                kutup_crypto::opaque::unknown_credential_identifier(&canonical_name),
             )
         }
     };
@@ -272,6 +277,17 @@ pub struct GrantResponse {
     expires_at: time::OffsetDateTime,
 }
 
+impl GrantResponse {
+    /// A grant just issued for [`grants::GRANT_MINUTES`].
+    pub(crate) fn new(grant: String) -> Self {
+        Self {
+            grant,
+            expires_at: time::OffsetDateTime::now_utc()
+                + time::Duration::minutes(grants::GRANT_MINUTES),
+        }
+    }
+}
+
 /// `POST /api/auth/login/finish` — checks KE3. A sign-in answers as sign-in
 /// always has (setup, the second factor, or the session with the account's
 /// envelopes); a reauth answers a grant. Every miss is the same `401`: a
@@ -334,8 +350,14 @@ pub async fn login_finish(
     let server_state =
         kutup_crypto::opaque_login_state::open(state_key, req.login_id.as_bytes(), &sealed)
             .map_err(|_| AppError::invalid_credentials())?;
-    if kutup_crypto::opaque::server_login_finish(&server_state, &finalization).is_err() {
-        return Err(AppError::invalid_credentials());
+    match kutup_crypto::opaque::server_login_finish(&server_state, &finalization) {
+        Ok(()) => {}
+        // A finalization that is not one (its attempt stays counted).
+        Err(kutup_crypto::error::CryptoError::InvalidInput(_)) => {
+            return Err(AppError::bad_request("invalid credentialFinalization"))
+        }
+        // A wrong password, or a name that is no account.
+        Err(_) => return Err(AppError::invalid_credentials()),
     }
     // A fake answer cannot be finished; this is a guard, not a path.
     let Some(user_id) = user_id else {
@@ -367,12 +389,7 @@ pub async fn login_finish(
             grants::GRANT_MINUTES,
         )
         .await?;
-        return Ok(Json(GrantResponse {
-            grant,
-            expires_at: time::OffsetDateTime::now_utc()
-                + time::Duration::minutes(grants::GRANT_MINUTES),
-        })
-        .into_response());
+        return Ok(Json(GrantResponse::new(grant)).into_response());
     }
     let client = direct_sign_in_client(&headers)?;
     signed_in_answer(&state, &headers, client, user_id).await
@@ -382,7 +399,8 @@ pub async fn login_finish(
 
 /// A registration's result as a client uploads it: the record, and the setup
 /// it was made against.
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// Serialize: utoipa's `flatten` needs it.
+#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordUpload {
     /// OPAQUE `RegistrationUpload`, base64.
@@ -401,8 +419,10 @@ impl RecordUpload {
             .map_err(|_| AppError::bad_request("invalid opaqueRecord"))?;
         let (current, _) = state.opaque.current();
         if self.opaque_server_key_id != current {
-            return Err(AppError::conflict("the server's OPAQUE key changed: register again")
-                .with_details(serde_json::json!({ "code": "opaqueKeyStale" })));
+            return Err(
+                AppError::conflict("the server's OPAQUE key changed: register again")
+                    .with_details(serde_json::json!({ "code": "opaqueKeyStale" })),
+            );
         }
         Ok((record, current as i16))
     }
@@ -433,10 +453,11 @@ pub struct RegisterStartResponse {
 }
 
 async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
-    let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE key_binding = $1)")
-        .bind(key_binding)
-        .fetch_one(&state.pool)
-        .await?;
+    let taken: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE key_binding = $1)")
+            .bind(key_binding)
+            .fetch_one(&state.pool)
+            .await?;
     if taken {
         return Err(AppError::conflict("keyBinding is taken; draw another")
             .with_details(serde_json::json!({ "code": "keyBindingTaken" })));

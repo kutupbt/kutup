@@ -711,8 +711,20 @@ fn build_router(state: AppState) -> Router {
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
         )
         .route(
-            "/api/auth/recover",
-            post(auth::recover).route_layer(from_fn(middleware::rate_limit_recovery)),
+            "/api/auth/recover/grant",
+            post(auth::recover_grant).route_layer(from_fn(middleware::rate_limit_recovery)),
+        )
+        // OPAQUE registration: each start is one query of an OPRF key, so it
+        // is limited as a sign-in attempt is.
+        .route(
+            "/api/auth/opaque/register/start",
+            post(handlers::opaque::register_start)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/auth/opaque/register/finish",
+            post(handlers::opaque::register_finish).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/auth/complete-setup", post(auth::complete_setup))
