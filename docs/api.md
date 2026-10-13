@@ -50,6 +50,7 @@ Specific codes, where an app does something particular (a test in
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
+| `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
