@@ -50,7 +50,7 @@ export interface KutupChatTransport {
   fetchSealedBundles(username: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>;
-  storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean>;
+  storeIdentityPins(write: { baseRevision: number; envelope: string }): Promise<boolean>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
@@ -494,10 +494,10 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn store_identity_pins(&self, record: &crate::IdentityPinsRecord) -> Result<bool> {
+    async fn store_identity_pins(&self, write: &crate::IdentityPinsWrite) -> Result<bool> {
         from_transport(
             self.js
-                .js_store_identity_pins(to_transport(record)?)
+                .js_store_identity_pins(to_transport(write)?)
                 .await
                 .map_err(transport_error)?,
         )

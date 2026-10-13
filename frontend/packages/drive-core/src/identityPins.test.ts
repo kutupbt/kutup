@@ -17,9 +17,9 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     Promise.resolve(scanned === `qr:${local}:${la}:${peer}:${pa}`),
   ),
   sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
-  openIdentityPins: vi.fn((_m: string, binding: string, revision: number, sealed: string) => {
+  openIdentityPins: vi.fn((_m: string, binding: string, sealed: string) => {
     const parsed = JSON.parse(sealed) as { binding: string; revision: number; list: unknown }
-    return parsed.binding === binding && parsed.revision === revision ? Promise.resolve(parsed.list) : Promise.reject(new Error('relabelled'))
+    return parsed.binding === binding ? Promise.resolve({ list: parsed.list, revision: parsed.revision }) : Promise.reject(new Error('another account'))
   }),
 }))
 
@@ -49,7 +49,7 @@ vi.mock('@kutup/session/client', () => {
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
       }),
-      put: vi.fn((_url: string, body: { revision: number; envelope: string }) => {
+      put: vi.fn((_url: string, body: { baseRevision: number; envelope: string }) => {
         server.puts++
         if (server.conflictOnce) {
           server.conflictOnce = false
@@ -60,14 +60,17 @@ vi.mock('@kutup/session/client', () => {
           }
           return Promise.reject(conflict())
         }
-        if (body.revision !== (server.pins?.revision ?? 0) + 1) return Promise.reject(conflict())
-        server.pins = body
+        // Stored only on top of the revision the write started from, newer than it.
+        const revision = (JSON.parse(body.envelope) as { revision: number }).revision
+        if (body.baseRevision !== (server.pins?.revision ?? 0) || revision <= body.baseRevision) return Promise.reject(conflict())
+        server.pins = { revision, envelope: body.envelope }
         return Promise.resolve({ data: null })
       }),
     },
   }
 })
 
+import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { acceptIdentity, checkIdentity, personSafetyNumber, PinsRolledBack, resetIdentityPinsForTesting, SafetyNumberMismatch, verifyPerson } from './identityPins'
 import type { DriveIdentity } from './identity'
 
@@ -102,7 +105,7 @@ beforeEach(() => {
   server.puts = 0
   server.conflictOnce = false
   server.batches = []
-  localStorage.clear()
+  resetRevisionGuardsForTesting()
 })
 
 describe('checkIdentity', () => {
@@ -162,7 +165,7 @@ describe('checkIdentity', () => {
     publish('bob@kutup.dev', 'B')
     server.conflictOnce = true
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: false })
-    expect(server.pins!.revision).toBe(2)
+    expect(server.pins!.revision).toBeGreaterThan(1)
     expect(storedPins().map((p) => p.account)).toEqual(['bob@kutup.dev', 'carol@kutup.dev'])
   })
 
@@ -176,13 +179,22 @@ describe('checkIdentity', () => {
     expect(PinsRolledBack).toBeDefined()
   })
 
+  it('refuses a list sealed at an older revision than this browser has seen', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    resetIdentityPinsForTesting()
+    // The server replays an older list, sealed at revision 1 (it cannot relabel it).
+    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [] } }) }
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
+  })
+
   it('seals the list to the key binding, not to the address', async () => {
     publish('bob@kutup.dev', 'B')
     await checkIdentity(me, 'bob@kutup.dev')
     expect((JSON.parse(server.pins!.envelope) as { binding: string }).binding).toBe(ME_BINDING)
     // Another account's list (another binding, the same address) does not open.
     resetIdentityPinsForTesting()
-    localStorage.clear()
+    resetRevisionGuardsForTesting()
     expect(await checkIdentity({ ...me, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
   })
 

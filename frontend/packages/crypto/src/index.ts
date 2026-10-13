@@ -99,7 +99,8 @@ export type {
   SignedMailKeyList,
 } from './mailKey'
 export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
-export type { ContactSummary, MailNameKind } from './contactCard'
+export type { ContactSummary, MailNameKind, Revisioned } from './contactCard'
+export { OlderThanSeenError, RevisionGuard, revisionGuard, memoryRevisionStore, type RevisionStore } from './revisionGuard'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,

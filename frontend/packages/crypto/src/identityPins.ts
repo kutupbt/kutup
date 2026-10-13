@@ -53,9 +53,10 @@ export async function sealIdentityPins(masterKeyBase64: string, binding: string,
   return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, binding, revision, JSON.stringify(list))
 }
 
-/** Opens the pin list of the account whose key binding is `binding`, stored at `revision`. */
-export async function openIdentityPins(masterKeyBase64: string, binding: string, revision: number, sealed: string): Promise<IdentityPins> {
-  return JSON.parse((await getCryptoWasm()).openIdentityPins(masterKeyBase64, binding, revision, sealed)) as IdentityPins
+/** Opens the pin list of the account whose key binding is `binding`: the list and the revision it was sealed at. */
+export async function openIdentityPins(masterKeyBase64: string, binding: string, sealed: string): Promise<{ list: IdentityPins; revision: number }> {
+  const opened = (await getCryptoWasm()).openIdentityPins(masterKeyBase64, binding, sealed)
+  return { list: JSON.parse(opened.value) as IdentityPins, revision: opened.revision }
 }
 
 /** The safety number two accounts compare in person: the same in Chat, Drive and the CLI. */

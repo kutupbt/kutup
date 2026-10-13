@@ -128,9 +128,9 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
-  async storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean> {
+  async storeIdentityPins(write: { baseRevision: number; envelope: string }): Promise<boolean> {
     try {
-      await api.put('/user/identity-pins', record)
+      await api.put('/user/identity-pins', write)
       return true
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) return false
