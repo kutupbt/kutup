@@ -36,6 +36,9 @@ pub enum KeptError {
 pub struct Kept {
     pub key: VaultKey,
     pub generated_password: Option<Zeroizing<String>>,
+    /// The revision it was kept at (docs/plans/sealed-revisions.md): the
+    /// next keep of this vault goes on top of it.
+    pub revision: u64,
 }
 
 /// Seals `key` for the account: under `master_key`, bound to `binding` and
@@ -48,6 +51,7 @@ pub fn seal(
     master_key: &[u8],
     binding: &str,
     file_id: &[u8; 16],
+    revision: u64,
     key: &VaultKey,
     generated: bool,
 ) -> Result<Vec<u8>, KeptError> {
@@ -66,7 +70,9 @@ pub fn seal(
         (true, None) => return Err(KeptError::NoPassword),
         (false, password) => VaultSecret::chosen(password.map(String::as_str), key_file),
     };
-    Ok(seal_vault_secret(master_key, binding, file_id, &secret)?)
+    Ok(seal_vault_secret(
+        master_key, binding, file_id, revision, &secret,
+    )?)
 }
 
 /// Opens what the account keeps for vault `file_id`.
@@ -76,7 +82,7 @@ pub fn open(
     binding: &str,
     file_id: &[u8; 16],
 ) -> Result<Kept, KeptError> {
-    let secret = open_vault_secret(envelope, master_key, binding, file_id)?;
+    let (secret, revision) = open_vault_secret(envelope, master_key, binding, file_id)?;
     let mut key = VaultKey::new();
     if let Some(hash) = secret.password_element() {
         key = key.with_password_hash(&hash);
@@ -87,6 +93,7 @@ pub fn open(
     Ok(Kept {
         key,
         generated_password: secret.generated_password,
+        revision,
     })
 }
 
@@ -119,8 +126,9 @@ mod tests {
             (VaultKey::new().with_password("k7m2q-9xd4t-4tpav"), true),
         ] {
             let contents = vault_saved_with(&key);
-            let envelope = seal(&MASTER, BINDING, &VAULT, &key, generated).unwrap();
+            let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, generated).unwrap();
             let kept = open(&envelope, &MASTER, BINDING, &VAULT).unwrap();
+            assert_eq!(kept.revision, 5);
             assert!(open_vault(&contents, &kept.key).is_ok());
             assert_eq!(kept.key.password, None, "never the password itself");
             assert_eq!(
@@ -133,10 +141,10 @@ mod tests {
     #[test]
     fn a_key_known_only_by_its_hash_is_not_kept_again() {
         let key = VaultKey::new().with_password("p");
-        let envelope = seal(&MASTER, BINDING, &VAULT, &key, false).unwrap();
+        let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, false).unwrap();
         let kept = open(&envelope, &MASTER, BINDING, &VAULT).unwrap();
         assert!(matches!(
-            seal(&MASTER, BINDING, &VAULT, &kept.key, false),
+            seal(&MASTER, BINDING, &VAULT, 5, &kept.key, false),
             Err(KeptError::NotKeepable)
         ));
         assert!(matches!(
@@ -144,6 +152,7 @@ mod tests {
                 &MASTER,
                 BINDING,
                 &VAULT,
+                5,
                 &VaultKey::new().with_key_file(b"k"),
                 true
             ),
@@ -157,6 +166,7 @@ mod tests {
             &MASTER,
             BINDING,
             &VAULT,
+            5,
             &VaultKey::new().with_password("p"),
             false,
         )

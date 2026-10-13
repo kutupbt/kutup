@@ -292,9 +292,27 @@ pub(crate) fn keep_secret(
     }
     kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
     let id = Uuid::parse_str(file_id)?;
-    let sealed = kutup_pass::kept::seal(master_key, binding, id.as_bytes(), &key, false)?;
+    // On top of the key kept now, if any (docs/plans/sealed-revisions.md).
+    let base = client
+        .list_vault_secrets()?
+        .into_iter()
+        .find(|row| row.file_id == file_id)
+        .and_then(|row| {
+            base64::engine::general_purpose::STANDARD
+                .decode(row.envelope)
+                .ok()
+        })
+        .and_then(|envelope| kutup_crypto::account_envelope::inspect(&envelope).ok())
+        .and_then(|header| header.revision)
+        .unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let revision = now.max(base + 1);
+    let sealed = kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
     let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
-    client.put_vault_secret(file_id, &envelope)?;
+    client.put_vault_secret(file_id, &envelope, base)?;
     Ok(envelope)
 }
 

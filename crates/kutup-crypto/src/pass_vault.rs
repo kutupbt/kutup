@@ -13,8 +13,12 @@
 //! key) cannot read the password directly; a weak one can still be guessed
 //! from its unsalted hash. A password Kutup Pass generated for the vault (one
 //! nobody uses elsewhere) is kept as it is, so it can be shown for a KeePass
-//! app. Key files are kept as KeePass reads them. Every payload is padded to
-//! one length, so an envelope's size does not tell which of these it holds.
+//! app. Key files are kept as KeePass reads them. The envelope pads every
+//! payload to one length (the purpose's `Fixed` policy), so an envelope's
+//! size does not tell which of these it holds, and carries the secret's
+//! revision (docs/plans/sealed-revisions.md): a vault's key is replaced when
+//! it changes, and the server stores a new one only on top of the revision
+//! the writer started from.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -32,9 +36,9 @@ pub const MAX_PASSWORD_BYTES: usize = 1024;
 /// The largest key file kept, in bytes. Key files are normally kept as
 /// their 32-byte key element (`kutup_pass::key_file_secret`).
 pub const MAX_KEY_FILE_BYTES: usize = 2048;
-/// Every payload's length: the largest one (a key file and a generated
-/// password at their limits), the rest padded with zeros to it.
-const PAYLOAD_LEN: usize =
+/// The longest payload (a key file and a generated password at their
+/// limits); the envelope pads every payload to it.
+pub const MAX_PAYLOAD_LEN: usize =
     DOMAIN.len() + 16 + 1 + (2 + MAX_KEY_FILE_BYTES) + (2 + MAX_PASSWORD_BYTES);
 
 /// What opens one vault.
@@ -112,7 +116,7 @@ fn payload(file_id: &[u8; 16], secret: &VaultSecret) -> Result<Zeroizing<Vec<u8>
     {
         return Err(invalid("a vault needs a password or a key file"));
     }
-    let mut out = Zeroizing::new(Vec::with_capacity(PAYLOAD_LEN));
+    let mut out = Zeroizing::new(Vec::with_capacity(MAX_PAYLOAD_LEN));
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(file_id);
     let mut flags = 0;
@@ -141,8 +145,7 @@ fn payload(file_id: &[u8; 16], secret: &VaultSecret) -> Result<Zeroizing<Vec<u8>
         }
         push(&mut out, password.as_bytes());
     }
-    debug_assert!(out.len() <= PAYLOAD_LEN);
-    out.resize(PAYLOAD_LEN, 0);
+    debug_assert!(out.len() <= MAX_PAYLOAD_LEN);
     Ok(out)
 }
 
@@ -166,20 +169,22 @@ fn take_value<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8]> {
     take(rest, len)
 }
 
-/// Seals the secret of vault `file_id` (the Drive file's UUID bytes) under
-/// the master key, for the account's key binding.
+/// Seals revision `revision` of the secret of vault `file_id` (the Drive
+/// file's UUID bytes) under the master key, for the account's key binding.
 pub fn seal_vault_secret(
     master_key: &[u8],
     binding: &str,
     file_id: &[u8; 16],
+    revision: u64,
     secret: &VaultSecret,
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_object(
+    account_envelope::seal_revision(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
         binding,
         file_id,
+        revision,
     )
 }
 
@@ -188,6 +193,7 @@ pub fn seal_vault_secret_with_nonce(
     master_key: &[u8],
     binding: &str,
     file_id: &[u8; 16],
+    revision: u64,
     secret: &VaultSecret,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
@@ -198,32 +204,33 @@ pub fn seal_vault_secret_with_nonce(
         AccountEnvelopePurpose::PassVaultSecret,
         binding,
         file_id,
-        None,
+        Some(revision),
         nonce,
     )
 }
 
-/// Opens the secret of vault `file_id`; fails unless it was sealed for that
-/// vault.
+/// Opens the secret of vault `file_id` and the revision it was sealed at;
+/// fails unless it was sealed for that vault.
 pub fn open_vault_secret(
     envelope: &[u8],
     master_key: &[u8],
     binding: &str,
     file_id: &[u8; 16],
-) -> Result<VaultSecret> {
-    let plain = Zeroizing::new(account_envelope::open_object(
+) -> Result<(VaultSecret, u64)> {
+    let (plain, revision) = account_envelope::open_revision(
         envelope,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
         binding,
         file_id,
-    )?);
-    parse_payload(&plain, file_id)
+    )?;
+    let plain = Zeroizing::new(plain);
+    Ok((parse_payload(&plain, file_id)?, revision))
 }
 
 /// Reads a payload, held to the same bounds sealing keeps.
 fn parse_payload(plain: &[u8], file_id: &[u8; 16]) -> Result<VaultSecret> {
-    if plain.len() != PAYLOAD_LEN {
+    if plain.len() > MAX_PAYLOAD_LEN {
         return Err(CryptoError::AuthFailed);
     }
     let mut rest = plain.strip_prefix(DOMAIN).ok_or(CryptoError::AuthFailed)?;
@@ -267,8 +274,8 @@ fn parse_payload(plain: &[u8], file_id: &[u8; 16]) -> Result<VaultSecret> {
     } else {
         None
     };
-    // Only the padding may follow.
-    if rest.iter().any(|&byte| byte != 0) {
+    // Nothing may follow (the envelope has removed its padding).
+    if !rest.is_empty() {
         return Err(CryptoError::AuthFailed);
     }
     Ok(VaultSecret {
@@ -295,10 +302,10 @@ mod tests {
             VaultSecret::generated("abcd-efgh-ijkl", None),
             VaultSecret::generated("abcd-efgh-ijkl", Some(b"kf")),
         ] {
-            let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, &s).unwrap();
+            let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
             assert_eq!(
                 open_vault_secret(&sealed, &MASTER, BINDING, &VAULT).unwrap(),
-                s
+                (s, 7)
             );
         }
     }
@@ -306,8 +313,8 @@ mod tests {
     #[test]
     fn a_chosen_password_is_kept_only_as_keepass_hashes_it() {
         let s = VaultSecret::chosen(Some("parola-çğ"), None);
-        let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, &s).unwrap();
-        let plain = account_envelope::open_object(
+        let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
+        let (plain, _) = account_envelope::open_revision(
             &sealed,
             &MASTER,
             AccountEnvelopePurpose::PassVaultSecret,
@@ -318,7 +325,8 @@ mod tests {
         assert!(!plain
             .windows("parola-çğ".len())
             .any(|w| w == "parola-çğ".as_bytes()));
-        let opened = open_vault_secret(&sealed, &MASTER, BINDING, &VAULT).unwrap();
+        let (opened, revision) = open_vault_secret(&sealed, &MASTER, BINDING, &VAULT).unwrap();
+        assert_eq!(revision, 7);
         assert_eq!(
             opened.password_element().unwrap().as_slice(),
             Sha256::digest("parola-çğ".as_bytes()).as_slice()
@@ -337,6 +345,7 @@ mod tests {
             &MASTER,
             BINDING,
             &VAULT,
+            7,
             &VaultSecret::chosen(Some("p"), None),
         )
         .unwrap();
@@ -354,19 +363,15 @@ mod tests {
     /// Seals `payload` as a vault secret's envelope as is, to hand the
     /// parser what sealing never makes.
     fn sealed_raw(payload: &[u8]) -> Vec<u8> {
-        account_envelope::seal_object(
+        account_envelope::seal_revision(
             payload,
             &MASTER,
             AccountEnvelopePurpose::PassVaultSecret,
             BINDING,
             &VAULT,
+            7,
         )
         .unwrap()
-    }
-
-    fn padded(mut payload: Vec<u8>) -> Vec<u8> {
-        payload.resize(PAYLOAD_LEN, 0);
-        payload
     }
 
     fn head(flags: u8) -> Vec<u8> {
@@ -390,7 +395,7 @@ mod tests {
         ]
         .iter()
         .map(|s| {
-            seal_vault_secret(&MASTER, BINDING, &VAULT, s)
+            seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s)
                 .unwrap()
                 .len()
         })
@@ -405,41 +410,40 @@ mod tests {
         // What sealing makes, by hand, opens.
         let mut good = head(HAS_PASSWORD_HASH);
         good.extend_from_slice(&[3; 32]);
-        assert!(open(&padded(good.clone())).is_ok());
-        // Unpadded, or padded with something other than zeros.
-        assert!(open(&good).is_err());
-        let mut dirty = padded(good.clone());
-        *dirty.last_mut().unwrap() = 1;
-        assert!(open(&dirty).is_err());
+        assert!(open(&good).is_ok());
+        // Anything after it (the envelope pads, the payload does not).
+        let mut trailing = good.clone();
+        trailing.push(0);
+        assert!(open(&trailing).is_err());
         // Unknown flags, no flags, a hash and a generated password together.
         for flags in [0, 8, HAS_PASSWORD_HASH | HAS_GENERATED_PASSWORD] {
             let mut p = head(flags);
             p.extend_from_slice(&[3; 32]);
             p.extend_from_slice(&[0, 1, b'g']);
-            assert!(open(&padded(p)).is_err(), "flags {flags}");
+            assert!(open(&p).is_err(), "flags {flags}");
         }
         // An empty key file or generated password.
         for flags in [HAS_KEY_FILE, HAS_GENERATED_PASSWORD] {
             let mut p = head(flags);
             p.extend_from_slice(&[0, 0]);
-            assert!(open(&padded(p)).is_err(), "empty, flags {flags}");
+            assert!(open(&p).is_err(), "empty, flags {flags}");
         }
         // Another vault's id, or the v1 domain.
         let mut other = DOMAIN.to_vec();
         other.extend_from_slice(&[2; 16]);
         other.push(HAS_PASSWORD_HASH);
         other.extend_from_slice(&[3; 32]);
-        assert!(open(&padded(other)).is_err());
+        assert!(open(&other).is_err());
         let mut v1 = b"kutup/pass-vault-secret/v1\0".to_vec();
         v1.extend_from_slice(&VAULT);
         v1.push(1);
         v1.extend_from_slice(&[0, 1, b'p']);
-        assert!(open(&padded(v1)).is_err());
+        assert!(open(&v1).is_err());
     }
 
     #[test]
     fn refuses_empty_doubled_and_oversized_secrets() {
-        let seal = |s: &VaultSecret| seal_vault_secret(&MASTER, BINDING, &VAULT, s);
+        let seal = |s: &VaultSecret| seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s);
         assert!(seal(&VaultSecret::chosen(None, None)).is_err());
         let mut both = VaultSecret::chosen(Some("a"), None);
         both.generated_password = Some(Zeroizing::new("b".into()));

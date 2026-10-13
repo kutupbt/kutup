@@ -219,6 +219,7 @@ impl Vault {
         master_key: &[u8],
         binding: &str,
         file_id: &str,
+        revision: f64,
         generated: bool,
     ) -> Result<String, JsValue> {
         if self.key_unsaved {
@@ -230,6 +231,7 @@ impl Vault {
             master_key,
             binding,
             &vault_id(file_id)?,
+            revision_arg(revision)?,
             &self.key,
             generated,
         )
@@ -252,6 +254,14 @@ impl Vault {
     }
 }
 
+/// A revision from JavaScript: a positive safe integer (unix milliseconds).
+fn revision_arg(revision: f64) -> Result<u64, JsValue> {
+    if revision.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&revision) {
+        return Err(js_error("revision must be a positive safe integer"));
+    }
+    Ok(revision as u64)
+}
+
 fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {
     Ok(*uuid::Uuid::parse_str(file_id)
         .map_err(|_| js_error("a vault's file id is a UUID"))?
@@ -267,6 +277,8 @@ struct KeptView {
     key_file: Option<String>,
     /// The password, when Kutup Pass generated it (to show).
     generated_password: Option<String>,
+    /// The revision it was kept at; the next keep goes on top of it.
+    revision: f64,
 }
 
 /// Opens what the account keeps for vault `fileId` (base64):
@@ -287,6 +299,7 @@ pub fn open_kept(
         password_hash: kept.key.password_hash().map(|hash| STANDARD.encode(hash)),
         key_file: kept.key.key_file().map(|file| STANDARD.encode(file)),
         generated_password: kept.generated_password.as_deref().cloned(),
+        revision: kept.revision as f64,
     })
 }
 

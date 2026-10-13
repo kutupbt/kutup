@@ -62,7 +62,7 @@ assert.equal(ours.otp(bank, 59_000), null)
 // A key changed: the new one opens the saved vault, the old one does not.
 ours.changeKey('yeni', null, minute(8))
 // Not kept before it is saved: Drive's copy still opens with the old key.
-assert.throws(() => ours.keepKey(new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', false))
+assert.throws(() => ours.keepKey(new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false))
 const rekeyed = ours.save()
 assert.ok(pass.Vault.open(rekeyed, 'yeni', null, null))
 assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))
@@ -75,6 +75,7 @@ assert.deepEqual(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding,
   passwordHash: vectors.chosenPasswordHash,
   keyFile: vectors.keyFile,
   generatedPassword: null,
+  revision: vectors.revision,
 })
 const shown = pass.openKept(vectors.sealedGenerated, masterKey, vectors.binding, vectors.fileId)
 assert.equal(shown.generatedPassword, vectors.generatedPassword)
@@ -82,10 +83,29 @@ assert.equal(shown.keyFile, null)
 assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, '00000000-0000-4000-8000-000000000000'))
 assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, 'another-binding', vectors.fileId))
 assert.throws(() => pass.openKept(vectors.sealedChosen, new Uint8Array(32), vectors.binding, vectors.fileId))
-const kept = pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, true)
+const kept = pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, vectors.revision + 5, true)
 const keptKey = pass.openKept(kept, masterKey, vectors.binding, vectors.fileId)
 assert.equal(keptKey.generatedPassword, 'yeni')
+assert.equal(keptKey.revision, vectors.revision + 5)
+// Every kind of key is one length (the envelope's fixed padding).
+assert.equal(Buffer.from(kept, 'base64').length, Buffer.from(vectors.sealedChosen, 'base64').length)
+// A revision that is not a positive safe integer is refused.
+for (const bad of [0, -1, 1.5]) {
+  assert.throws(() => pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, bad, true))
+}
+// The vector set's refused envelopes for this purpose do not open as a kept
+// key, for the vault (object) and account they name.
+const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
+const passVectors = envelopeVectors.purposes.find((p) => p.purpose === 6)
+const passVaultId = [...Buffer.from(passVectors.objectId, 'base64')].map((b) => b.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+for (const refused of passVectors.refused) {
+  assert.throws(
+    () => pass.openKept(refused.envelope, Buffer.from(envelopeVectors.key, 'base64'), envelopeVectors.binding, passVaultId),
+    undefined,
+    refused.why,
+  )
+}
 assert.ok(pass.Vault.open(rekeyed, null, Buffer.from(keptKey.passwordHash, 'base64'), null))
 // Opened with a kept key, only the password's hash is known: nothing to keep.
-assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, false))
+assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, false))
 console.log('pass WASM checks passed')

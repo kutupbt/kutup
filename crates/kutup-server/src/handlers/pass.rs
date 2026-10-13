@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::AppState;
+use crate::{revisions, AppState};
 
 /// The largest envelope kept: a password and a key file at their limits,
 /// with the envelope's header.
@@ -37,6 +37,8 @@ pub struct VaultSecretRow {
     file_id: String,
     /// Base64 of the account envelope (purpose `PassVaultSecret`).
     envelope: String,
+    /// The revision in the envelope's header: the base of the next keep.
+    revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
@@ -44,8 +46,11 @@ pub struct VaultSecretRow {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PutVaultSecretRequest {
-    /// Base64 of the account envelope (purpose `PassVaultSecret`).
+    /// Base64 of the account envelope (purpose `PassVaultSecret`); its
+    /// header's revision must be above `baseRevision`.
     envelope: String,
+    /// The revision of the secret this change started from; 0 for none.
+    base_revision: i64,
 }
 
 /// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
@@ -84,9 +89,16 @@ pub async fn list_vault_secrets(
         if !can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
+        let revision = account_envelope::inspect(&envelope)
+            .ok()
+            .and_then(|header| header.revision)
+            .map(revisions::stored)
+            .transpose()?
+            .unwrap_or(0);
         out.push(VaultSecretRow {
             file_id: file_id.to_string(),
             envelope: STANDARD.encode(envelope),
+            revision,
             updated_at,
         });
     }
@@ -94,7 +106,8 @@ pub async fn list_vault_secrets(
 }
 
 /// `PUT /api/pass/vault-secrets/{fileId}` — keep (or replace) the caller's
-/// secret for a vault they can open.
+/// secret for a vault they can open, on top of the revision the change
+/// started from (docs/plans/sealed-revisions.md).
 #[utoipa::path(
     put,
     path = "/api/pass/vault-secrets/{fileId}",
@@ -104,8 +117,9 @@ pub async fn list_vault_secrets(
     request_body = PutVaultSecretRequest,
     responses(
         (status = 204, description = "Stored"),
-        (status = 400, description = "Not this account's vault secret"),
-        (status = 404, description = "No such vault, or no access to it")
+        (status = 400, description = "Not this account's vault secret, or not newer than its base"),
+        (status = 404, description = "No such vault, or no access to it"),
+        (status = 409, description = "Another device kept a key first (code revision_conflict)")
     )
 )]
 pub async fn put_vault_secret(
@@ -131,7 +145,31 @@ pub async fn put_vault_secret(
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
-    let envelope = checked_envelope(&req.envelope, &binding, file_id)?;
+    let (envelope, revision) = checked_envelope(&req.envelope, &binding, file_id)?;
+    revisions::check_follows(revision, req.base_revision)?;
+    // The secret kept now, locked: the change goes only on top of it.
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT envelope FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2 FOR UPDATE",
+    )
+    .bind(user_id)
+    .bind(file_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let current = match &stored {
+        None => 0,
+        Some(stored) => account_envelope::inspect(stored)
+            .ok()
+            .and_then(|header| header.revision)
+            .map(revisions::stored)
+            .transpose()?
+            .unwrap_or(0),
+    };
+    if current != req.base_revision {
+        return Err(revisions::conflict(
+            "another device kept a key for this vault first",
+            current,
+        ));
+    }
     sqlx::query(
         "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
          ON CONFLICT (user_id, file_id) DO UPDATE SET envelope = $3, updated_at = NOW()",
@@ -145,10 +183,10 @@ pub async fn put_vault_secret(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// The envelope in `b64` if it is canonical base64 of at most
-/// [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and sealed
-/// for vault `file_id`.
-fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8>> {
+/// The envelope in `b64` and its revision, if it is canonical base64 of at
+/// most [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and
+/// sealed for vault `file_id`.
+fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<(Vec<u8>, u64)> {
     let envelope = STANDARD
         .decode(b64)
         .ok()
@@ -161,14 +199,17 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8
         .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
     // The one check every stored account envelope passes: its purpose, this
     // account's key binding, this vault.
-    account_envelope::validate_for(
+    let header = account_envelope::validate_for(
         &envelope,
         AccountEnvelopePurpose::PassVaultSecret,
         binding,
         file_id.as_bytes(),
     )
     .map_err(|_| AppError::bad_request("envelope is not this account's vault secret"))?;
-    Ok(envelope)
+    let revision = header
+        .revision
+        .ok_or_else(|| AppError::bad_request("envelope has no revision"))?;
+    Ok((envelope, revision))
 }
 
 /// `DELETE /api/pass/vault-secrets/{fileId}` — forget the caller's secret
@@ -455,14 +496,14 @@ mod tests {
 
     fn sealed(binding: &str) -> String {
         let secret = VaultSecret::chosen(Some("kasa"), None);
-        STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], &secret).unwrap())
+        STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], 5, &secret).unwrap())
     }
 
     const VAULT: Uuid = Uuid::from_bytes([1u8; 16]);
 
     #[test]
     fn a_vault_secret_must_name_the_binding_it_is_checked_against() {
-        assert!(checked_envelope(&sealed(ID), ID, VAULT).is_ok());
+        assert_eq!(checked_envelope(&sealed(ID), ID, VAULT).unwrap().1, 5);
         assert!(
             checked_envelope(&sealed("1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91"), ID, VAULT).is_err()
         );

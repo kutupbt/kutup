@@ -146,12 +146,14 @@ export class RevisionGuard {
    */
   async accept(scope: string, id: string, revision: number): Promise<void> {
     checkRevision(revision)
-    const seen = await this.seen(scope, id)
-    if (revision < seen) throw new OlderThanSeenError(scope, revision, seen)
-    if (revision > seen) {
-      const { keys, entry } = await this.entry(scope, id)
-      await this.store.put(entry, keys.sealSeen(entry, revision))
-    }
+    const { keys, entry } = await this.entry(scope, id)
+    // One read-then-write at a time per entry, so two accepts at once
+    // cannot leave the lower of them stored.
+    await serialized(entry, async () => {
+      const seen = await this.seen(scope, id)
+      if (revision < seen) throw new OlderThanSeenError(scope, revision, seen)
+      if (revision > seen) await this.store.put(entry, keys.sealSeen(entry, revision))
+    })
   }
 
   /** The revision to seal a new value of `scope`/`id` at, written on top of `base`. */
@@ -160,24 +162,52 @@ export class RevisionGuard {
   }
 }
 
+const chains = new Map<string, Promise<unknown>>()
+
+/**
+ * Runs `task` after every earlier task on `entry` in this page, and under the
+ * browser's lock of the same name where there is one (other tabs too).
+ */
+function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  const run = (): Promise<T> => (locks ? (locks.request(`kutup-revision:${entry}`, task) as Promise<T>) : task())
+  const result = (chains.get(entry) ?? Promise.resolve()).then(run, run)
+  const settled = result.catch(() => undefined)
+  chains.set(entry, settled)
+  void settled.then(() => {
+    if (chains.get(entry) === settled) chains.delete(entry)
+  })
+  return result
+}
+
 let shared: RevisionStore | null = null
-const guards = new Map<string, RevisionGuard>()
+/** By account: the guard, for the master key it was made with. */
+const guards = new Map<string, { masterKey: string; guard: RevisionGuard }>()
 /** Set by tests: keys that need no WASM. */
 let testKeys: ((userId: string) => GuardKeys) | null = null
 
 /** The account's guard over the browser's store. */
 export function revisionGuard(session: { userId: string; masterKey: Uint8Array }): RevisionGuard {
-  let guard = guards.get(session.userId)
-  if (!guard) {
-    shared ??= indexedDbRevisionStore()
-    const masterKey = toBase64(session.masterKey)
-    let keys: Promise<GuardKeys> | null = null
-    const forTests = testKeys
-    guard = new RevisionGuard(shared, () =>
-      forTests ? Promise.resolve(forTests(session.userId)) : (keys ??= getCryptoWasm().then((wasm) => new wasm.RevisionGuardKeys(masterKey))),
-    )
-    guards.set(session.userId, guard)
+  const masterKey = toBase64(session.masterKey)
+  const known = guards.get(session.userId)
+  // Made again when the master key is another (the keys derive from it).
+  if (known?.masterKey === masterKey) return known.guard
+  shared ??= indexedDbRevisionStore()
+  let keys: Promise<GuardKeys> | null = null
+  const forTests = testKeys
+  const load = (): Promise<GuardKeys> => {
+    if (forTests) return Promise.resolve(forTests(session.userId))
+    keys ??= getCryptoWasm()
+      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey))
+      .catch((error: unknown) => {
+        // Not kept: the next call loads again.
+        keys = null
+        throw error
+      })
+    return keys
   }
+  const guard = new RevisionGuard(shared, load)
+  guards.set(session.userId, { masterKey, guard })
   return guard
 }
 
@@ -185,6 +215,7 @@ export function revisionGuard(session: { userId: string; masterKey: Uint8Array }
 export function resetRevisionGuardsForTesting(): void {
   shared = memoryRevisionStore()
   guards.clear()
+  chains.clear()
   testKeys = plainGuardKeysForTesting
 }
 
