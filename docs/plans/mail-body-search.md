@@ -93,19 +93,26 @@ as Proton's; Delete local search data deletes the database, and its key.
 - Before the first page, the change feed's cursor is taken (so nothing
   changed during the build is missed). Pages of rows come from
   `GET /api/mail/search-index`, newest first (its total on the first page
-  only). A page is read under the lock and its rows wait in a sealed list
-  (`pending`, Drafts aside); its messages are downloaded and opened outside
-  the lock, four at a time, then stored under it again, each only if it is
-  still pending and with its row as the list holds it then. The feed keeps
-  that list current under the same lock, so a message moved or deleted
-  while it downloads is stored as it is now, or not at all.
+  only). A page is read under the lock and its rows wait (`pending`:
+  their ids in the progress, each row a sealed record of its own; Drafts
+  aside); its messages are downloaded and opened outside the lock, four at
+  a time, then stored under it again, each only if it still waits and with
+  its row as it is then. The feed keeps the waiting rows current under the
+  same lock, so a message moved or deleted while it downloads is stored as
+  it is now, or not at all. At most 5,000 rows wait: past that the newest
+  mail is read again later from the top down to the oldest left out
+  (`rescan`), and only rows not held wait.
 - **Locks:** every change, in any tab, holds one exclusive Web Lock
   (`<database>:write`) and reads the stored state again inside it; a second
   lock lets one tab build at a time. Other tabs hear of each change on a
   BroadcastChannel and read the index again; deleting the database closes
   their connections first.
-- Out of room (or a record past what one may hold): what is indexed stays,
-  the index becomes "limited" to a date.
+- Out of room (the browser's, or a record of the index past what one may
+  hold): what is indexed stays, older mail is not read, the index becomes
+  "limited" to a date, and indexing is tried again an hour later.
+- **Versions:** an index of an older version is deleted and built again;
+  one written by a newer version (another tab already updated) is left
+  alone: this page neither writes nor searches it until reloaded.
 - **Damage:** a record that does not open, a directory that does not (or is
   of another version), or progress that does not: nothing more is written
   over it; the database is deleted and the index built again.
@@ -122,7 +129,9 @@ commits late is never skipped; without `since` it answers where the feed is
 now. Tombstones are kept 30 days; a cursor older than that gets `resync`
 and the index is built again.
 
-On Mail's poll and before every search the browser follows it: gone
+While a step of the feed fails, keyword searches go to the server, so no
+row shown is out of date. On Mail's poll and before every search the
+browser follows it: gone
 messages are removed, changed ones get their new row (a waiting one too),
 Drafts are kept or dropped by their rows, and those not held (new mail) wait
 to be indexed. While building, one the build has yet to reach is left to it.

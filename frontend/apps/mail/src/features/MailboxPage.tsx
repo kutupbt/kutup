@@ -181,7 +181,7 @@ export function MailboxPage() {
   // from this browser's index, found, filtered and paged here.
   const contentSearch = useContentSearch()
   const contentState = useContentSearchState(contentSearch)
-  const byContent = !!q.trim() && !group && (contentState.status === 'ready' || contentState.status === 'limited')
+  const byContent = !!q.trim() && !group && contentState.searchable
   const serverList = useFolder(place, { q, criteria, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending && !byContent)
   const contentList = useContentSearchList(contentSearch, place, { q, criteria, conversations, filter, sort, page: page - 1, pageSize }, byContent)
   const list = byContent ? contentList : serverList

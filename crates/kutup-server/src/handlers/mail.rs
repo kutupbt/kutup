@@ -489,19 +489,35 @@ pub async fn search_index(
         .as_deref()
         .map(|value| parse_cursor(value, Sort::Newest))
         .transpose()?;
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages
-          WHERE owner = $1 AND user_id = $1
-            AND ($2::timestamptz IS NULL OR (received_at, id) < ($2, $3))
-          ORDER BY received_at DESC, id DESC
-          LIMIT $4"
-    ))
-    .bind(user_id)
-    .bind(before.and_then(|c| c.time))
-    .bind(before.map(|c| c.id))
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
-    .await?;
+    // Two queries, so each keeps its plan on the (owner, received_at, id) index.
+    let rows: Vec<Row> = match before {
+        None => {
+            sqlx::query_as(&format!(
+                "SELECT {ROW_COLUMNS} FROM mail_messages
+                  WHERE owner = $1 AND user_id = $1
+                  ORDER BY received_at DESC, id DESC
+                  LIMIT $2"
+            ))
+            .bind(user_id)
+            .bind(limit + 1)
+            .fetch_all(&state.pool)
+            .await?
+        }
+        Some(cursor) => {
+            sqlx::query_as(&format!(
+                "SELECT {ROW_COLUMNS} FROM mail_messages
+                  WHERE owner = $1 AND user_id = $1 AND (received_at, id) < ($2, $3)
+                  ORDER BY received_at DESC, id DESC
+                  LIMIT $4"
+            ))
+            .bind(user_id)
+            .bind(cursor.time)
+            .bind(cursor.id)
+            .bind(limit + 1)
+            .fetch_all(&state.pool)
+            .await?
+        }
+    };
     let total: Option<i64> = if before.is_none() {
         Some(
             sqlx::query_scalar(

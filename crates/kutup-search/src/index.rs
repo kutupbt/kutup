@@ -77,6 +77,9 @@ struct Directory {
 struct PeriodInfo {
     prefixes: BTreeSet<String>,
     docs: u32,
+    /// Of `docs`, those removed since (their entries stay until rebuilt).
+    #[serde(default)]
+    removed: u32,
 }
 
 /// One table of a period's documents; a document's place is its index here.
@@ -180,12 +183,12 @@ impl Index {
         Ok(Index { directory })
     }
 
-    /// How many documents it holds (removed ones included until rebuilt).
+    /// How many documents it holds (not those removed).
     pub fn len(&self) -> u64 {
         self.directory
             .periods
             .values()
-            .map(|p| u64::from(p.docs))
+            .map(|p| u64::from(p.docs.saturating_sub(p.removed)))
             .sum()
     }
 
@@ -303,16 +306,22 @@ impl Index {
         for ((period, chunk), ids) in by_table {
             let key = docs_key(period, chunk);
             let mut table: DocTable = decode(records, &key)?;
-            let mut any = false;
+            let mut gone = 0;
             for entry in &mut table.docs {
                 if entry.live && ids.contains(entry.id.as_str()) {
                     entry.live = false;
-                    any = true;
+                    gone += 1;
                 }
             }
-            if any {
+            if gone > 0 {
                 changed.insert(key, encode(&table)?);
+                if let Some(info) = self.directory.periods.get_mut(&period) {
+                    info.removed += gone;
+                }
             }
+        }
+        if !changed.is_empty() {
+            changed.insert(DIRECTORY_KEY.into(), encode(&self.directory)?);
         }
         Ok(changed)
     }
@@ -602,6 +611,10 @@ mod tests {
         let changed = kept.index.remove(&gone, &needed).unwrap();
         kept.records.extend(changed);
         assert_eq!(kept.search("rapor"), ["b"]);
+        // Counted no more, and the stored directory says so.
+        assert_eq!(kept.index.len(), 1);
+        let reopened = Index::open(kept.records.get(DIRECTORY_KEY).map(Vec::as_slice)).unwrap();
+        assert_eq!(reopened.len(), 1);
     }
 
     #[test]

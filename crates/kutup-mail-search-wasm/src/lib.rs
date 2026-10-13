@@ -114,6 +114,9 @@ pub struct MailSearch {
     /// A record needed did not open (damaged, or from another store key):
     /// it was read as missing, and the index should be built again.
     damaged: bool,
+    /// The directory was written by a newer version: nothing is written
+    /// (this page is the old one), and nothing is deleted either.
+    newer: bool,
 }
 
 #[wasm_bindgen]
@@ -144,6 +147,7 @@ impl MailSearch {
             wrapped,
             index: Index::open(None).map_err(js_error)?,
             damaged: false,
+            newer: false,
         })
     }
 
@@ -158,6 +162,12 @@ impl MailSearch {
     /// database and builds the index again.
     pub fn damaged(&self) -> bool {
         self.damaged
+    }
+
+    /// Whether the directory is of a newer version than this page's: the
+    /// page refuses to write and asks to be reloaded, instead of rebuilding.
+    pub fn newer(&self) -> bool {
+        self.newer
     }
 
     /// Whether `text` holds every word of `query` as the index would find
@@ -181,11 +191,17 @@ impl MailSearch {
         let Some(sealed) = sealed else {
             return Ok(false);
         };
-        let opened = self
-            .keys
-            .open_record(DIRECTORY_KEY, &sealed)
-            .ok()
-            .filter(|plain| Index::stored_version(plain).ok() == Some(INDEX_VERSION))
+        let plain = self.keys.open_record(DIRECTORY_KEY, &sealed).ok();
+        let version = plain
+            .as_deref()
+            .and_then(|plain| Index::stored_version(plain).ok());
+        if version.is_some_and(|v| v > INDEX_VERSION) {
+            self.newer = true;
+            self.damaged = true;
+            return Ok(false);
+        }
+        let opened = plain
+            .filter(|_| version == Some(INDEX_VERSION))
             .and_then(|plain| Index::open(Some(&plain)).ok());
         match opened {
             Some(index) => self.index = index,

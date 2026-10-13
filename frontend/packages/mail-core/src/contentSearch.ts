@@ -19,9 +19,9 @@ import { createMailSearch, mailSearchMatcher, mailSearchStoreName, type DocRef, 
 // Every change, in any tab, holds one exclusive Web Lock and reads the
 // stored state again inside it; the other tabs hear of it on a
 // BroadcastChannel. Messages are downloaded outside the lock: the rows to
-// index wait in a list (`pending`) that the feed keeps current under the
-// lock, and a downloaded message is stored only with its row as the list
-// holds it then (not at all if it went meanwhile).
+// index wait (`pending`: their ids in the progress, each row a record of its
+// own) and the feed keeps them current under the lock; a downloaded message
+// is stored only if it still waits, with its row as it is then.
 
 /** The wrapped store key's record (not a secret: it opens only with the master key). */
 const KEY_ID = 'store-key'
@@ -31,11 +31,17 @@ const BATCH = 50
 const OPEN_AT_ONCE = 4
 /** Periods read per step of a search (each 30 days). */
 const PERIODS_AT_ONCE = 12
+/** Rows that may wait at once; past it the build reads the newest mail again later. */
+const MAX_PENDING = 5000
+/** Out of room: how long before indexing is tried again. */
+const ROOM_RETRY_MS = 60 * 60 * 1000
 
 export type ContentSearchStatus = 'off' | 'building' | 'paused' | 'ready' | 'limited' | 'unsupported'
 
 export interface ContentSearchState {
   status: ContentSearchStatus
+  /** Whether keyword searches are answered here now (built, current, and of this page's version). */
+  searchable: boolean
   /** Messages indexed, of `total` (while building). */
   indexed: number
   total: number
@@ -55,8 +61,12 @@ interface Progress {
   /** The change feed's cursor, taken before the first page was read. */
   feed: string | null
   limitedFrom: number | null
-  /** Rows read (by the build or the feed) and not yet downloaded and indexed, kept current by the feed. */
-  pending: MailMessage[]
+  /** Out of room: not before this time is indexing tried again. */
+  roomRetryAt: number | null
+  /** Ids of rows waiting to be downloaded and indexed (each row in `pending/<id>`). */
+  pending: string[]
+  /** Rows that did not fit in `pending`: the newest mail is read again, from the top down to `until`. */
+  rescan: { cursor: string | null; until: number } | null
 }
 
 interface IndexPage {
@@ -83,11 +93,14 @@ async function changesPage(since: string | null): Promise<ChangesPage> {
   return data
 }
 
-const FRESH: Progress = { enabled: false, cursor: null, started: false, paused: false, total: 0, feed: null, limitedFrom: null, pending: [] }
+const FRESH: Progress = { enabled: false, cursor: null, started: false, paused: false, total: 0, feed: null, limitedFrom: null, roomRetryAt: null, pending: [], rescan: null }
 
-/** Out of room in the browser, or a record past what one may hold: the index stays as it is, limited. */
-function outOfRoom(error: unknown): boolean {
-  if (error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)) return true
+function quotaExceeded(error: unknown): boolean {
+  return error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)
+}
+
+/** A record of the index past what one may hold: as out of room for it. */
+function tooLarge(error: unknown): boolean {
   return error instanceof Error && /too large/.test(error.message)
 }
 
@@ -100,6 +113,7 @@ function rowOf(message: MailMessage): string {
 }
 
 const timeOf = (message: Pick<MailMessage, 'receivedAt'>) => Date.parse(message.receivedAt)
+const pendingName = (id: string) => `pending/${id}`
 
 /** A build cursor's time (`<nanoseconds>_<id>`), in ms. */
 function cursorTime(cursor: string): number {
@@ -160,11 +174,12 @@ class SealedStore {
     })
   }
 
-  /** Stores records in one transaction: all of them or none. */
-  put(records: SealedRecord[]): Promise<void> {
+  /** Stores records and deletes others in one transaction: all of it or none. */
+  put(records: SealedRecord[], deletes: string[] = []): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('records', 'readwrite')
       const store = tx.objectStore('records')
+      for (const id of deletes) store.delete(id)
       for (const record of records) store.put(record.sealed, record.id)
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error ?? new Error('search store write'))
@@ -182,6 +197,14 @@ class SealedStore {
   }
 }
 
+/** What one run under the lock asked for once it ends. */
+interface Run {
+  /** The index was made again: building starts after. */
+  rebuild: boolean
+  /** The database was deleted in this run (not twice). */
+  reset: boolean
+}
+
 /** One account's body search in this browser. */
 export class ContentSearch {
   private progress: Progress = FRESH
@@ -194,11 +217,17 @@ export class ContentSearch {
   private closed = false
   /** Set when the work under the lock changed what searches find. */
   private dirty = false
-  /** Set when the index was made again under the lock: building starts after it. */
-  private rebuildAfter = false
+  /** The run holding the lock now. */
+  private run: Run = { rebuild: false, reset: false }
+  /** The last change feed step failed: until one succeeds, searches go to the server. */
+  private stale = false
+  /** The index was written by a newer version: this page neither writes nor searches it. */
+  private outdated = false
+  /** The database cannot be written at all. */
+  private broken = false
   private revision = 0
   private listeners = new Set<() => void>()
-  private snapshot: ContentSearchState = { status: 'off', indexed: 0, total: 0, limitedFrom: null, revision: 0 }
+  private snapshot: ContentSearchState = { status: 'off', searchable: false, indexed: 0, total: 0, limitedFrom: null, revision: 0 }
   private readonly channel: BroadcastChannel | null
 
   private constructor(
@@ -249,19 +278,21 @@ export class ContentSearch {
   /**
    * Runs `work` holding the index's lock (in every tab), on the state as
    * stored now; when `work` changed what searches find, lists refresh and
-   * the other tabs are told. An index found damaged is made again.
+   * the other tabs are told. An index found damaged is made again (one of a
+   * newer version is left alone).
    */
   private async exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const run = async () => {
+    const run: Run = { rebuild: false, reset: false }
+    const locked = async () => {
       if (this.closed) throw new Error('body search is closed')
+      this.run = run
       await this.attach()
       this.dirty = false
-      this.rebuildAfter = false
       try {
         await this.load()
         return await work()
       } catch (error) {
-        if (!this.index?.damaged()) throw error
+        if (!this.index?.damaged() || this.index.newer() || run.reset) throw error
         // A record that does not open: nothing more is written over it.
         await this.startAgain()
         throw error
@@ -274,11 +305,11 @@ export class ContentSearch {
     }
     try {
       if (typeof navigator !== 'undefined' && 'locks' in navigator) {
-        return (await navigator.locks.request(`${this.dbName}:write`, run))
+        return (await navigator.locks.request(`${this.dbName}:write`, locked))
       }
-      return await run()
+      return await locked()
     } finally {
-      if (this.rebuildAfter && !this.closed) void this.build().catch(() => undefined)
+      if (run.rebuild && !this.closed) void this.build().catch(() => undefined)
     }
   }
 
@@ -308,7 +339,11 @@ export class ContentSearch {
     this.index = index
   }
 
-  /** The stored state; a directory that does not open (or of another version) makes the index again. */
+  /**
+   * The stored state. A directory, progress or drafts record that does not
+   * open (or an older version) makes the index again; one of a newer version
+   * leaves this page out of it until reloaded.
+   */
   private async load() {
     const index = this.index!
     const directoryId = index.directoryId()
@@ -316,6 +351,12 @@ export class ContentSearch {
     const draftsId = index.recordId(DRAFTS)
     const found = await this.store!.get([directoryId, progressId, draftsId])
     index.openDirectory(found.get(directoryId))
+    if (index.newer()) {
+      this.outdated = true
+      this.publish()
+      return
+    }
+    this.outdated = false
     const open = <T>(name: string, id: string): T | null | 'damaged' => {
       const sealed = found.get(id)
       if (!sealed) return null
@@ -334,13 +375,23 @@ export class ContentSearch {
     this.publish()
   }
 
-  /** Deletes the database (and its key) and starts again, on if it was. Under the lock. */
+  /**
+   * Deletes the database (and its key) and starts again, on if it was; once
+   * per run. Under the lock. A database that cannot be written is told.
+   */
   private async startAgain(enabled = this.progress.enabled) {
+    if (this.run.reset) return
     await this.reset()
     if (!enabled) return
     this.progress = { ...FRESH, enabled: true }
-    await this.save()
-    this.rebuildAfter = true
+    try {
+      await this.save()
+    } catch {
+      this.broken = true
+      this.publish()
+      return
+    }
+    this.run.rebuild = true
   }
 
   /** What the reader sees. */
@@ -355,20 +406,31 @@ export class ContentSearch {
 
   private publish() {
     const p = this.progress
-    const status: ContentSearchStatus = !p.enabled ? 'off' : p.paused ? 'paused' : p.cursor !== null || !p.started ? 'building' : p.limitedFrom !== null ? 'limited' : 'ready'
+    const status: ContentSearchStatus = this.broken
+      ? 'unsupported'
+      : !p.enabled
+        ? 'off'
+        : p.paused
+          ? 'paused'
+          : p.cursor !== null || !p.started
+            ? 'building'
+            : p.limitedFrom !== null
+              ? 'limited'
+              : 'ready'
+    const searchable = (status === 'ready' || status === 'limited') && !this.stale && !this.outdated
     const indexed = (this.index?.size() ?? 0) + this.drafts.size
-    this.snapshot = { status, indexed, total: Math.max(p.total, indexed), limitedFrom: p.limitedFrom, revision: this.revision }
+    this.snapshot = { status, searchable, indexed, total: Math.max(p.total, indexed), limitedFrom: p.limitedFrom, revision: this.revision }
     this.listeners.forEach((listener) => listener())
   }
 
   /**
-   * Stores the progress and the drafts with `extra` records, in one
-   * transaction; `changes`: what searches find changed.
+   * Stores the progress and the drafts with `extra` records (and deletes
+   * `deletes`), in one transaction; `changes`: what searches find changed.
    */
-  private async save(extra: SealedRecord[] = [], changes = true) {
+  private async save(extra: SealedRecord[] = [], changes = true, deletes: string[] = []) {
     const index = this.index!
     const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
-    await this.store!.put([...extra, index.sealRecord(DRAFTS, encode([...this.drafts.values()])), index.sealRecord(PROGRESS, encode(this.progress))])
+    await this.store!.put([...extra, index.sealRecord(DRAFTS, encode([...this.drafts.values()])), index.sealRecord(PROGRESS, encode(this.progress))], deletes)
     if (changes) this.markChanged()
     this.publish()
   }
@@ -418,6 +480,8 @@ export class ContentSearch {
     this.index = null
     await SealedStore.remove(this.dbName)
     await this.attach()
+    this.run.reset = true
+    this.broken = false
     this.progress = FRESH
     this.drafts = new Map()
     this.markChanged()
@@ -436,29 +500,79 @@ export class ContentSearch {
     })
   }
 
-  /** Whether keyword searches go to this index: on, and built (or out of room). */
+  /** Whether keyword searches go to this index now. */
   get active(): boolean {
-    return this.snapshot.status === 'ready' || this.snapshot.status === 'limited'
+    return this.snapshot.searchable
+  }
+
+  /** Rows waiting, by id, as stored now. Under the lock (or for reading ahead of it). */
+  private async pendingRows(ids: string[]): Promise<Map<string, MailMessage>> {
+    const index = this.index!
+    const found = await this.store!.get(ids.map((id) => index.recordId(pendingName(id))))
+    const rows = new Map<string, MailMessage>()
+    for (const id of ids) {
+      const sealed = found.get(index.recordId(pendingName(id)))
+      const plain = sealed ? index.openRecord(pendingName(id), sealed) : undefined
+      if (plain) rows.set(id, JSON.parse(new TextDecoder().decode(plain)) as MailMessage)
+    }
+    return rows
   }
 
   /**
-   * Indexes `docs` and stores them with the progress (`next` applied), in
-   * one transaction. Out of room, what is indexed stays and older mail is
-   * not searched here; false then. Under the lock.
+   * Rows to wait (Drafts kept by their rows instead): their records, and
+   * the progress's ids. What does not fit is read again later, from the top
+   * down to the oldest of it. Returns the records to store.
    */
-  private async addDocs(docs: IndexDoc[], next: Partial<Progress> = {}): Promise<boolean> {
+  private wait(rows: MailMessage[]): SealedRecord[] {
     const index = this.index!
+    const ids = new Set(this.progress.pending)
+    const records: SealedRecord[] = []
+    let over: number | null = null
+    for (const row of rows) {
+      if (row.folder === 'drafts') {
+        this.drafts.set(row.id, row)
+        continue
+      }
+      if (!ids.has(row.id) && ids.size >= MAX_PENDING) {
+        over = Math.min(over ?? Number.POSITIVE_INFINITY, timeOf(row))
+        continue
+      }
+      ids.add(row.id)
+      records.push(index.sealRecord(pendingName(row.id), new TextEncoder().encode(JSON.stringify(row))))
+    }
+    const rescan = over === null ? this.progress.rescan : { cursor: null, until: Math.min(over, this.progress.rescan?.until ?? over) }
+    this.progress = { ...this.progress, pending: [...ids], rescan }
+    return records
+  }
+
+  /**
+   * Indexes `docs` and stores them with the progress (`next` applied) in one
+   * transaction, deleting `deletes`. Out of room (the browser's, or a record
+   * of the index past its limit): what is indexed stays, older mail is not
+   * read, and indexing is tried again later; false then. Under the lock.
+   */
+  private async addDocs(docs: IndexDoc[], next: Partial<Progress> = {}, deletes: string[] = []): Promise<boolean> {
+    const index = this.index!
+    const room = async (): Promise<false> => {
+      await this.load()
+      this.progress = { ...this.progress, cursor: null, started: true, limitedFrom: index.oldestTime() ?? Date.now(), roomRetryAt: Date.now() + ROOM_RETRY_MS }
+      await this.save([], true)
+      return false
+    }
+    let changed: SealedRecord[] = []
     try {
-      const changed = docs.length ? index.add(docs, await this.store!.load(index.planAdd(docs))) : []
-      this.progress = { ...this.progress, ...next }
-      await this.save(changed, docs.length > 0)
+      if (docs.length) changed = index.add(docs, await this.store!.load(index.planAdd(docs)))
+    } catch (error) {
+      if (!tooLarge(error)) throw error
+      return room()
+    }
+    this.progress = { ...this.progress, ...next, roomRetryAt: null }
+    try {
+      await this.save(changed, docs.length > 0, deletes)
       return true
     } catch (error) {
-      if (!outOfRoom(error)) throw error
-      await this.load()
-      this.progress = { ...this.progress, cursor: null, started: true, pending: [], limitedFrom: index.oldestTime() ?? Date.now() }
-      await this.save().catch(() => this.publish())
-      return false
+      if (!quotaExceeded(error)) throw error
+      return room()
     }
   }
 
@@ -478,20 +592,11 @@ export class ContentSearch {
     return docs
   }
 
-  /** Rows a page brought: Drafts kept by their rows, the rest waiting to be indexed. */
-  private take(rows: MailMessage[]) {
-    const pending = new Map(this.progress.pending.map((row) => [row.id, row]))
-    for (const row of rows) {
-      if (row.folder === 'drafts') this.drafts.set(row.id, row)
-      else pending.set(row.id, row)
-    }
-    this.progress = { ...this.progress, pending: [...pending.values()] }
-  }
-
   /**
    * Builds from where it stopped, in one tab at a time: a page of rows is
-   * read under the lock (and waits in `pending`), its messages downloaded
-   * outside it, and stored under it again as `pending` holds them then.
+   * read under the lock (and waits), its messages downloaded outside it, and
+   * stored under it again as they wait then. Rows that did not fit are read
+   * again from the top (`rescan`), only those not held waiting.
    */
   private async build(): Promise<void> {
     if (this.building) return
@@ -501,22 +606,24 @@ export class ContentSearch {
         for (;;) {
           const step = await this.exclusive(async () => {
             const p = this.progress
-            if (!p.enabled || p.paused) return 'stop'
+            if (!p.enabled || p.paused || this.outdated) return 'stop'
+            if (p.roomRetryAt !== null && Date.now() < p.roomRetryAt) return 'stop'
             if (p.feed === null) {
               // The feed starts before the first page, so no change is missed.
               this.progress = { ...p, feed: (await changesPage(null)).next }
               await this.save([], false)
             }
             if (this.progress.pending.length) return 'index'
+            if (this.progress.rescan) return this.rescanPage()
             if (this.progress.started && this.progress.cursor === null) return 'stop'
             const data = await indexPage(this.progress.cursor)
-            this.take(data.messages)
+            const records = this.wait(data.messages)
             this.progress = { ...this.progress, started: true, total: data.total ?? this.progress.total, cursor: data.next }
-            await this.save()
+            await this.save(records)
             return 'index'
           })
           if (step === 'stop') break
-          await this.indexPending()
+          if (step === 'index') await this.indexPending()
         }
       } finally {
         this.building = false
@@ -532,26 +639,59 @@ export class ContentSearch {
     }
   }
 
-  /** Downloads a batch of `pending` outside the lock, then indexes what is still pending, with its row as now. */
+  /** One page of the newest mail read again: rows held get their rows, the rest wait. Under the lock. */
+  private async rescanPage(): Promise<'index' | 'more'> {
+    const index = this.index!
+    const rescan = this.progress.rescan!
+    const data = await indexPage(rescan.cursor)
+    const rows = data.messages.filter((m) => timeOf(m) >= rescan.until)
+    const others = rows.filter((m) => m.folder !== 'drafts')
+    const hits: SearchHit[] = others.map((m) => ({ id: m.id, timeMs: timeOf(m), meta: rowOf(m) }))
+    let records: SealedRecord[] = []
+    let missing: MailMessage[] = []
+    if (hits.length) {
+      const updated = index.updateMeta(hits, await this.store!.load(index.planUpdateMeta(hits)))
+      records = updated.stored
+      const notHeld = new Set(updated.missing)
+      missing = others.filter((m) => notHeld.has(m.id))
+    }
+    // Only as much as fits; the rest on a later pass, from this page.
+    const room = MAX_PENDING - this.progress.pending.length
+    if (missing.length > room) {
+      await this.save(records)
+      return 'index'
+    }
+    records.push(...this.wait([...rows.filter((m) => m.folder === 'drafts'), ...missing]))
+    const done = data.next === null || rows.length < data.messages.length
+    this.progress = { ...this.progress, rescan: done ? null : { ...rescan, cursor: data.next } }
+    await this.save(records)
+    return 'index'
+  }
+
+  /** Downloads a batch of the rows waiting outside the lock, then indexes those still waiting, with their rows as now. */
   private async indexPending(): Promise<void> {
-    const batch = this.progress.pending.slice(0, BATCH)
-    if (!batch.length) return
-    const docs = await this.texts(batch)
+    const ids = this.progress.pending.slice(0, BATCH)
+    if (!ids.length) return
+    const rows = await this.pendingRows(ids)
+    const docs = await this.texts(ids.flatMap((id) => (rows.has(id) ? [rows.get(id)!] : [])))
     await this.exclusive(async () => {
-      const now = new Map(this.progress.pending.map((row) => [row.id, row]))
-      const done = new Set(docs.map((doc) => doc.id))
+      const waiting = new Set(this.progress.pending)
+      const now = await this.pendingRows(ids.filter((id) => waiting.has(id)))
       const kept = docs.flatMap((doc) => {
         const row = now.get(doc.id)
         return row ? [{ ...doc, timeMs: timeOf(row), meta: rowOf(row) }] : []
       })
-      await this.addDocs(kept, { pending: this.progress.pending.filter((row) => !done.has(row.id)) })
+      // Done: indexed, or a row that no longer reads (left to a rebuild).
+      const done = new Set(ids)
+      const deletes = ids.map((id) => this.index!.recordId(pendingName(id)))
+      await this.addDocs(kept, { pending: this.progress.pending.filter((id) => !done.has(id)) }, deletes)
     })
   }
 
   /** One page of the change feed, applied (no download). Under the lock. */
   private async followFeed(): Promise<'more' | 'done' | 'resync'> {
     const p = this.progress
-    if (!p.enabled || p.paused || p.feed === null) return 'done'
+    if (!p.enabled || p.paused || p.feed === null || this.outdated) return 'done'
     const index = this.index!
     const data = await changesPage(p.feed)
     if (data.resync) return 'resync'
@@ -570,33 +710,46 @@ export class ContentSearch {
     for (const row of rows) this.drafts.delete(row.id)
     for (const row of drafts) this.drafts.set(row.id, row)
     // Waiting rows follow their messages, or go with them.
-    const changedById = new Map(rows.map((row) => [row.id, row]))
-    const pending = p.pending.flatMap((row) => (goneIds.has(row.id) || drafts.some((d) => d.id === row.id) ? [] : [changedById.get(row.id) ?? row]))
-    const pendingIds = new Set(pending.map((row) => row.id))
+    const waiting = new Set(p.pending)
+    const leaving = new Set([...goneIds, ...drafts.map((d) => d.id)].filter((id) => waiting.has(id)))
+    const records: SealedRecord[] = rows
+      .filter((row) => waiting.has(row.id))
+      .map((row) => index.sealRecord(pendingName(row.id), new TextEncoder().encode(JSON.stringify(row))))
+    const deletes = [...leaving].map((id) => index.recordId(pendingName(id)))
+    this.progress = { ...p, pending: p.pending.filter((id) => !leaving.has(id)) }
     // The index: gone ones removed, changed ones given their rows.
     const removed: DocRef[] = [...data.gone.map((g) => ({ id: g.id, timeMs: timeOf(g) })), ...drafts.map((m) => ({ id: m.id, timeMs: timeOf(m) }))]
-    if (removed.length) await this.store!.put(index.remove(removed, await this.store!.load(index.planRemove(removed))))
-    const held: SearchHit[] = rows.filter((m) => !pendingIds.has(m.id)).map((m) => ({ id: m.id, timeMs: timeOf(m), meta: rowOf(m) }))
+    if (removed.length) records.push(...index.remove(removed, await this.store!.load(index.planRemove(removed))))
+    const held: SearchHit[] = rows.filter((m) => !waiting.has(m.id)).map((m) => ({ id: m.id, timeMs: timeOf(m), meta: rowOf(m) }))
     let missing: MailMessage[] = []
     if (held.length) {
-      const updated = index.updateMeta(held, await this.store!.load(index.planUpdateMeta(held)))
-      await this.store!.put(updated.stored)
+      // Tables `remove` changed are read as just written.
+      const loaded = await this.store!.load(index.planUpdateMeta(held))
+      const written = new Map(records.map((r) => [r.id, r.sealed]))
+      const updated = index.updateMeta(
+        held,
+        loaded.map((l) => ({ ...l, sealed: written.get(index.recordId(l.name)) ?? l.sealed })),
+      )
+      const replaced = new Set(updated.stored.map((r) => r.id))
+      records.splice(0, records.length, ...records.filter((r) => !replaced.has(r.id)), ...updated.stored)
       const notHeld = new Set(updated.missing)
       missing = rows.filter((m) => notHeld.has(m.id))
     }
     // Not held: new mail waits to be indexed; one the build has yet to reach
-    // is left to it (it reads the row as it is then); out of room, none.
+    // is left to it (it reads the row as it is then).
     const building = !p.started || p.cursor !== null
     const reach = p.cursor === null ? Number.POSITIVE_INFINITY : cursorTime(p.cursor)
-    const fresh = missing.filter((m) => p.limitedFrom === null && !(building && (!p.started || timeOf(m) <= reach)))
-    this.progress = { ...p, feed: data.next, pending: [...pending, ...fresh] }
-    await this.save()
+    const fresh = missing.filter((m) => !(building && (!p.started || timeOf(m) <= reach)))
+    records.push(...this.wait(fresh))
+    this.progress = { ...this.progress, feed: data.next }
+    await this.save(records, true, deletes)
     return data.more ? 'more' : 'done'
   }
 
   /**
    * Follows the change feed (Mail's poll, and before every search); new mail
-   * and a build that stopped go on. One at a time per tab.
+   * and a build that stopped go on. One at a time per tab. While a step
+   * fails, searches go to the server (no row may be out of date).
    */
   catchUp(): Promise<void> {
     // Cleared once it settles (never before it is set, even when it ends at once).
@@ -608,16 +761,28 @@ export class ContentSearch {
 
   private async followAll(): Promise<void> {
     if (!this.progress.enabled) return
-    for (let page = 0; page < 20; page++) {
-      const step = await this.exclusive(() => this.followFeed())
-      if (step === 'resync') {
-        await this.rebuild()
-        return
+    try {
+      for (let page = 0; page < 20; page++) {
+        const step = await this.exclusive(() => this.followFeed())
+        if (step === 'resync') {
+          await this.rebuild()
+          return
+        }
+        if (step === 'done') break
       }
-      if (step === 'done') break
+      if (this.stale) {
+        this.stale = false
+        this.publish()
+      }
+    } catch (error) {
+      if (!this.stale) {
+        this.stale = true
+        this.publish()
+      }
+      throw error
     }
     const p = this.progress
-    if (!p.paused && (p.cursor !== null || !p.started || p.pending.length)) void this.build()
+    if (!p.paused && (p.cursor !== null || !p.started || p.pending.length || p.rescan)) void this.build()
   }
 
   /** Every message whose words hold all of `query`'s, as their list rows, newest first. */
@@ -645,7 +810,7 @@ export class ContentSearch {
       for (const draft of this.drafts.values()) {
         if (this.matches(query, `${draft.subject}\n${people(draft)}`)) out.push(draft)
       }
-      return { out, damaged: unreadable || index.damaged() }
+      return { out, damaged: !index.newer() && (unreadable || index.damaged()) }
     })
     if (rows.damaged) void this.rebuild().catch(() => undefined)
     return rows.out
@@ -691,7 +856,7 @@ export function useContentSearch(): ContentSearch | null {
   return search
 }
 
-const OFF: ContentSearchState = { status: 'off', indexed: 0, total: 0, limitedFrom: null, revision: 0 }
+const OFF: ContentSearchState = { status: 'off', searchable: false, indexed: 0, total: 0, limitedFrom: null, revision: 0 }
 
 export function useContentSearchState(search: ContentSearch | null): ContentSearchState {
   return useSyncExternalStore(
