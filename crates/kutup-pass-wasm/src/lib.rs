@@ -239,6 +239,26 @@ impl Vault {
         Ok(STANDARD.encode(sealed))
     }
 
+    /// Whether the kept key `envelope` (base64) is the key this vault is open
+    /// with: then keeping this vault's key again is not needed. False for one
+    /// that does not open here.
+    #[wasm_bindgen(js_name = keptKeyIsMine)]
+    pub fn kept_key_is_mine(
+        &self,
+        envelope: &str,
+        master_key: &[u8],
+        binding: &str,
+        file_id: &str,
+    ) -> Result<bool, JsValue> {
+        let Ok(envelope) = STANDARD.decode(envelope) else {
+            return Ok(false);
+        };
+        Ok(
+            kutup_pass::kept::open(&envelope, master_key, binding, &vault_id(file_id)?)
+                .is_ok_and(|kept| kept.key.same_as(&self.key)),
+        )
+    }
+
     /// Changes the vault's key (saved with the next `save`).
     #[wasm_bindgen(js_name = changeKey)]
     pub fn change_key(

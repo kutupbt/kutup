@@ -147,40 +147,77 @@ pub async fn put_vault_secret(
             .await?;
     let (envelope, revision) = checked_envelope(&req.envelope, &binding, file_id)?;
     revisions::check_follows(revision, req.base_revision)?;
-    // The secret kept now, locked: the change goes only on top of it.
-    let stored: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2 FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(file_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let current = match &stored {
-        None => 0,
-        Some(stored) => account_envelope::inspect(stored)
-            .ok()
-            .and_then(|header| header.revision)
-            .map(revisions::stored)
-            .transpose()?
-            .unwrap_or(0),
+    // Stored only on top of the secret the change started from: a first
+    // keep inserts or nothing (two first keeps at once: the second gets the
+    // 409); a later one replaces exactly the row it read, locked.
+    let stored = if req.base_revision == 0 {
+        sqlx::query(
+            "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, file_id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .bind(&envelope)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1
+    } else {
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT envelope FROM pass_vault_secrets
+              WHERE user_id = $1 AND file_id = $2 FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match current {
+            Some(current) if revision_of(&current)? == req.base_revision => {
+                sqlx::query(
+                    "UPDATE pass_vault_secrets SET envelope = $3, updated_at = NOW()
+                      WHERE user_id = $1 AND file_id = $2",
+                )
+                .bind(user_id)
+                .bind(file_id)
+                .bind(&envelope)
+                .execute(&mut *tx)
+                .await?;
+                true
+            }
+            _ => false,
+        }
     };
-    if current != req.base_revision {
+    if !stored {
+        drop(tx);
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT envelope FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let current = match current {
+            Some(current) => revision_of(&current)?,
+            None => 0,
+        };
         return Err(revisions::conflict(
             "another device kept a key for this vault first",
             current,
         ));
     }
-    sqlx::query(
-        "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, file_id) DO UPDATE SET envelope = $3, updated_at = NOW()",
-    )
-    .bind(user_id)
-    .bind(file_id)
-    .bind(&envelope)
-    .execute(&mut *tx)
-    .await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The revision of a stored vault secret (0 for one without, which a stored
+/// one never is).
+fn revision_of(envelope: &[u8]) -> AppResult<i64> {
+    account_envelope::inspect(envelope)
+        .ok()
+        .and_then(|header| header.revision)
+        .map(revisions::stored)
+        .transpose()
+        .map(|revision| revision.unwrap_or(0))
 }
 
 /// The envelope in `b64` and its revision, if it is canonical base64 of at

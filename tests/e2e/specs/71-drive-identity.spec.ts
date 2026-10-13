@@ -92,6 +92,8 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await dialog.getByTestId('identity-share-anyway').click()
   expect((await anyway).status()).toBe(204)
   await bobDrive.keyboard.press('Escape')
+  // Done with this tab: one page of Bob's from here on.
+  await bobDrive.close()
 
   // On her file, Bob trusts the new identity; the warnings go.
   await bobPage.goto(appUrl('drive', '/shared'))
@@ -122,7 +124,10 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await bobPage.getByTestId('identity-verify-open').first().click()
   await expect(bobPage.getByTestId('drive-safety-number')).toHaveText(aliceNumber, { timeout: 30_000 })
   await bobPage.getByLabel(/paste/i).fill(payload)
+  // The verification is stored in the pin list before the page moves on.
+  const verified = bobPage.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname.endsWith('/user/identity-pins'))
   await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
+  expect((await verified).status()).toBe(204)
   await bobPage.keyboard.press('Escape')
   await bobPage.goto(appUrl('drive', '/shared'))
   await expect(bobPage.getByTestId('identity-verified').first()).toBeVisible({ timeout: 60_000 })

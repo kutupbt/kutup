@@ -293,28 +293,56 @@ pub(crate) fn keep_secret(
     }
     kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
     let id = Uuid::parse_str(file_id)?;
-    // On top of the key kept now, if any (docs/plans/sealed-revisions.md).
-    let base = client
-        .list_vault_secrets()?
-        .into_iter()
-        .find(|row| row.file_id == file_id)
-        .and_then(|row| {
-            base64::engine::general_purpose::STANDARD
-                .decode(row.envelope)
-                .ok()
-        })
-        .and_then(|envelope| kutup_crypto::account_envelope::inspect(&envelope).ok())
-        .and_then(|header| header.revision)
-        .unwrap_or(0);
+    // On top of the key kept now, if any (docs/plans/sealed-revisions.md);
+    // when another device kept one meanwhile, done if it is this same key,
+    // else once more on top of it.
+    let kept_now = |client: &Client| -> Result<Option<(u64, Vec<u8>)>> {
+        Ok(client
+            .list_vault_secrets()?
+            .into_iter()
+            .find(|row| row.file_id == file_id)
+            .and_then(|row| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(row.envelope)
+                    .ok()
+            })
+            .map(|envelope| {
+                let revision = kutup_crypto::account_envelope::inspect(&envelope)
+                    .ok()
+                    .and_then(|header| header.revision)
+                    .unwrap_or(0);
+                (revision, envelope)
+            }))
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let revision = now.max(base + 1);
-    let sealed = kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
-    let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
-    client.put_vault_secret(file_id, &envelope, base)?;
-    Ok(envelope)
+    let mut base = kept_now(client)?.map_or(0, |(revision, _)| revision);
+    for attempt in 0..2 {
+        let revision = now.max(base + 1);
+        let sealed =
+            kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
+        let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
+        if client.put_vault_secret(file_id, &envelope, base)? {
+            return Ok(envelope);
+        }
+        let newer = kept_now(client)?;
+        if let Some((_, kept)) = &newer {
+            if kutup_pass::kept::open(kept, master_key, binding, id.as_bytes())
+                .is_ok_and(|kept| kept.key.same_as(&key))
+            {
+                return Ok(base64::engine::general_purpose::STANDARD.encode(kept));
+            }
+        }
+        if attempt == 1 {
+            break;
+        }
+        base = newer.map_or(0, |(revision, _)| revision);
+    }
+    Err(anyhow!(
+        "another device kept a different key for this vault meanwhile; run this again to keep yours"
+    ))
 }
 
 /// Where a vault lives on Drive and what opens it there.

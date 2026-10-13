@@ -23,6 +23,7 @@ type Calls =
   | { call: 'close'; handle: number }
   | { call: 'keepKey'; handle: number; masterKey: Uint8Array; binding: string; fileId: string; revision: number; generated: boolean }
   | { call: 'openKept'; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }
+  | { call: 'keptKeyIsMine'; handle: number; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }
   | { call: 'importPreview'; contents: Uint8Array; provider: string | null }
   | { call: 'importFormats' }
 

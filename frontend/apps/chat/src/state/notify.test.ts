@@ -21,7 +21,7 @@ function entry(
   return {
     id: `e${seq}`,
     conversation,
-    peer,
+    sender: peer,
     direction,
     senderDeviceId: 1,
     timestampMs: 1000 + seq,
