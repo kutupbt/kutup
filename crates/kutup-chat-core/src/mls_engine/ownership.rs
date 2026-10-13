@@ -288,7 +288,7 @@ impl MlsClient {
             kind: kutup_chat_proto::content::kind::GROUP_CONTROL.into(),
             sent_at: candidate.created_at.to_string(),
             seq,
-            message_id: Some(send_id.clone()),
+            message_id: send_id.clone(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,

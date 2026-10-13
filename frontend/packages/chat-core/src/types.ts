@@ -3,7 +3,7 @@ export interface ChatContentView {
   kind: string
   sentAt: string
   seq: string
-  messageId?: string
+  messageId: string
   replyTo?: string
   body: unknown
   text?: string
@@ -944,8 +944,8 @@ export interface MlsGroupAuthorizationPolicy {
   policyVersion: 1
   sequence: number
   applicationSenders: 1 | 2
-  /** Who may change the group's information: 1 members, 2 (or absent) administrators. */
-  groupInfoEditors?: 1 | 2
+  /** Who may change the group's information: 1 members, 2 administrators. */
+  groupInfoEditors: 1 | 2
 }
 
 export interface MlsGroupCryptographicPolicy {

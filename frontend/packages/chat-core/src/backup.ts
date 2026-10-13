@@ -665,7 +665,7 @@ export class ChatBackupCoordinator {
     for (const content of contents) {
       const descriptor = content.attachment
       if (descriptor && isEligible(content, this.runtime.clock.now())
-          && (!content.messageId || !deletedMessageIds.has(content.messageId))) {
+          && !deletedMessageIds.has(content.messageId)) {
         descriptors.set(descriptor.attachmentId, descriptor)
       }
     }

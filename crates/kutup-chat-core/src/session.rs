@@ -32,11 +32,6 @@ use crate::db::{
     OutboxEntry, OutboxLeg, OutboxSyncLeg, PeerProfile, SentMessage,
 };
 use crate::error::{ChatError, Result};
-use crate::history_transfer::{
-    prepare_history_transfer_acceptance, prepare_history_transfer_completion,
-    prepare_history_transfer_request, PreparedHistoryTransferAcceptance,
-    PreparedHistoryTransferRequest,
-};
 use crate::keys;
 use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPolicy};
 use crate::store::ChatStore;
@@ -283,158 +278,10 @@ impl Session {
         &self.account
     }
 
-    /// Create and device-sign a short-lived request to copy display history
-    /// from another device on this account.
-    pub fn prepare_history_transfer_request<R: Rng + CryptoRng>(
-        &self,
-        manifest_sequence: u64,
-        now_unix: i64,
-        rng: &mut R,
-    ) -> Result<PreparedHistoryTransferRequest> {
-        prepare_history_transfer_request(
-            &self.store.local_identity_key_pair(),
-            self.user(),
-            self.device_id(),
-            manifest_sequence,
-            now_unix,
-            rng,
-        )
-    }
-
-    /// Accept and device-sign a verified history request, negotiating strict
-    /// archive size limits before any encrypted frame is produced.
-    pub fn prepare_history_transfer_acceptance<R: Rng + CryptoRng>(
-        &self,
-        request: &kutup_chat_proto::ChatHistoryTransferRequestV1,
-        record_limit: u32,
-        plaintext_byte_limit: u64,
-        now_unix: i64,
-        rng: &mut R,
-    ) -> Result<PreparedHistoryTransferAcceptance> {
-        prepare_history_transfer_acceptance(
-            &self.store.local_identity_key_pair(),
-            request,
-            self.device_id(),
-            record_limit,
-            plaintext_byte_limit,
-            now_unix,
-            rng,
-        )
-    }
-
-    pub fn prepare_history_transfer_completion<R: Rng + CryptoRng>(
-        &self,
-        acceptance: &kutup_chat_proto::ChatHistoryTransferAcceptanceV1,
-        transcript_hash: &[u8; 32],
-        archive: &crate::VerifiedHistoryArchiveV1,
-        frame_count: u32,
-        completed_at_unix: i64,
-        rng: &mut R,
-    ) -> Result<kutup_chat_proto::ChatHistoryTransferCompletionV1> {
-        prepare_history_transfer_completion(
-            &self.store.local_identity_key_pair(),
-            acceptance,
-            transcript_hash,
-            frame_count,
-            archive.header.record_count,
-            archive.header.media_plaintext_bytes,
-            &archive.plaintext_digest,
-            completed_at_unix,
-            rng,
-        )
-    }
-
-    /// Atomically expose a verified, commitment-complete imported archive.
-    /// Records remain isolated from every live cryptographic state table.
-    pub async fn import_history(&self, records: Vec<crate::ImportedHistoryRecordV1>) -> Result<()> {
-        let mut normalized = std::collections::HashMap::new();
-        let mut provenance: Option<(&str, u32)> = None;
-        for record in &records {
-            let transfer_id = uuid::Uuid::parse_str(&record.transfer_id)
-                .map_err(|_| ChatError::Invalid("history transfer id must be a UUID".into()))?;
-            if transfer_id.to_string() != record.transfer_id {
-                return Err(ChatError::Invalid(
-                    "history transfer id must use canonical UUID form".into(),
-                ));
-            }
-            if record.source_record_id.is_empty() || record.source_record_id.len() > 256 {
-                return Err(ChatError::Invalid(
-                    "history source record id must contain 1 to 256 bytes".into(),
-                ));
-            }
-            if record.source_device_id == 0 || record.sender_device_id == 0 {
-                return Err(ChatError::Invalid(
-                    "history record device ids must be positive".into(),
-                ));
-            }
-            let sender: kutup_chat_proto::AccountAddress =
-                record
-                    .sender
-                    .parse()
-                    .map_err(|error: kutup_chat_proto::AddressError| {
-                        ChatError::Invalid(error.to_string())
-                    })?;
-            if sender.canonical() != record.sender {
-                return Err(ChatError::Invalid(
-                    "history record sender is not canonical".into(),
-                ));
-            }
-            let content = serde_json::from_slice::<ChatContent>(&record.content)
-                .map_err(|error| ChatError::Content(error.to_string()))?;
-            if serde_json::to_vec(&content)
-                .map_err(|error| ChatError::Content(error.to_string()))?
-                != record.content
-            {
-                return Err(ChatError::Invalid(
-                    "history record content is not canonical".into(),
-                ));
-            }
-            match provenance {
-                None => provenance = Some((&record.transfer_id, record.source_device_id)),
-                Some((transfer_id, source_device_id))
-                    if transfer_id == record.transfer_id
-                        && source_device_id == record.source_device_id => {}
-                Some(_) => {
-                    return Err(ChatError::Invalid(
-                        "one history import must have one transfer and source device".into(),
-                    ))
-                }
-            }
-            let key = (record.transfer_id.clone(), record.source_record_id.clone());
-            if let Some(existing) = normalized.insert(key, record.clone()) {
-                if existing != *record {
-                    return Err(ChatError::Trust(
-                        "history import contains conflicting duplicate records".into(),
-                    ));
-                }
-            }
-        }
-        for record in normalized.into_values() {
-            if let Some(start) = serde_json::from_slice::<ChatContent>(&record.content)
-                .map_err(|error| ChatError::Content(error.to_string()))?
-                .as_disappearing_expiry_start()
-            {
-                if !record.outgoing || record.sender != self.user() {
-                    return Err(ChatError::Trust(
-                        "history expiry starts must come from the local account's outgoing transcript"
-                            .into(),
-                    ));
-                }
-                start.validate().map_err(ChatError::Content)?;
-            }
-            self.store.stage_imported_history(record);
-        }
-        self.store.commit().await
-    }
-
-    pub async fn imported_history(&self) -> Result<Vec<crate::ImportedHistoryRecordV1>> {
-        self.store.list_imported_history().await
-    }
-
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
     pub(crate) async fn disappearing_expiry_starts(&self) -> Result<DisappearingExpiryStarts> {
         let outgoing = self.store.db().list_sent_messages().await?;
-        let imported = self.store.db().list_imported_history().await?;
-        collect_disappearing_expiry_starts(&outgoing, &imported, self.user())
+        collect_disappearing_expiry_starts(&outgoing, self.user())
     }
 
     pub(crate) async fn validate_disappearing_expiry_start(
@@ -452,13 +299,11 @@ impl Session {
             let Ok(content) = serde_json::from_slice::<ChatContent>(content) else {
                 return Ok(false);
             };
-            Ok(
-                content.message_id.as_deref() == Some(start.target_message_id.as_str())
-                    && content
-                        .disappearing_after_seconds()
-                        .map_err(ChatError::Content)?
-                        .is_some(),
-            )
+            Ok(content.message_id == start.target_message_id.as_str()
+                && content
+                    .disappearing_after_seconds()
+                    .map_err(ChatError::Content)?
+                    .is_some())
         };
         let db = self.store.db();
         let found = match &start.conversation {
@@ -469,17 +314,6 @@ impl Session {
                     if message.peer == peer && target_matches(&message.content)? {
                         found = true;
                         break;
-                    }
-                }
-                if !found {
-                    for message in db.list_imported_history().await? {
-                        if !message.outgoing
-                            && message.conversation == start.conversation
-                            && target_matches(&message.content)?
-                        {
-                            found = true;
-                            break;
-                        }
                     }
                 }
                 found
@@ -497,17 +331,6 @@ impl Session {
                         break;
                     }
                 }
-                if !found {
-                    for message in db.list_imported_history().await? {
-                        if !message.outgoing
-                            && message.conversation == start.conversation
-                            && target_matches(&message.content)?
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
                 found
             }
         };
@@ -517,334 +340,6 @@ impl Session {
             ));
         }
         Ok(())
-    }
-
-    /// Collect a deterministic, display-only snapshot suitable for archive
-    /// packing. The newest `record_limit` rows are retained and returned in
-    /// chronological order. No session, cursor, outbox, or MLS state is copied.
-    pub async fn history_archive_records(
-        &self,
-        record_limit: u32,
-    ) -> Result<Vec<kutup_chat_proto::ChatHistoryArchiveRecordV1>> {
-        if record_limit == 0 || record_limit > kutup_chat_proto::MAX_CHAT_HISTORY_TRANSFER_RECORDS {
-            return Err(ChatError::Invalid(
-                "history archive record limit is outside the V1 bounds".into(),
-            ));
-        }
-        let db = self.store.db();
-        let snapshot_at_ms = now_millis();
-        let incoming = db.list_messages().await?;
-        let outgoing = db.list_sent_messages().await?;
-        let mls = db.list_mls_messages().await?;
-        let imported = db.list_imported_history().await?;
-        let starts = collect_disappearing_expiry_starts(&outgoing, &imported, self.user())?;
-        let mut records = Vec::new();
-        for message in incoming {
-            let conversation = direct_conversation(&message.peer)?;
-            if expired_content(
-                &message.content,
-                &conversation,
-                false,
-                message.received_at,
-                &starts,
-                snapshot_at_ms,
-            )?
-            .is_some()
-            {
-                continue;
-            }
-            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
-                source_record_id: format!("direct-in:{}", message.id),
-                conversation,
-                sender: canonical_account(&message.peer)?,
-                sender_device_id: message.sender_device_id,
-                outgoing: false,
-                content: decode_canonical_history_content(&message.content)?,
-                timestamp_ms: message.received_at,
-                delivered: true,
-            });
-        }
-        for message in outgoing {
-            let conversation = direct_conversation(&message.peer)?;
-            if expired_content(
-                &message.content,
-                &conversation,
-                true,
-                message.created_at,
-                &starts,
-                snapshot_at_ms,
-            )?
-            .is_some()
-            {
-                continue;
-            }
-            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
-                source_record_id: format!("direct-out:{}", message.send_id),
-                conversation,
-                sender: self.user().to_owned(),
-                sender_device_id: self.device_id(),
-                outgoing: true,
-                content: decode_canonical_history_content(&message.content)?,
-                timestamp_ms: message.created_at,
-                delivered: message.delivered,
-            });
-        }
-        for message in mls {
-            let conversation = kutup_chat_proto::ConversationId::Group {
-                group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
-            };
-            if expired_content(
-                &message.content,
-                &conversation,
-                message.outgoing,
-                message.timestamp_ms,
-                &starts,
-                snapshot_at_ms,
-            )?
-            .is_some()
-            {
-                continue;
-            }
-            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
-                source_record_id: format!("mls:{}", message.record_id),
-                conversation,
-                sender: canonical_account(&message.sender)?,
-                sender_device_id: message.sender_device_id,
-                outgoing: message.outgoing,
-                content: decode_canonical_history_content(&message.content)?,
-                timestamp_ms: message.timestamp_ms,
-                delivered: message.delivered,
-            });
-        }
-        for message in imported {
-            if expired_content(
-                &message.content,
-                &message.conversation,
-                message.outgoing,
-                message.timestamp_ms,
-                &starts,
-                snapshot_at_ms,
-            )?
-            .is_some()
-            {
-                continue;
-            }
-            let mut digest = Sha256::new();
-            digest.update(b"kutup/chat/imported-source-record/v1\0");
-            digest.update(message.transfer_id.as_bytes());
-            digest.update([0]);
-            digest.update(message.source_record_id.as_bytes());
-            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
-                source_record_id: format!("imported:{}", hex::encode(digest.finalize())),
-                conversation: message.conversation,
-                sender: canonical_account(&message.sender)?,
-                sender_device_id: message.sender_device_id,
-                outgoing: message.outgoing,
-                content: decode_canonical_history_content(&message.content)?,
-                timestamp_ms: message.timestamp_ms,
-                delivered: message.delivered,
-            });
-        }
-        for record in &records {
-            record.validate().map_err(ChatError::Invalid)?;
-        }
-        records.sort_by(|left, right| {
-            left.timestamp_ms
-                .cmp(&right.timestamp_ms)
-                .then_with(|| left.source_record_id.cmp(&right.source_record_id))
-        });
-        let keep = record_limit as usize;
-        if records.len() > keep {
-            records.drain(..records.len() - keep);
-        }
-        Ok(records)
-    }
-
-    /// Persist a newly signed request before its first relay write, retaining
-    /// the exact ephemeral secret needed to resume after a browser reload.
-    pub async fn journal_prepared_history_request(
-        &self,
-        prepared: &PreparedHistoryTransferRequest,
-        now_unix: i64,
-    ) -> Result<()> {
-        self.save_history_transfer_progress(
-            crate::HistoryTransferJournalV1 {
-                transfer_id: prepared.request.transfer_id.clone(),
-                role: crate::HistoryTransferRoleV1::Requester,
-                state: crate::HistoryTransferJournalStateV1::Requested,
-                request: prepared.request.clone(),
-                acceptance: None,
-                ephemeral_secret: prepared.ephemeral_secret.journal_bytes(),
-                next_frame_index: 0,
-                updated_at_unix: now_unix,
-            },
-            Vec::new(),
-            now_unix,
-        )
-        .await
-    }
-
-    /// Persist an approved response and its exact encrypted archive before the
-    /// first frame upload. A restart resumes at `next_frame_index == 0` without
-    /// regenerating an X25519 key, nonce, or ciphertext.
-    pub async fn journal_prepared_history_response(
-        &self,
-        request: &kutup_chat_proto::ChatHistoryTransferRequestV1,
-        prepared: &PreparedHistoryTransferAcceptance,
-        archive: &crate::PreparedHistoryArchiveV1,
-        now_unix: i64,
-    ) -> Result<()> {
-        self.save_history_transfer_progress(
-            crate::HistoryTransferJournalV1 {
-                transfer_id: request.transfer_id.clone(),
-                role: crate::HistoryTransferRoleV1::Responder,
-                state: crate::HistoryTransferJournalStateV1::FramesReady,
-                request: request.clone(),
-                acceptance: Some(prepared.acceptance.clone()),
-                ephemeral_secret: prepared.ephemeral_secret.journal_bytes(),
-                next_frame_index: 0,
-                updated_at_unix: now_unix,
-            },
-            archive.frames.clone(),
-            now_unix,
-        )
-        .await
-    }
-
-    /// Atomically persist a validated journal update and every exact encrypted
-    /// frame needed for retry. Frame ciphertext is immutable by transfer/index.
-    pub async fn save_history_transfer_progress(
-        &self,
-        journal: crate::HistoryTransferJournalV1,
-        frames: Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
-        now_unix: i64,
-    ) -> Result<()> {
-        journal
-            .request
-            .validate(now_unix)
-            .map_err(ChatError::Invalid)?;
-        if journal.transfer_id != journal.request.transfer_id
-            || journal.request.account != self.user()
-        {
-            return Err(ChatError::Trust(
-                "history transfer journal account/request binding mismatch".into(),
-            ));
-        }
-        match journal.role {
-            crate::HistoryTransferRoleV1::Requester
-                if journal.request.requesting_device_id == self.device_id() => {}
-            crate::HistoryTransferRoleV1::Responder
-                if journal
-                    .acceptance
-                    .as_ref()
-                    .is_some_and(|value| value.responding_device_id == self.device_id()) => {}
-            _ => {
-                return Err(ChatError::Trust(
-                    "history transfer journal role does not belong to this device".into(),
-                ))
-            }
-        }
-        let transcript_hash = journal
-            .acceptance
-            .as_ref()
-            .map(|acceptance| {
-                acceptance
-                    .validate(&journal.request, now_unix)
-                    .map_err(ChatError::Invalid)?;
-                kutup_chat_proto::chat_history_transfer_transcript_hash(
-                    &journal.request,
-                    acceptance,
-                    now_unix,
-                )
-                .map_err(ChatError::Invalid)
-            })
-            .transpose()?;
-        match journal.state {
-            crate::HistoryTransferJournalStateV1::Requested
-                if journal.acceptance.is_none()
-                    && frames.is_empty()
-                    && journal.next_frame_index == 0 => {}
-            crate::HistoryTransferJournalStateV1::Accepted
-            | crate::HistoryTransferJournalStateV1::FramesReady
-            | crate::HistoryTransferJournalStateV1::ImportReady
-            | crate::HistoryTransferJournalStateV1::Completed
-                if journal.acceptance.is_some() => {}
-            crate::HistoryTransferJournalStateV1::Cancelled => {}
-            _ => {
-                return Err(ChatError::Invalid(
-                    "history transfer journal state is inconsistent".into(),
-                ))
-            }
-        }
-        if journal.next_frame_index as usize > frames.len() {
-            return Err(ChatError::Invalid(
-                "history transfer progress escapes the retained frames".into(),
-            ));
-        }
-        for (position, frame) in frames.iter().enumerate() {
-            frame.validate().map_err(ChatError::Invalid)?;
-            if frame.transfer_id != journal.transfer_id || frame.index as usize != position {
-                return Err(ChatError::Trust(
-                    "history transfer journal frames are not contiguous".into(),
-                ));
-            }
-            if transcript_hash.is_some_and(|hash| frame.transcript_hash != hex::encode(hash)) {
-                return Err(ChatError::Trust(
-                    "history transfer journal frame transcript mismatch".into(),
-                ));
-            }
-        }
-        if let Some(existing) = self
-            .store
-            .load_history_transfer_journal(&journal.transfer_id)
-            .await?
-        {
-            if existing.role != journal.role
-                || existing.request != journal.request
-                || existing.ephemeral_secret != journal.ephemeral_secret
-                || existing.acceptance.is_some() && existing.acceptance != journal.acceptance
-                || matches!(
-                    existing.state,
-                    crate::HistoryTransferJournalStateV1::Completed
-                        | crate::HistoryTransferJournalStateV1::Cancelled
-                ) && journal.state != existing.state
-                || history_transfer_state_rank(journal.state)
-                    < history_transfer_state_rank(existing.state)
-                || journal.next_frame_index < existing.next_frame_index
-                || journal.updated_at_unix < existing.updated_at_unix
-            {
-                return Err(ChatError::Trust(
-                    "history transfer journal attempted rollback or key substitution".into(),
-                ));
-            }
-        }
-        self.store.stage_history_transfer_journal(journal);
-        for frame in frames {
-            self.store.stage_history_transfer_frame(frame);
-        }
-        self.store.commit().await
-    }
-
-    pub async fn history_transfer_progress(
-        &self,
-        transfer_id: &str,
-    ) -> Result<(
-        Option<crate::HistoryTransferJournalV1>,
-        Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
-    )> {
-        Ok((
-            self.store
-                .load_history_transfer_journal(transfer_id)
-                .await?,
-            self.store.list_history_transfer_frames(transfer_id).await?,
-        ))
-    }
-
-    pub async fn delete_history_transfer_progress(&self, transfer_id: &str) -> Result<()> {
-        let frames = self.store.list_history_transfer_frames(transfer_id).await?;
-        let indices = frames.iter().map(|frame| frame.index).collect::<Vec<_>>();
-        self.store.delete_history_transfer(transfer_id, &indices);
-        self.store.commit().await
     }
 
     /// Bind a bare account opened from an authenticated local session to the
@@ -1165,7 +660,7 @@ impl Session {
                     let waiting = content
                         .as_undecryptable()
                         .is_some_and(|body| body.send_id.as_deref() == Some(send_id));
-                    if waiting || content.message_id.as_deref() == Some(send_id) {
+                    if waiting || content.message_id == send_id {
                         // Already here, or already waited for.
                         request = None;
                     }
@@ -1235,9 +730,7 @@ impl Session {
             .await?
             .filter(|sent| sent.peer == peer)
             .and_then(|sent| serde_json::from_slice::<ChatContent>(&sent.content).ok())
-            .filter(|content| {
-                content.is_resendable() && content.message_id.as_deref() == Some(send_id)
-            }))
+            .filter(|content| content.is_resendable() && content.message_id == send_id))
     }
 
     /// The records still waiting for a message: `(peer, send id, received at)`.
@@ -1328,7 +821,7 @@ impl Session {
                     }
                 }
                 None => {
-                    already_here |= content.message_id.is_some_and(|id| send_ids.contains(&id));
+                    already_here |= send_ids.contains(&content.message_id);
                 }
             }
         }
@@ -1854,11 +1347,7 @@ impl Session {
                     !body.send_id.is_empty()
                         && body.send_id.len() <= 64
                         && !body.peer.is_empty()
-                        && body
-                            .content
-                            .message_id
-                            .as_deref()
-                            .is_none_or(|message_id| message_id == body.send_id)
+                        && body.content.message_id == body.send_id
                         && body.content.kind != kutup_chat_proto::content::kind::SENT_TRANSCRIPT
                 })
         } else {
@@ -2344,9 +1833,8 @@ impl Session {
         let incoming = self.store.db().list_messages().await?;
         let outgoing = self.store.db().list_sent_messages().await?;
         let mls = self.store.db().list_mls_messages().await?;
-        let imported = self.store.db().list_imported_history().await?;
-        let starts = collect_disappearing_expiry_starts(&outgoing, &imported, self.user())?;
-        let controls = collect_account_controls(&outgoing, &imported, self.user());
+        let starts = collect_disappearing_expiry_starts(&outgoing, self.user())?;
+        let controls = collect_account_controls(&outgoing, self.user());
         let mut expired_ids = std::collections::BTreeSet::new();
         let mut attachment_ids = std::collections::BTreeSet::new();
         let mut expired_messages = 0u32;
@@ -2406,29 +1894,6 @@ impl Session {
                 expired_messages = expired_messages.saturating_add(1);
             }
         }
-        for message in &imported {
-            if let Some(expired) = expired_content(
-                &message.content,
-                &message.conversation,
-                message.outgoing,
-                message.timestamp_ms,
-                &starts,
-                now_ms,
-            )?
-            .or_else(|| controls.deleted_content(&message.content, &message.conversation))
-            {
-                self.store
-                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
-                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
-                expired_messages = expired_messages.saturating_add(1);
-            } else if message.outgoing
-                && message.sender == self.user()
-                && controls.is_superseded(&message.content)
-            {
-                self.store
-                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
-            }
-        }
 
         // Once a target is gone, retaining its reaction/edit operation keeps
         // no product value and unnecessarily preserves its stable identifier.
@@ -2445,12 +1910,6 @@ impl Session {
         for message in &mls {
             if content_targets_any(&message.content, &expired_ids)? {
                 self.store.delete_mls_message(&message.record_id);
-            }
-        }
-        for message in &imported {
-            if content_targets_any(&message.content, &expired_ids)? {
-                self.store
-                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
             }
         }
         for entry in self.store.db().list_outbox().await? {
@@ -3430,10 +2889,10 @@ impl Session {
                 "only a local-only record can be written without sending".into(),
             ));
         }
-        let send_id = content
-            .message_id
-            .clone()
-            .ok_or_else(|| ChatError::Invalid("a local record needs an id".into()))?;
+        if content.message_id.is_empty() {
+            return Err(ChatError::Invalid("a local record needs an id".into()));
+        }
+        let send_id = content.message_id.clone();
         let now = now_millis();
         let result = async {
             self.store.stage_sent_message(SentMessage {
@@ -3773,35 +3232,11 @@ fn canonical_account(value: &str) -> Result<String> {
     Ok(canonical)
 }
 
-fn history_transfer_state_rank(state: crate::HistoryTransferJournalStateV1) -> u8 {
-    use crate::HistoryTransferJournalStateV1::*;
-    match state {
-        Requested => 0,
-        Accepted => 1,
-        FramesReady => 2,
-        ImportReady => 3,
-        Completed | Cancelled => 4,
-    }
-}
-
 fn direct_conversation(value: &str) -> Result<kutup_chat_proto::ConversationId> {
     let address: kutup_chat_proto::AccountAddress = canonical_account(value)?
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
     Ok(kutup_chat_proto::ConversationId::direct(address))
-}
-
-fn decode_canonical_history_content(bytes: &[u8]) -> Result<ChatContent> {
-    let content: ChatContent =
-        serde_json::from_slice(bytes).map_err(|error| ChatError::Content(error.to_string()))?;
-    let canonical =
-        serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
-    if canonical != bytes {
-        return Err(ChatError::Invalid(
-            "durable history content is not canonical".into(),
-        ));
-    }
-    Ok(content)
 }
 
 fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&DevicePreKeyBundle> {
@@ -3812,7 +3247,7 @@ fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&Device
 }
 
 struct ExpiredContent {
-    message_id: Option<String>,
+    message_id: String,
     attachment_id: Option<String>,
 }
 
@@ -3836,8 +3271,10 @@ impl AccountControls {
             return None;
         }
         let content = serde_json::from_slice::<ChatContent>(bytes).ok()?;
-        let message_id = content.message_id.clone()?;
-        if !self.deleted.contains(&(conversation.key(), message_id)) {
+        if !self
+            .deleted
+            .contains(&(conversation.key(), content.message_id.clone()))
+        {
             return None;
         }
         Some(ExpiredContent {
@@ -3852,8 +3289,7 @@ impl AccountControls {
         !self.superseded.is_empty()
             && serde_json::from_slice::<ChatContent>(bytes)
                 .ok()
-                .and_then(|content| content.message_id)
-                .is_some_and(|message_id| self.superseded.contains(&message_id))
+                .is_some_and(|content| self.superseded.contains(&content.message_id))
     }
 }
 
@@ -3862,11 +3298,7 @@ impl AccountControls {
 /// (by revision, then device) and the furthest read position (by the
 /// reading device's clock) per conversation are kept; delete-for-me
 /// controls are all kept so a copy arriving late is removed too.
-fn collect_account_controls(
-    outgoing: &[SentMessage],
-    imported: &[crate::ImportedHistoryRecordV1],
-    local_account: &str,
-) -> AccountControls {
+fn collect_account_controls(outgoing: &[SentMessage], local_account: &str) -> AccountControls {
     let mut controls = AccountControls::default();
     let mut states = std::collections::BTreeMap::<String, ((u32, u32), String)>::new();
     // Stickers: the newest save of each, and which were removed.
@@ -3876,20 +3308,12 @@ fn collect_account_controls(
     let own = outgoing
         .iter()
         .filter(|message| message.peer == local_account)
-        .map(|message| message.content.as_slice())
-        .chain(
-            imported
-                .iter()
-                .filter(|message| message.outgoing && message.sender == local_account)
-                .map(|message| message.content.as_slice()),
-        );
+        .map(|message| message.content.as_slice());
     for bytes in own {
         let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
             continue;
         };
-        let Some(control_id) = content.message_id.clone() else {
-            continue;
-        };
+        let control_id = content.message_id.clone();
         if let Some(delete) = content.as_delete_for_me() {
             let key = delete.conversation.key();
             for message_id in delete.message_ids {
@@ -3967,17 +3391,11 @@ pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, S
 
 pub(crate) fn collect_disappearing_expiry_starts(
     outgoing: &[SentMessage],
-    imported: &[crate::ImportedHistoryRecordV1],
     local_account: &str,
 ) -> Result<DisappearingExpiryStarts> {
     let mut starts = DisappearingExpiryStarts::new();
     for message in outgoing {
         if message.peer == local_account {
-            collect_disappearing_expiry_start(&message.content, &mut starts)?;
-        }
-    }
-    for message in imported {
-        if message.outgoing && message.sender == local_account {
             collect_disappearing_expiry_start(&message.content, &mut starts)?;
         }
     }
@@ -4024,10 +3442,8 @@ pub(crate) fn disappearing_deadline_for_content(
     let base_ms = if outgoing {
         timestamp_ms
     } else {
-        let message_id = content.message_id.as_ref().ok_or_else(|| {
-            ChatError::Content("disappearing message has no logical message id".into())
-        })?;
-        let Some(started_at_ms) = starts.get(&(conversation.key(), message_id.clone())) else {
+        let Some(started_at_ms) = starts.get(&(conversation.key(), content.message_id.clone()))
+        else {
             return Ok(None);
         };
         *started_at_ms
@@ -4072,9 +3488,7 @@ fn collect_expired(
     message_ids: &mut std::collections::BTreeSet<String>,
     attachment_ids: &mut std::collections::BTreeSet<String>,
 ) {
-    if let Some(message_id) = expired.message_id {
-        message_ids.insert(message_id);
-    }
+    message_ids.insert(expired.message_id);
     if let Some(attachment_id) = expired.attachment_id {
         attachment_ids.insert(attachment_id);
     }
@@ -4239,115 +3653,6 @@ mod sealed_tests {
                 .unwrap_or_else(|| registration.last_resort_kyber_pre_key.clone()),
             one_time_pre_key: registration.one_time_pre_keys.first().cloned(),
         }
-    }
-
-    #[test]
-    fn archive_snapshot_merges_domains_and_keeps_the_newest_bound() {
-        let mut rng = OsRng.unwrap_err();
-        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let mut session = block_on(Session::generate(
-            db.clone(),
-            "alice@a.test",
-            1,
-            1,
-            &mut rng,
-        ))
-        .unwrap();
-        block_on(session.complete_registration(1)).unwrap();
-        let content = |text: &str, seq| {
-            serde_json::to_vec(&ChatContent::text("2026-08-09T00:00:00Z", seq, text)).unwrap()
-        };
-        let mut pending = Pending::default();
-        pending.messages.push(InboxMessage {
-            id: "mailbox-1".into(),
-            peer: "bob@b.test".into(),
-            sender_device_id: 1,
-            cursor: 1,
-            content: content("old inbound", 1),
-            received_at: 100,
-        });
-        pending.sent_messages.insert(
-            "send-1".into(),
-            SentMessage {
-                send_id: "send-1".into(),
-                peer: "bob@b.test".into(),
-                sender_device_id: 1,
-                content: content("sent", 2),
-                created_at: 200,
-                delivered_at: Some(201),
-                delivered: true,
-                deduplicated: false,
-            },
-        );
-        let imported = crate::ImportedHistoryRecordV1 {
-            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
-            source_record_id: "older-source".into(),
-            source_device_id: 2,
-            conversation: direct_conversation("carol@c.test").unwrap(),
-            sender: "carol@c.test".into(),
-            sender_device_id: 2,
-            outgoing: false,
-            content: content("imported", 3),
-            timestamp_ms: 300,
-            delivered: true,
-        };
-        pending.imported_history.insert(
-            (
-                imported.transfer_id.clone(),
-                imported.source_record_id.clone(),
-            ),
-            imported,
-        );
-        pending.mls_messages.insert(
-            "in:mls-1".into(),
-            crate::MlsHistoryMessage {
-                record_id: "in:mls-1".into(),
-                message_id: "22222222-2222-4222-8222-222222222222".into(),
-                conversation_id: [4; 16],
-                incarnation: 1,
-                mls_group_id: vec![5; 16],
-                epoch: 1,
-                sender: "dave@d.test".into(),
-                sender_device_id: 1,
-                outgoing: false,
-                cursor: Some(2),
-                transport_digest: [6; 32],
-                content: content("group", 4),
-                timestamp_ms: 400,
-                delivered: true,
-                deduplicated: false,
-            },
-        );
-        block_on(db.apply(&pending)).unwrap();
-
-        let snapshot = block_on(session.history_archive_records(3)).unwrap();
-        assert_eq!(snapshot.len(), 3);
-        assert_eq!(snapshot[0].source_record_id, "direct-out:send-1");
-        assert!(snapshot[1].source_record_id.starts_with("imported:"));
-        assert_eq!(snapshot[2].source_record_id, "mls:in:mls-1");
-        assert!(matches!(
-            snapshot[2].conversation,
-            kutup_chat_proto::ConversationId::Group { .. }
-        ));
-
-        let prepared = session
-            .prepare_history_transfer_request(1, 1_000, &mut rng)
-            .unwrap();
-        block_on(session.journal_prepared_history_request(&prepared, 1_000)).unwrap();
-        let (journal, frames) =
-            block_on(session.history_transfer_progress(&prepared.request.transfer_id)).unwrap();
-        assert_eq!(
-            journal.unwrap().ephemeral_secret,
-            prepared.ephemeral_secret.journal_bytes()
-        );
-        assert!(frames.is_empty());
-        block_on(session.delete_history_transfer_progress(&prepared.request.transfer_id)).unwrap();
-        assert!(
-            block_on(session.history_transfer_progress(&prepared.request.transfer_id))
-                .unwrap()
-                .0
-                .is_none()
-        );
     }
 
     #[test]
@@ -4613,7 +3918,6 @@ mod sealed_tests {
         let incoming_id = "10000000-0000-4000-8000-000000000001";
         let sent_id = "20000000-0000-4000-8000-000000000002";
         let mls_id = "30000000-0000-4000-8000-000000000003";
-        let imported_id = "40000000-0000-4000-8000-000000000004";
         let live_id = "50000000-0000-4000-8000-000000000005";
         let reaction_id = "60000000-0000-4000-8000-000000000006";
         let reaction = serde_json::to_vec(
@@ -4697,12 +4001,6 @@ mod sealed_tests {
                 },
                 mls_id,
             ),
-            (
-                "73000000-0000-4000-8000-000000000003",
-                9,
-                direct_conversation("carol@c.test").unwrap(),
-                imported_id,
-            ),
         ] {
             pending.sent_messages.insert(
                 id.into(),
@@ -4770,25 +4068,6 @@ mod sealed_tests {
                 deduplicated: false,
             },
         );
-        let imported = crate::ImportedHistoryRecordV1 {
-            transfer_id: "70000000-0000-4000-8000-000000000007".into(),
-            source_record_id: "imported-expiring".into(),
-            source_device_id: 2,
-            conversation: direct_conversation("carol@c.test").unwrap(),
-            sender: "carol@c.test".into(),
-            sender_device_id: 2,
-            outgoing: false,
-            content: expiring(imported_id, 4, "imported"),
-            timestamp_ms: 1_000,
-            delivered: true,
-        };
-        pending.imported_history.insert(
-            (
-                imported.transfer_id.clone(),
-                imported.source_record_id.clone(),
-            ),
-            imported,
-        );
         block_on(db.apply(&pending)).unwrap();
 
         assert_eq!(
@@ -4796,7 +4075,7 @@ mod sealed_tests {
             ExpiryReport::default()
         );
         let report = block_on(session.purge_expired_history(31_000)).unwrap();
-        assert_eq!(report.expired_messages, 4);
+        assert_eq!(report.expired_messages, 3);
         assert!(report.expired_attachment_ids.is_empty());
         let remaining = block_on(db.list_messages()).unwrap();
         assert_eq!(remaining.len(), 2);
@@ -4804,117 +4083,12 @@ mod sealed_tests {
         assert_eq!(remaining[1].id, "mailbox-future-content");
         assert!(block_on(db.list_sent_messages()).unwrap().is_empty());
         assert!(block_on(db.list_mls_messages()).unwrap().is_empty());
-        assert!(block_on(db.list_imported_history()).unwrap().is_empty());
         assert!(block_on(db.load_outbox("direct-derived"))
             .unwrap()
             .is_none());
         assert!(block_on(db.load_mls_outbox("mls-derived"))
             .unwrap()
             .is_none());
-    }
-
-    #[test]
-    fn imported_disappearing_message_preserves_unread_and_earliest_read_deadline() {
-        let mut rng = OsRng.unwrap_err();
-        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let mut session = block_on(Session::generate(db, "alice@a.test", 1, 1, &mut rng)).unwrap();
-        block_on(session.complete_registration(1)).unwrap();
-        let content = serde_json::to_vec(
-            &ChatContent::text_with_id(
-                "80000000-0000-4000-8000-000000000008",
-                "2026-08-10T00:00:00Z",
-                1,
-                "restored temporary message",
-            )
-            .with_disappearing_after(30)
-            .unwrap(),
-        )
-        .unwrap();
-        let record = crate::ImportedHistoryRecordV1 {
-            transfer_id: "90000000-0000-4000-8000-000000000009".into(),
-            source_record_id: "temporary-source".into(),
-            source_device_id: 2,
-            conversation: direct_conversation("bob@b.test").unwrap(),
-            sender: "bob@b.test".into(),
-            sender_device_id: 2,
-            outgoing: false,
-            content,
-            timestamp_ms: 1,
-            delivered: true,
-        };
-
-        block_on(session.import_history(vec![record.clone()])).unwrap();
-        block_on(session.import_history(vec![record])).unwrap();
-        assert_eq!(
-            block_on(session.imported_history()).unwrap()[0].timestamp_ms,
-            1,
-            "history transfer preserves the source timestamp"
-        );
-        assert_eq!(
-            block_on(session.purge_expired_history(1_000_000))
-                .unwrap()
-                .expired_messages,
-            0,
-            "an unread imported recipient message has no countdown"
-        );
-
-        let later_start = ChatContent::disappearing_expiry_start_with_id(
-            "a0000000-0000-4000-8000-00000000000a",
-            "2026-08-10T00:00:01Z",
-            2,
-            direct_conversation("bob@b.test").unwrap(),
-            "80000000-0000-4000-8000-000000000008",
-            6_000,
-        )
-        .unwrap();
-        let earlier_start = ChatContent::disappearing_expiry_start_with_id(
-            "b0000000-0000-4000-8000-00000000000b",
-            "2026-08-10T00:00:02Z",
-            3,
-            direct_conversation("bob@b.test").unwrap(),
-            "80000000-0000-4000-8000-000000000008",
-            5_000,
-        )
-        .unwrap();
-        block_on(session.import_history(vec![
-            crate::ImportedHistoryRecordV1 {
-                transfer_id: "90000000-0000-4000-8000-000000000009".into(),
-                source_record_id: "later-expiry-start-source".into(),
-                source_device_id: 2,
-                conversation: direct_conversation("alice@a.test").unwrap(),
-                sender: "alice@a.test".into(),
-                sender_device_id: 2,
-                outgoing: true,
-                content: serde_json::to_vec(&later_start).unwrap(),
-                timestamp_ms: 6_000,
-                delivered: true,
-            },
-            crate::ImportedHistoryRecordV1 {
-                transfer_id: "90000000-0000-4000-8000-000000000009".into(),
-                source_record_id: "earlier-expiry-start-source".into(),
-                source_device_id: 2,
-                conversation: direct_conversation("alice@a.test").unwrap(),
-                sender: "alice@a.test".into(),
-                sender_device_id: 2,
-                outgoing: true,
-                content: serde_json::to_vec(&earlier_start).unwrap(),
-                timestamp_ms: 5_000,
-                delivered: true,
-            },
-        ]))
-        .unwrap();
-        assert_eq!(
-            block_on(session.purge_expired_history(34_999))
-                .unwrap()
-                .expired_messages,
-            0
-        );
-        assert_eq!(
-            block_on(session.purge_expired_history(35_000))
-                .unwrap()
-                .expired_messages,
-            1
-        );
     }
 
     #[test]

@@ -1550,11 +1550,7 @@ impl Engine {
                 }
             }
         }
-        if content
-            .message_id
-            .as_deref()
-            .is_some_and(|message_id| message_id != send_id)
-        {
+        if content.message_id != send_id {
             return Err(ChatError::Invalid(
                 "encrypted content messageId must match transport sendId".into(),
             ));

@@ -114,7 +114,7 @@ fn one_to_one_text_round_trip_through_wire_types() {
 
     // Alice establishes to Bob's bundle and sends a text.
     block_on(alice.establish(&bob_addr, &bob_bundle, &mut rng)).unwrap();
-    let msg1 = ChatContent::text("2026-07-13T10:00:00Z", 1, "hello bob 👋");
+    let msg1 = ChatContent::text_with_id("m1", "2026-07-13T10:00:00Z", 1, "hello bob 👋");
     let env1 = block_on(alice.encrypt(&bob_addr, bob_reg, &msg1, &mut rng)).unwrap();
     // The first message must be a session-establishing PreKey envelope.
     assert_eq!(env1.envelope_type, kutup_chat_proto::EnvelopeType::PreKey);
@@ -128,7 +128,7 @@ fn one_to_one_text_round_trip_through_wire_types() {
     assert_eq!(got1.seq, 1);
 
     // Bob replies; steady-state messages are Message envelopes.
-    let msg2 = ChatContent::text("2026-07-13T10:00:01Z", 1, "hi alice");
+    let msg2 = ChatContent::text_with_id("m2", "2026-07-13T10:00:01Z", 1, "hi alice");
     let env2 = block_on(bob.encrypt(&alice_addr, alice_reg, &msg2, &mut rng)).unwrap();
     assert_eq!(env2.envelope_type, kutup_chat_proto::EnvelopeType::Message);
     let delivered2 = wrap(env2, "bob", 2);
@@ -137,13 +137,13 @@ fn one_to_one_text_round_trip_through_wire_types() {
 
     // Several more rounds to tick the ratchet in both directions.
     for round in 2..8u64 {
-        let m = ChatContent::text("t", round, format!("a->b {round}"));
+        let m = ChatContent::text_with_id("m3", "t", round, format!("a->b {round}"));
         let e = block_on(alice.encrypt(&bob_addr, bob_reg, &m, &mut rng)).unwrap();
         let d =
             block_on(bob.decrypt(&alice_addr, &wrap(e, "alice", round + 10), &mut rng)).unwrap();
         assert_eq!(d.as_text().unwrap().text, format!("a->b {round}"));
 
-        let m = ChatContent::text("t", round, format!("b->a {round}"));
+        let m = ChatContent::text_with_id("m4", "t", round, format!("b->a {round}"));
         let e = block_on(bob.encrypt(&alice_addr, alice_reg, &m, &mut rng)).unwrap();
         let d = block_on(alice.decrypt(&bob_addr, &wrap(e, "bob", round + 20), &mut rng)).unwrap();
         assert_eq!(d.as_text().unwrap().text, format!("b->a {round}"));
@@ -176,7 +176,7 @@ fn device_state_survives_reopen() {
         let e = block_on(alice.encrypt(
             &bob_addr,
             bob_reg,
-            &ChatContent::text("t", 1, "before restart"),
+            &ChatContent::text_with_id("m5", "t", 1, "before restart"),
             &mut rng,
         ))
         .unwrap();
@@ -199,7 +199,7 @@ fn device_state_survives_reopen() {
         let e = block_on(alice.encrypt(
             &bob_addr,
             bob_reg,
-            &ChatContent::text("t", 2, "after restart"),
+            &ChatContent::text_with_id("m6", "t", 2, "after restart"),
             &mut rng,
         ))
         .unwrap();
@@ -210,7 +210,7 @@ fn device_state_survives_reopen() {
         let e = block_on(bob.encrypt(
             &alice_addr,
             alice_reg,
-            &ChatContent::text("t", 3, "reply after restart"),
+            &ChatContent::text_with_id("m7", "t", 3, "reply after restart"),
             &mut rng,
         ))
         .unwrap();
@@ -243,7 +243,7 @@ fn tampered_ciphertext_is_rejected() {
 
     let bundle = serve_bundle(bob.registration().unwrap(), 1);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
-    let msg = ChatContent::text("t", 1, "secret");
+    let msg = ChatContent::text_with_id("m8", "t", 1, "secret");
     let mut env = block_on(alice.encrypt(
         &bob_addr,
         bob.registration().unwrap().registration_id,

@@ -103,12 +103,6 @@ pub enum MlsGroupInfoEditorsV1 {
     Administrators = 2,
 }
 
-impl MlsGroupInfoEditorsV1 {
-    fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
 impl From<MlsGroupInfoEditorsV1> for u16 {
     fn from(value: MlsGroupInfoEditorsV1) -> Self {
         value as u16
@@ -140,9 +134,8 @@ pub struct MlsGroupAuthorizationPolicyV1 {
     pub policy_version: u16,
     pub sequence: u64,
     pub application_senders: MlsApplicationSenderPolicyV1,
-    /// Omitted while it is the default (administrators), so policies written
-    /// before it existed keep their canonical bytes.
-    #[serde(default, skip_serializing_if = "MlsGroupInfoEditorsV1::is_default")]
+    /// Always present in the canonical encoding; a policy without it does
+    /// not decode.
     pub group_info_editors: MlsGroupInfoEditorsV1,
 }
 

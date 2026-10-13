@@ -165,14 +165,14 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
         let e1 = block_on(alice.encrypt(
             &bob_addr,
             bundle.registration_id,
-            &ChatContent::text("t", 1, "first"),
+            &ChatContent::text_with_id("m1", "t", 1, "first"),
             &mut rng,
         ))
         .unwrap();
         let e2 = block_on(alice.encrypt(
             &bob_addr,
             bundle.registration_id,
-            &ChatContent::text("t", 2, "second"),
+            &ChatContent::text_with_id("m2", "t", 2, "second"),
             &mut rng,
         ))
         .unwrap();
@@ -236,7 +236,7 @@ fn dedups_a_redelivered_cursor() {
     let env = block_on(alice.encrypt(
         &bob_addr,
         bundle.registration_id,
-        &ChatContent::text("t", 1, "once"),
+        &ChatContent::text_with_id("m3", "t", 1, "once"),
         &mut rng,
     ))
     .unwrap();
@@ -274,7 +274,7 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
     let env = block_on(alice.encrypt(
         &bob_addr,
         bundle.registration_id,
-        &ChatContent::text("replay", 1, "once"),
+        &ChatContent::text_with_id("m4", "replay", 1, "once"),
         &mut rng,
     ))
     .unwrap();
@@ -355,7 +355,7 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
         "forged-note",
         "bob",
         1,
-        ChatContent::text("2026-07-16T12:00:00Z", 1, "not Bob's note"),
+        ChatContent::text_with_id("m5", "2026-07-16T12:00:00Z", 1, "not Bob's note"),
     );
     let encrypted =
         block_on(alice.encrypt(&bob_addr, bundle.registration_id, &wrapper, &mut rng)).unwrap();
@@ -580,15 +580,16 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
             1,
             &unknown_key,
         ),
-        ChatContent::text("2026-07-16T12:00:00Z", 2, "first request").with_profile_key(&first_key),
+        ChatContent::text_with_id("m6", "2026-07-16T12:00:00Z", 2, "first request")
+            .with_profile_key(&first_key),
         ChatContent::profile_key_update_with_id(
             "profile-before-accept",
             "2026-07-16T12:00:10Z",
             3,
             &rotated_key,
         ),
-        ChatContent::text("2026-07-16T12:00:20Z", 4, "try again"),
-        ChatContent::text("2026-07-16T12:00:30Z", 5, "blocked plaintext"),
+        ChatContent::text_with_id("m7", "2026-07-16T12:00:20Z", 4, "try again"),
+        ChatContent::text_with_id("m8", "2026-07-16T12:00:30Z", 5, "blocked plaintext"),
     ];
     let encrypted = contents
         .iter()

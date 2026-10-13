@@ -288,7 +288,7 @@ export function ConversationView({
   const startExpiry = useCallback(
     (view: MessageView) => {
       const content = view.entry.content
-      if (view.outgoing || !content.messageId || !content.expiresAfterSeconds || content.expiresAtMs !== undefined) return
+      if (view.outgoing || !content.expiresAfterSeconds || content.expiresAtMs !== undefined) return
       if (expiryStarted.current.has(content.messageId)) return
       expiryStarted.current.add(content.messageId)
       void service

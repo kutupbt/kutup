@@ -186,7 +186,7 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         <p className="mb-2 mt-4 text-sm">{t('chat.group.whoEdits')}</p>
         <div className="flex gap-2">
           {(['members', 'administrators'] as const).map((who) => {
-            const active = (group.currentAuthorizationPolicy.groupInfoEditors ?? 2) === (who === 'members' ? 1 : 2)
+            const active = group.currentAuthorizationPolicy.groupInfoEditors === (who === 'members' ? 1 : 2)
             return (
               <Button
                 key={who}

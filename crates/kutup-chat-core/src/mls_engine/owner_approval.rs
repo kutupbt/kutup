@@ -387,7 +387,7 @@ impl MlsClient {
                 || existing.mls_group_id != mls_group_id
                 || existing.expected_recipients != expected_recipients
                 || content.kind != kutup_chat_proto::content::kind::GROUP_CONTROL
-                || content.message_id.as_deref() != Some(send_id.as_str())
+                || content.message_id != send_id.as_str()
                 || content.sent_at != sent_at_seconds.to_string()
                 || existing_body != body
             {
@@ -410,7 +410,7 @@ impl MlsClient {
                 || history.incarnation != conversation.request.genesis.incarnation
                 || history.mls_group_id != mls_group_id
                 || content.kind != kutup_chat_proto::content::kind::GROUP_CONTROL
-                || content.message_id.as_deref() != Some(send_id.as_str())
+                || content.message_id != send_id.as_str()
                 || content.sent_at != sent_at_seconds.to_string()
                 || existing_body != body
             {
@@ -432,7 +432,7 @@ impl MlsClient {
             kind: kutup_chat_proto::content::kind::GROUP_CONTROL.into(),
             sent_at: sent_at_seconds.to_string(),
             seq,
-            message_id: Some(send_id.clone()),
+            message_id: send_id.clone(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,

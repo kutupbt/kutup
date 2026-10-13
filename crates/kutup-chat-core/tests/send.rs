@@ -528,7 +528,7 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
     for (name, bundle) in [("old", &stale), ("new", &fresh)] {
         let mut sender = device(name, 1, &mut rng);
         block_on(sender.establish(&bob_addr, bundle, &mut rng)).unwrap();
-        let content = ChatContent::text("2026-10-06T10:00:00Z", 1, name);
+        let content = ChatContent::text_with_id("m1", "2026-10-06T10:00:00Z", 1, name);
         let envelope =
             block_on(sender.encrypt(&bob_addr, bundle.registration_id, &content, &mut rng))
                 .unwrap();
@@ -555,7 +555,7 @@ fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
     );
     let mut carol = device("carol", 1, &mut rng);
     block_on(carol.establish(&bob_addr, &one_time, &mut rng)).unwrap();
-    let content = ChatContent::text("2026-10-06T10:00:00Z", 1, "one-time");
+    let content = ChatContent::text_with_id("m2", "2026-10-06T10:00:00Z", 1, "one-time");
     let envelope =
         block_on(carol.encrypt(&bob_addr, one_time.registration_id, &content, &mut rng)).unwrap();
     block_on(bob.decrypt(
@@ -599,7 +599,7 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     ))]);
     server.set_sync_active(vec![(1, reg_id(&alice_session))]);
     let mut alice = Engine::new(alice_session, server);
-    let msg = ChatContent::text("secure-1", 1, "manifest required");
+    let msg = ChatContent::text_with_id("secure-1", "secure-1", 1, "manifest required");
 
     assert!(matches!(
         block_on(alice.send("secure-1", "bob", &msg, &mut rng)),
@@ -607,6 +607,7 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
     ));
     assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
 
+    let msg = ChatContent::text_with_id("secure-2", "secure-1", 1, "manifest required");
     let summary = block_on(alice.send("secure-2", "bob", &msg, &mut rng)).unwrap();
     assert!(summary.delivered);
     let pin = block_on(alice_db.load_manifest_trust("bob"))
@@ -639,29 +640,46 @@ fn a_message_from_a_newer_device_list_makes_the_next_send_fetch_again() {
     let mut alice = Engine::new(alice_session, server.clone());
     let alice_addr = ChatAddress::local("alice", 1);
 
-    block_on(alice.send("v1", "bob", &ChatContent::text("t", 1, "one"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "v1",
+        "bob",
+        &ChatContent::text_with_id("v1", "t", 1, "one"),
+        &mut rng,
+    ))
+    .unwrap();
     decrypt_for(&mut bob, &alice_addr, &server.last_delivered(), 2, &mut rng);
 
     // Bob writes from the device list Alice already holds: nothing changes.
-    let mut same = ChatContent::text("t", 1, "same list");
+    let mut same = ChatContent::text_with_id("m3", "t", 1, "same list");
     same.set_device_list_version(1);
     let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &same, &mut rng)).unwrap();
     deposit(&server, &envelope, "bob", 2, 1);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     assert!(
-        block_on(alice.send("v2", "bob", &ChatContent::text("t", 2, "two"), &mut rng))
-            .unwrap()
-            .delivered
+        block_on(alice.send(
+            "v2",
+            "bob",
+            &ChatContent::text_with_id("v2", "t", 2, "two"),
+            &mut rng
+        ))
+        .unwrap()
+        .delivered
     );
 
     // Bob writes from a newer one: Alice stops trusting the list she holds.
-    let mut newer = ChatContent::text("t", 2, "new list");
+    let mut newer = ChatContent::text_with_id("m4", "t", 2, "new list");
     newer.set_device_list_version(2);
     let envelope = block_on(bob.encrypt(&alice_addr, alice_reg, &newer, &mut rng)).unwrap();
     deposit(&server, &envelope, "bob", 2, 2);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     assert!(
-        block_on(alice.send("v3", "bob", &ChatContent::text("t", 3, "three"), &mut rng)).is_err(),
+        block_on(alice.send(
+            "v3",
+            "bob",
+            &ChatContent::text_with_id("v3", "t", 3, "three"),
+            &mut rng
+        ))
+        .is_err(),
         "the send fetched the list again, and the mock had none to give"
     );
 }
@@ -679,7 +697,12 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
     server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
 
     let mut alice = Engine::new(device("alice", 1, &mut rng), server);
-    let msg = ChatContent::text("secure-injection", 1, "reject injection");
+    let msg = ChatContent::text_with_id(
+        "secure-injection",
+        "secure-injection",
+        1,
+        "reject injection",
+    );
     assert!(matches!(
         block_on(alice.send("secure-injection", "bob", &msg, &mut rng)),
         Err(ChatError::Trust(_))
@@ -751,7 +774,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     block_on(alice.send(
         "identity-old",
         "bob",
-        &ChatContent::text("identity-old", 1, "old identity"),
+        &ChatContent::text_with_id("identity-old", "identity-old", 1, "old identity"),
         &mut rng,
     ))
     .unwrap();
@@ -767,7 +790,12 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         block_on(alice.send(
             "identity-replaced",
             "bob",
-            &ChatContent::text("identity-replaced", 2, "must remain blocked"),
+            &ChatContent::text_with_id(
+                "identity-replaced",
+                "identity-replaced",
+                2,
+                "must remain blocked"
+            ),
             &mut rng,
         )),
         Err(ChatError::Trust(_))
@@ -818,7 +846,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     block_on(reopened.send(
         "identity-new",
         "bob",
-        &ChatContent::text("identity-new", 3, "new identity accepted"),
+        &ChatContent::text_with_id("identity-new", "identity-new", 3, "new identity accepted"),
         &mut rng,
     ))
     .unwrap();
@@ -839,7 +867,7 @@ fn fans_out_to_two_devices_and_recovers_missing() {
     server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
 
     let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    let msg = ChatContent::text("t", 1, "hi both devices");
+    let msg = ChatContent::text_with_id("s1", "t", 1, "hi both devices");
     let summary = block_on(alice.send("s1", "bob", &msg, &mut rng)).unwrap();
 
     assert!(summary.delivered);
@@ -883,7 +911,7 @@ fn drops_extra_device() {
     server.set_active(vec![(1, reg_id(&bob1))]);
 
     let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    let msg = ChatContent::text("t", 1, "only device one is real");
+    let msg = ChatContent::text_with_id("s2", "t", 1, "only device one is real");
     let summary = block_on(alice.send("s2", "bob", &msg, &mut rng)).unwrap();
 
     assert!(summary.delivered);
@@ -920,9 +948,13 @@ fn a_second_message_does_not_fetch_keys_again() {
     let alice_addr = ChatAddress::local("alice", 1);
 
     for (send_id, seq, text) in [("k1", 1, "first"), ("k2", 2, "second"), ("k3", 3, "third")] {
-        let summary =
-            block_on(alice.send(send_id, "bob", &ChatContent::text("t", seq, text), &mut rng))
-                .unwrap();
+        let summary = block_on(alice.send(
+            send_id,
+            "bob",
+            &ChatContent::text_with_id(send_id, "t", seq, text),
+            &mut rng,
+        ))
+        .unwrap();
         assert!(summary.delivered);
         assert_eq!(summary.attempts, 1);
         assert_eq!(
@@ -988,7 +1020,13 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
     // An established conversation: Alice writes, Bob accepts and answers.
-    block_on(alice.send("r1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "r1",
+        "bob",
+        &ChatContent::text_with_id("r1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     deposit(
         &bob_server,
         &alice_server.last_delivered()[0],
@@ -998,14 +1036,26 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     );
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
     block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
-    block_on(bob.send("r2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    block_on(bob.send(
+        "r2",
+        "alice",
+        &ChatContent::text_with_id("r2", "t", 1, "hi"),
+        &mut rng,
+    ))
+    .unwrap();
     deposit(&alice_server, &bob_server.last_delivered()[0], "bob", 2, 1);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
     let sent_before = bob_server.delivered.borrow().len();
     let sent_history_before = block_on(bob.session().sent_history()).unwrap().len();
 
     // Alice's next message reaches Bob unreadable.
-    block_on(alice.send("r3", "bob", &ChatContent::text("t", 2, "lost"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "r3",
+        "bob",
+        &ChatContent::text_with_id("r3", "t", 2, "lost"),
+        &mut rng,
+    ))
+    .unwrap();
     let broken = deposit(
         &bob_server,
         &corrupted(&alice_server.last_delivered()[0]),
@@ -1045,7 +1095,13 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     assert_eq!(block_on(alice.session().history()).unwrap().len(), 1);
 
     // What Alice writes next travels under the fresh session and reads.
-    block_on(alice.send("r4", "bob", &ChatContent::text("t", 3, "again"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "r4",
+        "bob",
+        &ChatContent::text_with_id("r4", "t", 3, "again"),
+        &mut rng,
+    ))
+    .unwrap();
     deposit(
         &bob_server,
         &alice_server.last_delivered()[0],
@@ -1063,7 +1119,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     block_on(alice.send(
         "r5",
         "bob",
-        &ChatContent::text("t", 4, "lost too"),
+        &ChatContent::text_with_id("r5", "t", 4, "lost too"),
         &mut rng,
     ))
     .unwrap();
@@ -1082,7 +1138,7 @@ fn an_unreadable_message_refreshes_the_session_and_leaves_a_record() {
     block_on(alice.send(
         "r6",
         "bob",
-        &ChatContent::text("t", 5, "still fine"),
+        &ChatContent::text_with_id("r6", "t", 5, "still fine"),
         &mut rng,
     ))
     .unwrap();
@@ -1163,11 +1219,23 @@ fn a_message_still_waited_for_is_asked_for_again_and_given_up_on_after_a_week() 
     let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
-    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "g1",
+        "bob",
+        &ChatContent::text_with_id("g1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&alice_server, &bob_server, "alice", 1, 1, false);
     block_on(bob.receive(&mut rng)).unwrap();
     block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
-    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    block_on(bob.send(
+        "g2",
+        "alice",
+        &ChatContent::text_with_id("g2", "t", 1, "hi"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&bob_server, &alice_server, "bob", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
@@ -1234,11 +1302,23 @@ fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
     let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
-    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "g1",
+        "bob",
+        &ChatContent::text_with_id("g1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&alice_server, &bob_server, "alice", 1, 1, false);
     block_on(bob.receive(&mut rng)).unwrap();
     block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
-    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    block_on(bob.send(
+        "g2",
+        "alice",
+        &ChatContent::text_with_id("g2", "t", 1, "hi"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&bob_server, &alice_server, "bob", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
@@ -1288,11 +1368,23 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
-    block_on(alice.send("f1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "f1",
+        "bob",
+        &ChatContent::text_with_id("f1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&alice_server, &bob_server, "alice", 1, 1, false);
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
     block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
-    block_on(bob.send("f2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    block_on(bob.send(
+        "f2",
+        "alice",
+        &ChatContent::text_with_id("f2", "t", 1, "hi"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&bob_server, &alice_server, "bob", 2, 1, false);
     assert_eq!(block_on(alice.receive(&mut rng)).unwrap().messages.len(), 1);
 
@@ -1320,7 +1412,7 @@ fn an_unreadable_message_is_asked_for_again_and_fills_in() {
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(report.messages.len(), 1);
     assert_eq!(report.messages[0].content.as_text().unwrap().text, "lost");
-    assert_eq!(report.messages[0].content.message_id.as_deref(), Some(lost));
+    assert_eq!(report.messages[0].content.message_id, lost);
     assert_eq!(
         report.messages[0].content.sent_at,
         "2026-10-04T09:00:00.000Z"
@@ -1361,11 +1453,23 @@ fn a_record_stops_waiting_for_something_that_was_never_a_message() {
     let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
-    block_on(alice.send("g1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "g1",
+        "bob",
+        &ChatContent::text_with_id("g1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&alice_server, &bob_server, "alice", 1, 1, false);
     block_on(bob.receive(&mut rng)).unwrap();
     block_on(bob.accept_contact("alice", "t", &mut rng)).unwrap();
-    block_on(bob.send("g2", "alice", &ChatContent::text("t", 1, "hi"), &mut rng)).unwrap();
+    block_on(bob.send(
+        "g2",
+        "alice",
+        &ChatContent::text_with_id("g2", "t", 1, "hi"),
+        &mut rng,
+    ))
+    .unwrap();
     relay(&bob_server, &alice_server, "bob", 2, 1, false);
     block_on(alice.receive(&mut rng)).unwrap();
 
@@ -1403,7 +1507,13 @@ fn an_unreadable_message_from_a_stranger_is_dropped_without_a_reply() {
     let mut alice = Engine::new_for_development(alice_session, alice_server.clone());
     let mut bob = Engine::new_for_development(bob_session, bob_server.clone());
 
-    block_on(alice.send("s1", "bob", &ChatContent::text("t", 1, "hello"), &mut rng)).unwrap();
+    block_on(alice.send(
+        "s1",
+        "bob",
+        &ChatContent::text_with_id("s1", "t", 1, "hello"),
+        &mut rng,
+    ))
+    .unwrap();
     let broken = deposit(
         &bob_server,
         &corrupted(&alice_server.last_delivered()[0]),
@@ -1436,7 +1546,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     let s1 = block_on(alice.send(
         "r1",
         "bob",
-        &ChatContent::text("t", 1, "hello v1"),
+        &ChatContent::text_with_id("r1", "t", 1, "hello v1"),
         &mut rng,
     ))
     .unwrap();
@@ -1466,7 +1576,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     let s2 = block_on(alice.send(
         "r2",
         "bob",
-        &ChatContent::text("t", 2, "hello v2"),
+        &ChatContent::text_with_id("r2", "t", 2, "hello v2"),
         &mut rng,
     ))
     .unwrap();
@@ -1505,7 +1615,7 @@ fn outbox_persists_across_failure_and_flush_resends() {
     *server.fail_sends.borrow_mut() = 1; // the first network send fails after enqueue
 
     let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
-    let msg = ChatContent::text("t", 1, "survives a crash");
+    let msg = ChatContent::text_with_id("s4", "t", 1, "survives a crash");
 
     // The send fails at the transport, but the ciphertext is already durably queued.
     let err = block_on(alice.send("s4", "bob", &msg, &mut rng));
@@ -1572,7 +1682,12 @@ fn a_failing_send_is_reported_and_holds_back_only_its_own_peer() {
     *server.fail_sends.borrow_mut() = 2;
     for (send_id, text) in [("first", "one"), ("second", "two")] {
         assert!(matches!(
-            block_on(alice.send(send_id, "bob", &ChatContent::text("t", 1, text), &mut rng)),
+            block_on(alice.send(
+                send_id,
+                "bob",
+                &ChatContent::text_with_id(send_id, "t", 1, text),
+                &mut rng
+            )),
             Err(ChatError::Transport(_))
         ));
     }
@@ -1798,7 +1913,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
         1,
         &mut rng,
     );
-    assert_eq!(received.message_id.as_deref(), Some("direct-linked"));
+    assert_eq!(received.message_id, "direct-linked");
     assert_eq!(
         received.as_text().unwrap().text,
         "hello from my other device"
@@ -1823,7 +1938,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     assert_eq!(linked_history.len(), 1);
     assert_eq!(linked_history[0].peer, "bob");
     let linked_content = serde_json::from_slice::<ChatContent>(&linked_history[0].content).unwrap();
-    assert_eq!(linked_content.message_id.as_deref(), Some("direct-linked"));
+    assert_eq!(linked_content.message_id, "direct-linked");
     assert_eq!(
         linked_content.as_text().unwrap().text,
         "hello from my other device"
@@ -1857,7 +1972,7 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
     let summary = block_on(engine.send(
         "note-local",
         "alice",
-        &ChatContent::text("2026-07-16T10:00:00Z", 1, "remember this"),
+        &ChatContent::text_with_id("note-local", "2026-07-16T10:00:00Z", 1, "remember this"),
         &mut rng,
     ))
     .unwrap();
@@ -1895,7 +2010,12 @@ fn canonical_single_device_note_to_self_does_not_loop_back_as_incoming() {
     let summary = block_on(engine.send(
         "note-canonical-local",
         "alice@example.test",
-        &ChatContent::text("2026-07-16T10:00:00Z", 1, "canonical note"),
+        &ChatContent::text_with_id(
+            "note-canonical-local",
+            "2026-07-16T10:00:00Z",
+            1,
+            "canonical note",
+        ),
         &mut rng,
     ))
     .unwrap();
@@ -1921,7 +2041,7 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let summary = block_on(first.send(
         "note-linked",
         "alice",
-        &ChatContent::text("2026-07-16T10:01:00Z", 1, "sync this note"),
+        &ChatContent::text_with_id("note-linked", "2026-07-16T10:01:00Z", 1, "sync this note"),
         &mut rng,
     ))
     .unwrap();
@@ -1967,7 +2087,12 @@ fn canonical_linked_device_accepts_bare_local_sender_from_server() {
     let summary = block_on(first.send(
         "note-canonical-linked",
         "alice@example.test",
-        &ChatContent::text("2026-07-16T10:02:00Z", 1, "sync canonical note"),
+        &ChatContent::text_with_id(
+            "note-canonical-linked",
+            "2026-07-16T10:02:00Z",
+            1,
+            "sync canonical note",
+        ),
         &mut rng,
     ))
     .unwrap();

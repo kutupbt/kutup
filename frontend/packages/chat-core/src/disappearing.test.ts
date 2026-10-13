@@ -32,6 +32,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '8',
+      messageId: 'm-34',
       body: { durationSeconds: 3_600 },
       disappearingTimer: { durationSeconds: 3_600 },
     })
@@ -40,6 +41,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: '2026-08-10T00:00:01Z',
       seq: '9',
+      messageId: 'm-42',
       body: {},
       disappearingTimer: {},
     })
@@ -55,6 +57,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'text',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '1',
+      messageId: 'm-57',
       body: { text: 'temporary' },
       text: 'temporary',
       expiresAfterSeconds: 30,
@@ -72,6 +75,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'text',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '1',
+      messageId: 'm-74',
       body: { text: 'unread temporary' },
       text: 'unread temporary',
       expiresAfterSeconds: 30,
@@ -87,6 +91,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: 't',
       seq: '1',
+      messageId: 'm-89',
       body: {},
       disappearingTimer: {},
     })

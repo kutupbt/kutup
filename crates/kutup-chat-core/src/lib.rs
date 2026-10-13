@@ -19,7 +19,6 @@ mod clock;
 mod db;
 mod engine;
 mod error;
-mod history_transfer;
 mod invite_link;
 mod keys;
 mod manifest;
@@ -35,6 +34,7 @@ mod identity_sync;
 pub(crate) mod search;
 mod session;
 mod store;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 pub(crate) mod timeline;
 mod transport;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
@@ -54,24 +54,16 @@ pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord,
-    HistoryTransferJournalStateV1, HistoryTransferJournalV1, HistoryTransferRoleV1,
-    ImportedHistoryRecordV1, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
-    MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending,
-    PendingAccountIdentityResetV1, SentMessage,
+    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
+    MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
+    Pending, PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, OutboxFailure, OutboxFlush,
     PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};
-pub use history_transfer::{
-    derive_history_transfer_key, open_history_transfer_frame, prepare_history_archive,
-    seal_history_transfer_frame, verify_history_archive, verify_history_transfer_acceptance,
-    verify_history_transfer_request, HistoryTransferEphemeralSecret, PreparedHistoryArchiveV1,
-    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest, VerifiedHistoryArchiveV1,
-};
 pub use invite_link::{
     invite_link_fragment, new_invite_link_secret, new_invite_status_token,
     parse_invite_link_fragment, InviteLinkKeys,

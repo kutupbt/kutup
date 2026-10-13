@@ -129,11 +129,10 @@ pub struct ChatContent {
     pub sent_at: String,
     /// Per-`(sender, senderDevice)` monotonic counter → per-sender ordering.
     pub seq: u64,
-    /// Stable sender-generated logical identifier. New user-visible messages
-    /// use the same UUID as the durable transport `sendId`; legacy v1 content
-    /// omits it and remains readable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<String>,
+    /// Stable sender-generated logical identifier, required on every kind.
+    /// User-visible messages use the same UUID as the durable transport
+    /// `sendId`; content without it does not decode.
+    pub message_id: String,
     /// Stable logical message UUID being replied to. It remains inside E2EE
     /// content and never becomes delivery or federation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,22 +166,6 @@ impl ChatContent {
     pub const MAX_DISAPPEARING_SECONDS: u32 = 30 * 24 * 60 * 60;
     const DISAPPEARING_AFTER_FIELD: &'static str = "expiresAfterSeconds";
 
-    /// Builds a `text` message.
-    pub fn text(sent_at: impl Into<String>, seq: u64, text: impl Into<String>) -> Self {
-        ChatContent {
-            v: Self::VERSION,
-            kind: kind::TEXT.to_string(),
-            sent_at: sent_at.into(),
-            seq,
-            message_id: None,
-            reply_to: None,
-            profile_key: None,
-            profile_suite: None,
-            body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
-            extra: serde_json::Map::new(),
-        }
-    }
-
     /// Builds a new text message whose stable content id matches its logical
     /// outbox/send id. References such as receipts and reactions use this id.
     pub fn text_with_id(
@@ -191,9 +174,18 @@ impl ChatContent {
         seq: u64,
         text: impl Into<String>,
     ) -> Self {
-        let mut content = Self::text(sent_at, seq, text);
-        content.message_id = Some(message_id.into());
-        content
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::TEXT.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
+            extra: serde_json::Map::new(),
+        }
     }
 
     /// Adds a canonical, non-nil logical message reference.
@@ -231,7 +223,7 @@ impl ChatContent {
             kind: kind::PROFILE_KEY_UPDATE.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: Some(profile_key.into()),
             profile_suite: Some(crate::profile::ProfileSuiteId::XChaCha20Poly1305V1.as_u16()),
@@ -264,7 +256,7 @@ impl ChatContent {
             kind: kind::ATTACHMENT.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -278,7 +270,7 @@ impl ChatContent {
     /// suites and malformed metadata remain a visible unsupported message;
     /// they never authorize object retrieval.
     pub fn as_attachment(&self) -> Option<ChatAttachmentDescriptorV1> {
-        if self.kind != kind::ATTACHMENT || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind::ATTACHMENT || self.v != Self::VERSION {
             return None;
         }
         let descriptor: ChatAttachmentDescriptorV1 =
@@ -306,7 +298,7 @@ impl ChatContent {
             kind: kind::REACTION.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -317,7 +309,7 @@ impl ChatContent {
     }
 
     pub fn as_reaction(&self) -> Option<ReactionBody> {
-        if self.kind != kind::REACTION || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind::REACTION || self.v != Self::VERSION {
             return None;
         }
         let body: ReactionBody = serde_json::from_value(self.body.clone()).ok()?;
@@ -344,7 +336,7 @@ impl ChatContent {
             kind: kind::MESSAGE_MUTATION.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -355,10 +347,7 @@ impl ChatContent {
     }
 
     pub fn as_message_mutation(&self) -> Option<MessageMutationBody> {
-        if self.kind != kind::MESSAGE_MUTATION
-            || self.v != Self::VERSION
-            || self.message_id.is_none()
-        {
+        if self.kind != kind::MESSAGE_MUTATION || self.v != Self::VERSION {
             return None;
         }
         let body: MessageMutationBody = serde_json::from_value(self.body.clone()).ok()?;
@@ -380,7 +369,7 @@ impl ChatContent {
             kind: kind::RECEIPT.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -391,7 +380,7 @@ impl ChatContent {
     }
 
     pub fn as_receipt(&self) -> Option<ReceiptBody> {
-        if self.kind != kind::RECEIPT || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind::RECEIPT || self.v != Self::VERSION {
             return None;
         }
         let body: ReceiptBody = serde_json::from_value(self.body.clone()).ok()?;
@@ -413,7 +402,7 @@ impl ChatContent {
             kind: kind::TYPING.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -435,7 +424,7 @@ impl ChatContent {
             kind: kind::CALL.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -445,7 +434,7 @@ impl ChatContent {
     }
 
     pub fn as_call(&self) -> Option<crate::CallSignalV1> {
-        if self.kind != kind::CALL || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind::CALL || self.v != Self::VERSION {
             return None;
         }
         let signal: crate::CallSignalV1 = serde_json::from_value(self.body.clone()).ok()?;
@@ -475,7 +464,7 @@ impl ChatContent {
             kind: kind::SESSION_CONTROL.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -508,16 +497,13 @@ impl ChatContent {
         seq: u64,
         content: ChatContent,
     ) -> Result<Self, String> {
-        let send_id = content
-            .message_id
-            .clone()
-            .ok_or_else(|| "only a message with an id can be sent again".to_string())?;
+        let send_id = content.message_id.clone();
         Ok(ChatContent {
             v: Self::VERSION,
             kind: kind::RESEND.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -537,16 +523,14 @@ impl ChatContent {
             return None;
         }
         let body: ResendBody = serde_json::from_value(self.body.clone()).ok()?;
-        (body.content.is_resendable()
-            && body.content.message_id.as_deref() == Some(body.send_id.as_str()))
-        .then_some(body)
+        (body.content.is_resendable() && body.content.message_id == body.send_id).then_some(body)
     }
 
     /// Whether this is a message a peer may ask for again: something that
     /// was history on both sides, not a live signal, a control or a record
     /// only one device writes.
     pub fn is_resendable(&self) -> bool {
-        self.message_id.is_some()
+        !self.message_id.is_empty()
             && !self.is_ephemeral()
             && !Self::is_local_only_kind(&self.kind)
             && !Self::is_account_control_kind(&self.kind)
@@ -578,7 +562,7 @@ impl ChatContent {
             kind: kind::UNDECRYPTABLE.to_string(),
             sent_at: sent_at.into(),
             seq: 0,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -625,7 +609,7 @@ impl ChatContent {
     }
 
     pub fn as_typing(&self) -> Option<TypingBody> {
-        if self.kind != kind::TYPING || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind::TYPING || self.v != Self::VERSION {
             return None;
         }
         serde_json::from_value(self.body.clone()).ok()
@@ -682,7 +666,7 @@ impl ChatContent {
             kind: kind::DISAPPEARING_TIMER.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -693,10 +677,7 @@ impl ChatContent {
     }
 
     pub fn as_disappearing_timer(&self) -> Option<DisappearingTimerBody> {
-        if self.kind != kind::DISAPPEARING_TIMER
-            || self.v != Self::VERSION
-            || self.message_id.is_none()
-        {
+        if self.kind != kind::DISAPPEARING_TIMER || self.v != Self::VERSION {
             return None;
         }
         let body: DisappearingTimerBody = serde_json::from_value(self.body.clone()).ok()?;
@@ -723,7 +704,7 @@ impl ChatContent {
             kind: kind::DISAPPEARING_EXPIRY_START.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -734,10 +715,7 @@ impl ChatContent {
     }
 
     pub fn as_disappearing_expiry_start(&self) -> Option<DisappearingExpiryStartBody> {
-        if self.kind != kind::DISAPPEARING_EXPIRY_START
-            || self.v != Self::VERSION
-            || self.message_id.is_none()
-        {
+        if self.kind != kind::DISAPPEARING_EXPIRY_START || self.v != Self::VERSION {
             return None;
         }
         let body: DisappearingExpiryStartBody = serde_json::from_value(self.body.clone()).ok()?;
@@ -759,7 +737,7 @@ impl ChatContent {
             kind: kind.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -770,7 +748,7 @@ impl ChatContent {
     }
 
     fn as_account_control<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Option<T> {
-        if self.kind != kind || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind || self.v != Self::VERSION {
             return None;
         }
         serde_json::from_value(self.body.clone()).ok()
@@ -974,7 +952,7 @@ impl ChatContent {
             kind: kind::CONTACT_CONTROL.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -1595,14 +1573,34 @@ mod tests {
 
     #[test]
     fn text_round_trips_with_stable_shape() {
-        let c = ChatContent::text("2026-07-13T10:00:00Z", 41, "hi");
+        let c = ChatContent::text_with_id(MESSAGE, "2026-07-13T10:00:00Z", 41, "hi");
         let json = serde_json::to_string(&c).unwrap();
         assert_eq!(
             json,
-            r#"{"v":1,"kind":"text","sentAt":"2026-07-13T10:00:00Z","seq":41,"body":{"text":"hi"}}"#
+            r#"{"v":1,"kind":"text","sentAt":"2026-07-13T10:00:00Z","seq":41,"messageId":"0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b","body":{"text":"hi"}}"#
         );
         let back: ChatContent = serde_json::from_str(&json).unwrap();
         assert_eq!(back.as_text().unwrap().text, "hi");
+    }
+
+    #[test]
+    fn content_without_a_message_id_does_not_decode() {
+        // The pre-wipe v1 encoding omitted `messageId` on some kinds; every
+        // kind now carries it and a reader refuses content without it.
+        for src in [
+            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"body":{"text":"x"}}"#,
+            r#"{"v":1,"kind":"typing","sentAt":"t","seq":1,"body":{"started":true}}"#,
+            r#"{"v":2,"kind":"futureKind","sentAt":"t","seq":1,"body":{}}"#,
+            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"messageId":null,"body":{"text":"x"}}"#,
+        ] {
+            assert!(serde_json::from_str::<ChatContent>(src).is_err(), "{src}");
+        }
+        let ok =
+            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"messageId":"m","body":{"text":"x"}}"#;
+        assert_eq!(
+            serde_json::from_str::<ChatContent>(ok).unwrap().message_id,
+            "m"
+        );
     }
 
     #[test]
@@ -1620,7 +1618,7 @@ mod tests {
     #[test]
     fn unknown_kind_is_preserved_not_dropped() {
         // A message from a hypothetical newer client.
-        let src = r#"{"v":2,"kind":"reaction","sentAt":"2026-07-13T10:00:00Z","seq":7,"body":{"emoji":"👍","target":3}}"#;
+        let src = r#"{"v":2,"kind":"reaction","sentAt":"2026-07-13T10:00:00Z","seq":7,"messageId":"m","body":{"emoji":"👍","target":3}}"#;
         let c: ChatContent = serde_json::from_str(src).unwrap();
         assert!(!c.is_known_kind());
         assert!(c.as_text().is_none());
@@ -1632,8 +1630,7 @@ mod tests {
 
     #[test]
     fn unknown_top_level_fields_survive() {
-        let src =
-            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"body":{"text":"x"},"futureField":"abc"}"#;
+        let src = r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"messageId":"m","body":{"text":"x"},"futureField":"abc"}"#;
         let c: ChatContent = serde_json::from_str(src).unwrap();
         assert_eq!(
             c.extra.get("futureField").and_then(|v| v.as_str()),
@@ -1656,7 +1653,7 @@ mod tests {
         .unwrap();
         let value = serde_json::to_value(&content).unwrap();
         assert_eq!(value["replyTo"], target);
-        assert!(ChatContent::text("t", 1, "x")
+        assert!(ChatContent::text_with_id(MESSAGE, "t", 1, "x")
             .with_reply_to(Some("not-a-uuid"))
             .is_err());
     }
@@ -1781,7 +1778,7 @@ mod tests {
         assert_eq!(value["expiresAfterSeconds"], 86_400);
         assert_eq!(message.disappearing_after_seconds().unwrap(), Some(86_400));
 
-        assert!(ChatContent::text("t", 1, "too short")
+        assert!(ChatContent::text_with_id(MESSAGE, "t", 1, "too short")
             .with_disappearing_after(29)
             .is_err());
         assert!(ChatContent::typing_with_id("id", "t", 1, true)
@@ -1839,7 +1836,8 @@ mod tests {
 
     #[test]
     fn sent_transcript_round_trips_without_exposing_content_metadata() {
-        let original = ChatContent::text("2026-07-16T10:00:00Z", 8, "private note");
+        let original =
+            ChatContent::text_with_id(MESSAGE, "2026-07-16T10:00:00Z", 8, "private note");
         let wrapper = ChatContent::sent_transcript("note-1", "alice", 1234, original.clone());
         assert_eq!(wrapper.kind, kind::SENT_TRANSCRIPT);
         assert_eq!(wrapper.sent_at, original.sent_at);
@@ -1970,8 +1968,11 @@ mod tests {
         unknown.body["colour"] = serde_json::json!("red");
         assert_eq!(unknown.as_conversation_state(), None);
         assert_eq!(unknown.account_control_is_valid(), Some(false));
-        content.message_id = None;
-        assert_eq!(content.as_conversation_state(), None);
+        let mut missing = serde_json::to_value(&content).unwrap();
+        missing.as_object_mut().unwrap().remove("messageId");
+        assert!(serde_json::from_value::<ChatContent>(missing).is_err());
+        content.message_id = OTHER.into();
+        assert!(content.as_conversation_state().is_some());
     }
 
     #[test]

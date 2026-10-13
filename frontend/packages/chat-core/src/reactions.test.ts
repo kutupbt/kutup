@@ -27,6 +27,7 @@ function operation(
       kind: 'reaction',
       sentAt: new Date(timestampMs).toISOString(),
       seq,
+      messageId: `${reactor}-${timestampMs}-${seq}-${senderDeviceId}`,
       body: reaction,
       reaction,
     },

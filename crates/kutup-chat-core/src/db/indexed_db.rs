@@ -3,7 +3,8 @@
 //! Every record is encrypted at rest (`store_cipher`,
 //! `docs/research/16-browser-storage-architecture.md`): it is stored under a
 //! keyed hash of its key, its value sealed under a store key wrapped by the
-//! account master key. A store from before that is converted on first open.
+//! account master key. A database without the wrapped key is a new store: any
+//! records already in it are cleared on first open, never read.
 //!
 //! Each durable domain gets its own object store. A [`Pending`] unit of work is
 //! queued into one IndexedDB read-write transaction spanning every store, so a
@@ -25,10 +26,9 @@ use wasm_bindgen::JsValue;
 
 use crate::db::store_cipher::{keys, StoreCipher};
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, HistoryTransferJournalV1,
-    ImportedHistoryRecordV1, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
-    SentMessage,
+    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
+    PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -47,9 +47,6 @@ const MLS_OUTBOX: &str = "mls_outbox";
 const MLS_MESSAGES: &str = "mls_messages";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
-const IMPORTED_HISTORY: &str = "imported_history";
-const HISTORY_TRANSFER_JOURNALS: &str = "history_transfer_journals";
-const HISTORY_TRANSFER_FRAMES: &str = "history_transfer_frames";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const MANIFEST_HISTORY: &str = "manifest_history";
@@ -60,7 +57,7 @@ const META: &str = "meta";
 /// Derived index records (conversation timelines), sealed like the rest.
 const INDEX: &str = "index_values";
 
-const ALL_STORES: [&str; 26] = [
+const ALL_STORES: [&str; 23] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -76,9 +73,6 @@ const ALL_STORES: [&str; 26] = [
     MLS_MESSAGES,
     MESSAGES,
     SENT_MESSAGES,
-    IMPORTED_HISTORY,
-    HISTORY_TRANSFER_JOURNALS,
-    HISTORY_TRANSFER_FRAMES,
     INBOUND,
     MANIFEST_TRUST,
     MANIFEST_HISTORY,
@@ -123,8 +117,8 @@ pub struct IndexedDbChatDb {
 
 impl IndexedDbChatDb {
     /// Open (or create) the versioned browser database, encrypted under a key
-    /// wrapped by `master_key` (the account master key). A store written
-    /// before records were encrypted is converted here, in one transaction.
+    /// wrapped by `master_key` (the account master key). A database with no
+    /// wrapped key is started fresh here: cleared and keyed in one transaction.
     pub async fn open(name: &str, master_key: &[u8; 32]) -> Result<Self> {
         if name.trim().is_empty() {
             return Err(ChatError::Invalid(
@@ -132,7 +126,9 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(12);
+        // Version 13 dropped the device-to-device history-transfer stores;
+        // an upgrade deletes every object store not listed here.
+        let mut builder = Rexie::builder(name).version(13);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -163,7 +159,7 @@ impl IndexedDbChatDb {
             }
             None => {
                 let (cipher, wrapped) = StoreCipher::create(master_key, name, &mut OsRng)?;
-                convert_plaintext_store(&db, &writer, &cipher, &wrapped).await?;
+                start_new_store(&writer, &wrapped).await?;
                 cipher
             }
         };
@@ -331,127 +327,12 @@ impl IndexedDbChatDb {
     }
 }
 
-/// How a store keyed its records before they were sealed.
-#[derive(Clone, Copy)]
-enum LegacyKey {
-    Text,
-    Number,
-    Pair,
-    TextNumber,
-    Triple,
-}
-
-fn legacy_key(shape: LegacyKey, key: &JsValue) -> Result<Vec<u8>> {
-    let bad = || ChatError::Db("unexpected key in the plaintext chat store".into());
-    let text = |value: JsValue| value.as_string().ok_or_else(bad);
-    let number = |value: JsValue| {
-        value
-            .as_f64()
-            .filter(|n| n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX))
-            .map(|n| n as u32)
-            .ok_or_else(bad)
-    };
-    Ok(match shape {
-        LegacyKey::Text => string_key(&text(key.clone())?),
-        LegacyKey::Number => number_key(number(key.clone())?),
-        LegacyKey::Pair => {
-            let parts = Array::from(key);
-            pair_key(&text(parts.get(0))?, &text(parts.get(1))?)
-        }
-        LegacyKey::TextNumber => {
-            let parts = Array::from(key);
-            pair_number_key(&text(parts.get(0))?, number(parts.get(1))?)
-        }
-        LegacyKey::Triple => {
-            let parts = Array::from(key);
-            triple_key(
-                &text(parts.get(0))?,
-                &text(parts.get(1))?,
-                &text(parts.get(2))?,
-            )
-        }
-    })
-}
-
-async fn legacy_scan(db: &Rexie, name: &str) -> Result<Vec<(JsValue, JsValue)>> {
-    let transaction = idb(db.transaction(&[name], TransactionMode::ReadOnly))?;
-    let store = idb(transaction.store(name))?;
-    idb(store.scan(None, None, None, None).await)
-}
-
-/// Convert a store written before records were sealed: read every record
-/// the way it was written, then clear each object store and write it back
-/// sealed, with the wrapped key and the format marker, in one durable
-/// transaction. A crash leaves either the plaintext store or the sealed one.
-async fn convert_plaintext_store(
-    db: &Rexie,
-    writer: &web_sys::IdbDatabase,
-    cipher: &StoreCipher,
-    wrapped: &[u8],
-) -> Result<()> {
-    let mut records: Vec<(&'static str, Vec<u8>, Vec<u8>)> = Vec::new();
-    macro_rules! read {
-        ($store:expr, $shape:expr, $ty:ty) => {
-            for (key, value) in legacy_scan(db, $store).await? {
-                let value: $ty = from_js(value)?;
-                records.push(($store, legacy_key($shape, &key)?, encode(&value)?));
-            }
-        };
-    }
-    read!(LOCAL_IDENTITY, LegacyKey::Text, LocalIdentity);
-    read!(SESSIONS, LegacyKey::Text, Vec<u8>);
-    read!(IDENTITIES, LegacyKey::Text, Vec<u8>);
-    read!(PRE_KEYS, LegacyKey::Number, Vec<u8>);
-    read!(USED_PRE_KEYS, LegacyKey::Number, i64);
-    read!(SIGNED_PRE_KEYS, LegacyKey::Number, Vec<u8>);
-    read!(KYBER_PRE_KEYS, LegacyKey::Number, Vec<u8>);
-    read!(KYBER_SEEN, LegacyKey::Text, bool);
-    read!(SENDER_KEYS, LegacyKey::Pair, Vec<u8>);
-    read!(OUTBOX, LegacyKey::Text, OutboxEntry);
-    read!(MLS_STATE, LegacyKey::Text, Vec<u8>);
-    read!(MLS_OUTBOX, LegacyKey::Text, MlsOutboxEntry);
-    read!(MLS_MESSAGES, LegacyKey::Text, MlsHistoryMessage);
-    read!(MESSAGES, LegacyKey::Text, InboxMessage);
-    read!(SENT_MESSAGES, LegacyKey::Text, SentMessage);
-    read!(IMPORTED_HISTORY, LegacyKey::Pair, ImportedHistoryRecordV1);
-    read!(
-        HISTORY_TRANSFER_JOURNALS,
-        LegacyKey::Text,
-        HistoryTransferJournalV1
-    );
-    read!(
-        HISTORY_TRANSFER_FRAMES,
-        LegacyKey::TextNumber,
-        kutup_chat_proto::ChatHistoryTransferFrameV1
-    );
-    read!(INBOUND, LegacyKey::Text, InboundEnvelope);
-    read!(MANIFEST_TRUST, LegacyKey::Text, ManifestTrust);
-    read!(
-        MANIFEST_HISTORY,
-        LegacyKey::Triple,
-        AccountManifestHistoryRecordV1
-    );
-    read!(CONTACTS, LegacyKey::Text, ContactRecord);
-    read!(LOCAL_PROFILE, LegacyKey::Text, LocalProfile);
-    read!(PEER_PROFILES, LegacyKey::Text, PeerProfile);
-    for (key, value) in legacy_scan(db, META).await? {
-        let name = key
-            .as_string()
-            .ok_or_else(|| ChatError::Db("unexpected key in the plaintext chat store".into()))?;
-        let encoded = match name.as_str() {
-            LAST_CURSOR | LAST_SENT_SEQ | WRITER_GENERATION => encode(&from_js::<u64>(value)?)?,
-            PENDING_PREKEY_UPLOAD | PREKEY_ROTATION | REPAIR_LIMITS | PENDING_REGISTRATION => {
-                encode(&from_js::<Vec<u8>>(value)?)?
-            }
-            other => {
-                return Err(ChatError::Db(format!(
-                    "unknown entry {other} in the plaintext chat store"
-                )))
-            }
-        };
-        records.push((META, string_key(&name), encoded));
-    }
-
+/// Start a store that has no wrapped key: clear every object store (records
+/// from before sealing, or from an interrupted first open, are never read)
+/// and write the wrapped key and the format marker, in one durable
+/// transaction. A crash leaves either the old contents, cleared on the next
+/// open, or the new empty sealed store.
+async fn start_new_store(writer: &web_sys::IdbDatabase, wrapped: &[u8]) -> Result<()> {
     let database: &DurableDatabase = wasm_bindgen::JsCast::unchecked_ref(writer);
     let options = js_sys::Object::new();
     js_sys::Reflect::set(&options, &"durability".into(), &"strict".into())
@@ -475,16 +356,7 @@ async fn convert_plaintext_store(
     for clear in join_all(clears.into_iter().map(std::future::IntoFuture::into_future)).await {
         clear.map_err(write_error)?;
     }
-    let mut operations = Vec::with_capacity(records.len() + 2);
-    for (name, key, value) in &records {
-        let hashed = cipher.hashed_key(name, key);
-        let sealed = cipher.seal(name, &hashed, key, value, &mut OsRng)?;
-        operations.push(put_op(
-            &stores[name],
-            Uint8Array::from(sealed.as_slice()).into(),
-            JsValue::from_str(&hashed),
-        ));
-    }
+    let mut operations = Vec::with_capacity(2);
     operations.push(put_op(
         &stores[META],
         Uint8Array::from(wrapped).into(),
@@ -683,53 +555,6 @@ impl ChatDb for IndexedDbChatDb {
         Ok(messages)
     }
 
-    async fn load_imported_history(
-        &self,
-        transfer_id: &str,
-        source_record_id: &str,
-    ) -> Result<Option<ImportedHistoryRecordV1>> {
-        self.get(IMPORTED_HISTORY, pair_key(transfer_id, source_record_id))
-            .await
-    }
-
-    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
-        let mut records = self
-            .all::<ImportedHistoryRecordV1>(IMPORTED_HISTORY)
-            .await?;
-        records.sort_by(|left, right| {
-            left.timestamp_ms
-                .cmp(&right.timestamp_ms)
-                .then_with(|| left.transfer_id.cmp(&right.transfer_id))
-                .then_with(|| left.source_record_id.cmp(&right.source_record_id))
-        });
-        Ok(records)
-    }
-
-    async fn load_history_transfer_journal(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Option<HistoryTransferJournalV1>> {
-        self.get(HISTORY_TRANSFER_JOURNALS, string_key(transfer_id))
-            .await
-    }
-
-    async fn list_history_transfer_frames(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
-        let mut frames = Vec::new();
-        for frame in self
-            .all::<kutup_chat_proto::ChatHistoryTransferFrameV1>(HISTORY_TRANSFER_FRAMES)
-            .await?
-        {
-            if frame.transfer_id == transfer_id {
-                frames.push(frame);
-            }
-        }
-        frames.sort_by_key(|frame: &kutup_chat_proto::ChatHistoryTransferFrameV1| frame.index);
-        Ok(frames)
-    }
-
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
         let mut inbound = self.all::<InboundEnvelope>(INBOUND).await?;
         inbound.sort_by(|left, right| {
@@ -846,18 +671,6 @@ impl ChatDb for IndexedDbChatDb {
                 .map(|message| message.id)
                 .collect()
         };
-        let mut cascaded_transfer_frame_deletes = Vec::new();
-        for (transfer_id, journal) in &pending.history_transfer_journals {
-            if journal.is_none() {
-                for frame in self.list_history_transfer_frames(transfer_id).await? {
-                    let key = (transfer_id.clone(), frame.index);
-                    if !pending.history_transfer_frames.contains_key(&key) {
-                        cascaded_transfer_frame_deletes.push(key);
-                    }
-                }
-            }
-        }
-
         // IndexedDB has one writer in this engine. Check immutable records
         // before opening the atomic write transaction; an existing different
         // value is a durable cryptographic contradiction, never an upsert.
@@ -873,34 +686,6 @@ impl ChatDb for IndexedDbChatDb {
                 }
             }
         }
-        for ((transfer_id, source_record_id), record) in &pending.imported_history {
-            if let Some(existing) = self
-                .load_imported_history(transfer_id, source_record_id)
-                .await?
-            {
-                if existing != *record {
-                    return Err(ChatError::Trust(format!(
-                        "immutable imported history conflicts at {transfer_id}/{source_record_id}"
-                    )));
-                }
-            }
-        }
-        for ((transfer_id, index), frame) in &pending.history_transfer_frames {
-            if let Some(existing) = self
-                .get::<kutup_chat_proto::ChatHistoryTransferFrameV1>(
-                    HISTORY_TRANSFER_FRAMES,
-                    pair_number_key(transfer_id, *index),
-                )
-                .await?
-            {
-                if frame.as_ref().is_some_and(|frame| *frame != existing) {
-                    return Err(ChatError::Trust(format!(
-                        "history transfer frame {transfer_id}/{index} changed across retry"
-                    )));
-                }
-            }
-        }
-
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.
@@ -931,9 +716,6 @@ impl ChatDb for IndexedDbChatDb {
         let mls_messages = store(MLS_MESSAGES)?;
         let messages = store(MESSAGES)?;
         let sent_messages = store(SENT_MESSAGES)?;
-        let imported_history = store(IMPORTED_HISTORY)?;
-        let history_transfer_journals = store(HISTORY_TRANSFER_JOURNALS)?;
-        let history_transfer_frames = store(HISTORY_TRANSFER_FRAMES)?;
         let inbound = store(INBOUND)?;
         let manifest_trust = store(MANIFEST_TRUST)?;
         let manifest_history = store(MANIFEST_HISTORY)?;
@@ -1009,35 +791,6 @@ impl ChatDb for IndexedDbChatDb {
         self.stage_puts(&mut operations, &sent_messages, writes.sent_messages)?;
         for send_id in &pending.delete_sent_message_ids {
             operations.push(self.delete(&sent_messages, string_key(send_id)));
-        }
-        for ((transfer_id, source_record_id), value) in writes.imported_history {
-            operations.push(self.put(
-                &imported_history,
-                pair_key(&transfer_id, &source_record_id),
-                &value,
-            )?);
-        }
-        for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-            operations
-                .push(self.delete(&imported_history, pair_key(transfer_id, source_record_id)));
-        }
-        self.stage_map(
-            &mut operations,
-            &history_transfer_journals,
-            writes.history_transfer_journals,
-        )?;
-        for ((transfer_id, index), value) in writes.history_transfer_frames {
-            let key = pair_number_key(&transfer_id, index);
-            match value {
-                Some(value) => operations.push(self.put(&history_transfer_frames, key, &value)?),
-                None => operations.push(self.delete(&history_transfer_frames, key)),
-            }
-        }
-        for (transfer_id, index) in cascaded_transfer_frame_deletes {
-            operations.push(self.delete(
-                &history_transfer_frames,
-                pair_number_key(&transfer_id, index),
-            ));
         }
         self.stage_map(&mut operations, &inbound, writes.inbound)?;
         self.stage_puts(&mut operations, &manifest_trust, writes.manifest_trust)?;
@@ -1187,9 +940,6 @@ struct PreparedWrites {
     mls_messages: Vec<(String, Vec<u8>)>,
     messages: Vec<(String, Vec<u8>)>,
     sent_messages: Vec<(String, Vec<u8>)>,
-    imported_history: Vec<((String, String), Vec<u8>)>,
-    history_transfer_journals: Vec<(String, Option<Vec<u8>>)>,
-    history_transfer_frames: Vec<((String, u32), Option<Vec<u8>>)>,
     inbound: Vec<(String, Option<Vec<u8>>)>,
     manifest_trust: Vec<(String, Vec<u8>)>,
     manifest_history: Vec<((String, String, u64), Vec<u8>)>,
@@ -1237,9 +987,6 @@ impl PreparedWrites {
                 .map(|message| Ok((message.id.clone(), encode(message)?)))
                 .collect::<Result<_>>()?,
             sent_messages: serialize_map(&pending.sent_messages)?,
-            imported_history: serialize_map(&pending.imported_history)?,
-            history_transfer_journals: serialize_optional_map(&pending.history_transfer_journals)?,
-            history_transfer_frames: serialize_optional_map(&pending.history_transfer_frames)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
@@ -1302,10 +1049,6 @@ fn pair_key(left: &str, right: &str) -> Vec<u8> {
     keys::pair(left, right)
 }
 
-fn pair_number_key(left: &str, right: u32) -> Vec<u8> {
-    keys::text_number(left, right)
-}
-
 fn triple_key(first: &str, second: &str, third: &str) -> Vec<u8> {
     keys::triple(first, second, third)
 }
@@ -1333,11 +1076,6 @@ fn kyber_seen_key(kyber_id: u32, ec_id: u32, base_key: &[u8]) -> String {
     format!("{kyber_id}:{ec_id}:{}", hex::encode(base_key))
 }
 
-fn from_js<T: DeserializeOwned>(value: JsValue) -> Result<T> {
-    serde_wasm_bindgen::from_value(value)
-        .map_err(|error| ChatError::Db(format!("IndexedDB decode: {error}")))
-}
-
 fn idb<T>(result: rexie::Result<T>) -> Result<T> {
     result.map_err(|error| ChatError::Db(error.to_string()))
 }
@@ -1346,7 +1084,6 @@ fn idb<T>(result: rexie::Result<T>) -> Result<T> {
 mod tests {
     use super::*;
     use crate::db::{AuthorityTrust, InboundFailureKind, InboundState};
-    use base64::Engine as _;
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -1406,67 +1143,6 @@ mod tests {
                 deduplicated: false,
             },
         );
-        let imported = ImportedHistoryRecordV1 {
-            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
-            source_record_id: "source-1".into(),
-            source_device_id: 1,
-            conversation: kutup_chat_proto::ConversationId::direct(
-                kutup_chat_proto::AccountAddress::federated("alice", "a.test").unwrap(),
-            ),
-            sender: "alice@a.test".into(),
-            sender_device_id: 1,
-            outgoing: false,
-            content: vec![18],
-            timestamp_ms: 98,
-            delivered: true,
-        };
-        pending.imported_history.insert(
-            (
-                imported.transfer_id.clone(),
-                imported.source_record_id.clone(),
-            ),
-            imported.clone(),
-        );
-        let b64 = |byte, len| base64::engine::general_purpose::STANDARD.encode(vec![byte; len]);
-        let request = kutup_chat_proto::ChatHistoryTransferRequestV1 {
-            version: 1,
-            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
-            account: "alice@a.test".into(),
-            requesting_device_id: 3,
-            manifest_sequence: 1,
-            ephemeral_public_key: b64(1, 32),
-            request_nonce: b64(2, 32),
-            created_at_unix: 1_000,
-            expires_at_unix: 1_900,
-            device_signature: b64(3, 64),
-        };
-        let journal = HistoryTransferJournalV1 {
-            transfer_id: request.transfer_id.clone(),
-            role: crate::HistoryTransferRoleV1::Requester,
-            state: crate::HistoryTransferJournalStateV1::Requested,
-            request,
-            acceptance: None,
-            ephemeral_secret: [4; 32],
-            next_frame_index: 0,
-            updated_at_unix: 1_000,
-        };
-        let transfer_frame = kutup_chat_proto::ChatHistoryTransferFrameV1 {
-            version: 1,
-            transfer_id: journal.transfer_id.clone(),
-            transcript_hash: "05".repeat(32),
-            index: 0,
-            final_frame: true,
-            plaintext_bytes: 1,
-            nonce: b64(6, 24),
-            ciphertext: b64(7, 17),
-        };
-        pending
-            .history_transfer_journals
-            .insert(journal.transfer_id.clone(), Some(journal.clone()));
-        pending.history_transfer_frames.insert(
-            (transfer_frame.transfer_id.clone(), transfer_frame.index),
-            Some(transfer_frame.clone()),
-        );
         pending.inbound.insert(
             "inbound-1".into(),
             Some(InboundEnvelope {
@@ -1521,19 +1197,6 @@ mod tests {
         assert_eq!(db.list_outbox().await.unwrap().len(), 1);
         assert_eq!(db.list_messages().await.unwrap().len(), 1);
         assert_eq!(db.list_sent_messages().await.unwrap().len(), 1);
-        assert_eq!(db.list_imported_history().await.unwrap(), vec![imported]);
-        assert_eq!(
-            db.load_history_transfer_journal(&journal.transfer_id)
-                .await
-                .unwrap(),
-            Some(journal.clone())
-        );
-        assert_eq!(
-            db.list_history_transfer_frames(&journal.transfer_id)
-                .await
-                .unwrap(),
-            vec![transfer_frame]
-        );
         assert!(
             db.load_sent_message("sent-1")
                 .await
@@ -1561,17 +1224,6 @@ mod tests {
         assert_eq!(db.load_last_cursor().await.unwrap(), Some(u64::MAX));
         assert_eq!(db.load_last_sent_seq().await.unwrap(), Some(u64::MAX - 1));
 
-        let mut clear_transfer = Pending::default();
-        clear_transfer
-            .history_transfer_journals
-            .insert(journal.transfer_id.clone(), None);
-        db.apply(&clear_transfer).await.unwrap();
-        assert!(db
-            .list_history_transfer_frames(&journal.transfer_id)
-            .await
-            .unwrap()
-            .is_empty());
-
         let mut consumed = Pending::default();
         consumed.pre_keys.insert(7, None);
         db.apply(&consumed).await.unwrap();
@@ -1584,6 +1236,38 @@ mod tests {
         );
         assert_eq!(db.load_pre_key(7).await.unwrap(), None);
 
+        db.db.close();
+        Rexie::delete(&name).await.unwrap();
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_database_without_a_store_key_is_started_fresh() {
+        let name = format!("kutup-chat-test-unkeyed-{}", js_sys::Date::now());
+        // A database with records but no wrapped store key: what a store
+        // from before sealing, or one from an interrupted first open, holds.
+        let mut builder = Rexie::builder(&name).version(13);
+        for store in ALL_STORES {
+            builder = builder.add_object_store(ObjectStore::new(store));
+        }
+        let raw = builder.build().await.unwrap();
+        let transaction = raw
+            .transaction(&[MESSAGES], TransactionMode::ReadWrite)
+            .unwrap();
+        transaction
+            .store(MESSAGES)
+            .unwrap()
+            .put(
+                &JsValue::from_str("plaintext"),
+                Some(&JsValue::from_str("message-1")),
+            )
+            .await
+            .unwrap();
+        transaction.done().await.unwrap();
+        raw.close();
+
+        let db = IndexedDbChatDb::open(&name, &[3; 32]).await.unwrap();
+        assert!(db.list_messages().await.unwrap().is_empty());
+        assert!(plain_meta(&db.db, STORE_KEY).await.unwrap().is_some());
         db.db.close();
         Rexie::delete(&name).await.unwrap();
     }

@@ -102,7 +102,7 @@ impl ChatContent {
             kind: kind.to_string(),
             sent_at: sent_at.into(),
             seq,
-            message_id: Some(message_id.into()),
+            message_id: message_id.into(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -112,7 +112,7 @@ impl ChatContent {
     }
 
     pub(crate) fn structured_body<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Option<T> {
-        if self.kind != kind || self.v != Self::VERSION || self.message_id.is_none() {
+        if self.kind != kind || self.v != Self::VERSION {
             return None;
         }
         serde_json::from_value(self.body.clone()).ok()
