@@ -72,10 +72,10 @@ export async function verifyPin(pin: string): Promise<PinCheck> {
     return { result: 'ok' }
   } catch (error) {
     if (!isAxiosError(error)) throw error
-    const body = error.response?.data as { error?: string; attemptsLeft?: number } | undefined
-    if (error.response?.status === 404 && body?.error === 'noPin') return { result: 'noPin' }
-    if (error.response?.status === 403 && body?.error === 'signedOut') return { result: 'signedOut' }
-    if (error.response?.status === 403 && body?.error === 'wrongPin') return { result: 'wrong', attemptsLeft: body.attemptsLeft ?? 0 }
+    const body = error.response?.data as { code?: string; attemptsLeft?: number } | undefined
+    if (error.response?.status === 404 && body?.code === 'noPin') return { result: 'noPin' }
+    if (error.response?.status === 403 && body?.code === 'signedOut') return { result: 'signedOut' }
+    if (error.response?.status === 403 && body?.code === 'wrongPin') return { result: 'wrong', attemptsLeft: body.attemptsLeft ?? 0 }
     if (error.response?.status === 429) throw new ReauthLockedError()
     throw error
   }

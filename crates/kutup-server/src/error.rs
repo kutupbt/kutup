@@ -55,6 +55,13 @@ impl AppError {
         Self::new(StatusCode::UNAUTHORIZED, message)
     }
 
+    /// A wrong password or login key (`invalidCredentials`), told apart from
+    /// an expired session (`unauthorized`).
+    pub fn invalid_credentials() -> Self {
+        Self::unauthorized("invalid credentials")
+            .with_details(serde_json::json!({ "code": "invalidCredentials" }))
+    }
+
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, message)
     }
@@ -155,14 +162,72 @@ mod tests {
         assert_eq!(body["code"], "invalid");
     }
 
+    /// The codes docs/api.md's "Errors" tables list.
+    fn documented_codes() -> std::collections::HashSet<String> {
+        let api = include_str!("../../../docs/api.md");
+        let start = api
+            .find("\n## Errors\n")
+            .expect("docs/api.md has an Errors section");
+        let end = api[start + 1..]
+            .find("\n## ")
+            .map_or(api.len(), |e| start + 1 + e);
+        let mut codes = std::collections::HashSet::new();
+        for line in api[start..end].lines().filter(|l| l.starts_with('|')) {
+            // The code column: the first cell of the specific codes' table,
+            // the second of the defaults' table.
+            for cell in line.split('|').take(3) {
+                let mut rest = cell;
+                while let Some(at) = rest.find('`') {
+                    let after = &rest[at + 1..];
+                    let Some(close) = after.find('`') else { break };
+                    codes.insert(after[..close].to_owned());
+                    rest = &after[close + 1..];
+                }
+            }
+        }
+        codes
+    }
+
+    /// Every `"code" : "<word>"` in `source`, whatever the spacing.
+    fn json_codes(source: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut rest = source;
+        while let Some(at) = rest.find("\"code\"") {
+            rest = &rest[at + 6..];
+            let Some(after) = rest.trim_start().strip_prefix(':') else {
+                continue;
+            };
+            let Some(after) = after.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let code: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !code.is_empty() && after[code.len()..].starts_with('"') {
+                found.push(code);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn codes_are_found_whatever_the_spacing() {
+        // Built at run time, so the scan of this very file does not find it.
+        let q = '"';
+        let source = format!(
+            "json!({{{q}code{q}:{q}a1{q}}}) json!({{ {q}code{q} : {q}b_2{q} }}) {q}code{q}: x"
+        );
+        assert_eq!(json_codes(&source), vec!["a1".to_owned(), "b_2".to_owned()]);
+    }
+
     #[test]
     fn every_code_the_server_uses_is_documented() {
-        let api = include_str!("../../../docs/api.md");
-        let documented = |code: &str| api.contains(&format!("`{code}`"));
-        for status in [400u16, 401, 403, 404, 409, 413, 422, 429] {
+        let documented = documented_codes();
+        for status in [400u16, 401, 403, 404, 409, 413, 422, 429, 418] {
             let code = default_code(StatusCode::from_u16(status).unwrap());
             assert!(
-                documented(code),
+                documented.contains(code),
                 "default code {code} is not in docs/api.md"
             );
         }
@@ -178,14 +243,8 @@ mod tests {
                     stack.push(path);
                 } else if path.extension().is_some_and(|e| e == "rs") {
                     let source = std::fs::read_to_string(&path).unwrap();
-                    let mut rest = source.as_str();
-                    while let Some(at) = rest.find("\"code\": \"") {
-                        rest = &rest[at + 9..];
-                        let code: String = rest
-                            .chars()
-                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                            .collect();
-                        if !code.is_empty() && !documented(&code) {
+                    for code in json_codes(&source) {
+                        if !documented.contains(&code) {
                             missing.push(format!("{code} ({})", path.display()));
                         }
                     }

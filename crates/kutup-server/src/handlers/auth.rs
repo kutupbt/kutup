@@ -815,7 +815,7 @@ pub async fn verify_account_login_key(
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?
-            .ok_or_else(|| AppError::unauthorized("invalid credentials"))?;
+            .ok_or_else(AppError::invalid_credentials)?;
     let lockout = lockout_key(Some(user_id), "");
     if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
         return Err(AppError::too_many_requests(
@@ -828,7 +828,7 @@ pub async fn verify_account_login_key(
     if !verify_hash(&login_key, &login_key_hash) {
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         tracing::warn!(user_id = %user_id, "account password re-check failed");
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     }
     ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
     Ok(())
@@ -910,7 +910,7 @@ pub async fn login(
         // Run bcrypt anyway to keep timing constant.
         let _ = bcrypt::verify("dummy", &FAKE_BCRYPT_HASH);
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     };
 
     if !is_active {
@@ -923,7 +923,7 @@ pub async fn login(
 
     if !verify_hash(&login_key_bytes, &login_key_hash) {
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     }
     ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
 

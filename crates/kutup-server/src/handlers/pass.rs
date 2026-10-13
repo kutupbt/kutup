@@ -260,7 +260,10 @@ pub struct VerifyPinRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PinRefusal {
+    /// The same word as `code`, kept for readers of the text.
     error: &'static str,
+    /// `wrongPin`, `signedOut` or `noPin` (docs/api.md, "Errors").
+    code: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     attempts_left: Option<i16>,
 }
@@ -270,6 +273,7 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
         status,
         Json(PinRefusal {
             error,
+            code: error,
             attempts_left,
         }),
     )

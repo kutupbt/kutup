@@ -104,6 +104,25 @@ pub async fn session_version_header(mut req: Request, next: Next) -> Response {
     let slot = SessionVersionSlot::default();
     req.extensions_mut().insert(slot.clone());
     let mut response = next.run(req).await;
+    // Not on an answer a cache keeps (thumbnails, map tiles): an old copy
+    // would bring back an old version and send apps re-reading their account.
+    let cacheable = response
+        .headers()
+        .get(axum::http::header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("immutable")
+                || value.split(',').any(|part| {
+                    part.trim()
+                        .strip_prefix("max-age=")
+                        .and_then(|age| age.parse::<u64>().ok())
+                        .is_some_and(|age| age > 0)
+                })
+        });
+    if cacheable {
+        return response;
+    }
     if let Some(version) = slot.0.lock().unwrap().take() {
         if let Ok(value) = axum::http::HeaderValue::from_str(&version) {
             response.headers_mut().insert(SESSION_VERSION_HEADER, value);
