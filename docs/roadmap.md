@@ -657,10 +657,13 @@ device: ergonomics; the account sets the security floor) is in
 - Chat privacy options (read receipts, typing indicators, link previews,
   always relay calls, default disappearing timer) move into the account,
   sealed; notification content stays a stricter-only device override.
+  Owner: third session.
 - Pass auto-lock delay and unlock mode move into `pass_settings` as the floor.
+  Owner: third session.
 - Showing the account when joining a meeting link moves into the account, off
-  by default.
-- The account lists which devices keep a Mail search index.
+  by default. Owner: third session.
+- The account lists which devices keep a Mail search index. Owner: second
+  session.
 
 ### Pass (KeePass vaults in Drive)
 
