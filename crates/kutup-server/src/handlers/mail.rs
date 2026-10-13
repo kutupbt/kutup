@@ -582,19 +582,14 @@ pub struct SearchChanges {
 }
 
 /// Where the change feed is: a transaction, then a message id after it.
-fn change_cursor(xid: i64, id: Uuid) -> String {
-    format!("{xid}.{id}")
-}
-
-fn parse_change_cursor(value: &str) -> AppResult<(i64, Uuid)> {
-    let bad = || AppError::bad_request("since is not a cursor");
-    let (xid, id) = value.split_once('.').ok_or_else(bad)?;
-    let xid: i64 = xid.parse().map_err(|_| bad())?;
-    if xid < 0 {
-        return Err(bad());
-    }
-    Ok((xid, Uuid::parse_str(id).map_err(|_| bad())?))
-}
+/// Body search's feed: an account's own mail (docs/sync-feeds.md).
+pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Feed {
+    rows: "mail_messages",
+    rows_filter: "user_id = $1",
+    owner_column: "owner",
+    tombstones: "mail_message_tombstones",
+    floors: "mail_change_floors",
+};
 
 /// `GET /api/mail/search-index/changes?since=` — what changed in your own
 /// mailbox since `since`, for body search to keep the list rows it holds
@@ -623,65 +618,20 @@ pub async fn search_index_changes(
     let since = query
         .since
         .as_deref()
-        .map(parse_change_cursor)
+        .map(crate::change_feed::Cursor::parse)
         .transpose()?;
     let mut tx = state.pool.begin().await?;
-    // Every transaction below this one has finished.
-    let upper: i64 =
-        sqlx::query_scalar("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
-            .fetch_one(&mut *tx)
-            .await?;
-    let now = || SearchChanges {
-        changed: Vec::new(),
-        gone: Vec::new(),
-        next: change_cursor(upper, Uuid::nil()),
-        more: false,
-        resync: false,
-    };
-    let Some((since_xid, since_id)) = since else {
-        return Ok(Json(now()));
-    };
-    let floor: Option<i64> =
-        sqlx::query_scalar("SELECT floor_xid FROM mail_change_floors WHERE owner = $1")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    // Changes since then are no longer kept, or the cursor is from another
-    // database (restored, or a new cluster: transactions count from low again).
-    if floor.is_some_and(|floor| floor >= since_xid) || since_xid > upper {
+    let page = crate::change_feed::page(&mut tx, &SEARCH_FEED, user_id, since, limit).await?;
+    if page.resync || since.is_none() {
         return Ok(Json(SearchChanges {
-            resync: true,
-            ..now()
+            changed: Vec::new(),
+            gone: Vec::new(),
+            next: page.next,
+            more: false,
+            resync: page.resync,
         }));
     }
-    // Both kinds in one order, (transaction, id), after the cursor and
-    // below `upper`.
-    let keys: Vec<(i64, Uuid, bool)> = sqlx::query_as(
-        "SELECT change_xid, id, false FROM mail_messages
-          WHERE owner = $1 AND user_id = $1
-            AND (change_xid, id) > ($2, $3) AND change_xid < $4
-         UNION ALL
-         SELECT change_xid, id, true FROM mail_message_tombstones
-          WHERE owner = $1
-            AND (change_xid, id) > ($2, $3) AND change_xid < $4
-         ORDER BY 1, 2
-         LIMIT $5",
-    )
-    .bind(user_id)
-    .bind(since_xid)
-    .bind(since_id)
-    .bind(upper)
-    .bind(limit + 1)
-    .fetch_all(&mut *tx)
-    .await?;
-    let more = keys.len() as i64 > limit;
-    let keys = &keys[..keys.len().min(limit as usize)];
-    let next = match keys.last() {
-        Some((xid, id, _)) if more => change_cursor(*xid, *id),
-        _ => change_cursor(upper, Uuid::nil()),
-    };
-    let changed_ids: Vec<Uuid> = keys.iter().filter(|k| !k.2).map(|k| k.1).collect();
-    let gone_ids: Vec<Uuid> = keys.iter().filter(|k| k.2).map(|k| k.1).collect();
+    let (changed_ids, gone_ids, next, more) = (page.changed, page.gone, page.next, page.more);
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
           WHERE owner = $1 AND user_id = $1 AND id = ANY($2)
@@ -718,20 +668,7 @@ pub async fn search_index_changes(
 /// Forgets body search's tombstones after 30 days; an index that has not
 /// caught up since then builds again (its cursor is at or below the floor).
 pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u64> {
-    let forgotten = sqlx::query(
-        "WITH gone AS (
-             DELETE FROM mail_message_tombstones
-              WHERE deleted_at < now() - interval '30 days'
-             RETURNING owner, change_xid)
-         INSERT INTO mail_change_floors (owner, floor_xid)
-         SELECT owner, max(change_xid) FROM gone GROUP BY owner
-         ON CONFLICT (owner) DO UPDATE
-            SET floor_xid = GREATEST(mail_change_floors.floor_xid, EXCLUDED.floor_xid)",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(forgotten)
+    crate::change_feed::forget_tombstones(pool, &SEARCH_FEED, 30).await
 }
 
 /// A page of a place.
