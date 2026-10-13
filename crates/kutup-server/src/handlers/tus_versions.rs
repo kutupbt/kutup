@@ -330,7 +330,15 @@ pub(super) async fn finish(
         .clone()
         .filter(|_| collection_now == landing.collection_id);
     let stored = match record(&mut tx, &landing, content_hash.as_deref()).await {
-        Ok(seq) => tx.commit().await.map(|()| seq).map_err(AppError::from),
+        Ok(seq) => match tx.commit().await {
+            Ok(()) => Ok(seq),
+            // A commit can fail in the reporting after it took effect: look
+            // before deleting the object of a version that landed.
+            Err(error) => match landed_version(state, landing.upload_id).await {
+                Some(seq) => Ok(seq),
+                None => Err(AppError::from(error)),
+            },
+        },
         Err(error) => {
             // Released before the row is deleted below: it holds the row's lock.
             drop(tx);
@@ -371,6 +379,16 @@ pub(super) async fn finish(
             tus_error(AppError::internal("db store version"))
         }
     }
+}
+
+/// The version's recorded log position, if it was stored after all.
+async fn landed_version(state: &AppState, version_id: Uuid) -> Option<i64> {
+    sqlx::query_scalar("SELECT seq_at_snapshot FROM file_versions WHERE id = $1")
+        .bind(version_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Whether a check's error refuses the upload for good (rather than failing

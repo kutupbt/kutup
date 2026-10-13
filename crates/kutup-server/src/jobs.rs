@@ -925,6 +925,16 @@ pub async fn purge_file_root(
     guard: PurgeGuard,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
+    // An open upload of a new version is locked before the file, the order
+    // its last part takes them in (`tus::patch`: the upload row, then the
+    // file), so the two never deadlock.
+    let open_versions: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id FROM uploads
+         WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
+    )
+    .bind(file_id)
+    .fetch_all(&mut *tx)
+    .await?;
     let row: Option<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         // A pruned original was released already.
         "SELECT (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
@@ -986,15 +996,14 @@ pub async fn purge_file_root(
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
-    // An open upload of a new version of it goes with it (its reservation
-    // and the file's one upload slot); its parts are aborted after commit.
-    let open_versions: Vec<(String, String)> = sqlx::query_as(
-        "DELETE FROM uploads WHERE file_id = $1 AND kind = 'version'
-         RETURNING storage_path, s3_upload_id",
-    )
-    .bind(file_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    // The open upload of a new version goes with it (its reservation and
+    // the file's one upload slot); its parts are aborted after commit.
+    for (upload_id, _, _) in &open_versions {
+        sqlx::query("DELETE FROM uploads WHERE id = $1")
+            .bind(upload_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("DELETE FROM files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)
@@ -1010,7 +1019,7 @@ pub async fn purge_file_root(
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
     // files/{id}/ — the original, versions, assets and thumbnails.
-    for (path, upload) in &open_versions {
+    for (_, path, upload) in &open_versions {
         let _ = storage.abort_multipart(path, upload).await;
     }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;

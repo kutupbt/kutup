@@ -864,7 +864,7 @@ pub async fn patch(
         drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete upload");
     }
-    if tx.commit().await.is_err() {
+    if tx.commit().await.is_err() && !file_landed(&state, file_id).await {
         drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db commit");
     }
@@ -878,6 +878,16 @@ pub async fn patch(
         ],
     )
         .into_response()
+}
+
+/// Whether the file row exists after all: a commit can fail in the reporting
+/// after it took effect, and then its object must stay.
+async fn file_landed(state: &AppState, file_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM files WHERE id = $1)")
+        .bind(file_id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(true)
 }
 
 /// After the parts were stitched, storing the file failed: the upload cannot
@@ -993,16 +1003,23 @@ pub async fn delete(
 
     // The uploader's own upload, or an upload of a new version of a file in
     // one of the caller's folders: an owner can free their file's one upload
-    // slot from someone who left it open.
+    // slot from someone who left it open. Locked for the whole cancel: a last
+    // part landing meanwhile holds the row, and once it lands the row is gone
+    // and this answers 404 (the upload finished), never 204.
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
+    };
     let row: Option<(String, String)> = match sqlx::query_as(
         "SELECT u.storage_path, u.s3_upload_id FROM uploads u
          WHERE u.id = $1 AND (u.user_id = $2 OR (u.kind = 'version' AND EXISTS (
              SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
-             WHERE f.id = u.file_id AND c.owner_user_id = $2)))",
+             WHERE f.id = u.file_id AND c.owner_user_id = $2)))
+         FOR UPDATE OF u",
     )
     .bind(upload_id)
     .bind(user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(value) => value,
@@ -1027,12 +1044,11 @@ pub async fn delete(
         )
             .into_response();
     }
-    if sqlx::query("DELETE FROM uploads WHERE id=$1")
+    let deleted = sqlx::query("DELETE FROM uploads WHERE id=$1")
         .bind(upload_id)
-        .execute(&state.pool)
-        .await
-        .is_err()
-    {
+        .execute(&mut *tx)
+        .await;
+    if deleted.is_err() || tx.commit().await.is_err() {
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete");
     }
 
