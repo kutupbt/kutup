@@ -700,6 +700,22 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   and `status` (noticing another agent in the shell) are built.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
+- **Idea (deferred, decided 2026-10-13): fingerprint / face unlock on the
+  web.**
+  - How: a passkey made on the device (Touch ID, Windows Hello, Android
+    fingerprint) whose WebAuthn PRF output protects an unlock key kept only
+    on that device. Unlocking asks for the fingerprint, and the vault opens
+    with no password typed.
+  - The server stores nothing for it, which is stronger than the PIN, whose
+    hash the server keeps.
+  - Offered only where the browser and authenticator support PRF; the PIN
+    and the password stay as fallbacks. It becomes a fourth unlock mode next
+    to password, PIN and one click.
+  - Bitwarden's web vault unlocks with a passkey this way. Proton Pass has
+    fingerprint unlock in its apps, not on the web.
+  - Related, separate decision: the same passkey as a second sign-in factor
+    for the account (only TOTP today).
+  - Adds no stored format, so no wipe is needed.
 
 ---
 
