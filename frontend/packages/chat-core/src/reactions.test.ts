@@ -16,7 +16,7 @@ function operation(
   const message: ChatHistoryEntry = {
     id: `${reactor}-${timestampMs}-${seq}-${senderDeviceId}`,
     conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    peer: 'bob@b.test',
+    sender: 'bob@b.test',
     direction: reactor === 'alice@a.test' ? 'outgoing' : 'incoming',
     senderDeviceId,
     timestampMs,

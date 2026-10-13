@@ -16,7 +16,7 @@ function entry(
   return {
     id,
     conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    peer: 'bob@b.test',
+    sender: 'bob@b.test',
     direction: 'incoming',
     senderDeviceId: 1,
     timestampMs,

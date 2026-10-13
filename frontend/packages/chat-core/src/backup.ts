@@ -990,9 +990,7 @@ export class ChatBackupCoordinator {
           recordId,
           mutationSequence: previous?.record.mutationSequence ?? 1,
           conversation: entry.conversation,
-          sender: entry.direction === 'outgoing'
-            ? `${this.options.username}@${this.options.serverName}`
-            : entry.peer,
+          sender: entry.sender,
           senderDeviceId: entry.senderDeviceId ?? this.options.deviceId,
           outgoing: entry.direction === 'outgoing',
           content,
@@ -1606,7 +1604,7 @@ function entryOf(record: BackupDisplayRecord): ChatHistoryEntry {
   return {
     id: record.recordId,
     conversation: record.conversation,
-    peer: record.sender,
+    sender: record.sender,
     direction: record.outgoing ? 'outgoing' : 'incoming',
     senderDeviceId: record.senderDeviceId || undefined,
     timestampMs: record.timestampMs,

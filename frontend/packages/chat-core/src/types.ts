@@ -309,8 +309,8 @@ export interface ChangeMark {
 export interface ChatHistoryEntry {
   id: string
   conversation: ConversationId
-  /** Direct: the other account. Group: the sender's account for an incoming entry, the group id for an outgoing one. */
-  peer: string
+  /** Who wrote it: an account's canonical `username@server` (this account's own when outgoing). Which chat: `conversation`. */
+  sender: string
   direction: 'incoming' | 'outgoing'
   senderDeviceId?: number
   cursor?: string

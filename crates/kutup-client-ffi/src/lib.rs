@@ -451,38 +451,15 @@ fn worker_main(
 }
 
 async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
+    let me = engine.session().user().to_owned();
     let incoming = engine.session().history().await?;
     let outgoing = engine.session().sent_history().await?;
     let mut history = Vec::with_capacity(incoming.len() + outgoing.len());
     for message in incoming {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        history.push(ChatHistoryEntry {
-            id: message.id,
-            peer: message.peer,
-            direction: ChatDirection::Incoming,
-            sender_device_id: Some(message.sender_device_id),
-            cursor: Some(message.cursor),
-            timestamp_ms: message.received_at,
-            delivered: true,
-            deduplicated: false,
-            content: content.into(),
-        });
+        history.push(incoming_entry(message)?);
     }
     for message in outgoing {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        history.push(ChatHistoryEntry {
-            id: message.send_id,
-            peer: message.peer,
-            direction: ChatDirection::Outgoing,
-            sender_device_id: None,
-            cursor: None,
-            timestamp_ms: message.created_at,
-            delivered: message.delivered,
-            deduplicated: message.deduplicated,
-            content: content.into(),
-        });
+        history.push(outgoing_entry(message, &me)?);
     }
     history.sort_by(|left, right| {
         left.timestamp_ms
@@ -490,6 +467,42 @@ async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(history)
+}
+
+/// A received message: written by the other account, in its chat.
+fn incoming_entry(message: kutup_chat_core::InboxMessage) -> Result<ChatHistoryEntry> {
+    let content = serde_json::from_slice::<ChatContent>(&message.content)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(ChatHistoryEntry {
+        id: message.id,
+        conversation: message.peer.clone(),
+        sender: message.peer,
+        direction: ChatDirection::Incoming,
+        sender_device_id: Some(message.sender_device_id),
+        cursor: Some(message.cursor),
+        timestamp_ms: message.received_at,
+        delivered: true,
+        deduplicated: false,
+        content: content.into(),
+    })
+}
+
+/// A sent message: written by this account (`me`), in the other's chat.
+fn outgoing_entry(message: kutup_chat_core::SentMessage, me: &str) -> Result<ChatHistoryEntry> {
+    let content = serde_json::from_slice::<ChatContent>(&message.content)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(ChatHistoryEntry {
+        id: message.send_id,
+        conversation: message.peer,
+        sender: me.to_owned(),
+        direction: ChatDirection::Outgoing,
+        sender_device_id: None,
+        cursor: None,
+        timestamp_ms: message.created_at,
+        delivered: message.delivered,
+        deduplicated: message.deduplicated,
+        content: content.into(),
+    })
 }
 
 fn take_key(mut bytes: Vec<u8>, name: &str) -> Result<[u8; 32]> {
@@ -515,3 +528,53 @@ fn worker_stopped() -> KutupChatError {
 }
 
 uniffi::setup_scaffolding!();
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn content() -> Vec<u8> {
+        serde_json::to_vec(&ChatContent::text_with_id(
+            "m1",
+            "2026-07-16T12:00:00Z",
+            1,
+            "hi",
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_outgoing_entry_is_written_by_this_account_in_the_others_chat() {
+        let entry = outgoing_entry(
+            kutup_chat_core::SentMessage {
+                send_id: "s1".into(),
+                peer: "bob@chat.test".into(),
+                sender_device_id: 7,
+                content: content(),
+                created_at: 1,
+                delivered_at: None,
+                delivered: false,
+                deduplicated: false,
+            },
+            "alice@chat.test",
+        )
+        .unwrap();
+        assert_eq!(entry.conversation, "bob@chat.test");
+        assert_eq!(entry.sender, "alice@chat.test");
+    }
+
+    #[test]
+    fn an_incoming_entry_is_written_by_the_other_account() {
+        let entry = incoming_entry(kutup_chat_core::InboxMessage {
+            id: "m1".into(),
+            peer: "bob@chat.test".into(),
+            sender_device_id: 3,
+            cursor: 9,
+            content: content(),
+            received_at: 1,
+        })
+        .unwrap();
+        assert_eq!(entry.conversation, "bob@chat.test");
+        assert_eq!(entry.sender, "bob@chat.test");
+    }
+}

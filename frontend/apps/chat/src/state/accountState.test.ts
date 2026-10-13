@@ -20,7 +20,7 @@ function entry(
   return {
     id: `e${seq}`,
     conversation,
-    peer: conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
+    sender: conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
     direction,
     senderDeviceId: 1,
     timestampMs: at,
