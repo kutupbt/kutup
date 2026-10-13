@@ -16,6 +16,7 @@ use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
+use sha2::Digest;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -354,7 +355,25 @@ pub(crate) fn save_version(
         },
     );
     match stored {
-        Ok(row) => Ok(Some(row.id)),
+        Ok(row) => {
+            let followed = crate::names::folder_hash_key(vault.keys, vault.collection_id).and_then(
+                |hash_key| {
+                    let sha256: [u8; 32] = sha2::Sha256::digest(contents).into();
+                    crate::uploader::follow_new_content(
+                        client,
+                        &file,
+                        &file_key,
+                        &hash_key,
+                        contents.len() as u64,
+                        &sha256,
+                    )
+                },
+            );
+            if let Err(e) = followed {
+                eprintln!("warning: the vault's details did not follow its new version: {e:#}");
+            }
+            Ok(Some(row.id))
+        }
         Err(error) if version_conflict(&error).is_some() => Ok(None),
         Err(error) => Err(error).context("save vault version"),
     }

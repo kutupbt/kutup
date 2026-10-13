@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use sha2::Digest;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -209,6 +210,22 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
             based_on: None,
         },
     )?;
+
+    let followed =
+        crate::names::folder_hash_key(&found.keys, &found.collection.id).and_then(|hash_key| {
+            let sha256: [u8; 32] = sha2::Sha256::digest(&old).into();
+            crate::uploader::follow_new_content(
+                &ctx.client,
+                row,
+                file_key,
+                &hash_key,
+                old.len() as u64,
+                &sha256,
+            )
+        });
+    if let Err(e) = followed {
+        eprintln!("warning: the file's details did not follow the restored version: {e:#}");
+    }
 
     let short = &version_id[..version_id.len().min(8)];
     if json {

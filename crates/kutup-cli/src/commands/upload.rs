@@ -10,21 +10,17 @@
 //! is one, so uploading it again sends only what is new or changed.
 
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
 
 use crate::api::{ApiError, Client, Collection, NameHolder};
 use crate::context::require_session;
-use crate::cryptohelpers::{
-    decrypt_collection_key, decrypt_collections, decrypt_file_meta, find_collection,
-};
+use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
 use crate::keyring::Keyring;
 use crate::session::{Session, Store};
 use crate::uploader::{
-    self, create_sub_collection, file_name, now_unix, Naming, Progress, UploadRequest, Uploaded,
+    self, create_sub_collection, file_name, now_unix, Progress, UploadRequest, Uploaded,
     RESUME_MAX_IDLE_SECS,
 };
 
@@ -59,7 +55,6 @@ pub fn run(
         store: &ctx.store,
         session: &ctx.session,
         master_key: &master_key,
-        cols: &cols,
         no_resume,
         keep_both,
     };
@@ -137,7 +132,6 @@ struct Uploads<'a> {
     store: &'a Store,
     session: &'a Session,
     master_key: &'a [u8],
-    cols: &'a [Collection],
     no_resume: bool,
     keep_both: bool,
 }
@@ -160,6 +154,7 @@ impl Uploads<'_> {
         target: &Target,
         name: Option<&str>,
         progress: Progress,
+        sha256: Option<[u8; 32]>,
     ) -> Result<Uploaded> {
         uploader::upload_streaming(
             self.client,
@@ -171,18 +166,21 @@ impl Uploads<'_> {
                 collection_key: &target.key,
                 resume: !self.no_resume,
                 progress,
-                naming: Naming::Claim(target.hash_key),
+                hash_key: target.hash_key,
                 name,
+                sha256,
             },
         )
     }
 
     /// One file into `target` under its name: uploaded, already there, or
-    /// (`--keep-both`) beside the different file holding the name.
+    /// (`--keep-both`) beside the different file holding the name, under the
+    /// first numbered name free there.
     fn file(&self, path: &Path, target: &Target, progress: Progress) -> Result<Placed> {
         let name = file_name(&path.to_string_lossy());
         let quiet = matches!(progress, Progress::Quiet);
-        let holder = match self.upload(path, target, None, progress) {
+        let sha256 = uploader::sha256_file(path)?;
+        let holder = match self.upload(path, target, None, progress, Some(sha256)) {
             Ok(done) => return Ok(Placed::Uploaded(done)),
             Err(e) => match name_taken(&e) {
                 Some(holder) => holder,
@@ -190,63 +188,45 @@ impl Uploads<'_> {
             },
         };
         if holder.kind == "file" {
-            let local = content_hash_of(path, &target.hash_key)?;
+            let local = crate::names::content_hash(&target.hash_key, &sha256)?;
             if holder.content_hash.as_deref() == Some(local.as_str()) {
                 return Ok(Placed::AlreadyThere(holder.id));
             }
         }
-        let mut taken = self.names_in(target)?;
-        if !self.keep_both {
-            bail!(
-                "{name} is already in that folder ({}) — pass --keep-both to upload it as {:?}",
-                if holder.kind == "folder" {
-                    "a folder"
-                } else {
-                    "a different file"
-                },
-                crate::names::free_name(&name, &taken)
-            );
-        }
+        let mut tried = HashSet::new();
         for _ in 0..3 {
-            let free = crate::names::free_name(&name, &taken);
+            let (free, _) = crate::names::first_available(
+                self.client,
+                Some(&target.id),
+                &target.hash_key,
+                crate::names::numbered_names(&name),
+                |candidate| tried.contains(&crate::names::canonical(candidate)),
+            )?;
+            if !self.keep_both {
+                bail!(
+                    "{name} is already in that folder ({}) — pass --keep-both to upload it as {free:?}",
+                    if holder.kind == "folder" {
+                        "a folder"
+                    } else {
+                        "a different file"
+                    },
+                );
+            }
             let progress = if quiet {
                 Progress::Quiet
             } else {
                 Progress::Bar
             };
-            match self.upload(path, target, Some(&free), progress) {
+            // Free when asked; taken meanwhile, the next one is asked for.
+            match self.upload(path, target, Some(&free), progress, Some(sha256)) {
                 Ok(done) => return Ok(Placed::Uploaded(done)),
                 Err(e) if name_taken(&e).is_some() => {
-                    taken.insert(crate::names::canonical(&free));
+                    tried.insert(crate::names::canonical(&free));
                 }
                 Err(e) => return Err(e),
             }
         }
         bail!("no free name for {name} in that folder")
-    }
-
-    /// The names in a folder now (its files' and subfolders'), canonical.
-    fn names_in(&self, target: &Target) -> Result<HashSet<String>> {
-        let col = find_collection(self.cols, &target.id).context("the folder vanished")?;
-        let keys = Keyring::load(self.client, col, &target.key, self.master_key)?;
-        let mut names: HashSet<String> = self
-            .client
-            .list_files(&target.id)?
-            .iter()
-            .map(|f| crate::names::canonical(&decrypt_file_meta(f, &keys).0))
-            .collect();
-        let fresh = decrypt_collections(
-            self.client.list_collections()?,
-            self.master_key,
-            self.session,
-        );
-        names.extend(
-            fresh
-                .iter()
-                .filter(|c| c.parent_collection_id.as_deref() == Some(target.id.as_str()))
-                .map(|c| crate::names::canonical(&c.name)),
-        );
-        Ok(names)
     }
 
     /// The subfolder `name` of `parent`: the one there, or a new one.
@@ -336,21 +316,6 @@ fn name_taken(error: &anyhow::Error) -> Option<NameHolder> {
         .chain()
         .find_map(|cause| cause.downcast_ref::<ApiError>())
         .and_then(|api| api.name_taken.clone())
-}
-
-/// The local file's content hash under a folder's hash key.
-fn content_hash_of(path: &Path, hash_key: &[u8; 32]) -> Result<String> {
-    let mut file = std::fs::File::open(path)?;
-    let mut digest = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&buf[..n]);
-    }
-    crate::names::content_hash(hash_key, &digest.finalize().into())
 }
 
 /// Accumulates a recursive upload's results for the summary / `--json` doc.

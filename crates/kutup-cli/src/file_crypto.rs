@@ -275,6 +275,7 @@ pub fn move_request(
             to_collection_key,
         )?,
         name_hash: None,
+        content_hash: None,
     })
 }
 
