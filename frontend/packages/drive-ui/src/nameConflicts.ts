@@ -6,7 +6,15 @@ import { useSyncExternalStore } from 'react'
  * time, and may apply the answer to the rest of the batch.
  */
 
-export type ConflictChoice = 'replace' | 'keepBoth' | 'skip'
+export type ConflictChoice = 'replace' | 'keepBoth' | 'skip' | 'restart'
+
+/**
+ * Why a Replace could not go ahead: the file there changed while this one
+ * was chosen or sent (`changed`); an earlier replacement of it from this
+ * account is still open (`ownUpload`, which may be cancelled and started
+ * again); or someone else is replacing it (`othersUpload`).
+ */
+export type ReplaceProblem = 'changed' | 'ownUpload' | 'othersUpload'
 
 export interface ConflictQuestion {
   /** The name being uploaded. */
@@ -19,8 +27,8 @@ export interface ConflictQuestion {
   keptAs: string
   /** Replacing is offered: a file holds the name, and this content can become its newest version. */
   canReplace: boolean
-  /** A file holds the name, but this one is too large to send as its version. */
-  replaceTooLarge?: boolean
+  /** Asked again after a Replace could not go ahead: Keep both or Skip (or, for `ownUpload`, start again). */
+  problem?: ReplaceProblem
   /** More items of the same batch may still clash ("apply to all" is offered). */
   more: boolean
 }

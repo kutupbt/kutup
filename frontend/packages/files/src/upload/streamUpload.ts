@@ -19,7 +19,7 @@
 
 import * as tus from 'tus-js-client'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
-import { createFileRecordV1, openFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
+import { createFileRecordV1, openFileRecordV1, renameFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
 import {
   DRIVE_FILE_BLOB_CIPHER_CHUNK,
   DRIVE_FILE_BLOB_PREFIX_BYTES,
@@ -65,8 +65,12 @@ export interface StreamUploadOptions {
 export interface UploadedFile {
   fileId: string
   fileKey: Uint8Array
-  /** A new file's key is generation 1. */
-  keyGeneration: 1
+  /** A new file's key is generation 1; a new version is sealed at the file's current one. */
+  keyGeneration: number
+  /** A new version of an existing file (its metadata and content hash landed with it). */
+  version?: boolean
+  /** That version's id (the upload's): what its thumbnails are drawn from. */
+  versionId?: string
   collectionId: string
   /** SHA-256 of the plaintext (base64), as sealed in its metadata; null if it has none. */
   contentSha256: string | null
@@ -79,6 +83,28 @@ export interface UploadedFile {
 export class UploadNameTaken extends Error {
   constructor(readonly holder: { kind: 'file' | 'folder'; id: string; contentHash: string | null } | null) {
     super('an item with this name is already here')
+  }
+}
+
+/**
+ * A new version was refused because the file changed since it was chosen
+ * (docs/api.md, "POST /api/uploads with versionOf"): another version
+ * (`version`), its metadata (`revision`), or its key (`key`). The server
+ * discarded the upload; sending it again as it was would only fail again.
+ */
+export class VersionConflict extends Error {
+  constructor(readonly kind: 'version' | 'revision' | 'key') {
+    super('the file changed since this upload started')
+  }
+}
+
+/**
+ * Another upload of a new version of this file is open: this account's
+ * (`uploadId`, to go on with or cancel), or someone else's (null).
+ */
+export class VersionUploading extends Error {
+  constructor(readonly uploadId: string | null) {
+    super('a new version of this file is being uploaded')
   }
 }
 
@@ -182,6 +208,120 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
   }
 }
 
+/** The file a new version is for, as it is now (re-keyed to its folder's epoch first). */
+export interface VersionTarget {
+  fileId: string
+  collectionId: string
+  /** The folder epoch its key is wrapped at, and that wrap. */
+  keyEpoch: number
+  fileKeyEnvelope: string
+  /** Its current key and that key's generation: the new content is sealed under it. */
+  fileKey: Uint8Array
+  keyGeneration: number
+  /** Its metadata revision now: the new metadata is the next. */
+  metadataRevision: number
+}
+
+export interface StreamVersionOptions {
+  file: File
+  target: VersionTarget
+  /** The file's whole new metadata (its name as it is, the new size and `sha256`). */
+  metadata: FileMetadataV1
+  /** The new content's hash in its folder, recorded as the version lands. */
+  contentHash?: string
+  /** Stored only while the file still holds this version (an id, or `original`). */
+  basedOn?: string
+  accessToken: string | (() => Promise<string>)
+  onProgress?: (plainSent: number, plainTotal: number) => void
+  onWaiting?: (waiting: boolean) => void
+  signal?: AbortSignal
+  resumable?: { owner: string }
+}
+
+/** The tus `Upload-Metadata` of a new version (exported for tests). */
+export function versionUploadMetadata(
+  target: Pick<VersionTarget, 'fileId'>,
+  sealed: { metadataEnvelope: string; metadataRevision: number },
+  opts: Pick<StreamVersionOptions, 'contentHash' | 'basedOn'>,
+): Record<string, string> {
+  const metadata: Record<string, string> = {
+    versionOf: target.fileId,
+    metadataEnvelope: sealed.metadataEnvelope,
+    metadataRevision: String(sealed.metadataRevision),
+  }
+  if (opts.contentHash) metadata.contentHash = opts.contentHash
+  if (opts.basedOn) metadata.basedOn = opts.basedOn
+  return metadata
+}
+
+/**
+ * Upload `file` as the newest version of an existing file, over tus like a
+ * new file — resumable after a reload, at any size — sealed for the file at
+ * its current key generation, with its next metadata (and content hash)
+ * landing in the same step (Proton's revisions; docs/api.md). A file
+ * changed meanwhile rejects `VersionConflict`; another open upload of a
+ * version of it, `VersionUploading`.
+ */
+export async function streamVersionUpload(opts: StreamVersionOptions): Promise<UploadedFile> {
+  const { target } = opts
+  const sealed = await renameFileRecordV1(
+    { id: target.fileId, keyGeneration: target.keyGeneration, metadataRevision: target.metadataRevision },
+    target.fileKey,
+    opts.metadata,
+  )
+  const context = { fileId: target.fileId, generation: target.keyGeneration }
+  const first = await newFileBlobStreamEncryptorV1(target.fileKey, context)
+  let started = false
+  const pending: Omit<PendingUpload, 'uploadUrl' | 'startedAt' | 'updatedAt'> | null = opts.resumable
+    ? {
+        fileId: target.fileId,
+        owner: opts.resumable.owner,
+        size: opts.file.size,
+        lastModified: opts.file.lastModified,
+        collectionId: target.collectionId,
+        keyEpoch: target.keyEpoch,
+        fileKeyEnvelope: target.fileKeyEnvelope,
+        metadataEnvelope: sealed.metadataEnvelope,
+        prefix: toBase64(first.prefix),
+        version: { keyGeneration: target.keyGeneration, metadataRevision: sealed.metadataRevision },
+      }
+    : null
+  const uploadUrl = await send({
+    ...opts,
+    plaintext: fileSource(opts.file),
+    fileId: target.fileId,
+    prefix: first.prefix,
+    openStream: async () => {
+      if (!started) {
+        started = true
+        return first
+      }
+      return resumeFileBlobStreamEncryptorV1(target.fileKey, context, first.prefix)
+    },
+    create: {
+      metadata: versionUploadMetadata(target, sealed, opts),
+      remember: pending
+        ? async (uploadUrl) => {
+            const now = Date.now()
+            const record = { ...pending, uploadUrl, startedAt: now, updatedAt: now }
+            await pendingUploads.put(record)
+            return record
+          }
+        : undefined,
+    },
+    pending,
+  })
+  return {
+    fileId: target.fileId,
+    fileKey: target.fileKey,
+    keyGeneration: target.keyGeneration,
+    collectionId: target.collectionId,
+    contentSha256: opts.metadata.sha256 ?? null,
+    version: true,
+    versionId: uploadIdOf(uploadUrl),
+  }
+}
+
 export interface ResumeUploadOptions {
   upload: PendingUpload
   /** The same file, chosen again (a page cannot open it by itself). */
@@ -209,8 +349,8 @@ function openPendingRecord(upload: PendingUpload, collectionKey: Uint8Array) {
       id: upload.fileId,
       collectionId: upload.collectionId,
       keyEpoch: upload.keyEpoch,
-      keyGeneration: 1,
-      metadataRevision: 1,
+      keyGeneration: upload.version?.keyGeneration ?? 1,
+      metadataRevision: upload.version?.metadataRevision ?? 1,
       fileKeyEnvelope: upload.fileKeyEnvelope,
       metadataEnvelope: upload.metadataEnvelope,
     } as Parameters<typeof openFileRecordV1>[0],
@@ -232,7 +372,8 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
   if (!sameName(opts.file.name, metadata.name) || opts.file.size !== upload.size || opts.file.lastModified !== upload.lastModified) {
     throw new NotTheSameFile()
   }
-  const context = { fileId: upload.fileId, generation: 1 }
+  const generation = upload.version?.keyGeneration ?? 1
+  const context = { fileId: upload.fileId, generation }
   const prefix = fromBase64(upload.prefix)
   // The stored prefix must be this file's, under this key: Rust checks it.
   await resumeFileBlobStreamEncryptorV1(fileKey, context, prefix)
@@ -245,7 +386,14 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
     uploadUrl: upload.uploadUrl,
     pending: upload,
   })
-  return { fileId: upload.fileId, fileKey, keyGeneration: 1, collectionId: upload.collectionId, contentSha256: metadata.sha256 ?? null }
+  return {
+    fileId: upload.fileId,
+    fileKey,
+    keyGeneration: generation,
+    collectionId: upload.collectionId,
+    contentSha256: metadata.sha256 ?? null,
+    ...(upload.version ? { version: true, versionId: uploadIdOf(upload.uploadUrl) } : {}),
+  }
 }
 
 /**
@@ -287,6 +435,28 @@ function nameTakenOf(error: unknown): UploadNameTaken | null {
   }
 }
 
+/** A new version's refusal (at create, or when the upload ends); null for anything else (exported for tests). */
+export function versionRefusalOf(error: unknown): VersionConflict | VersionUploading | null {
+  const response = (error as { originalResponse?: { getStatus(): number; getBody(): string } | null }).originalResponse
+  if (!response || response.getStatus() !== 409) return null
+  let body: { code?: unknown; error?: unknown; uploadId?: unknown }
+  try {
+    body = JSON.parse(response.getBody()) as typeof body
+  } catch {
+    return null
+  }
+  if (body.code === 'version_conflict') return new VersionConflict('version')
+  if (body.code === 'revision_conflict') return new VersionConflict('revision')
+  if (body.code === 'versionUploading') return new VersionUploading(typeof body.uploadId === 'string' ? body.uploadId : null)
+  if (body.error === 'file key changed' || body.error === 'file needs a re-key') return new VersionConflict('key')
+  return null
+}
+
+/** A refusal that settles the upload: the name is taken, or the file changed. */
+function refusalOf(error: unknown): Error | null {
+  return nameTakenOf(error) ?? versionRefusalOf(error)
+}
+
 /** A failure that waiting does not cure: the server refused, or the upload is gone. */
 function isFinal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 423 && status !== 429
@@ -311,7 +481,13 @@ interface SendOptions {
   pending: Pick<PendingUpload, 'fileId'> | null
 }
 
-async function send(opts: SendOptions): Promise<void> {
+/** The upload's id, the last part of its URL (for a new version, the version's id). */
+export function uploadIdOf(uploadUrl: string): string {
+  return uploadUrl.split('/').filter(Boolean).at(-1) ?? ''
+}
+
+/** Sends the upload; resolves with its URL on the server. */
+async function send(opts: SendOptions): Promise<string> {
   const source = new EncryptedFileSource(opts.plaintext, opts.openStream, opts.prefix)
   const uploadsEndpoint = `${await resolveApiBase()}/uploads/`
   const plainTotal = opts.file.size
@@ -340,7 +516,7 @@ async function send(opts: SendOptions): Promise<void> {
     void pendingUploads.put(remembered).catch(() => undefined)
   }
 
-  const running = new Promise<void>((resolve, reject) => {
+  const running = new Promise<string>((resolve, reject) => {
     let attempt = 0
     let finished = false
     let waitingTimer: ReturnType<typeof setTimeout> | null = null
@@ -359,7 +535,7 @@ async function send(opts: SendOptions): Promise<void> {
       setWaiting(false)
       source.close()
       if (error) reject(error)
-      else resolve()
+      else resolve(upload.url ?? opts.uploadUrl ?? '')
     }
 
     // The file is only its name for tus: the bytes come from `source`.
@@ -385,7 +561,7 @@ async function send(opts: SendOptions): Promise<void> {
       onShouldRetry(err, _attempt, options) {
         const status = statusOf(err)
         if (status === 401) return true
-        if (isFinal(status) || nameTakenOf(err)) return false
+        if (isFinal(status) || refusalOf(err)) return false
         return (options.retryDelays?.length ?? 0) > 0
       },
       metadata: opts.create?.metadata ?? {},
@@ -425,11 +601,14 @@ async function send(opts: SendOptions): Promise<void> {
       onError(err) {
         if (finished || opts.signal?.aborted) return
         const status = statusOf(err)
-        // Someone else took the name meanwhile: the server discarded the upload.
-        const taken = nameTakenOf(err)
-        if (taken) {
-          void forget()
-          finish(taken)
+        // Someone else took the name, or changed the file, meanwhile: the
+        // server discarded the upload (or never opened it).
+        const refused = refusalOf(err)
+        if (refused) {
+          // The open upload refused at create may be the one this browser
+          // remembers under the same file id: that record stays.
+          if (!(refused instanceof VersionUploading)) void forget()
+          finish(refused)
           return
         }
         if (status === 404 || status === 410) {
@@ -484,5 +663,5 @@ async function send(opts: SendOptions): Promise<void> {
     upload.start()
   })
   if (opts.pending) holdUpload(opts.pending.fileId, running)
-  await running
+  return running
 }

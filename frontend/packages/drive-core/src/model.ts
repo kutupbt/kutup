@@ -82,6 +82,8 @@ export interface DriveFile {
   media: MediaMetadataV1 | null
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
+  /** That key sealed under the folder key at `keyEpoch`, as listed. */
+  fileKeyEnvelope: string
   /** The key generation the upload was sealed under. */
   originalKeyGeneration: number
   /** The key generation of what a download serves. */
