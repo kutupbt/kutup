@@ -67,7 +67,7 @@ contact's PGP preferences).
 | Drive | default view, sort, folders first, grid thumbnails | `kutup-drive-view` |
 | Notes | source mode; Markdown mode per file | `kutup.notes.sourceMode`, `kutup-md-mode-<fileId>` |
 | Photos | viewer info panel | `kutup-photos-info` |
-| All | dismissed "not in contacts" banners | per app localStorage |
+| Chat, Mail | dismissed "not in contacts" banners: dismissals, not policy, so they stay on the device (keyed by user id, cleared on sign-out) | per app localStorage |
 
 ## Not following the rule yet
 
