@@ -14,8 +14,14 @@ pub struct UserDevice {
     pub device_id: i64,
     #[serde(default)]
     pub label: String,
+    /// The device's Ed25519 public key, base64.
+    #[serde(default)]
+    pub public_signing: String,
     #[serde(default)]
     pub is_active: bool,
+    /// Active and registered under the account's current identity.
+    #[serde(default)]
+    pub trusted: bool,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -29,10 +35,17 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Revokes a device, closing any in-flight WebSocket sessions signed by it.
-    pub fn revoke_user_device(&self, device_id: i64) -> Result<()> {
+    /// Revokes a device with the account's signed revocation, closing any
+    /// in-flight WebSocket sessions signed by it.
+    pub fn revoke_user_device(
+        &self,
+        device_id: i64,
+        revoked_at_ms: i64,
+        signature: &str,
+    ) -> Result<()> {
         let resp = self
             .request(Method::DELETE, &format!("/devices/{device_id}"))
+            .json(&serde_json::json!({ "revokedAtMs": revoked_at_ms, "signature": signature }))
             .send()?;
         super::check_ok(resp)
     }
