@@ -77,15 +77,15 @@ describe('noticesFor', () => {
     const theirs = entry(bob, 'incoming', { text: 'sure' })
     const onMine = entry(bob, 'incoming', {
       kind: 'reaction',
-      reaction: { targetMessageId: mine.content.messageId!, emoji: '❤️', active: true },
+      reaction: { targetMessageId: mine.content.messageId, emoji: '❤️', active: true },
     })
     const onTheirs = entry(bob, 'incoming', {
       kind: 'reaction',
-      reaction: { targetMessageId: theirs.content.messageId!, emoji: '👍', active: true },
+      reaction: { targetMessageId: theirs.content.messageId, emoji: '👍', active: true },
     })
     const removed = entry(bob, 'incoming', {
       kind: 'reaction',
-      reaction: { targetMessageId: mine.content.messageId!, emoji: '❤️', active: false },
+      reaction: { targetMessageId: mine.content.messageId, emoji: '❤️', active: false },
     })
     const history = [mine, theirs, onMine, onTheirs, removed]
     const notices = noticesFor([onMine, onTheirs, removed], history, context())

@@ -146,7 +146,7 @@ export function ChatJobs() {
       if (!synced.current.has(flight)) {
         synced.current.add(flight)
         const { conversation, timestampMs } = anchor
-        const id = anchor.content.messageId!
+        const id = anchor.content.messageId
         work.push(() => service.markReadThrough(conversation, id, timestampMs))
       }
     }

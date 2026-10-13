@@ -70,7 +70,7 @@ describe('foldAccountState', () => {
       late,
       entry(note, 'outgoing', 400, {
         kind: 'readPosition',
-        readPosition: { conversation: bob, throughMessageId: early.content.messageId!, readThroughMs: 999 },
+        readPosition: { conversation: bob, throughMessageId: early.content.messageId, readThroughMs: 999 },
       }),
     ]
     expect(foldAccountState(history, SELF).readThrough.get(BOB)).toBe(100)
