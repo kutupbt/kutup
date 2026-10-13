@@ -44,6 +44,20 @@ export interface CryptoWasmModule {
     driveSigningPublicKey: string
   }
   signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  signDeviceRegistration(
+    masterKeyBase64: string,
+    server: string,
+    userId: string,
+    devicePublicBase64: string,
+    challengeBase64: string,
+    issuedAtMs: number,
+  ): string
+  signDeviceRevocation(
+    masterKeyBase64: string,
+    server: string,
+    devicePublicBase64: string,
+    revokedAtMs: number,
+  ): string
   deriveSafetyNumber(
     localAccount: string,
     localAuthorityBase64: string,

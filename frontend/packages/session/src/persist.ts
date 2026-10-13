@@ -13,8 +13,9 @@ import { toBase64, fromBase64 } from '@kutup/crypto/base64'
 import { LocalStatePurpose, openLocalState, sealLocalState } from '@kutup/crypto/localState'
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import api, { getClientType, refreshAccessToken } from './client'
-import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
+import { decodeKeys, encodeKeys, type DeviceKeys, type SessionKeys } from './keys'
 import { activateSession, fetchProfile, KeyBindingMismatchError } from './profile'
+import { getSession, updateSession } from './store'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
 
 function profileFor(sessionId: string): string {
@@ -36,6 +37,29 @@ export async function persistKeys(sessionId: string, keys: SessionKeys): Promise
   } finally {
     localKey.fill(0)
   }
+}
+
+/**
+ * Keep `device` as this sign-in's collaboration device on this origin: in
+ * the session now, and sealed with the keys when this origin keeps them
+ * (so a reload or another tab reuses it instead of registering another).
+ * `null` forgets it.
+ */
+export async function persistDevice(device: DeviceKeys | null): Promise<void> {
+  const session = getSession()
+  if (!session) return
+  updateSession({ device, currentDeviceId: device?.id ?? null })
+  // Only a sign-in this origin keeps is sealed again (never starts keeping one).
+  if (readPersisted()?.sessionId !== session.sessionId) return
+  const keys: SessionKeys = {
+    userId: session.userId,
+    masterKey: session.masterKey,
+    privateKey: session.privateKey,
+    publicKey: session.publicKey,
+    keyBinding: session.envelopeBinding,
+  }
+  if (device) keys.device = device
+  await persistKeys(session.sessionId, keys)
 }
 
 export type RestoreResult = 'restored' | 'none'

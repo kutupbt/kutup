@@ -641,6 +641,21 @@ pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &
 
 /// A device registered the proper way: a fresh challenge, signed by the
 /// account's own authority.
+/// Signs `user` in again: a new session (token) of the same account.
+pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
+    let r = c
+        .post(format!("{base}/api/auth/login"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "name": user.username, "loginKey": user.login_key }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "login: {}", r.status());
+    r.json::<Value>().unwrap()["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);

@@ -30,6 +30,7 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type Ref,
 } from 'react'
 import {
@@ -49,16 +50,15 @@ import type {
   FileId,
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
-import { updateSession, useRequiredSession } from '@kutup/session/store'
+import { useRequiredSession } from '@kutup/session/store'
 import { SaveTracker, hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
-import {
-  generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
-} from '@kutup/collab/devices'
+import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@kutup/collab/identity'
-import { registerDevice } from '@kutup/collab/api'
+import { listDevices } from '@kutup/collab/api'
+import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { uploadAsset, fetchAsset, QuotaExceededError } from '@kutup/collab/whiteboardAssets'
 import { useResolvedTheme } from '../useResolvedTheme'
 import { toast } from 'sonner'
@@ -98,19 +98,6 @@ interface Props {
   onOutdated?: (base?: undefined, reset?: boolean) => void
 }
 
-// Module-level cache of registerDevice promises — same pattern as
-// OfficeEditor. Prevents duplicate device rows when two tabs of the
-// same file load concurrently.
-const _devicePromiseCache = new Map<string, Promise<number>>()
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let p = _devicePromiseCache.get(pubKeyB64)
-  if (!p) {
-    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
-    _devicePromiseCache.set(pubKeyB64, p)
-  }
-  return p
-}
-
 interface CursorPayload {
   color: string | null
   username: string | null
@@ -127,7 +114,8 @@ function WhiteboardEditorBase(
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const { t } = useTranslation()
   const session = useRequiredSession()
-  const storedDeviceId = session.currentDeviceId
+  /** The account has 20 devices in use: drawing stays local until one is removed. */
+  const [deviceLimit, setDeviceLimit] = useState(false)
   const userColor = session.color
   const username = session.username
   const userId = session.userId
@@ -275,17 +263,21 @@ function WhiteboardEditorBase(
     let alive = true
 
     void (async () => {
-      let kp = loadKeypair()
-      if (!kp) { kp = await generateDeviceKeypair(); saveKeypair(kp) }
-      keypairRef.current = kp
-
-      let did = storedDeviceId
-      if (!did) {
-        const pubB64 = encodePubKeyB64(kp.publicKey)
-        did = await ensureRegistered(pubB64, 'kutup-whiteboard:' + navigator.userAgent.slice(0, 60))
-        if (!alive) return
-        updateSession({ currentDeviceId: did })
+      // This sign-in's collaboration device; replaced below if the server
+      // stops taking it (frames read the refs, the socket URL `did`).
+      let current
+      try {
+        current = await currentDevice()
+      } catch (error) {
+        if (error instanceof TooManyDevicesError) {
+          if (alive) setDeviceLimit(true)
+          return
+        }
+        throw error
       }
+      if (!alive) return
+      keypairRef.current = current.keypair
+      let did = current.deviceId
       deviceIdRef.current = did
 
       const wsUrl = () => collabSocketUrl(fileId, did)
@@ -399,6 +391,20 @@ function WhiteboardEditorBase(
           }
         },
         onError: (e: unknown) => console.warn('whiteboard: ws error', e),
+        onRefused: async () => {
+          const id = did
+          const trusted = await listDevices()
+            .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
+            .catch(() => null)
+          if (trusted !== false || !(await deviceRefused())) return
+          const next = await currentDevice()
+          keypairRef.current = next.keypair
+          did = next.deviceId
+          deviceIdRef.current = did
+        },
+        onRenewDevice: (deviceIds) => {
+          void renewRequested(deviceIds).catch(() => undefined)
+        },
       })
       if (!alive) { transport.close(); return }
       transportRef.current = transport
@@ -624,7 +630,9 @@ function WhiteboardEditorBase(
   }
 
   return (
-    <div className="h-full w-full">
+    <div className="flex h-full w-full flex-col">
+      {deviceLimit ? <DeviceLimitNotice /> : null}
+      <div className="min-h-0 flex-1">
       <Suspense
         fallback={<div className="p-4 text-sm text-muted-foreground">{t('editor.whiteboard.loading')}</div>}
       >
@@ -678,6 +686,7 @@ function WhiteboardEditorBase(
           }}
         />
       </Suspense>
+      </div>
     </div>
   )
 }

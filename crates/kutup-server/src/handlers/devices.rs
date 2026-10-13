@@ -35,9 +35,59 @@ const CHALLENGE_MINUTES: i64 = 5;
 /// The most challenges one account holds unanswered; a new one evicts the
 /// oldest, so nobody can fill the table.
 const MAX_OPEN_CHALLENGES: i64 = 5;
-/// The most active devices one account has (here, and per account at a
-/// server elsewhere: the same rule).
+/// The most devices in use one account has (here, and per account at a
+/// server elsewhere: the same rule). In use: [`DEVICE_LIVE`] and a statement
+/// within the 30-day lease, so devices of ended sign-ins, or long unused,
+/// drop out of the count by themselves.
 pub(crate) const MAX_ACTIVE_DEVICES: i64 = 20;
+
+/// A device the server trusts (`d` the device row, `u` its user): active
+/// (not revoked), of the account's current incarnation, and registered by a
+/// sign-in session still live. Ending the session (a sign-out anywhere, its
+/// expiry, a password change) retires the device here; that needs no
+/// signature, and the device is not revoked for good.
+pub(crate) const DEVICE_LIVE: &str = "(d.is_active AND d.incarnation_id = u.account_incarnation_id
+     AND EXISTS (SELECT 1 FROM auth_sessions s WHERE s.id = d.session_id
+                 AND s.revoked_at IS NULL AND s.expires_at > now()))";
+
+/// [`DEVICE_LIVE`] and within the lease: what the cap counts.
+fn in_use() -> String {
+    format!(
+        "({DEVICE_LIVE} AND d.registration_issued_at_ms > \
+           (extract(epoch FROM now()) * 1000)::bigint - {})",
+        crate::remote_devices::LEASE_MS
+    )
+}
+
+/// Refuses a device that would be the account's 21st in use (`except`: the
+/// device being renewed, already counted if it is in use).
+async fn check_cap(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    except: Option<i64>,
+) -> AppResult<()> {
+    // One count per account, under its row's lock.
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    let in_use: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM user_devices d JOIN users u ON u.id = d.user_id
+         WHERE d.user_id = $1 AND d.id <> COALESCE($2, 0) AND {}",
+        in_use()
+    ))
+    .bind(user_id)
+    .bind(except)
+    .fetch_one(&mut **tx)
+    .await?;
+    if in_use >= MAX_ACTIVE_DEVICES {
+        return Err(AppError::conflict(format!(
+            "too many devices in use for this account (at most {MAX_ACTIVE_DEVICES}): remove one first"
+        ))
+        .with_details(serde_json::json!({ "code": "tooManyDevices" })));
+    }
+    Ok(())
+}
 /// How far a statement's time may be from this server's clock: lenient, so a
 /// skewed device still registers (the challenge makes it single use).
 const MAX_CLOCK_SKEW_MS: i64 = 24 * 3600 * 1000;
@@ -139,10 +189,15 @@ pub struct DeviceRow {
     /// The device's Ed25519 public key, canonical base64: what a revocation names.
     public_signing: String,
     is_active: bool,
-    /// Active and registered under the account's current incarnation: the
-    /// collaboration routes accept it. A client whose stored device is not
-    /// trusted registers a new one.
+    /// Active, registered under the account's current incarnation, by a
+    /// sign-in still live: the collaboration routes accept it. A client
+    /// whose stored device is not trusted registers a new one.
     trusted: bool,
+    /// Trusted and within its 30-day lease: one of the at most 20 the
+    /// account has in use.
+    in_use: bool,
+    /// Registered (or last renewed) by the caller's own sign-in.
+    this_session: bool,
     /// When its newest statement was made (UTC milliseconds): a client
     /// renews it when it is two weeks old.
     statement_issued_at_ms: i64,
@@ -273,29 +328,17 @@ pub async fn register(
             "the account's statement for this device does not verify, or its challenge is not one to answer",
         ));
     };
-    // One count per account, under its row's lock.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    let active: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM user_devices WHERE user_id = $1 AND is_active")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if active >= MAX_ACTIVE_DEVICES {
+    if let Err(e) = check_cap(&mut tx, user_id, None).await {
+        // The challenge stays used up.
         tx.commit().await?;
-        return Err(AppError::conflict(format!(
-            "too many devices for this account (at most {MAX_ACTIVE_DEVICES}): revoke one first"
-        ))
-        .with_details(serde_json::json!({ "code": "tooManyDevices" })));
+        return Err(e);
     }
     let (_, incarnation_id) = account_authority(&mut tx, user_id).await?;
     let inserted: Result<(i64, OffsetDateTime), sqlx::Error> = sqlx::query_as(
         r#"INSERT INTO user_devices (user_id, public_signing, label, incarnation_id,
                                      registration_challenge, registration_issued_at_ms,
-                                     registration_signature)
-           VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7)
+                                     registration_signature, session_id)
+           VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, $8)
            RETURNING id, created_at"#,
     )
     .bind(user_id)
@@ -305,6 +348,7 @@ pub async fn register(
     .bind(challenge.to_vec())
     .bind(req.statement.issued_at_ms)
     .bind(&req.statement.signature)
+    .bind(user.session.session_id)
     .fetch_one(&mut *tx)
     .await;
     let (id, created_at) = match inserted {
@@ -376,15 +420,25 @@ pub async fn renew(
             "the renewal does not verify, or its challenge is not one to answer",
         ));
     };
+    // Renewed, the device is in use again (if its sign-in ended, under this
+    // one): it counts against the cap like a new one.
+    if let Err(e) = check_cap(&mut tx, user_id, Some(device_id)).await {
+        tx.commit().await?;
+        return Err(e);
+    }
     sqlx::query(
-        "UPDATE user_devices SET registration_challenge = $2, registration_issued_at_ms = $3,
-                                 registration_signature = $4
-         WHERE id = $1 AND registration_issued_at_ms < $3",
+        "UPDATE user_devices SET
+             registration_challenge = CASE WHEN registration_issued_at_ms < $3 THEN $2 ELSE registration_challenge END,
+             registration_signature = CASE WHEN registration_issued_at_ms < $3 THEN $4 ELSE registration_signature END,
+             registration_issued_at_ms = GREATEST(registration_issued_at_ms, $3),
+             session_id = $5
+         WHERE id = $1",
     )
     .bind(device_id)
     .bind(challenge.to_vec())
     .bind(body.issued_at_ms)
     .bind(&body.signature)
+    .bind(user.session.session_id)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -409,18 +463,23 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         public_signing: Vec<u8>,
         is_active: bool,
         trusted: bool,
+        in_use: bool,
+        this_session: bool,
         issued_at_ms: i64,
         created_at: OffsetDateTime,
         last_seen_at: Option<OffsetDateTime>,
     }
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT d.id, COALESCE(d.label, '') AS label, d.public_signing, d.is_active,
-                  d.is_active AND d.incarnation_id = u.account_incarnation_id AS trusted,
+                  {DEVICE_LIVE} AS trusted, {} AS in_use,
+                  d.session_id IS NOT DISTINCT FROM $2 AS this_session,
                   d.registration_issued_at_ms AS issued_at_ms, d.created_at, d.last_seen_at
            FROM user_devices d JOIN users u ON u.id = d.user_id
            WHERE d.user_id = $1 ORDER BY d.created_at DESC"#,
-    )
+        in_use()
+    ))
     .bind(user_id)
+    .bind(user.session.session_id)
     .fetch_all(&state.pool)
     .await?;
     let out: Vec<DeviceRow> = rows
@@ -431,6 +490,8 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
             public_signing: STANDARD.encode(row.public_signing),
             is_active: row.is_active,
             trusted: row.trusted,
+            in_use: row.in_use,
+            this_session: row.this_session,
             statement_issued_at_ms: row.issued_at_ms,
             created_at: row.created_at,
             last_seen_at: row.last_seen_at,

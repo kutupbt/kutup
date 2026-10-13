@@ -372,14 +372,14 @@ pub async fn announce_for(
             .await?;
     // id, key, challenge, issued at, signature.
     type DeviceRow = (i64, Vec<u8>, Vec<u8>, i64, String);
-    let rows: Vec<DeviceRow> = sqlx::query_as(
+    let rows: Vec<DeviceRow> = sqlx::query_as(&format!(
         "SELECT d.id, d.public_signing, d.registration_challenge, d.registration_issued_at_ms,
                 d.registration_signature
          FROM user_devices d JOIN users u ON u.id = d.user_id
-         WHERE d.user_id = $1 AND d.id = ANY($2) AND d.is_active
-           AND d.incarnation_id = u.account_incarnation_id
+         WHERE d.user_id = $1 AND d.id = ANY($2) AND {}
          ORDER BY d.id LIMIT $3",
-    )
+        crate::handlers::devices::DEVICE_LIVE
+    ))
     .bind(user_id)
     .bind(device_ids)
     .bind(MAX_PER_ANNOUNCE as i64)

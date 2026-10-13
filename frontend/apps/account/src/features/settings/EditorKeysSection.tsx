@@ -11,7 +11,7 @@ import { Section } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
-import { useDevices, useRevokeDevice, type EditorDevice } from './api'
+import { MAX_DEVICES_IN_USE, useDevices, useRevokeDevice, type EditorDevice } from './api'
 
 /**
  * Editor devices: the per-browser Ed25519 keys that sign collaborative edits
@@ -23,7 +23,10 @@ export function EditorKeysSection() {
   const devices = useDevices()
   const revoke = useRevokeDevice()
   const [revoking, setRevoking] = useState<EditorDevice | null>(null)
-  const rows = devices.data ? [...devices.data].sort((a, b) => Number(b.isActive) - Number(a.isActive)) : []
+  // In use first, then retired (signed out, or long unused), then revoked.
+  const rank = (d: EditorDevice) => (d.inUse ? 0 : d.isActive ? 1 : 2)
+  const rows = devices.data ? [...devices.data].sort((a, b) => rank(a) - rank(b)) : []
+  const inUse = rows.filter((d) => d.inUse).length
 
   return (
     <Section title={t('settings.devices.title')} description={t('settings.devices.description')}>
@@ -35,6 +38,11 @@ export function EditorKeysSection() {
         <EmptyState title={t('settings.devices.emptyTitle')} description={t('settings.devices.emptyDescription')} />
       ) : null}
       {rows.length > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {t('settings.devices.inUseCount', { count: inUse, max: MAX_DEVICES_IN_USE })}
+        </p>
+      ) : null}
+      {rows.length > 0 ? (
         <Card className="divide-y divide-border p-0">
           {rows.map((d) => (
             <div key={d.deviceId} className="flex flex-wrap items-center gap-4 p-4">
@@ -42,7 +50,11 @@ export function EditorKeysSection() {
                 <p className="flex flex-wrap items-center gap-2 font-medium">
                   {d.label || t('settings.devices.unnamed')}
                   <Mono className="text-xs text-muted-foreground">#{d.deviceId}</Mono>
-                  {d.isActive ? null : <Badge variant="neutral">{t('settings.devices.revoked')}</Badge>}
+                  {!d.isActive ? (
+                    <Badge variant="neutral">{t('settings.devices.revoked')}</Badge>
+                  ) : d.inUse ? null : (
+                    <Badge variant="neutral">{t('settings.devices.notInUse')}</Badge>
+                  )}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {t('settings.devices.added', { when: formatInstant(d.createdAt, i18n.language) })}
@@ -79,7 +91,7 @@ export function EditorKeysSection() {
         errorFallback={t('settings.devices.revokeFailed')}
         onConfirm={() => {
           if (!revoking) return
-          revoke.mutate(revoking.deviceId, {
+          revoke.mutate(revoking, {
             onSuccess: () => {
               toast.success(t('settings.devices.revokedToast'))
               setRevoking(null)

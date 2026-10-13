@@ -235,7 +235,9 @@
       "revokeFailed": "The device could not be revoked.",
       "revokedToast": "Device revoked",
       "emptyTitle": "No editor devices yet",
-      "emptyDescription": "A device appears here the first time it opens a shared document."
+      "emptyDescription": "A device appears here the first time it opens a shared document.",
+      "inUseCount": "{{count}} of {{max}} devices in use. Devices of ended sign-ins, or unused for 30 days, don't count.",
+      "notInUse": "Not in use"
     },
     "profile": {
       "title": "Profile",

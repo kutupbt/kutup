@@ -45,18 +45,40 @@ DeviceRegistrationV1 = sign_authority(
   - the challenge (open, the caller's, then used up whatever the outcome);
   - `issuedAtMs` within ±24 hours of the server clock;
   - a key never registered before (on any account, revoked or not: `409`);
-  - at most 20 active devices per account (`tooManyDevices`).
+  - at most 20 devices in use per account (`tooManyDevices`; see *In use*).
 - Any failed check answers `403 deviceNotAuthorized`. The client registers
   again; this is not a sign-out.
 - The device row stores the statement and its incarnation.
 
-**Trust.** A device counts only while it is active and its incarnation is the
-account's current one. The socket and the HTTP frame routes check both, so an
-account reset ends every device of the old incarnation at once.
+**Trust.** A device is trusted while three things hold:
+
+- it is not revoked;
+- its incarnation is the account's current one, so an account reset ends
+  every device of the old incarnation at once;
+- the sign-in session that registered it (or last renewed it) is live.
+
+The socket and the HTTP frame routes check all three. A sign-out anywhere, a
+session's expiry or a password change that ends sessions retires the device
+without a signature. That is not a revocation: a renewal under a live
+sign-in, which needs the account's statement again, takes it up. The CLI's
+device is bound to the CLI's session the same way.
+
+**In use.** The cap counts devices in use: trusted, with a statement within
+the 30-day lease. Devices of ended sign-ins, and devices left unused for 30
+days, drop out of the count by themselves. When the cap is reached anyway,
+the client tells the user (in English and Turkish) to remove one under
+Account → Devices. The user chooses; nothing is revoked for them.
 
 **The lease.** A statement older than 30 days is no longer trusted by other
 servers (part 2). Clients renew after 15 days: they sign a fresh statement
 over a new challenge and send it to `POST /api/devices/:id/renew`.
+
+**On the web.** One device per sign-in per app origin, shared by its tabs.
+Its key, id and statement time are sealed with the session's keys
+(`EncodedKeys` v3), so a reload or a new tab reuses it, and it goes with the
+sign-in. A fork to another origin never carries it: each origin registers
+its own. Signing out revokes this origin's device with a signed revocation,
+best effort, on top of the server retiring it.
 
 **Revocation.** `DELETE /api/devices/:id` takes `DeviceRevocationV1`:
 

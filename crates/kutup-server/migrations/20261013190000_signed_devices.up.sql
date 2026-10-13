@@ -11,6 +11,10 @@ ALTER TABLE user_devices
     -- When the newest statement was made (renewed every two weeks).
     ADD COLUMN registration_issued_at_ms bigint NOT NULL,
     ADD COLUMN registration_signature text NOT NULL,
+    -- The sign-in session that registered (or last renewed) it: the device
+    -- is in use only while that session is live, so a sign-out anywhere, an
+    -- expired session or a password change retires it without a signature.
+    ADD COLUMN session_id uuid REFERENCES auth_sessions(id) ON DELETE SET NULL,
     -- The account's signed revocation (DeviceRevocationV1), once revoked.
     ADD COLUMN revoked_at_ms bigint,
     ADD COLUMN revocation_signature text,
@@ -20,6 +24,8 @@ ALTER TABLE user_devices
     ADD CONSTRAINT user_devices_incarnation_id_check CHECK (incarnation_id ~ '^[0-9a-f]{64}$'),
     ADD CONSTRAINT user_devices_registration_challenge_check CHECK (octet_length(registration_challenge) = 32),
     ADD CONSTRAINT user_devices_public_signing_key UNIQUE (public_signing);
+
+CREATE INDEX user_devices_session ON user_devices (session_id);
 
 CREATE TABLE device_registration_challenges (
     challenge_hash bytea PRIMARY KEY CHECK (octet_length(challenge_hash) = 32),

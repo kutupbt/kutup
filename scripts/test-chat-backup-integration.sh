@@ -18,6 +18,8 @@ export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
+# The device tests register more than 20 devices on one account in a minute.
+export RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=1000
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"

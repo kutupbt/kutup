@@ -180,3 +180,145 @@ fn only_the_accounts_own_statement_registers_a_device() {
     assert_eq!(body["code"], "deviceNotAuthorized");
     purge_accounts(&c, &base, &[&alice, &mallory]);
 }
+
+fn devices(c: &Client, base: &str, user: &User) -> Vec<Value> {
+    bearer(c.get(format!("{base}/api/devices")), &user.token)
+        .send()
+        .unwrap()
+        .json::<Vec<Value>>()
+        .unwrap()
+}
+
+fn row(rows: &[Value], id: i64) -> Value {
+    rows.iter()
+        .find(|r| r["deviceId"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("device {id} listed"))
+}
+
+/// A device lives with the sign-in that registered it: a sign-out retires
+/// it (no signature needed, not revoked for good); a renewal under another
+/// live sign-in takes it up again; the cap counts only devices in use.
+#[test]
+fn a_device_lives_with_its_sign_in() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER unset; skipping");
+        return;
+    };
+    let c = Client::new();
+    let mut alice = register(&c, &base);
+    let device = register_device(&c, &base, &alice);
+    let key = ed25519_dalek::SigningKey::from_bytes(&device.seed)
+        .verifying_key()
+        .to_bytes();
+    let folder = create_folder(&c, &base, &alice);
+    let file = seal_file(&folder, &uuid(), b"x");
+    assert!(upload(&c, &base, &alice.token, &folder, &file)
+        .status()
+        .is_success());
+    let frames = |user: &User, device: i64| {
+        bearer(
+            c.get(format!(
+                "{base}/api/files/{}/collab/frames?deviceId={device}&after=0",
+                file.id
+            )),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(frames(&alice, device.id), StatusCode::OK);
+    let listed = row(&devices(&c, &base, &alice), device.id);
+    assert_eq!(
+        (&listed["trusted"], &listed["inUse"], &listed["thisSession"]),
+        (&json!(true), &json!(true), &json!(true))
+    );
+
+    // Signed out: the device is retired, though not revoked.
+    let first = alice.token.clone();
+    alice.token = sign_in_again(&c, &base, &alice);
+    assert!(bearer(c.post(format!("{base}/api/auth/logout")), &first)
+        .send()
+        .unwrap()
+        .status()
+        .is_success());
+    let listed = row(&devices(&c, &base, &alice), device.id);
+    assert_eq!(
+        (
+            &listed["isActive"],
+            &listed["trusted"],
+            &listed["inUse"],
+            &listed["thisSession"]
+        ),
+        (&json!(true), &json!(false), &json!(false), &json!(false))
+    );
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/files/{}/collab/frames?deviceId={}&after=0",
+            file.id, device.id
+        )),
+        &alice.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "deviceNotAuthorized");
+
+    // Renewed under the live sign-in (the account's statement again): back.
+    let challenge = device_challenge(&c, &base, &alice);
+    let body = device_registration_body(&c, &base, &alice, &alice, &key, &challenge);
+    let renew = json!({
+        "challenge": body["challenge"],
+        "issuedAtMs": body["issuedAtMs"],
+        "signature": body["signature"],
+    });
+    let r = bearer(
+        c.post(format!("{base}/api/devices/{}/renew", device.id)),
+        &alice.token,
+    )
+    .json(&renew)
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    assert_eq!(frames(&alice, device.id), StatusCode::OK);
+    assert_eq!(
+        row(&devices(&c, &base, &alice), device.id)["thisSession"],
+        true
+    );
+
+    // The cap: 20 in use, the 21st refused...
+    for _ in 0..19 {
+        register_device(&c, &base, &alice);
+    }
+    let challenge = device_challenge(&c, &base, &alice);
+    let r = bearer(c.post(format!("{base}/api/devices")), &alice.token)
+        .json(&device_registration_body(
+            &c,
+            &base,
+            &alice,
+            &alice,
+            &device_key(),
+            &challenge,
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "tooManyDevices");
+    // ...until the sign-in they were made under ends: devices of ended
+    // sign-ins are not in use, so a new sign-in registers.
+    let second = alice.token.clone();
+    alice.token = sign_in_again(&c, &base, &alice);
+    assert!(bearer(c.post(format!("{base}/api/auth/logout")), &second)
+        .send()
+        .unwrap()
+        .status()
+        .is_success());
+    register_device(&c, &base, &alice);
+    let in_use = devices(&c, &base, &alice)
+        .iter()
+        .filter(|r| r["inUse"] == true)
+        .count();
+    assert_eq!(in_use, 1);
+    purge_accounts(&c, &base, &[&alice]);
+}

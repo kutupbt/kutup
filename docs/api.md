@@ -3896,21 +3896,58 @@ is not an automatic fallback for failed rotation.
 
 ## Devices
 
-Per-device Ed25519 signing keys for collaborative-edit frame signing. Each browser tab session creates one device row; CLI sessions persist across runs.
+Collaboration devices: the Ed25519 keys that sign collaborative-edit frames,
+each registered with the account's signed statement
+(docs/plans/device-registration.md). On the web, one device per sign-in per
+app origin, shared by its tabs; the CLI keeps one per profile. A device is
+trusted while it is not revoked, its incarnation is the account's current
+one and the sign-in session that registered (or last renewed) it is live.
+Refusals on the device routes and the collaboration routes answer `403
+deviceNotAuthorized`: the client registers again, it does not sign out.
+
+### POST /api/devices/challenge
+A one-time challenge for registering or renewing a device: 32 random bytes,
+valid five minutes, used up by any answer. At most five stay open per account
+(a sixth evicts the oldest). Rate limit:
+`RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN` (default 20) per account.
+**Auth:** Bearer JWT. **Response:** `{challenge}` (base64).
 
 ### POST /api/devices
-Register a device signing key. Required before opening any collaborative-edit WebSocket.
+Register a device key. Required before opening a collaborative-edit socket
+or using the HTTP frame routes.
 **Auth:** Bearer JWT.
-**Body:** `{publicSigning: <base64-32>, label?: string, authSig: <base64>, timestamp: <unix-seconds>}`. AuthSig is recorded but not validated in v1; the JWT is the trust anchor.
-**Response 201:** `{deviceId, label, createdAt}`
+**Body:** `{publicSigning, label?, challenge, issuedAtMs, signature}`: the
+account authority's `DeviceRegistrationV1` signature over its incarnation,
+this server, the user id, the key, the purpose, the challenge and
+`issuedAtMs` (within ±24 hours of the server clock). The device is bound to
+the caller's session.
+**Response 201:** `{deviceId, label, createdAt}`. **403**
+`deviceNotAuthorized`: the statement does not verify or the challenge is not
+the caller's to answer. **409**: the key was ever registered (any account,
+revoked or not), or `tooManyDevices`: the account has 20 devices in use
+(trusted, with a statement within 30 days). Devices of ended sign-ins, or
+unused for 30 days, do not count.
+
+### POST /api/devices/:id/renew
+A newer statement for the same key (body `{challenge, issuedAtMs,
+signature}`), which other servers need within 30 days. It also binds the
+device to the caller's session, so a device whose sign-in ended is taken up
+again; it then counts against the cap like a new one.
+**Response:** `204`, or `403 deviceNotAuthorized`, or `409 tooManyDevices`.
 
 ### GET /api/devices
-List the user's devices.
-**Response:** array of `{deviceId, label, isActive, createdAt, lastSeenAt}`.
+The account's devices, newest first: `{deviceId, label, publicSigning,
+isActive, trusted, inUse, thisSession, statementIssuedAtMs, createdAt,
+lastSeenAt}`. `isActive`: not revoked. `trusted`: as above. `inUse`: counted
+by the cap. `thisSession`: registered or renewed by the caller's session.
 
 ### DELETE /api/devices/:id
-Revoke a device. Closes any open WebSocket connections from that device. Returns 404 if the device is already inactive (idempotent state-transition semantics).
-**Response:** `204`.
+Revoke a device for good, with the account authority's `DeviceRevocationV1`
+signature (body `{revokedAtMs, signature}`): a session alone cannot revoke
+the account's devices. Its open sockets close, its key never registers
+again, and other servers are told through the account's announces.
+**Response:** `204`; `403 deviceNotAuthorized` when the revocation does not
+verify; `404` for a device already revoked.
 
 ---
 

@@ -15,28 +15,14 @@ import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
-import { updateSession } from '@kutup/session/store'
-import { claimSeed, listVersions, localBase, newestYjsVersion, registerDevice } from './api'
+import { claimSeed, listDevices, listVersions, localBase, newestYjsVersion } from './api'
 import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
-import { encodePubKeyB64, generateDeviceKeypair, loadKeypair, saveKeypair } from './devices'
+import { currentDevice, deviceRefused, renewRequested } from './currentDevice'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
 import { SnapshotTrigger } from './snapshot'
 import { collabSocketUrl } from './socketUrl'
 import { CollabTransport, type HelloMsg, type PositionMsg } from './transport'
-
-// Dedupes concurrent registerDevice() calls within one browser session
-// (a StrictMode double mount must not create two device rows).
-const devicePromises = new Map<string, Promise<number>>()
-
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let pending = devicePromises.get(pubKeyB64)
-  if (!pending) {
-    pending = registerDevice(pubKeyB64, label).then((r) => r.deviceId)
-    devicePromises.set(pubKeyB64, pending)
-  }
-  return pending
-}
 
 /**
  * The first content of a file no one has edited yet, as one Yjs update by a
@@ -75,8 +61,6 @@ export interface CollabSessionOptions {
   readOnly: boolean
   /** The signed-in user, for the cursor label. */
   username: string | null
-  /** This browser's collaboration device id, if already registered. */
-  storedDeviceId: number | null
   cursorColor: string
   /**
    * The first content, for a file that has never been saved: the seed
@@ -129,21 +113,10 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   const { fileId, fileKey, keyGeneration, fileKeyAt, readOnly, signal } = options
   const base = options.base ?? localBase(fileId)
 
-  // 1. A device keypair and registered device id.
-  let keypair = loadKeypair()
-  if (!keypair) {
-    keypair = await generateDeviceKeypair()
-    saveKeypair(keypair)
-  }
-  let deviceId = options.storedDeviceId
-  if (!deviceId) {
-    deviceId = await ensureRegistered(encodePubKeyB64(keypair.publicKey), navigator.userAgent.slice(0, 80))
-    if (signal.aborted) return null
-    updateSession({ currentDeviceId: deviceId })
-  }
+  // 1. This sign-in's collaboration device (throws TooManyDevicesError
+  // when the account has 20 in use). Replaced if the server stops taking it.
+  let dev = await currentDevice()
   if (signal.aborted) return null
-  const kp = keypair
-  const device = deviceId
 
   // 2. The document and awareness. Each tab has its own name and colour.
   const doc = new Y.Doc()
@@ -219,9 +192,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const frame = await encryptCollabFrameV1(
         update,
         KIND.YJS_UPDATE,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(device), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
         fileKey,
-        kp.privateKey,
+        dev.keypair.privateKey,
       )
       // Loading the file's content into a new document is not an edit.
       transport?.send(frame, { edit: origin !== 'seed' })
@@ -244,9 +217,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const frame = await encryptCollabFrameV1(
         update,
         KIND.YJS_AWARENESS,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(device), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
         fileKey,
-        kp.privateKey,
+        dev.keypair.privateKey,
       )
       transport?.send(frame, { edit: false })
     })()
@@ -323,7 +296,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
 
   // 6. The relay: replays what came after the saved state, then live frames.
   transport = new CollabTransport({
-    url: () => collabSocketUrl(fileId, device, base),
+    url: () => collabSocketUrl(fileId, dev.deviceId, base),
     lastSeenSeq: () => applied,
     onPosition: async (message: PositionMsg) => {
       if (message.type === 'stored') {
@@ -335,6 +308,19 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       advance()
       // Frames arrive, and are applied, before the position that follows them.
       if (message.type === 'replayed') options.onReplayed?.(message.throughSeq)
+    },
+    // The server may have stopped taking this device (revoked under
+    // Account → Devices): checked, and replaced if so; frames sealed from
+    // then on carry the new one.
+    onRefused: async () => {
+      const id = dev.deviceId
+      const trusted = await listDevices()
+        .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
+        .catch(() => null)
+      if (trusted === false && (await deviceRefused())) dev = await currentDevice()
+    },
+    onRenewDevice: (deviceIds) => {
+      void renewRequested(deviceIds).catch(() => undefined)
     },
     onHello: (hello: HelloMsg) => {
       docKeyId = hello.currentDocKeyId

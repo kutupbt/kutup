@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
+import { TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
 import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { fillDoc, placesMap, placesOf, replacePlaces, type Place } from '@kutup/map/list'
@@ -47,7 +48,7 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
   const [collaborators, setCollaborators] = useState(0)
   const [live, setLive] = useState<{ doc: Y.Doc; session: CollabSession } | null>(null)
   // Read once: a colour or device change must not tear the session down.
-  const identity = useRef({ username: account.username, deviceId: account.currentDeviceId, color: account.color ?? getCursorColor() })
+  const identity = useRef({ username: account.username, color: account.color ?? getCursorColor() })
   const lookRef = useRef(look)
   lookRef.current = look
 
@@ -121,7 +122,6 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           fileKeyAt: (generation) => fileKeyAt(file, generation),
           readOnly,
           username: identity.current.username,
-          storedDeviceId: identity.current.deviceId,
           cursorColor: identity.current.color,
           seed: {
             update: () => deterministicSeed(file.id, (doc) => fillDoc(doc, initial)),
@@ -169,8 +169,10 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
         refresh()
         setLive({ doc, session })
         picture()
-      } catch {
-        if (!controller.signal.aborted) setStatus('error')
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setStatus('error')
+        if (error instanceof TooManyDevicesError) toast.error(t('list.tooManyDevices'))
       }
     })()
     return () => {

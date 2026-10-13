@@ -235,7 +235,9 @@
       "revokeFailed": "Cihaz iptal edilemedi.",
       "revokedToast": "Cihaz iptal edildi",
       "emptyTitle": "Henüz düzenleme cihazı yok",
-      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür."
+      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür.",
+      "inUseCount": "{{max}} cihazdan {{count}} tanesi kullanımda. Oturumu kapanmış ya da 30 gündür kullanılmayan cihazlar sayılmaz.",
+      "notInUse": "Kullanımda değil"
     },
     "profile": {
       "title": "Profil",

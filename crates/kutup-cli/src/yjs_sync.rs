@@ -64,7 +64,7 @@ impl<'a> Peer<'a> {
     fn with_device<T>(&mut self, mut call: impl FnMut(&Device) -> Result<T>) -> Result<T> {
         match call(self.device()?) {
             Err(e) if not_authorized(&e) => {
-                let device = self.signer()?.register()?;
+                let device = self.signer()?.recover()?;
                 self.device = Some(device);
                 call(self.device.as_ref().expect("set above"))
             }

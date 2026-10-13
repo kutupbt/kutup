@@ -110,6 +110,23 @@ impl<'a> Signer<'a> {
         self.register()
     }
 
+    /// The server no longer takes this profile's device: renewed under this
+    /// sign-in if it is only its old sign-in that ended (the same key, no new
+    /// slot under the cap), else a new one.
+    pub fn recover(&self) -> Result<Device> {
+        if let Some(mut kept) = self.store.collab_device()? {
+            if kept.server == self.server && kept.user_id == self.sess.user_id {
+                kept.issued_at_ms = 0; // due now
+                match self.renewed(kept) {
+                    Ok(device) => return Ok(device),
+                    Err(e) if not_authorized(&e) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        self.register()
+    }
+
     fn renewed(&self, mut kept: CollabDevice) -> Result<Device> {
         let seed: [u8; 32] = STANDARD
             .decode(&kept.seed)?
