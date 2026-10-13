@@ -443,6 +443,19 @@ fn top_level_folder_names_are_unique_per_owner() {
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
+    // The trash says where it comes back: the top level.
+    let trash: Value = bearer(c.get(format!("{base}/api/trash")), &owner.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let row = trash["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == first.id.as_str())
+        .unwrap();
+    assert!(row["parentCollectionId"].is_null(), "{row}");
     // "Projects (2)" is the folder moved up above.
     let other = drive_names::name_hash(&top, "Projects (3)").unwrap();
     let renamed = {

@@ -43,12 +43,15 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         String,
         String,
         Option<String>,
+        Option<Uuid>,
         i64,
         OffsetDateTime,
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
                   c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash, c.color,
+                  (SELECT p.id FROM collections p
+                    WHERE p.id = c.parent_collection_id AND p.deleted_at IS NULL),
                   (SELECT COUNT(*) FROM files f WHERE f.trash_root_id = c.id),
                   c.deleted_at
            FROM collections c
@@ -111,6 +114,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     statement,
                     statement_hash,
                     color,
+                    lands,
                     items,
                     deleted_at,
                 )| TrashFolderRow {
@@ -123,6 +127,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     epoch_statement: statement,
                     epoch_statement_hash: statement_hash,
                     color,
+                    parent_collection_id: lands.map(|id| id.to_string()),
                     items,
                     deleted_at,
                 },

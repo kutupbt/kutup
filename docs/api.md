@@ -2128,6 +2128,9 @@ List the caller's trash roots, newest first. Folder rows carry the complete
 authenticated owner collection record. File rows additionally carry the parent
 collection's owner-key envelope and signed epoch record so the metadata chain
 can be verified even when the collection is absent from the live listing.
+A folder's `parentCollectionId` is where a restore puts it: its parent while
+that folder is live, otherwise `null` (the top level), so a client hashes a
+new name for the right place.
 
 **Auth:** Bearer JWT
 
@@ -2145,6 +2148,7 @@ can be verified even when the collection is absent from the live listing.
       "epochStatement": "<CollectionEpochStatementV1 base64>",
       "epochStatementHash": "<lowercase SHA-256 hex>",
       "color": "blue",
+      "parentCollectionId": "<uuid or null>",
       "items": 12,
       "deletedAt": "2026-06-11T11:22:33Z"
     }
