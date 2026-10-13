@@ -443,11 +443,12 @@ fn top_level_folder_names_are_unique_per_owner() {
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    let other = drive_names::name_hash(&top, "Projects (2)").unwrap();
+    // "Projects (2)" is the folder moved up above.
+    let other = drive_names::name_hash(&top, "Projects (3)").unwrap();
     let renamed = {
         use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
         drive_envelope::seal_b64(
-            b"Projects (2)",
+            b"Projects (3)",
             &first.key,
             DriveEnvelopeContextV1::new(
                 DriveEnvelopePurpose::CollectionName,
